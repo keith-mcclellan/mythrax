@@ -1,0 +1,30 @@
+[package]
+name = "mythrax-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1.35", features = ["full"] }
+surrealdb = { version = "1.5", features = ["kv-rocksdb", "kv-mem"] }
+ort = { version = "2.0.0-rc.4" }
+notify = "6.1.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+reqwest = { version = "0.11", features = ["json"] }
+uuid = { version = "1.6", features = ["v4"] }
+clap = { version = "4.4", features = ["derive"] }
+anyhow = "1.0"
+tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
+tower = { version = "0.4", features = ["util"] }
+regex = "1.10"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[[bin]]
+name = "mythrax"
+path = "src/main.rs"

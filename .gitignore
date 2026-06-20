@@ -1,0 +1,67 @@
+# PDF assets and local papers
+*.pdf
+2606.11926v1.pdf
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Python virtual environment & package artifacts
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Local database files
+data/
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+
+# Agent lifecycle / temporary files
+.trash/
+.handoffs/
+.triage_failed
+.triage_report.md
+current_swap.txt
+mlx_lm.log
+compact_output.log
+search_history.log
+mythrax_search_history.log
+logs/
+*.log
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+*.token
+*.key
+*.pem
+id_rsa*
+*.credentials
+config.json
+
+# IDEs and OS metadata
+.DS_Store
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

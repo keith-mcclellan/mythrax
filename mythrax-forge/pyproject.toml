@@ -1,0 +1,20 @@
+[project]
+name = "mythrax-forge"
+version = "0.1.0"
+dependencies = [
+    "httpx[http2]>=0.27.0",       # Connection-pooled HTTP client
+    "scikit-learn>=1.3.0",        # DBSCAN clustering
+    "structlog>=23.1.0",          # Structured logging
+    "pyyaml>=6.0.1",              # YAML parsing (safe_load only)
+    "tiktoken>=0.5.1",            # Token calculations
+    "apscheduler>=3.10.1",        # Scheduled dreaming tasks
+    "google-genai>=0.1.1",        # Gemini API support
+    "anthropic>=0.18.0",          # Claude API support
+    "fastapi>=0.100.0",           # API components for tests
+    "uvicorn>=0.22.0",            # Uvicorn server for tests
+    "pytest>=7.0.0",              # Testing framework
+]
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
