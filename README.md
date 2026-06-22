@@ -1,8 +1,7 @@
 # ⚔️ Project Mythrax: Self-Improvement & Memory Engine
 
-Project Mythrax is a hybrid-language local memory and cognitive self-improvement engine designed for autonomous AI agents. The engine is divided into two primary subsystems:
-1.  **Mythrax Core** (Written in Rust): A low-latency local memory daemon, Axum REST API, and native SurrealDB/ONNX embedding retriever.
-2.  **Mythrax Forge** (Written in Python): A background cognitive engine running Hypothesis Testing & Refinement (HTR), AST-gated execution sandboxing, DBSCAN epoch-based dreaming, and hierarchical RAPTOR summarization compaction.
+Project Mythrax is a 100% native Rust local memory and cognitive self-improvement engine designed for autonomous AI agents. The engine is unified under a single high-performance library and binary:
+- **Mythrax Core**: A low-latency local memory daemon, Axum REST API, native SurrealDB/ONNX embedding retriever, DBSCAN epoch-based dreaming scheduler, and hierarchical RAPTOR summarization compaction.
 
 ---
 
@@ -12,36 +11,26 @@ Project Mythrax is a hybrid-language local memory and cognitive self-improvement
 graph TB
     subgraph "Interface Layer"
         CLI[mythrax CLI<br/>Rust - Instant Startup <15ms]
-        MCP[mythrax-mcp<br/>Python FastMCP Wrapper]
+        MCP[mythrax mcp<br/>Native Stdin/Stdout JSON-RPC 2.0]
     end
 
     subgraph "Mythrax Core (Rust Daemon - <30MB RAM)"
         REST[Axum REST API<br/>127.0.0.1 with Token Auth]
         Store[Markdown Store<br/>Atomic Writes + safe YAML]
         Watcher[notify File-Watcher<br/>Obsidian vault sync]
-        DB[(SurrealDB Server<br/>Native graph + HNSW vectors)]
-        ONNX[ORT Crate<br/>nomic-embed-text local]
-    end
-
-    subgraph "Mythrax Forge (Python Background Engine)"
-        SCHED[APScheduler Background Daemon]
-        COORD[HTR Coordinator<br/>Arbor Search + duplicate check]
-        EXEC[HTR Executor<br/>HITL + AST-screened workspace runner]
-        CRITIC[HTR Critic & Parser<br/>pytest output evaluator]
-        SYNTH[Synthesis & Compaction<br/>DBSCAN dreaming + RAPTOR]
+        DB[(SurrealDB Server<br/>Persistent RocksDB + HNSW vectors)]
+        ONNX[ORT Crate<br/>nomic-embed-text local ONNX]
+        SCHED[Tokio background scheduler<br/>Dreaming + Compaction loops]
     end
 
     CLI -->|HTTP Connection-Pooled REST| REST
-    MCP -->|HTTP REST Client| REST
-    SCHED --> COORD
-    SCHED --> SYNTH
-    COORD -->|HTTP REST| REST
-    SYNTH -->|HTTP REST| REST
     REST --> Store
     REST --> DB
     REST --> ONNX
     Watcher -->|FS Event| DB
     Store -->|writes| DB
+    SCHED --> DB
+    SCHED --> Store
 ```
 
 ---
@@ -65,7 +54,7 @@ Atomic save and index of a new episodic context.
     ```json
     {
       "id": "episode:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3d207b",
-      "status": "indexed"
+      "status": "success"
     }
     ```
 
@@ -95,20 +84,6 @@ Combined vector and graph similarity retrieval.
 
 ### 3. Record Feedback (`POST /v1/feedback`)
 Applies Exponential Moving Average (EMA) reinforcement to dynamic rules: `utility = 0.3 * success + 0.7 * previous_utility`.
-*   **Request:**
-    ```json
-    {
-      "id": "wisdom:dynamic_rule_xyz",
-      "success": true
-    }
-    ```
-*   **Response:**
-    ```json
-    {
-      "status": "reinforced",
-      "new_utility": 0.79
-    }
-    ```
 
 ### 4. Fetch/Update LLM Configuration (`GET/POST /v1/config/llm`)
 Permits dynamic switching between cloud (Gemini/Claude) and local (mlx/ollama) providers, permanently or with an auto-expiry timeframe (e.g. `"2h"`, `"1d"`).
@@ -117,65 +92,49 @@ Permits dynamic switching between cloud (Gemini/Claude) and local (mlx/ollama) p
 
 ## 🛠️ CLI Command Reference
 
-### Core CLI (`mythrax`)
-*   `mythrax init` — Set up directories, download local tokenizer/embedding models, and initialize database schemas.
-*   `mythrax daemon start [--port <port>]` — Starts the Axum server and vault file watcher.
-*   `mythrax daemon stop` — Stops the background daemon.
+### Core CLI Commands (`mythrax`)
+*   `mythrax init [harness] [--source <path>]` — Set up fresh RocksDB cache, SurrealDB schemas, and creates Obsidian subfolders. If harness name is provided, configures it.
+*   `mythrax config <harness> [--source <path>]` — Merges Mythrax MCP and hook configurations without wiping the database. Supported harnesses: `antigravity`, `claude`, `cursor`, `codex`, `opencode`, `openclaw`, `hermes`.
+*   `mythrax config llm --provider <local|cloud> [--model <model>] [--cloud-provider <name>] [--api-key <key>]` — Configures model/embedding provider settings and cloud API keys (saved securely in private file `~/.mythrax/keys.json` with `0600` permissions).
+*   `mythrax daemon start [--port <port>] [--vault <path>]` — Starts the Axum server, watcher, and background tokio synthesis scheduler.
+*   `mythrax daemon stop` — Safely stops the running daemon using the PID file.
+*   `mythrax status` — Details configuration and connection settings.
 *   `mythrax search <query> [--scope <scope>] [--limit <limit>]` — Performs vector and graph search.
-*   `mythrax status` — Details DB connections, memory footprint, and watcher health.
-*   `mythrax config llm --provider <local|cloud> [--timeframe <duration>]` — Toggles LLM configurations.
-
-### Forge CLI (`mythrax-forge`)
-*   `mythrax-forge run <script_path>` — Runs a script through AST-guided sandbox validation.
-*   `mythrax-forge compact` — Forces vertical/horizontal tree summarization (RAPTOR) epochs.
-*   `mythrax-forge dream` — Runs incremental synthesis (DBSCAN) over new episodes.
-
----
-
-## 🚀 Quick Start / Try It Out
-
-### 1. Download Pre-requisites & Models
-Setup SurrealDB and grab Nomic Embed ONNX models:
-```bash
-chmod +x ./scripts/download_assets.sh
-./scripts/download_assets.sh
-```
-
-### 2. Bootstrapping
-Install Python packages and start the Core memory daemon:
-```bash
-# Set up Python venv
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ./mythrax-forge -e ./mythrax-mcp
-
-# Initialize directories & schema
-cargo run --bin mythrax -- init
-
-# Start Core daemon
-cargo run --bin mythrax -- daemon start &
-```
-
-### 3. Execute Compliance Installation
-Install the required agent hooks:
-```bash
-./scripts/install_hooks.sh
-```
+*   `mythrax vault ingest --source <dir> --harness <type> [--scope <scope>]` — Bulk ingests logs from target harnesses.
+*   `mythrax vault organize` — Resolves duplicate notes and vault structures.
+*   `mythrax vault summarize [--scope <scope>]` — Compacks and summarizes episodes.
+*   `mythrax vault verify [--fix]` — Runs graph and file-to-db integrity verification.
+*   `mythrax vault reprocess` — Recalculates embeddings for episodes stored during offline/missing model state.
+*   `mythrax mcp` — Runs the native stdin/stdout JSON-RPC 2.0 MCP server.
 
 ---
 
 ## 🛡️ Programmatic Compliance Enforcement
 
-To prevent agent compliance rules from being lost during context compactions, the system uses two deterministic gates:
-1.  **Antigravity pre-invocation hook (`hooks.json`)**: Configured at `~/.gemini/config/hooks.json`, this hook automatically executes `/Users/keith/.gemini/antigravity/scratch/verify_compliance.py` before every model turn. Any compliance violations (such as failure to query memory or an offline daemon) are printed and injected directly into the agent's context.
-2.  **Git lifecycle hooks**: Installed in the repository (`pre-commit`, `pre-push`, `post-checkout`, `post-merge`), blocking code modifications and commits unless compliance is successfully met.
+To enforce compliance, a single primary Gemini hook executes `./target/debug/mythrax verify` before every model turn, checking tailwind compliance, search history cleanup, and daemon health.
 
 ---
 
-## 📚 References & Inspiration
+## 🚀 Quick Start / Try It Out
 
-Project Mythrax is heavily inspired by the following research and cognitive architectures:
-*   **Arbor Cognitive Architecture:** The core hypothesis-generation, execution testing, and criticism loop (HTR) is designed around the principles described in the Arbor research paper: [Arbor: A Framework for Self-Improving Agents](https://share.google/vGt70fyOADsQuUlf1).
-*   **RAPTOR:** Recursive Abstractive Processing for Tree-Organized Retrieval (RAPTOR) is utilized for building hierarchical memory summaries.
-*   **DBSCAN:** Used for episodic clustering and dreaming consolidation epochs.
+### 1. Bootstrapping
+Build the project, initialize the database directories, and configure your target harness:
+```bash
+# Build binary
+cargo build --release
 
+# Initialize for antigravity harness
+./target/release/mythrax init antigravity
+```
+
+### 2. Start Daemon
+Start the memory server:
+```bash
+./target/release/mythrax daemon start
+```
+
+### 3. Run Tests
+Verify compile and test status:
+```bash
+cargo test
+```
