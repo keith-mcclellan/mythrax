@@ -38,6 +38,14 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 5)]
         limit: usize,
     },
+    /// Run safety compliance audits on the active directory
+    Verify {
+        /// Workspace directory to audit
+        #[arg(short, long)]
+        workspace: Option<String>,
+    },
+    /// Start the MCP server over stdin/stdout
+    Mcp,
 }
 
 #[derive(Subcommand, Debug)]

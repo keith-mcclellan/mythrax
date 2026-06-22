@@ -50,15 +50,20 @@ impl LocalEmbedder {
 
         let ids = encoding.get_ids();
         let mask = encoding.get_attention_mask();
-        let seq_len = ids.len();
+        let mut seq_len = ids.len();
 
         if seq_len == 0 {
             return Ok(vec![0.0; 768]); // Default dimension
         }
 
+        // Truncate sequence length to a maximum of 2048 to prevent quadratic memory usage in self-attention layers
+        if seq_len > 2048 {
+            seq_len = 2048;
+        }
+
         // Convert token IDs to i64 for ONNX
-        let input_ids_data: Vec<i64> = ids.iter().map(|&x| x as i64).collect();
-        let attention_mask_data: Vec<i64> = mask.iter().map(|&x| x as i64).collect();
+        let input_ids_data: Vec<i64> = ids.iter().take(seq_len).map(|&x| x as i64).collect();
+        let attention_mask_data: Vec<i64> = mask.iter().take(seq_len).map(|&x| x as i64).collect();
         let token_type_ids_data: Vec<i64> = vec![0; seq_len];
 
         // Create 2D inputs [batch_size = 1, seq_len]

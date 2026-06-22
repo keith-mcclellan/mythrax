@@ -4,9 +4,14 @@ mod api;
 mod secret_filter;
 mod store;
 mod embeddings;
-mod watcher;
+mod vault;
 mod wal;
 mod cli;
+mod verify;
+mod auth;
+mod llm;
+mod cognitive;
+mod mcp;
 
 use clap::Parser;
 use std::path::PathBuf;
@@ -14,7 +19,7 @@ use std::sync::Arc;
 use anyhow::{Result, Context};
 use db::{SurrealBackend, StorageBackend};
 use store::MarkdownStore;
-use watcher::WatchIgnoreList;
+use vault::watcher::WatchIgnoreList;
 use cli::{Cli, Commands, DaemonAction};
 
 #[tokio::main]
@@ -94,7 +99,7 @@ async fn main() -> Result<()> {
                     let ignore_list = Arc::new(WatchIgnoreList::new());
 
                     // Start File-Watcher
-                    let _watcher = watcher::start_watching(
+                    let _watcher = vault::watcher::start_watching(
                         vault_path,
                         ignore_list.clone(),
                         backend.clone(),
@@ -105,6 +110,8 @@ async fn main() -> Result<()> {
                     let state = Arc::new(api::ApiState {
                         backend,
                         auth_token,
+                        store: store.clone(),
+                        ignore_list: ignore_list.clone(),
                     });
 
                     // Build router and start Axum listener
@@ -191,6 +198,60 @@ async fn main() -> Result<()> {
             } else {
                 println!("Failed to execute search: {}", res.status());
             }
+        },
+        Commands::Verify { workspace } => {
+            let workspace_path = if let Some(w) = workspace {
+                PathBuf::from(w)
+            } else {
+                std::env::current_dir().context("Failed to get current directory")?
+            };
+
+            println!("Running safety compliance audit on: {:?}", workspace_path);
+            let results = verify::run_workspace_audit(&workspace_path).await;
+
+            println!("Tailwind check: {}", if results.tailwind_ok { "PASSED" } else { "FAILED" });
+            if !results.tailwind_ok {
+                for violation in &results.tailwind_violations {
+                    println!("  Violation: {}", violation);
+                }
+            }
+
+            println!("Search history check: {}", if results.search_history_ok { "PASSED" } else { "FAILED" });
+            if let Some(err) = &results.search_history_error {
+                println!("  Error: {}", err);
+            }
+
+            println!("Daemon health check: {}", if results.daemon_ok { "PASSED" } else { "FAILED" });
+            if let Some(err) = &results.daemon_error {
+                println!("  Error: {}", err);
+            }
+
+            if results.tailwind_ok && results.search_history_ok && results.daemon_ok {
+                println!("Compliance status: SUCCESS");
+            } else {
+                println!("Compliance status: FAILED");
+                std::process::exit(1);
+            }
+        }
+        Commands::Mcp => {
+            let home = std::env::var("HOME").context("HOME env var not set")?;
+            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+            let config_path = mythrax_dir.join("config.json");
+
+            let vault_path = if config_path.exists() {
+                let config_content = std::fs::read_to_string(&config_path)?;
+                let config_val: serde_json::Value = serde_json::from_str(&config_content)?;
+                PathBuf::from(config_val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+            } else {
+                PathBuf::from(&home).join("mythrax-vault")
+            };
+
+            let backend = Arc::new(db::SurrealBackend::new_in_memory().await?);
+            backend.init().await?;
+            let store = Arc::new(store::MarkdownStore::new(&vault_path)?);
+
+            let mcp_server = mcp::McpServer::new(backend, store);
+            mcp_server.run().await?;
         }
     }
 

@@ -4,47 +4,72 @@
 set -euo pipefail
 
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-echo "=== Installing Mythrax hooks to: $WORKSPACE_ROOT ==="
 
-# 1. Initialize git if not present
-if [ ! -d "$WORKSPACE_ROOT/.git" ]; then
-  echo "Initializing git repository..."
-  git -C "$WORKSPACE_ROOT" init
-  git -C "$WORKSPACE_ROOT" remote add origin https://github.com/keith-mcclellan/mythrax || true
+# Target directories default to WORKSPACE_ROOT if no args passed
+TARGET_DIRS=()
+if [ "$#" -gt 0 ]; then
+  for dir in "$@"; do
+    TARGET_DIRS+=("$(cd "$dir" && pwd)")
+  done
+else
+  TARGET_DIRS+=("$WORKSPACE_ROOT")
 fi
 
-# 2. Write Git hooks
-HOOKS_DIR="$WORKSPACE_ROOT/.git/hooks"
-mkdir -p "$HOOKS_DIR"
+echo "=== Target directories for hooks: ==="
+for dir in "${TARGET_DIRS[@]}"; do
+  echo "  - $dir"
+done
 
-echo "Writing git pre-commit, pre-push, post-checkout, post-merge hooks..."
-HOOK_NAMES=("pre-commit" "pre-push" "post-checkout" "post-merge")
-for hook in "${HOOK_NAMES[@]}"; do
-  HOOK_PATH="$HOOKS_DIR/$hook"
-  cat << 'EOF' > "$HOOK_PATH"
+# 1. Initialize git and write hooks for each target directory
+for dir in "${TARGET_DIRS[@]}"; do
+  echo "--- Configuring directory: $dir ---"
+  if [ ! -d "$dir/.git" ]; then
+    echo "Initializing git repository in $dir..."
+    git -C "$dir" init
+  fi
+
+  HOOKS_DIR="$dir/.git/hooks"
+  mkdir -p "$HOOKS_DIR"
+
+  echo "Writing git pre-commit, pre-push, post-checkout, post-merge hooks..."
+  HOOK_NAMES=("pre-commit" "pre-push" "post-checkout" "post-merge")
+  for hook in "${HOOK_NAMES[@]}"; do
+    HOOK_PATH="$HOOKS_DIR/$hook"
+    cat << 'EOF' > "$HOOK_PATH"
 #!/bin/sh
 # Compliance verification hook installed by Project Mythrax
 echo "Running compliance check hook..."
 python3 /Users/keith/.gemini/antigravity/scratch/verify_compliance.py "$(pwd)"
 EOF
-  chmod +x "$HOOK_PATH"
-done
+    chmod +x "$HOOK_PATH"
+  done
 
-echo "Writing git post-commit hook..."
-POST_COMMIT_PATH="$HOOKS_DIR/post-commit"
-cat << 'EOF' > "$POST_COMMIT_PATH"
-#!/bin/sh
+  echo "Writing git post-commit hook..."
+  POST_COMMIT_PATH="$HOOKS_DIR/post-commit"
+  cat << 'EOF' > "$POST_COMMIT_PATH"
+#!/usr/bin/env python3
 # Commit indexing hook installed by Project Mythrax
-commit_msg=$(git log -1 --pretty=%B)
-scope=$(basename "$(pwd)")
-token=$(cat ~/.mythrax/token 2>/dev/null || echo "secret-token")
+import subprocess
+import os
+import sys
 
-curl -s -X POST -H "Content-Type: application/json" \
-  -H "X-Mythrax-Token: $token" \
-  -d "{\"title\": \"Commit: $(git log -1 --pretty=%s)\", \"content\": \"$commit_msg\", \"entities\": [], \"scope\": \"$scope\"}" \
-  http://127.0.0.1:8090/v1/episodes >/dev/null 2>&1 &
+# Ensure venv packages are in path
+sys.path.insert(0, "/Users/keith/Documents/self-improvement-engine/.venv/lib/python3.14/site-packages")
+sys.path.insert(0, "/Users/keith/Documents/self-improvement-engine/mythrax-mcp/src")
+
+try:
+    commit_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B"], text=True).strip()
+    commit_title = f"Commit: {subprocess.check_output(['git', 'log', '-1', '--pretty=%s'], text=True).strip()}"
+    scope = os.path.basename(os.getcwd())
+    
+    from mythrax_mcp.main import save_episode
+    save_episode(title=commit_title, content=commit_msg, entities=[], scope=scope)
+except Exception:
+    # Silent failure to not block git workflow
+    pass
 EOF
-chmod +x "$POST_COMMIT_PATH"
+  chmod +x "$POST_COMMIT_PATH"
+done
 
 # 3. Update global Gemini config.json and mcp_config.json using Python JSON parser
 echo "Configuring MCP and permission grants in ~/.gemini/config/..."
