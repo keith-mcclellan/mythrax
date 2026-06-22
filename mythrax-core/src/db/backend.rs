@@ -1,8 +1,9 @@
 use axum::async_trait;
 use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave};
 use anyhow::{Result, Context};
-use surrealdb::engine::local::{Db, Mem};
+use surrealdb::engine::local::{Db, Mem, RocksDb};
 use surrealdb::Surreal;
+use std::sync::Arc;
 use uuid::Uuid;
 use crate::db::schema::INIT_SCHEMA;
 
@@ -74,14 +75,37 @@ pub trait StorageBackend: Send + Sync {
 
 pub struct SurrealBackend {
     pub db: Surreal<Db>,
+    pub embedder: Option<Arc<crate::embeddings::LocalEmbedder>>,
 }
 
 impl SurrealBackend {
-    pub async fn new_in_memory() -> Result<Self> {
-        let db = Surreal::new::<Mem>(()).await
-            .context("Failed to initialize in-memory SurrealDB")?;
+    pub async fn new(url: &str) -> Result<Self> {
+        let db = if url.starts_with("rocksdb://") {
+            let path = url.strip_prefix("rocksdb://").unwrap();
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            Surreal::new::<RocksDb>(path).await
+                .context(format!("Failed to initialize SurrealDB with RocksDB at: {}", path))?
+        } else {
+            Surreal::new::<Mem>(()).await
+                .context("Failed to initialize SurrealDB with in-memory store")?
+        };
         db.use_ns("mythrax").use_db("memory").await?;
-        Ok(Self { db })
+
+        let embedder = match crate::embeddings::LocalEmbedder::new() {
+            Ok(emb) => Some(Arc::new(emb)),
+            Err(e) => {
+                tracing::warn!("Failed to initialize LocalEmbedder: {}. Falling back to non-embedded mode.", e);
+                None
+            }
+        };
+
+        Ok(Self { db, embedder })
+    }
+
+    pub async fn new_in_memory() -> Result<Self> {
+        Self::new("mem://").await
     }
 }
 
@@ -158,7 +182,8 @@ impl StorageBackend for SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    processed_in_dream: false
+                    processed_in_dream: false,
+                    embedding: $embedding
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -174,7 +199,8 @@ impl StorageBackend for SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    processed_in_dream: false
+                    processed_in_dream: false,
+                    embedding: $embedding
                 };
                 
                 CREATE $met CONTENT {
@@ -191,6 +217,19 @@ impl StorageBackend for SurrealBackend {
         let scope_val = episode.scope.clone().unwrap_or_else(|| "general".to_string());
         let vp_val = episode.vault_path.clone().unwrap_or_else(|| "".to_string());
 
+        let embedding_val = if let Some(ref embedder) = self.embedder {
+            let text_to_embed = format!("{}: {}", episode.title, episode.content);
+            match embedder.embed(&text_to_embed) {
+                Ok(vec) => Some(vec),
+                Err(e) => {
+                    tracing::warn!("Embedding generation failed in save_episode: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let response = self.db.query(query_str)
             .bind(("ep_uuid", &ep_uuid))
             .bind(("metrics_uuid", &metrics_uuid))
@@ -198,6 +237,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("content", &episode.content))
             .bind(("target_scope", &scope_val))
             .bind(("vault_path", &vp_val))
+            .bind(("embedding", &embedding_val))
             .await?;
 
         println!("DEBUG: save_episode query response: {:#?}", response);
@@ -262,7 +302,7 @@ impl StorageBackend for SurrealBackend {
                     causal_explanation: $causal_explanation,
                     prescribed_remedy: $prescribed_remedy,
                     tier: $tier,
-                    scope: $scope,
+                    scope: $target_scope,
                     vault_path: $vault_path,
                     source_episodes: $source_episodes,
                     generator_name: $generator_name
@@ -281,7 +321,7 @@ impl StorageBackend for SurrealBackend {
                     causal_explanation: $causal_explanation,
                     prescribed_remedy: $prescribed_remedy,
                     tier: $tier,
-                    scope: $scope,
+                    scope: $target_scope,
                     vault_path: $vault_path,
                     source_episodes: $source_episodes,
                     generator_name: $generator_name
@@ -308,7 +348,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("causal_explanation", &rule.causal_explanation))
             .bind(("prescribed_remedy", &rule.prescribed_remedy))
             .bind(("tier", &rule.tier))
-            .bind(("scope", &rule.scope))
+            .bind(("target_scope", &rule.scope))
             .bind(("vault_path", &vp_val))
             .bind(("source_episodes", &rule.source_episodes))
             .bind(("generator_name", &rule.generator_name))
@@ -477,25 +517,52 @@ impl StorageBackend for SurrealBackend {
         let sql = "SELECT active_provider, model, cloud_provider, is_override, expires_at FROM config:settings;";
         let mut response = self.db.query(sql).await?.check().context("Get config query failed")?;
         let config_opt: Option<LlmConfigResponse> = response.take(0)?;
-        if let Some(config) = config_opt {
-            Ok(config)
+        let mut config = if let Some(c) = config_opt {
+            c
         } else {
-            Ok(LlmConfigResponse {
+            LlmConfigResponse {
                 active_provider: "local".to_string(),
                 cloud_provider: "gemini".to_string(),
                 model: "mlx-community/gemma-4-26b-a4b-it-4bit".to_string(),
                 is_override: false,
                 expires_at: None,
-            })
-        }
+                api_key: None,
+            }
+        };
+
+        let provider_for_key = if config.active_provider == "local" {
+            "local"
+        } else {
+            &config.cloud_provider
+        };
+        config.api_key = load_api_key(provider_for_key);
+        Ok(config)
     }
 
     async fn update_llm_config(&self, req: &LlmConfigRequest) -> Result<()> {
-        let (model, cloud_provider) = if req.provider == "local" {
-            ("mlx-community/gemma-4-26b-a4b-it-4bit".to_string(), "gemini".to_string())
-        } else {
-            ("gemini-1.5-flash".to_string(), "gemini".to_string())
-        };
+        let sql_select = "SELECT active_provider, model, cloud_provider, is_override, expires_at FROM config:settings;";
+        let mut select_res = self.db.query(sql_select).await?.check().context("Get config query failed")?;
+        let existing: Option<LlmConfigResponse> = select_res.take(0)?;
+
+        let mut current_model = req.model.clone();
+        let mut current_cloud_provider = req.cloud_provider.clone();
+
+        if current_model.is_none() || current_cloud_provider.is_none() {
+            let (default_model, default_cloud_provider) = if req.provider == "local" {
+                ("mlx-community/gemma-4-26b-a4b-it-4bit".to_string(), "gemini".to_string())
+            } else {
+                ("gemini-1.5-flash".to_string(), "gemini".to_string())
+            };
+            if current_model.is_none() {
+                current_model = Some(existing.as_ref().map(|e| e.model.clone()).unwrap_or(default_model));
+            }
+            if current_cloud_provider.is_none() {
+                current_cloud_provider = Some(existing.as_ref().map(|e| e.cloud_provider.clone()).unwrap_or(default_cloud_provider));
+            }
+        }
+
+        let model = current_model.unwrap();
+        let cloud_provider = current_cloud_provider.unwrap();
 
         let expires_at = if req.duration.as_deref() != Some("permanent") {
             Some("2026-06-21T23:59:59Z".to_string())
@@ -518,6 +585,16 @@ impl StorageBackend for SurrealBackend {
             .bind(("cloud_provider", &cloud_provider))
             .bind(("expires_at", &expires_at))
             .await?.check().context("UPSERT config failed")?;
+
+        if let Some(ref key) = req.api_key {
+            let provider_for_key = if req.provider == "local" {
+                "local"
+            } else {
+                &cloud_provider
+            };
+            save_api_key(provider_for_key, key)?;
+        }
+
         Ok(())
     }
 
@@ -626,7 +703,7 @@ impl StorageBackend for SurrealBackend {
                 subagent_conversation_id: $subagent,
                 summary: $summary,
                 handoff_file_path: $path,
-                scope: $scope
+                scope: $target_scope
             };
         ";
         self.db.query(query)
@@ -635,10 +712,55 @@ impl StorageBackend for SurrealBackend {
             .bind(("subagent", &handoff.subagent_conversation_id))
             .bind(("summary", &handoff.summary))
             .bind(("path", &handoff.handoff_file_path))
-            .bind(("scope", handoff.scope.as_deref().unwrap_or("general")))
+            .bind(("target_scope", handoff.scope.as_deref().unwrap_or("general")))
             .await?.check()?;
         Ok(format!("handoff:{}", id_str))
     }
+}
+
+fn load_api_key(provider: &str) -> Option<String> {
+    if let Ok(home) = std::env::var("HOME") {
+        let keys_path = std::path::PathBuf::from(&home).join(".mythrax/keys.json");
+        if keys_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&keys_path) {
+                if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content) {
+                    if let Some(val) = map.get(provider) {
+                        if let Some(s) = val.as_str() {
+                            return Some(s.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn save_api_key(provider: &str, key: &str) -> Result<()> {
+    if let Ok(home) = std::env::var("HOME") {
+        let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");
+        std::fs::create_dir_all(&mythrax_dir)?;
+        let keys_path = mythrax_dir.join("keys.json");
+        let mut map = if keys_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&keys_path) {
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content).unwrap_or_default()
+            } else {
+                serde_json::Map::new()
+            }
+        } else {
+            serde_json::Map::new()
+        };
+        map.insert(provider.to_string(), serde_json::Value::String(key.to_string()));
+        let content = serde_json::to_string_pretty(&map)?;
+        std::fs::write(&keys_path, &content)?;
+        
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&keys_path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+    Ok(())
 }
 
 

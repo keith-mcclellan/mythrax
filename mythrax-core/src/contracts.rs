@@ -77,12 +77,16 @@ pub struct LlmConfigResponse {
     pub model: String,
     pub is_override: bool,
     pub expires_at: Option<String>,
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfigRequest {
     pub provider: String,
     pub duration: Option<String>,
+    pub model: Option<String>,
+    pub cloud_provider: Option<String>,
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +101,9 @@ pub struct HypothesisNode {
     pub result: Option<String>,
     pub insight: Option<String>,
     pub code_ref: Option<String>,
+    pub code_changes: Option<std::collections::HashMap<String, String>>,
+    pub scope: Option<String>,
+    pub vault_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

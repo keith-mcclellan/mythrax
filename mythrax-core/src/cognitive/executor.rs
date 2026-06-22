@@ -11,7 +11,13 @@ impl ArborExecutor {
         Self { repo_path }
     }
 
-    pub fn execute(&self, node_id: &str, commit_sha: &str, test_command: &str) -> Result<(bool, String)> {
+    pub fn execute(
+        &self,
+        node_id: &str,
+        commit_sha: &str,
+        test_command: &str,
+        code_changes: &Option<std::collections::HashMap<String, String>>,
+    ) -> Result<(bool, String)> {
         let worktree_dir = format!("/tmp/worktree-node-{}", node_id);
         let worktree_path = PathBuf::from(&worktree_dir);
 
@@ -55,6 +61,17 @@ impl ArborExecutor {
                 .status()?;
             if !status2.success() {
                 return Err(anyhow!("Failed to add git worktree at {} for commit {}", worktree_dir, commit_sha));
+            }
+        }
+
+        // Apply code changes if present
+        if let Some(changes) = code_changes {
+            for (rel_path, content) in changes {
+                let file_path = worktree_path.join(rel_path);
+                if let Some(parent) = file_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&file_path, content)?;
             }
         }
 

@@ -19,10 +19,30 @@ impl MockLLMClient {
 }
 
 impl ArborLlmClient for MockLLMClient {
-    async fn propose_hypotheses(&self, _db: &dyn mythrax_core::db::StorageBackend, _parent_id: &str, _parent_hypothesis: &str) -> Result<String> {
+    async fn propose_hypotheses(
+        &self,
+        _db: &dyn mythrax_core::db::StorageBackend,
+        _parent_id: &str,
+        _parent_hypothesis: &str,
+        _target_files: &[(String, String)],
+    ) -> Result<String> {
         Ok(r#"[
-            { "node_id": "1", "hypothesis": "Optimize check range", "score": 90.0 },
-            { "node_id": "2", "hypothesis": "Sieve of Eratosthenes", "score": 98.0 }
+            {
+                "node_id": "1",
+                "hypothesis": "Optimize check range",
+                "score": 90.0,
+                "code_changes": {
+                    "prime_calc.py": "\ndef is_prime(n):\n    if n <= 1:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True\n"
+                }
+            },
+            {
+                "node_id": "2",
+                "hypothesis": "Sieve of Eratosthenes",
+                "score": 98.0,
+                "code_changes": {
+                    "prime_calc.py": "\ndef is_prime(n):\n    if n <= 1:\n        return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0:\n            return False\n    return True\n"
+                }
+            }
         ]"#.to_string())
     }
 
@@ -110,17 +130,7 @@ def test_prime():
 
 async fn setup_surreal_schema(db: &Surreal<Db>) -> Result<()> {
     let schema = r#"
-        DEFINE TABLE hypothesis_node SCHEMAFULL;
-        DEFINE FIELD node_id ON hypothesis_node TYPE string;
-        DEFINE FIELD parent_id ON hypothesis_node TYPE option<string>;
-        DEFINE FIELD children_ids ON hypothesis_node TYPE array<string>;
-        DEFINE FIELD depth ON hypothesis_node TYPE int;
-        DEFINE FIELD hypothesis ON hypothesis_node TYPE string;
-        DEFINE FIELD status ON hypothesis_node TYPE string DEFAULT 'pending';
-        DEFINE FIELD score ON hypothesis_node TYPE option<float>;
-        DEFINE FIELD result ON hypothesis_node TYPE option<string>;
-        DEFINE FIELD insight ON hypothesis_node TYPE option<string>;
-        DEFINE FIELD code_ref ON hypothesis_node TYPE option<string>;
+        DEFINE TABLE hypothesis_node SCHEMALESS;
         DEFINE INDEX node_id_idx ON hypothesis_node FIELDS node_id UNIQUE;
     "#;
     db.query(schema).await?.check()?;
@@ -147,10 +157,13 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         vault_temp.path().to_path_buf(),
         repo_temp.path().to_path_buf(),
         llm_client,
+        "math-testing".to_string(),
+        "python3 test_prime.py".to_string(),
+        vec!["prime_calc.py".to_string()],
     ).await;
 
     // ----- Step A: Initialization & Base Assessment -----
-    coordinator.init_root().await?;
+    coordinator.init_root("Base implementation of prime checker".to_string(), None).await?;
 
     // Assertion 1: ROOT node exists in SurrealDB
     let root_node: Option<HypothesisNode> = db

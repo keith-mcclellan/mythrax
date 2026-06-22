@@ -211,6 +211,63 @@ fn parse_generic_markdown(path: &Path, scope: &str) -> Result<String> {
     }
 }
 
+fn parse_codex_log(path: &Path) -> Result<String> {
+    let content = std::fs::read_to_string(path)?;
+    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+        let mut markdown = String::new();
+        if let Some(arr) = json_val.as_array() {
+            for msg in arr {
+                let role = msg["role"].as_str().unwrap_or("unknown");
+                let content = msg["content"].as_str().unwrap_or("");
+                markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+            }
+        } else if let Some(arr) = json_val["messages"].as_array() {
+            for msg in arr {
+                let role = msg["role"].as_str().unwrap_or("unknown");
+                let content = msg["content"].as_str().unwrap_or("");
+                markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+            }
+        }
+        if !markdown.is_empty() {
+            return Ok(markdown);
+        }
+    }
+    
+    let mut markdown = String::new();
+    let mut current_role = String::new();
+    let mut current_content = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("role =") || trimmed.starts_with("role=") {
+            if let Some(idx) = trimmed.find('"') {
+                if let Some(end_idx) = trimmed[idx+1..].find('"') {
+                    current_role = trimmed[idx+1..idx+1+end_idx].to_string();
+                }
+            }
+        } else if trimmed.starts_with("content =") || trimmed.starts_with("content=") {
+            if let Some(idx) = trimmed.find('"') {
+                if let Some(end_idx) = trimmed[idx+1..].find('"') {
+                    current_content = trimmed[idx+1..idx+1+end_idx].to_string();
+                }
+            }
+        }
+        if !current_role.is_empty() && !current_content.is_empty() {
+            markdown.push_str(&format!("**{}**: {}\n\n", current_role, current_content));
+            current_role.clear();
+            current_content.clear();
+        }
+    }
+    
+    if markdown.is_empty() {
+        if content.trim().is_empty() {
+            anyhow::bail!("Codex log file is empty");
+        }
+        Ok(content)
+    } else {
+        Ok(markdown)
+    }
+}
+
 fn quarantine_file(file_path: &Path, source_dir: &Path, error_msg: &str) -> String {
     let quarantine_dir = source_dir.join("quarantine");
     let _ = std::fs::create_dir_all(&quarantine_dir);
@@ -374,6 +431,41 @@ pub async fn bulk_ingest_vault(
                 }
             } else {
                 errors.push("state.vscdb not found in source directory".to_string());
+            }
+        }
+        "codex" => {
+            let files = find_files(&["json", "jsonl", "toml", "txt"]);
+            for file in files {
+                match parse_codex_log(&file) {
+                    Ok(content) => {
+                        let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                        let title = format!("codex_{}", file_stem);
+                        let uuid = uuid::Uuid::new_v4().to_string();
+                        let relative_path = format!("episodes/codex_{}_{}.md", file_stem, &uuid[..8]);
+                        
+                        let note_content = format!(
+                            "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"codex\"\n---\n\n{}",
+                            title, scope, content
+                        );
+                        if store.write_file(&relative_path, &note_content).is_ok() {
+                            let ep_save = crate::contracts::EpisodeSave {
+                                title,
+                                content: note_content,
+                                entities: vec![],
+                                scope: Some(scope.to_string()),
+                                vault_path: Some(relative_path),
+                                source_episode: None,
+                            };
+                            if db.save_episode(&ep_save).await.is_ok() {
+                                success_count += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let err_msg = quarantine_file(&file, source_dir, &e.to_string());
+                        errors.push(err_msg);
+                    }
+                }
             }
         }
         "opencode" => {

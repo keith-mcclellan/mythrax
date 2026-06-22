@@ -40,6 +40,7 @@ pub fn start_watching(
     ignore_list: Arc<WatchIgnoreList>,
     backend: Arc<dyn StorageBackend>,
     store: Arc<MarkdownStore>,
+    dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> Result<RecommendedWatcher> {
     let (tx, mut rx) = mpsc::channel::<notify::Result<Event>>(100);
 
@@ -55,6 +56,7 @@ pub fn start_watching(
     // Spawn a tokio task to handle events
     let backend_clone = backend.clone();
     let store_clone = store.clone();
+    let dream_tx_clone = dream_tx.clone();
     tokio::spawn(async move {
         while let Some(res) = rx.recv().await {
             match res {
@@ -70,6 +72,10 @@ pub fn start_watching(
                             }
                             if let Err(e) = sync_file_to_db(&path, &backend_clone, &store_clone).await {
                                 tracing::error!("Failed to sync file {:?} to DB: {:?}", path, e);
+                            } else {
+                                if let Some(ref tx) = dream_tx_clone {
+                                    let _ = tx.send(()).await;
+                                }
                             }
                         }
                     }

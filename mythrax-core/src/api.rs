@@ -15,6 +15,7 @@ pub struct ApiState {
     pub auth_token: String,
     pub store: Arc<MarkdownStore>,
     pub ignore_list: Arc<WatchIgnoreList>,
+    pub dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 pub fn create_router(state: Arc<ApiState>) -> Router {
@@ -48,7 +49,12 @@ async fn save_episode_handler(
     }
 
     match crate::vault::watcher::save_episode_bidirectional(&payload, &state.backend, &state.store, &state.ignore_list).await {
-        Ok(id) => Ok(Json(json!({ "status": "success", "id": id }))),
+        Ok(id) => {
+            if let Some(ref tx) = state.dream_tx {
+                let _ = tx.send(()).await;
+            }
+            Ok(Json(json!({ "status": "success", "id": id })))
+        }
         Err(e) => {
             tracing::error!("API failed to save episode bidirectional: {:?}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -204,6 +210,7 @@ mod tests {
             auth_token: "secret-token".to_string(),
             store,
             ignore_list,
+            dream_tx: None,
         });
 
         let app = create_router(state);

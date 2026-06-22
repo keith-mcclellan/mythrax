@@ -44,12 +44,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX wisdom_tier ON wisdom FIELDS tier;
 
-    DEFINE TABLE hypothesis_node SCHEMAFULL;
-    DEFINE FIELD content ON hypothesis_node TYPE string;
-    DEFINE FIELD support_score ON hypothesis_node TYPE float DEFAULT 1.0;
-    DEFINE FIELD scope ON hypothesis_node TYPE string DEFAULT 'general';
-    DEFINE FIELD vault_path ON hypothesis_node TYPE string DEFAULT '';
-    DEFINE FIELD embedding ON hypothesis_node TYPE option<array<float>>;
+    DEFINE TABLE hypothesis_node SCHEMALESS;
+    DEFINE INDEX node_id_idx ON hypothesis_node FIELDS node_id UNIQUE;
     DEFINE INDEX hypothesis_scope ON hypothesis_node FIELDS scope;
 
     DEFINE TABLE handoff SCHEMAFULL;

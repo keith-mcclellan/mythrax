@@ -56,7 +56,7 @@ impl LLMClient {
             "cloud" => {
                 match config.cloud_provider.as_str() {
                     "gemini" => {
-                        let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
+                        let api_key = config.api_key.clone().unwrap_or_else(|| std::env::var("GEMINI_API_KEY").unwrap_or_default());
                         let url = format!(
                             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
                             config.model, api_key
@@ -96,7 +96,7 @@ impl LLMClient {
                             .to_string()
                     }
                     "anthropic" | "claude" => {
-                        let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+                        let api_key = config.api_key.clone().unwrap_or_else(|| std::env::var("ANTHROPIC_API_KEY").unwrap_or_default());
                         let url = "https://api.anthropic.com/v1/messages";
                         
                         let mut payload = serde_json::json!({
@@ -137,15 +137,36 @@ impl LLMClient {
 }
 
 impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
-    async fn propose_hypotheses(&self, db: &dyn StorageBackend, _parent_id: &str, parent_hypothesis: &str) -> Result<String> {
+    async fn propose_hypotheses(
+        &self,
+        db: &dyn StorageBackend,
+        _parent_id: &str,
+        parent_hypothesis: &str,
+        target_files: &[(String, String)],
+    ) -> Result<String> {
+        let mut files_context = String::new();
+        for (path, content) in target_files {
+            files_context.push_str(&format!("--- FILE: {} ---\n{}\n\n", path, content));
+        }
+
         let prompt = format!(
-            "Based on the parent hypothesis: \"{}\", propose two alternative child hypotheses to refine it.\n\
-             Return a JSON array of objects, each containing:\n\
-             - \"node_id\": a unique sequential string ID (e.g. \"1\", \"2\")\n\
-             - \"hypothesis\": description of the refinement\n\
-             - \"score\": float utility expectation from 0.0 to 100.0 (assign higher score to the better candidate)\n\n\
-             Output format MUST be a raw JSON array only.",
-            parent_hypothesis
+            "You are an autonomous codebase researcher. We are modifying the following files:\n\n\
+             {}\n\
+             Based on the parent hypothesis: \"{}\", propose two alternative refinements.\n\
+             For each refinement, suggest sequential node_id (e.g. \"1\", \"2\"), description, expected utility score (0.0 to 100.0), and a 'code_changes' map containing relative file paths to their COMPLETE updated file contents.\n\n\
+             Return a JSON array of objects with exactly this structure:\n\
+             [\n\
+               {{\n\
+                 \"node_id\": \"1\",\n\
+                 \"hypothesis\": \"...description...\",\n\
+                 \"score\": 95.0,\n\
+                 \"code_changes\": {{\n\
+                   \"relative/file/path.rs\": \"...full updated content of the file...\"\n\
+                 }}\n\
+               }}\n\
+             ]\n\n\
+             Output format MUST be a raw JSON array only, without any markdown formatting or code block wrapping.",
+            files_context, parent_hypothesis
         );
         self.completion(db, Some("You are an ideation assistant that outputs raw JSON arrays."), &prompt).await
     }

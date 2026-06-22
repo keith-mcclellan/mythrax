@@ -8,7 +8,13 @@ use crate::db::StorageBackend;
 use crate::contracts::HypothesisNode;
 
 pub trait ArborLlmClient: Send + Sync {
-    async fn propose_hypotheses(&self, db: &dyn StorageBackend, parent_id: &str, parent_hypothesis: &str) -> Result<String>;
+    async fn propose_hypotheses(
+        &self,
+        db: &dyn StorageBackend,
+        parent_id: &str,
+        parent_hypothesis: &str,
+        target_files: &[(String, String)],
+    ) -> Result<String>;
     async fn evaluate_run(&self, db: &dyn StorageBackend, run_logs: &str) -> Result<String>;
     async fn abstract_insights(&self, db: &dyn StorageBackend, parent_insight: Option<&str>, child_insight: &str) -> Result<String>;
 }
@@ -20,6 +26,8 @@ pub struct ArborCoordinator<L: ArborLlmClient> {
     repo_path: PathBuf,
     llm_client: L,
     scope: String,
+    test_command: String,
+    target_files: Vec<String>,
 }
 
 impl<L: ArborLlmClient> ArborCoordinator<L> {
@@ -28,15 +36,20 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         vault_root: PathBuf,
         repo_path: PathBuf,
         llm_client: L,
+        scope: String,
+        test_command: String,
+        target_files: Vec<String>,
     ) -> Self {
-        let backend = crate::db::SurrealBackend { db: db.clone() };
+        let backend = crate::db::SurrealBackend { db: db.clone(), embedder: None };
         Self {
             db,
             backend,
             vault_root,
             repo_path,
             llm_client,
-            scope: "math-testing".to_string(),
+            scope,
+            test_command,
+            target_files,
         }
     }
 
@@ -44,8 +57,34 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         self.vault_root.join(format!("wiki/{}/hypothesis_tree/{}.md", self.scope, node_id))
     }
 
+    fn get_current_files_context(&self, parent: &HypothesisNode) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        for rel_path in &self.target_files {
+            let mut content = String::new();
+            if let Some(ref changes) = parent.code_changes {
+                if let Some(c) = changes.get(rel_path) {
+                    content = c.clone();
+                }
+            }
+            if content.is_empty() {
+                let full_path = self.repo_path.join(rel_path);
+                if full_path.exists() {
+                    if let Ok(c) = fs::read_to_string(full_path) {
+                        content = c;
+                    }
+                }
+            }
+            result.push((rel_path.clone(), content));
+        }
+        result
+    }
+
     /// Step A: Initialize the root node and base assessment
-    pub async fn init_root(&self) -> Result<()> {
+    pub async fn init_root(
+        &self,
+        hypothesis: String,
+        code_changes: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<()> {
         let root_id = "ROOT".to_string();
         
         let root_node = HypothesisNode {
@@ -53,12 +92,15 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             parent_id: None,
             children_ids: vec![],
             depth: 0,
-            hypothesis: "Base implementation of prime checker".to_string(),
+            hypothesis,
             status: "pending".to_string(),
             score: None,
             result: None,
             insight: None,
             code_ref: None,
+            code_changes,
+            scope: Some(self.scope.clone()),
+            vault_path: Some(format!("wiki/{}/hypothesis_tree/{}.md", self.scope, root_id)),
         };
 
         // Write to SurrealDB
@@ -83,7 +125,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             .await?
             .ok_or_else(|| anyhow!("Parent node not found"))?;
 
-        let response = self.llm_client.propose_hypotheses(&self.backend, &parent.node_id, &parent.hypothesis).await?;
+        let files_context = self.get_current_files_context(&parent);
+        let response = self.llm_client.propose_hypotheses(&self.backend, &parent.node_id, &parent.hypothesis, &files_context).await?;
         let proposals: Vec<serde_json::Value> = serde_json::from_str(&response)?;
         
         let mut children_ids = vec![];
@@ -91,6 +134,14 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             let node_id = prop["node_id"].as_str().ok_or_else(|| anyhow!("Missing node_id"))?.to_string();
             let hypothesis = prop["hypothesis"].as_str().ok_or_else(|| anyhow!("Missing hypothesis"))?.to_string();
             let score = prop["score"].as_f64().map(|s| s as f32);
+
+            let code_changes: Option<std::collections::HashMap<String, String>> = prop["code_changes"]
+                .as_object()
+                .map(|obj| {
+                    obj.iter()
+                       .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                       .collect()
+                });
 
             let child_node = HypothesisNode {
                 node_id: node_id.clone(),
@@ -103,6 +154,9 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                 result: None,
                 insight: None,
                 code_ref: None,
+                code_changes,
+                scope: Some(self.scope.clone()),
+                vault_path: Some(format!("wiki/{}/hypothesis_tree/{}.md", self.scope, node_id)),
             };
 
             // Write to SurrealDB
@@ -137,7 +191,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 
     /// Step C: Select next batch of hypotheses
     pub async fn select_next_batch(&self, limit: usize) -> Result<Vec<String>> {
-        let mut res = self.db.query("SELECT * FROM hypothesis_node WHERE status = 'pending' ORDER BY score DESC LIMIT $limit")
+        let mut res = self.db.query("SELECT * FROM hypothesis_node WHERE status = 'pending' AND scope = $target_scope ORDER BY score DESC LIMIT $limit")
+            .bind(("target_scope", &self.scope))
             .bind(("limit", limit))
             .await?;
         let nodes: Vec<HypothesisNode> = res.take(0)?;
@@ -157,9 +212,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             .output()?;
         let commit_sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
-        let test_command = "python3 test_prime.py";
         let executor = crate::cognitive::executor::ArborExecutor::new(self.repo_path.clone());
-        let (_success, logs) = executor.execute(&node.node_id, &commit_sha, test_command)?;
+        let (_success, logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes)?;
 
         node.result = Some(logs);
         
@@ -232,27 +286,27 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             .await?
             .ok_or_else(|| anyhow!("Node not found"))?;
 
-        // Apply sieve implementation to the repo path
-        let sieve_code = r#"
-def is_prime(n):
-    if n <= 1:
-        return False
-    # Optimized sieve/range check
-    for i in range(2, int(n**0.5) + 1):
-        if n % i == 0:
-            return False
-    return True
-"#;
-        fs::write(self.repo_path.join("prime_calc.py"), sieve_code)?;
+        // Apply dynamic code changes to the repo path
+        if let Some(ref changes) = node.code_changes {
+            for (rel_path, content) in changes {
+                let full_path = self.repo_path.join(rel_path);
+                if let Some(parent) = full_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&full_path, content)?;
+
+                // Run git add
+                let _ = Command::new("git")
+                    .args(&["add", rel_path])
+                    .current_dir(&self.repo_path)
+                    .status();
+            }
+        }
 
         // Commit changes to main branch
+        let commit_msg = format!("Apply HTR refinement: {} (Score: {})", node.hypothesis, node.score.unwrap_or(0.0));
         let _ = Command::new("git")
-            .args(&["add", "prime_calc.py"])
-            .current_dir(&self.repo_path)
-            .status();
-
-        let _ = Command::new("git")
-            .args(&["commit", "-m", "Apply optimization from hypothesis 2"])
+            .args(&["commit", "-m", &commit_msg])
             .current_dir(&self.repo_path)
             .status();
 
@@ -302,6 +356,11 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
         None => "null".to_string(),
     };
 
+    let code_changes_str = match &node.code_changes {
+        Some(changes) => serde_json::to_string(changes).unwrap_or_else(|_| "null".to_string()),
+        None => "null".to_string(),
+    };
+
     format!(
         "---\n\
          id: \"{}\"\n\
@@ -314,6 +373,7 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
          result: {}\n\
          insight: {}\n\
          code_ref: {}\n\
+         code_changes: {}\n\
          ---\n\n\
          # Hypothesis Tree Node: {}\n\n\
          {}\n",
@@ -327,6 +387,7 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
         result_str,
         insight_str,
         code_ref_str,
+        code_changes_str,
         node.node_id,
         node.hypothesis
     )
