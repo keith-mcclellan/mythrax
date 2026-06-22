@@ -6,6 +6,7 @@ use anyhow::{Result, Context};
 /// If a collision occurs (the file exists):
 /// - If the existing file has identical content, we can return the same path (or a flag to skip).
 /// - If the existing file is different, we can resolve it by generating a suffix (e.g., `_1`, `_2`).
+///
 /// Ensures parent directories are created.
 pub fn organize_file(
     vault_root: &Path,
@@ -24,12 +25,11 @@ pub fn organize_file(
 
     // Read existing content
     let existing_content = fs::read_to_string(&base_path).ok();
-    if let Some(existing) = existing_content {
-        if existing == content {
+    if let Some(existing) = existing_content
+        && existing == content {
             // Content is identical, safe to return base path (overwrite is a no-op)
             return Ok(base_path);
         }
-    }
 
     // Collision! Resolve by adding a numeric suffix.
     let stem = base_path
@@ -51,11 +51,10 @@ pub fn organize_file(
         
         // If candidate exists, check content equality
         let candidate_content = fs::read_to_string(&candidate_path).ok();
-        if let Some(cand_existing) = candidate_content {
-            if cand_existing == content {
+        if let Some(cand_existing) = candidate_content
+            && cand_existing == content {
                 return Ok(candidate_path);
             }
-        }
         counter += 1;
     }
 }

@@ -6,7 +6,8 @@ edition = "2024"
 [dependencies]
 axum = "0.7"
 tokio = { version = "1.35", features = ["full"] }
-surrealdb = { version = "1.5", features = ["kv-rocksdb", "kv-mem"] }
+surrealdb = { version = "3.1.5", features = ["kv-rocksdb", "kv-mem"] }
+surrealdb-types = "3.1.5"
 ort = { version = "2.0.0-rc.4" }
 notify = "6.1.1"
 serde = { version = "1.0", features = ["derive"] }

@@ -1,7 +1,7 @@
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
-use crate::contracts::{Episode, WisdomRule};
+use crate::contracts::{Episode, WisdomRule, WikiNode};
 use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
@@ -97,19 +97,16 @@ pub fn load_insights(vault_root: &Path) -> Vec<InsightNote> {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let scope = entry.file_name().to_string_lossy().to_string();
                 let insights_dir = entry.path().join("insights");
-                if insights_dir.exists() {
-                    if let Ok(files) = std::fs::read_dir(&insights_dir) {
+                if insights_dir.exists()
+                    && let Ok(files) = std::fs::read_dir(&insights_dir) {
                         for file in files.flatten() {
-                            if file.path().extension().map(|s| s == "md").unwrap_or(false) {
-                                if let Ok(content) = std::fs::read_to_string(file.path()) {
-                                    if let Ok(note) = parse_insight_note(&content, &file.path(), &scope) {
+                            if file.path().extension().map(|s| s == "md").unwrap_or(false)
+                                && let Ok(content) = std::fs::read_to_string(file.path())
+                                    && let Ok(note) = parse_insight_note(&content, &file.path(), &scope) {
                                         insights.push(note);
                                     }
-                                }
-                            }
                         }
                     }
-                }
             }
         }
     }
@@ -149,8 +146,8 @@ fn calculate_centroid(
     let mut sum = Vec::new();
     let mut count = 0;
     for ep_id in source_episodes {
-        if let Some(ep) = all_episodes.iter().find(|e| e.id.as_ref() == Some(ep_id)) {
-            if let Some(ref emb) = ep.embedding {
+        if let Some(ep) = all_episodes.iter().find(|e| e.id.as_ref() == Some(ep_id))
+            && let Some(ref emb) = ep.embedding {
                 if sum.is_empty() {
                     sum = vec![0.0; emb.len()];
                 }
@@ -159,7 +156,6 @@ fn calculate_centroid(
                 }
                 count += 1;
             }
-        }
     }
     if count > 0 {
         for val in &mut sum {
@@ -181,6 +177,12 @@ pub struct DreamCoordinator {
     llm: LLMClient,
 }
 
+impl Default for DreamCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DreamCoordinator {
     pub fn new() -> Self {
         Self {
@@ -199,8 +201,8 @@ impl DreamCoordinator {
         let mut file_eps = None;
         let mut file_min_samples = None;
 
-        if settings_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&settings_path) {
+        if settings_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&settings_path) {
                 let yaml_str = if content.starts_with("---") {
                     let parts: Vec<&str> = content.split("---").collect();
                     if parts.len() >= 3 { parts[1] } else { &content }
@@ -215,7 +217,6 @@ impl DreamCoordinator {
                     file_min_samples = settings.min_samples;
                 }
             }
-        }
 
         if let Some(mo) = mode_override {
             active_mode = mo.to_string();
@@ -304,6 +305,19 @@ impl DreamCoordinator {
                         if let Some(ref ep_id) = ep.id {
                             db.mark_episode_processed(ep_id).await?;
                         }
+
+                        let node_contract = WikiNode {
+                            id: None,
+                            name: ins.title.clone(),
+                            content: updated_summary.clone(),
+                            scope: scope.clone(),
+                            vault_path: Some(relative_path.clone()),
+                            embedding: None,
+                        };
+                        if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await
+                            && let Some(ref ep_id) = ep.id {
+                                let _ = db.relate_nodes(ep_id, &wiki_node_id).await;
+                            }
                     } else {
                         candidates.push(ep);
                     }
@@ -359,7 +373,7 @@ impl DreamCoordinator {
                     Ok(a) => a,
                     Err(_) => {
                         ClusterAnalysis {
-                            title: format!("Cluster Analysis {}", uuid::Uuid::new_v4().to_string()[..8].to_string()),
+                            title: format!("Cluster Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
                             summary: llm_res,
                         }
                     }
@@ -367,7 +381,7 @@ impl DreamCoordinator {
 
                 let cluster_ep_ids: Vec<String> = cluster_eps.iter().map(|ep| ep.id.clone().unwrap_or_default()).collect();
 
-                let clean_title = analysis.title.replace(' ', "_").replace('/', "_");
+                let clean_title = analysis.title.replace([' ', '/'], "_");
                 let insight_uuid = uuid::Uuid::new_v4().to_string();
                 let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
                 let insight_content = format!(
@@ -378,6 +392,20 @@ impl DreamCoordinator {
                     analysis.summary
                 );
                 store.write_file(&relative_path, &insight_content)?;
+
+                let node_contract = WikiNode {
+                    id: None,
+                    name: analysis.title.clone(),
+                    content: analysis.summary.clone(),
+                    scope: scope.clone(),
+                    vault_path: Some(relative_path.clone()),
+                    embedding: None,
+                };
+                if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
+                    for ep_id in &cluster_ep_ids {
+                        let _ = db.relate_nodes(ep_id, &wiki_node_id).await;
+                    }
+                }
 
                 let sys_wisdom = "You are a systems synthesizer. Analyze the events and extract system-level Wisdom Rules to avoid mistakes. Respond with a JSON array of rules.";
                 let prompt_wisdom = format!(
@@ -396,7 +424,7 @@ impl DreamCoordinator {
                     if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
                         for r in rules {
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace(' ', "_").replace('/', "_"), &rule_uuid[..8]);
+                            let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
                             let rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                                 r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, scope,
@@ -420,7 +448,11 @@ impl DreamCoordinator {
                                 similarity: None,
                                 utility: None,
                             };
-                            let _ = db.save_wisdom_rule(&rule_contract).await;
+                            if let Ok(wisdom_id) = db.save_wisdom_rule(&rule_contract).await {
+                                for ep_id in &cluster_ep_ids {
+                                    let _ = db.relate_nodes(ep_id, &wisdom_id).await;
+                                }
+                            }
                         }
                     }
                 }
@@ -453,7 +485,7 @@ mod tests {
 
         assert_eq!(labels.len(), 3);
         assert_eq!(labels[0], labels[1]);
-        assert_eq!(labels[0].is_some(), true);
+        assert!(labels[0].is_some());
         assert_eq!(labels[2], None);
     }
 }

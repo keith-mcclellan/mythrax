@@ -1,8 +1,7 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use surrealdb::engine::local::{Db, Mem};
 use surrealdb::Surreal;
 use tempfile::TempDir;
@@ -11,6 +10,12 @@ use mythrax_core::contracts::HypothesisNode;
 use mythrax_core::cognitive::arbor::{ArborCoordinator, ArborLlmClient};
 
 pub struct MockLLMClient;
+
+impl Default for MockLLMClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl MockLLMClient {
     pub fn new() -> Self {

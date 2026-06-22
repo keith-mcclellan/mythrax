@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use surrealdb_types::SurrealValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
@@ -11,7 +12,7 @@ pub struct Entity {
     pub embedding: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct Episode {
     pub id: Option<String>,
     pub title: String,
@@ -47,7 +48,7 @@ pub struct SearchResult {
     pub source_episode: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct WisdomRule {
     pub id: Option<String>,
     pub target_pattern: String,
@@ -70,7 +71,7 @@ pub struct Feedback {
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct LlmConfigResponse {
     pub active_provider: String,
     pub cloud_provider: String,
@@ -89,7 +90,7 @@ pub struct LlmConfigRequest {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct HypothesisNode {
     pub node_id: String,
     pub parent_id: Option<String>,
@@ -114,5 +115,32 @@ pub struct HandoffSave {
     pub handoff_file_path: String,
     pub scope: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WikiNode {
+    pub id: Option<String>,
+    pub name: String,
+    pub content: String,
+    pub scope: String,
+    pub vault_path: Option<String>,
+    pub embedding: Option<Vec<f32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+    pub total_matches: usize,
+    pub has_more: bool,
+    pub next_offset: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WisdomSearchResponse {
+    pub results: Vec<WisdomRule>,
+    pub total_matches: usize,
+    pub has_more: bool,
+    pub next_offset: usize,
+}
+
 
 

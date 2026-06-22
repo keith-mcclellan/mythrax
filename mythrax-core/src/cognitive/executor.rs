@@ -31,12 +31,12 @@ impl ArborExecutor {
         
         // Check if branch already exists and delete it to avoid conflict
         let _ = Command::new("git")
-            .args(&["branch", "-D", &branch_name])
+            .args(["branch", "-D", &branch_name])
             .current_dir(&self.repo_path)
             .status();
 
         let status = Command::new("git")
-            .args(&[
+            .args([
                 "worktree",
                 "add",
                 "-b",
@@ -50,7 +50,7 @@ impl ArborExecutor {
         if !status.success() {
             // Fallback: try checking it out as a detached head
             let status2 = Command::new("git")
-                .args(&[
+                .args([
                     "worktree",
                     "add",
                     "--detach",
@@ -99,13 +99,13 @@ impl ArborExecutor {
 
         // Remove worktree: git worktree remove --force /tmp/worktree-node-<id>
         let _ = Command::new("git")
-            .args(&["worktree", "remove", "--force", &worktree_dir])
+            .args(["worktree", "remove", "--force", &worktree_dir])
             .current_dir(&self.repo_path)
             .status();
 
         // Delete branch: git branch -D worktree-node-<id>
         let _ = Command::new("git")
-            .args(&["branch", "-D", &branch_name])
+            .args(["branch", "-D", &branch_name])
             .current_dir(&self.repo_path)
             .status();
 

@@ -50,15 +50,12 @@ fn audit_tailwind(workspace_path: &Path) -> (bool, Vec<String>) {
                 } else if path.is_file() {
                     if name == "tailwind.config.js" || name == "tailwind.config.ts" {
                         violations.push(path.to_string_lossy().to_string());
-                    } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext == "html" || ext == "css" || ext == "js" || ext == "ts" {
-                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                if content.contains("@tailwind") || content.to_lowercase().contains("tailwindcss") {
+                    } else if let Some(ext) = path.extension().and_then(|e| e.to_str())
+                        && (ext == "html" || ext == "css" || ext == "js" || ext == "ts")
+                            && let Ok(content) = std::fs::read_to_string(&path)
+                                && (content.contains("@tailwind") || content.to_lowercase().contains("tailwindcss")) {
                                     violations.push(path.to_string_lossy().to_string());
                                 }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -77,8 +74,8 @@ fn is_tailwind_allowed_in_config() -> bool {
     if !config_path.exists() {
         return false;
     }
-    if let Ok(content) = std::fs::read_to_string(config_path) {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+    if let Ok(content) = std::fs::read_to_string(config_path)
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(allowed) = val.get("allow_tailwind").and_then(|v| v.as_bool()) {
                 return allowed;
             }
@@ -86,7 +83,6 @@ fn is_tailwind_allowed_in_config() -> bool {
                 return allowed;
             }
         }
-    }
     false
 }
 
@@ -156,26 +152,22 @@ fn check_search_history(workspace_path: &Path) -> (bool, Option<String>) {
 }
 
 fn parse_log_timestamp(line: &str) -> Option<SystemTime> {
-    if line.starts_with('{') {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-            if let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
+    if line.starts_with('{')
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(line)
+            && let Some(ts_str) = val.get("timestamp").and_then(|v| v.as_str()) {
                 return parse_timestamp_str(ts_str);
             }
-        }
-    }
     parse_timestamp_str(line)
 }
 
 fn parse_timestamp_str(s: &str) -> Option<SystemTime> {
     // Check if it is a UNIX timestamp
     let re_unix = regex::Regex::new(r"\b(\d{10})\b").ok()?;
-    if let Some(cap) = re_unix.captures(s) {
-        if let Some(m) = cap.get(1) {
-            if let Ok(secs) = m.as_str().parse::<u64>() {
+    if let Some(cap) = re_unix.captures(s)
+        && let Some(m) = cap.get(1)
+            && let Ok(secs) = m.as_str().parse::<u64>() {
                 return Some(UNIX_EPOCH + std::time::Duration::from_secs(secs));
             }
-        }
-    }
 
     // Try RFC3339 / ISO8601 pattern
     let re_iso = regex::Regex::new(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})").ok()?;

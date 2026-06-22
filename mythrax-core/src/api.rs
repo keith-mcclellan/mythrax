@@ -5,7 +5,7 @@ use axum::{
 };
 use std::sync::Arc;
 use crate::db::StorageBackend;
-use crate::contracts::{EpisodeSave, SearchResult, Feedback, LlmConfigRequest, LlmConfigResponse, HandoffSave};
+use crate::contracts::{EpisodeSave, Feedback, LlmConfigRequest, LlmConfigResponse, HandoffSave, SearchResponse};
 use crate::store::MarkdownStore;
 use crate::vault::watcher::WatchIgnoreList;
 use serde_json::{json, Value};
@@ -31,12 +31,11 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
 }
 
 fn check_auth(headers: &HeaderMap, state: &ApiState) -> bool {
-    if let Some(token_header) = headers.get("X-Mythrax-Token") {
-        if let Ok(token_str) = token_header.to_str() {
-            return token_str == state.auth_token;
-        }
+    if let Some(token_str) = headers.get("X-Mythrax-Token").and_then(|h| h.to_str().ok()) {
+        crate::auth::verify_token_constant_time(token_str, &state.auth_token)
+    } else {
+        false
     }
-    false
 }
 
 async fn save_episode_handler(
@@ -66,7 +65,7 @@ async fn search_handler(
     State(state): State<Arc<ApiState>>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
-) -> Result<Json<Vec<SearchResult>>, StatusCode> {
+) -> Result<Json<SearchResponse>, StatusCode> {
     if !check_auth(&headers, &state) {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -76,10 +75,14 @@ async fn search_handler(
     let deep_insight = payload.get("deep_insight").and_then(|v| v.as_bool()).unwrap_or(false);
     let limit = payload.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
     let offset = payload.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let threshold = payload.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
 
-    match state.backend.search(query, scope, deep_insight, limit, offset).await {
+    match state.backend.search(query, scope, deep_insight, limit, offset, threshold).await {
         Ok(res) => Ok(Json(res)),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            tracing::error!("Search failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
 
@@ -162,7 +165,7 @@ async fn harvest_handler(
     }
 
     let harvester = crate::cognitive::harvest::Harvester::new();
-    match harvester.harvest_skills(&*state.backend, &*state.store).await {
+    match harvester.harvest_skills(&*state.backend, &state.store).await {
         Ok(_) => Ok(Json(json!({ "status": "success" }))),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
@@ -180,8 +183,8 @@ async fn dream_handler(
     let scope = payload.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
     let compactor = crate::cognitive::compactor::Compactor::new();
     
-    let res_scope = compactor.compact_scope(&*state.backend, &*state.store, scope).await;
-    let res_global = compactor.compact_global(&*state.backend, &*state.store).await;
+    let res_scope = compactor.compact_scope(&*state.backend, &state.store, scope).await;
+    let res_global = compactor.compact_global(&*state.backend, &state.store).await;
 
     match (res_scope, res_global) {
         (Ok(_), Ok(_)) => Ok(Json(json!({ "status": "success" }))),

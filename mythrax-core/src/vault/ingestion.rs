@@ -71,11 +71,10 @@ fn parse_antigravity_log(path: &Path) -> Result<String> {
                 if let Some(content) = obj["content"].as_str() {
                     markdown.push_str(&format!("## User Request\n{}\n\n", content));
                 }
-            } else if step_type == "PLANNER_RESPONSE" {
-                if let Some(content) = obj["content"].as_str() {
+            } else if step_type == "PLANNER_RESPONSE"
+                && let Some(content) = obj["content"].as_str() {
                     markdown.push_str(&format!("## Planner Response\n{}\n\n", content));
                 }
-            }
         }
     }
     if markdown.is_empty() {
@@ -239,18 +238,15 @@ fn parse_codex_log(path: &Path) -> Result<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("role =") || trimmed.starts_with("role=") {
-            if let Some(idx) = trimmed.find('"') {
-                if let Some(end_idx) = trimmed[idx+1..].find('"') {
+            if let Some(idx) = trimmed.find('"')
+                && let Some(end_idx) = trimmed[idx+1..].find('"') {
                     current_role = trimmed[idx+1..idx+1+end_idx].to_string();
                 }
-            }
-        } else if trimmed.starts_with("content =") || trimmed.starts_with("content=") {
-            if let Some(idx) = trimmed.find('"') {
-                if let Some(end_idx) = trimmed[idx+1..].find('"') {
+        } else if (trimmed.starts_with("content =") || trimmed.starts_with("content="))
+            && let Some(idx) = trimmed.find('"')
+                && let Some(end_idx) = trimmed[idx+1..].find('"') {
                     current_content = trimmed[idx+1..idx+1+end_idx].to_string();
                 }
-            }
-        }
         if !current_role.is_empty() && !current_content.is_empty() {
             markdown.push_str(&format!("**{}**: {}\n\n", current_role, current_content));
             current_role.clear();
@@ -274,11 +270,10 @@ fn quarantine_file(file_path: &Path, source_dir: &Path, error_msg: &str) -> Stri
     let filename = file_path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("unknown_file"));
     let dest_path = quarantine_dir.join(filename);
     let move_res = std::fs::rename(file_path, &dest_path);
-    if move_res.is_err() {
-        if std::fs::copy(file_path, &dest_path).is_ok() {
+    if move_res.is_err()
+        && std::fs::copy(file_path, &dest_path).is_ok() {
             let _ = std::fs::remove_file(file_path);
         }
-    }
     format!("Failed to parse {}: {}", file_path.display(), error_msg)
 }
 
@@ -300,13 +295,11 @@ pub async fn bulk_ingest_vault(
             for entry in entries.flatten() {
                 if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     let path = entry.path();
-                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                        if exts.contains(&ext.to_lowercase().as_str()) {
-                            if !path.components().any(|c| c.as_os_str() == "quarantine") {
+                    if let Some(ext) = path.extension().and_then(|s| s.to_str())
+                        && exts.contains(&ext.to_lowercase().as_str())
+                            && !path.components().any(|c| c.as_os_str() == "quarantine") {
                                 files.push(path);
                             }
-                        }
-                    }
                 }
             }
         }

@@ -5,6 +5,12 @@ pub struct LLMClient {
     client: reqwest::Client,
 }
 
+impl Default for LLMClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LLMClient {
     pub fn new() -> Self {
         Self {
@@ -12,6 +18,7 @@ impl LLMClient {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn prompt(&self, db: &dyn StorageBackend, prompt: &str) -> Result<String> {
         self.completion(db, None, prompt).await
     }
@@ -149,6 +156,32 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             files_context.push_str(&format!("--- FILE: {} ---\n{}\n\n", path, content));
         }
 
+        // Query Wisdom Rules semantically for all tiers
+        let mut rules = Vec::new();
+        for tier in &["pinned", "permanent", "dynamic"] {
+            if let Ok(res) = db.get_wisdom(parent_hypothesis, tier, 5, 0, 0.55).await {
+                rules.extend(res.results);
+            }
+        }
+        // Sort by blended score descending
+        rules.sort_by(|a, b| {
+            let score_a = a.similarity.unwrap_or(1.0) * (0.7 + 0.3 * a.utility.unwrap_or(1.0));
+            let score_b = b.similarity.unwrap_or(1.0) * (0.7 + 0.3 * b.utility.unwrap_or(1.0));
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        rules.truncate(5);
+
+        let mut wisdom_injection = String::new();
+        if !rules.is_empty() {
+            wisdom_injection.push_str("\n\nHere are some relevant Wisdom Rules to follow during code generation:\n");
+            for (idx, r) in rules.iter().enumerate() {
+                wisdom_injection.push_str(&format!(
+                    "{}. [Rule: {}]\n   - Action to Avoid: {}\n   - Why: {}\n   - Remedy: {}\n",
+                    idx + 1, r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy
+                ));
+            }
+        }
+
         let prompt = format!(
             "You are an autonomous codebase researcher. We are modifying the following files:\n\n\
              {}\n\
@@ -168,7 +201,13 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
              Output format MUST be a raw JSON array only, without any markdown formatting or code block wrapping.",
             files_context, parent_hypothesis
         );
-        self.completion(db, Some("You are an ideation assistant that outputs raw JSON arrays."), &prompt).await
+
+        let system_prompt = format!(
+            "You are an ideation assistant that outputs raw JSON arrays.{}",
+            wisdom_injection
+        );
+
+        self.completion(db, Some(&system_prompt), &prompt).await
     }
 
     async fn evaluate_run(&self, db: &dyn StorageBackend, run_logs: &str) -> Result<String> {
@@ -228,7 +267,7 @@ async fn send_with_retry(
         }
         attempt += 1;
         let base_ms = 200.0;
-        let factor = (2.0f64).powi(attempt as i32);
+        let factor = (2.0f64).powi(attempt);
         let jitter = (tokio::time::Instant::now().elapsed().as_nanos() % 100) as f64;
         let sleep_duration = std::time::Duration::from_millis((base_ms * factor + jitter) as u64);
         tokio::time::sleep(sleep_duration).await;

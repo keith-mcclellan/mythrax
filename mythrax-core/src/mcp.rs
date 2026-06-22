@@ -105,7 +105,9 @@ impl McpServer {
                                 "properties": {
                                     "query": { "type": "string" },
                                     "scope": { "type": "string" },
-                                    "limit": { "type": "integer" }
+                                    "limit": { "type": "integer" },
+                                    "offset": { "type": "integer" },
+                                    "threshold": { "type": "number" }
                                 },
                                 "required": ["query"]
                             }
@@ -118,7 +120,9 @@ impl McpServer {
                                 "properties": {
                                     "query": { "type": "string" },
                                     "tier": { "type": "string" },
-                                    "limit": { "type": "integer" }
+                                    "limit": { "type": "integer" },
+                                    "offset": { "type": "integer" },
+                                    "threshold": { "type": "number" }
                                 },
                                 "required": ["query", "tier"]
                             }
@@ -330,19 +334,30 @@ impl McpServer {
             "search_memories" => {
                 let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
                 let scope = args.get("scope").and_then(|v| v.as_str());
-                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
+                let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
 
-                let results = self.backend.search(query, scope, false, limit, 0).await?;
-                let stripped_results: Vec<Value> = results.into_iter().map(|mut r| {
+                let search_res = self.backend.search(query, scope, false, limit, offset, threshold).await?;
+                let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                     r.embedding = None;
                     serde_json::to_value(&r).unwrap()
                 }).collect();
+
+                let mut text = serde_json::to_string_pretty(&stripped_results)?;
+                if search_res.has_more {
+                    let remainder = search_res.total_matches.saturating_sub(offset + limit);
+                    text.push_str(&format!(
+                        "\n\n=== PAGINATION NOTICE: There are {} more matching memories. To retrieve the next page, query search_memories with offset={} and limit={}. ===",
+                        remainder, search_res.next_offset, limit
+                    ));
+                }
 
                 Ok(json!({
                     "content": [
                         {
                             "type": "text",
-                            "text": serde_json::to_string_pretty(&stripped_results)?
+                            "text": text
                         }
                     ]
                 }))
@@ -350,19 +365,30 @@ impl McpServer {
             "search_wisdom" => {
                 let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
                 let tier = args.get("tier").and_then(|v| v.as_str()).context("Missing tier")?;
-                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
+                let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
 
-                let results = self.backend.get_wisdom(query, tier, limit).await?;
-                let stripped_results: Vec<Value> = results.into_iter().map(|mut r| {
+                let search_res = self.backend.get_wisdom(query, tier, limit, offset, threshold).await?;
+                let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                     r.embedding = None;
                     serde_json::to_value(&r).unwrap()
                 }).collect();
+
+                let mut text = serde_json::to_string_pretty(&stripped_results)?;
+                if search_res.has_more {
+                    let remainder = search_res.total_matches.saturating_sub(offset + limit);
+                    text.push_str(&format!(
+                        "\n\n=== PAGINATION NOTICE: There are {} more matching wisdom rules. To retrieve the next page, query search_wisdom with offset={} and limit={}. ===",
+                        remainder, search_res.next_offset, limit
+                    ));
+                }
 
                 Ok(json!({
                     "content": [
                         {
                             "type": "text",
-                            "text": serde_json::to_string_pretty(&stripped_results)?
+                            "text": text
                         }
                     ]
                 }))
@@ -423,7 +449,7 @@ impl McpServer {
             }
             "harvest_skill_wisdom" => {
                 let harvester = crate::cognitive::harvest::Harvester::new();
-                harvester.harvest_skills(&*self.backend, &*self.store).await?;
+                harvester.harvest_skills(&*self.backend, &self.store).await?;
 
                 Ok(json!({
                     "content": [
@@ -471,11 +497,11 @@ impl McpServer {
                 let compactor = crate::cognitive::compactor::Compactor::new();
                 let coordinator = crate::cognitive::synthesis::DreamCoordinator::new();
 
-                coordinator.run_dream(&*self.backend, &*self.store, None).await?;
+                coordinator.run_dream(&*self.backend, &self.store, None).await?;
 
                 let scope_name = scope.unwrap_or("general");
-                compactor.compact_scope(&*self.backend, &*self.store, scope_name).await?;
-                compactor.compact_global(&*self.backend, &*self.store).await?;
+                compactor.compact_scope(&*self.backend, &self.store, scope_name).await?;
+                compactor.compact_global(&*self.backend, &self.store).await?;
 
                 Ok(json!({
                     "content": [
@@ -761,16 +787,14 @@ impl McpServer {
                     coordinator.execute_node(selected_node).await?;
                     coordinator.backpropagate_insights(selected_node).await?;
                     
-                    let node_val: Option<crate::contracts::HypothesisNode> = self.backend.db.select(("hypothesis_node", selected_node)).await?;
-                    if let Some(node_node) = node_val {
-                        if let Some(score) = node_node.score {
-                            if score >= 95.0 {
+                    let node_val: Option<crate::contracts::HypothesisNode> = self.backend.db.select(("hypothesis_node", selected_node.as_str())).await?;
+                    if let Some(node_node) = node_val
+                        && let Some(score) = node_node.score
+                            && score >= 95.0 {
                                 coordinator.decide_admission(selected_node).await?;
                                 status_msg = format!("HTR run loop completed successfully. Node {} merged with Score: {}.", selected_node, score);
                                 break;
                             }
-                        }
-                    }
                     
                     current_node = selected_node.clone();
                     step += 1;

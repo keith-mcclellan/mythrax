@@ -97,8 +97,8 @@ impl LocalEmbedder {
         let mut sum_embeddings = vec![0.0; hidden_dim];
         let mut active_tokens = 0.0;
 
-        for i in 0..seq_len {
-            if mask[i] == 1 {
+        for (i, &m) in mask.iter().enumerate().take(seq_len) {
+            if m == 1 {
                 active_tokens += 1.0;
                 let offset = i * hidden_dim;
                 for j in 0..hidden_dim {
@@ -108,8 +108,8 @@ impl LocalEmbedder {
         }
 
         if active_tokens > 0.0 {
-            for j in 0..hidden_dim {
-                sum_embeddings[j] /= active_tokens;
+            for val in &mut sum_embeddings {
+                *val /= active_tokens;
             }
         }
 
@@ -121,8 +121,8 @@ impl LocalEmbedder {
         l2_norm = l2_norm.sqrt();
 
         if l2_norm > 0.0 {
-            for j in 0..hidden_dim {
-                sum_embeddings[j] /= l2_norm;
+            for val in &mut sum_embeddings {
+                *val /= l2_norm;
             }
         }
 

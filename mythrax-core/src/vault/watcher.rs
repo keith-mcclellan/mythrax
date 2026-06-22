@@ -7,12 +7,18 @@ use tokio::sync::mpsc;
 use anyhow::{Result, Context};
 use crate::store::MarkdownStore;
 use crate::db::StorageBackend;
-use crate::contracts::{EpisodeSave, WisdomRule, Entity};
+use crate::contracts::{EpisodeSave, WisdomRule, Entity, WikiNode};
 use crate::vault::markdown::{parse_frontmatter, extract_plain_text};
 use crate::vault::organization::organize_file;
 
 pub struct WatchIgnoreList {
     ignored: Mutex<HashMap<PathBuf, Instant>>,
+}
+
+impl Default for WatchIgnoreList {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WatchIgnoreList {
@@ -78,6 +84,19 @@ pub fn start_watching(
                                 }
                             }
                         }
+                    } else if event.kind.is_remove() {
+                        for path in event.paths {
+                            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                                continue;
+                            }
+                            if let Ok(rel_path) = path.strip_prefix(&vault_root) {
+                                let rel_path_str = rel_path.to_string_lossy().to_string();
+                                tracing::info!("File removed from vault, deleting from DB: {}", rel_path_str);
+                                if let Err(e) = backend_clone.delete_by_vault_path(&rel_path_str).await {
+                                    tracing::error!("Failed to delete file {} from DB: {:?}", rel_path_str, e);
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -95,6 +114,12 @@ struct EpisodeFrontmatter {
     title: Option<String>,
     scope: Option<String>,
     entities: Option<Vec<Entity>>,
+}
+
+#[derive(serde::Deserialize)]
+struct WikiFrontmatter {
+    name: Option<String>,
+    scope: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -172,6 +197,26 @@ pub async fn sync_file_to_db(
 
             backend.save_wisdom_rule(&rule).await?;
         }
+    } else if rel_path.contains("wiki/") {
+        let frontmatter: WikiFrontmatter = yaml_opt
+            .and_then(|y| serde_json::to_value(y).ok())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or(WikiFrontmatter { name: None, scope: None });
+
+        let name = frontmatter.name.unwrap_or_else(|| {
+            path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
+        });
+
+        let node = WikiNode {
+            id: None,
+            name,
+            content: plain_body,
+            scope: frontmatter.scope.unwrap_or_else(|| "general".to_string()),
+            vault_path: Some(rel_path),
+            embedding: None,
+        };
+
+        backend.save_wiki_node(&node).await?;
     }
 
     Ok(())
@@ -336,9 +381,9 @@ mod tests {
         
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
-        let results = backend.search("Body content", Some("watcher-testing"), false, 1, 0).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Watcher Test");
+        let results = backend.search("Body content", Some("watcher-testing"), false, 1, 0, 0.55).await.unwrap();
+        assert_eq!(results.results.len(), 1);
+        assert_eq!(results.results[0].title, "Watcher Test");
     }
 
     #[tokio::test]
@@ -372,9 +417,9 @@ mod tests {
         assert!(ignore_list.is_ignored(&abs_path));
         
         // Verify content in DB
-        let results = backend.search("bidirectional sync", Some("bi-testing"), false, 1, 0).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Bidirectional Test");
+        let results = backend.search("bidirectional sync", Some("bi-testing"), false, 1, 0, 0.55).await.unwrap();
+        assert_eq!(results.results.len(), 1);
+        assert_eq!(results.results[0].title, "Bidirectional Test");
         
         // 3. Watcher side: modify file directly in vault and sync to DB
         // Wait 2.1 seconds so the ignore list entry expires
@@ -389,8 +434,8 @@ mod tests {
         sync_file_to_db(&abs_path, &backend, &store).await.unwrap();
         
         // Verify DB got updated
-        let results2 = backend.search("updated body", Some("bi-testing"), false, 1, 0).await.unwrap();
-        assert_eq!(results2.len(), 1);
-        assert_eq!(results2[0].title, "Watcher Test Updated");
+        let results2 = backend.search("updated body", Some("bi-testing"), false, 1, 0, 0.55).await.unwrap();
+        assert_eq!(results2.results.len(), 1);
+        assert_eq!(results2.results[0].title, "Watcher Test Updated");
     }
 }

@@ -4,6 +4,12 @@ use anyhow::{Result, Context};
 
 pub struct ArborCritic;
 
+impl Default for ArborCritic {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArborCritic {
     pub fn new() -> Self {
         Self

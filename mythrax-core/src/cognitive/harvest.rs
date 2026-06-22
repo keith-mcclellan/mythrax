@@ -50,15 +50,20 @@ fn scan_skills_in_dir(dir: &Path) -> Vec<SkillInfo> {
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let skill_md_path = entry.path().join("SKILL.md");
-                if skill_md_path.exists() {
-                    if let Ok(skill) = parse_skill_file(&skill_md_path) {
+                if skill_md_path.exists()
+                    && let Ok(skill) = parse_skill_file(&skill_md_path) {
                         skills.push(skill);
                     }
-                }
             }
         }
     }
     skills
+}
+
+impl Default for Harvester {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Harvester {
@@ -68,6 +73,7 @@ impl Harvester {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn synthesize_user_profile(
         &self,
         db: &dyn StorageBackend,
@@ -141,7 +147,7 @@ impl Harvester {
         if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&response) {
             for r in rules {
                 let rule_uuid = uuid::Uuid::new_v4().to_string();
-                let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace(' ', "_").replace('/', "_"), &rule_uuid[..8]);
+                let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
                 let rule_md = format!(
                     "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"general\"\ngenerator_name: \"CrossSkillHarvester\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                     r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,

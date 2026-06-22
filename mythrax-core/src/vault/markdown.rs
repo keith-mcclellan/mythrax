@@ -51,11 +51,10 @@ pub fn extract_plain_text(markdown: &str) -> String {
                     append_text(&mut plain_text, &code);
                 }
             }
-            Event::SoftBreak | Event::HardBreak => {
-                if !plain_text.is_empty() && !plain_text.ends_with(' ') {
+            Event::SoftBreak | Event::HardBreak
+                if !plain_text.is_empty() && !plain_text.ends_with(' ') => {
                     plain_text.push(' ');
                 }
-            }
             _ => {}
         }
     }

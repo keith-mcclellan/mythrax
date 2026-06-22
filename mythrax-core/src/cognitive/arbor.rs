@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use anyhow::{Result, anyhow};
 use surrealdb::engine::local::Db;
@@ -61,18 +61,16 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         let mut result = Vec::new();
         for rel_path in &self.target_files {
             let mut content = String::new();
-            if let Some(ref changes) = parent.code_changes {
-                if let Some(c) = changes.get(rel_path) {
+            if let Some(ref changes) = parent.code_changes
+                && let Some(c) = changes.get(rel_path) {
                     content = c.clone();
                 }
-            }
             if content.is_empty() {
                 let full_path = self.repo_path.join(rel_path);
-                if full_path.exists() {
-                    if let Ok(c) = fs::read_to_string(full_path) {
+                if full_path.exists()
+                    && let Ok(c) = fs::read_to_string(full_path) {
                         content = c;
                     }
-                }
             }
             result.push((rel_path.clone(), content));
         }
@@ -104,8 +102,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         };
 
         // Write to SurrealDB
-        let _: Option<HypothesisNode> = self.db.create(("hypothesis_node", &root_id))
-            .content(&root_node)
+        let _: Option<HypothesisNode> = self.db.create(("hypothesis_node", root_id.as_str()))
+            .content(root_node.clone())
             .await?;
 
         // Write to Vault
@@ -160,8 +158,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             };
 
             // Write to SurrealDB
-            let _: Option<HypothesisNode> = self.db.create(("hypothesis_node", &node_id))
-                .content(&child_node)
+            let _: Option<HypothesisNode> = self.db.create(("hypothesis_node", node_id.as_str()))
+                .content(child_node.clone())
                 .await?;
 
             // Write to Vault
@@ -178,8 +176,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         parent.children_ids.extend(children_ids);
         
         // Update parent in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", &parent.node_id))
-            .content(&parent)
+        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", parent.node_id.as_str()))
+            .content(parent.clone())
             .await?;
 
         // Rewrite parent markdown
@@ -192,7 +190,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
     /// Step C: Select next batch of hypotheses
     pub async fn select_next_batch(&self, limit: usize) -> Result<Vec<String>> {
         let mut res = self.db.query("SELECT * FROM hypothesis_node WHERE status = 'pending' AND scope = $target_scope ORDER BY score DESC LIMIT $limit")
-            .bind(("target_scope", &self.scope))
+            .bind(("target_scope", self.scope.as_str()))
             .bind(("limit", limit))
             .await?;
         let nodes: Vec<HypothesisNode> = res.take(0)?;
@@ -207,7 +205,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 
         // Retrieve current HEAD commit
         let output = Command::new("git")
-            .args(&["rev-parse", "HEAD"])
+            .args(["rev-parse", "HEAD"])
             .current_dir(&self.repo_path)
             .output()?;
         let commit_sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -218,8 +216,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         node.result = Some(logs);
         
         // Update in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", &node.node_id))
-            .content(&node)
+        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", node.node_id.as_str()))
+            .content(node.clone())
             .await?;
 
         // Rewrite vault markdown
@@ -244,8 +242,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         leaf.status = "done".to_string();
 
         // Update leaf in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", &leaf.node_id))
-            .content(&leaf)
+        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", leaf.node_id.as_str()))
+            .content(leaf.clone())
             .await?;
 
         // Rewrite leaf markdown
@@ -255,7 +253,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         // Propagate up to parent ancestors
         let mut current_parent_id = leaf.parent_id.clone();
         while let Some(parent_id) = current_parent_id {
-            let mut parent: HypothesisNode = self.db.select(("hypothesis_node", &parent_id))
+            let mut parent: HypothesisNode = self.db.select(("hypothesis_node", parent_id.as_str()))
                 .await?
                 .ok_or_else(|| anyhow!("Parent node not found"))?;
 
@@ -266,8 +264,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             parent.insight = Some(new_insight);
 
             // Update parent in SurrealDB
-            let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", &parent.node_id))
-                .content(&parent)
+            let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", parent.node_id.as_str()))
+                .content(parent.clone())
                 .await?;
 
             // Rewrite parent markdown
@@ -297,7 +295,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 
                 // Run git add
                 let _ = Command::new("git")
-                    .args(&["add", rel_path])
+                    .args(["add", rel_path])
                     .current_dir(&self.repo_path)
                     .status();
             }
@@ -306,15 +304,15 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         // Commit changes to main branch
         let commit_msg = format!("Apply HTR refinement: {} (Score: {})", node.hypothesis, node.score.unwrap_or(0.0));
         let _ = Command::new("git")
-            .args(&["commit", "-m", &commit_msg])
+            .args(["commit", "-m", &commit_msg])
             .current_dir(&self.repo_path)
             .status();
 
         node.status = "merged".to_string();
 
         // Update in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", &node.node_id))
-            .content(&node)
+        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", node.node_id.as_str()))
+            .content(node.clone())
             .await?;
 
         // Rewrite vault markdown

@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 mod contracts;
 mod db;
 mod api;
@@ -21,6 +23,7 @@ use db::{SurrealBackend, StorageBackend};
 use store::MarkdownStore;
 use vault::watcher::WatchIgnoreList;
 use cli::{Cli, Commands, DaemonAction, ConfigAction, VaultAction};
+use contracts::Episode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -184,7 +187,7 @@ async fn main() -> Result<()> {
                     };
 
                     let auth_token = if token_path.exists() {
-                        std::fs::read_to_string(&token_path)?.trim().to_string()
+                        crate::auth::load_token(&token_path)?
                     } else {
                         "secret-token".to_string()
                     };
@@ -211,6 +214,41 @@ async fn main() -> Result<()> {
                     // Initialize storage backend
                     let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
                     backend.init().await?;
+
+                    // Reprocess missing embeddings on startup
+                    let backend_startup = backend.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        if backend_startup.embedder.is_some() {
+                            tracing::info!("Checking for episodes with missing embeddings...");
+                            let sql = "SELECT * FROM episode WHERE embedding IS NONE;";
+                            match backend_startup.db.query(sql).await {
+                                Ok(mut response) => {
+                                    if let Ok(episodes) = response.take::<Vec<Episode>>(0)
+                                        && !episodes.is_empty() {
+                                            tracing::info!("Found {} episodes with missing embeddings. Regenerating...", episodes.len());
+                                            for ep in episodes {
+                                                if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
+                                                    let text_to_embed = format!("{}: {}", ep.title, ep.content);
+                                                    if let Ok(vec) = embedder.embed(&text_to_embed)
+                                                        && let Ok(thing) = crate::db::parse_record_id(id_str) {
+                                                            let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                            let _ = backend_startup.db.query(update_sql)
+                                                                .bind(("id", thing))
+                                                                .bind(("embedding", vec))
+                                                                .await;
+                                                        }
+                                                }
+                                            }
+                                            tracing::info!("Finished regenerating missing embeddings.");
+                                        }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to query missing embeddings on startup: {:?}", e);
+                                }
+                            }
+                        }
+                    });
 
                     // Initialize Markdown Store
                     let store = Arc::new(MarkdownStore::new(&vault_path)?);
@@ -246,12 +284,18 @@ async fn main() -> Result<()> {
                             loop {
                                 tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
                                 tracing::info!("Daily scheduled deep dreaming starting...");
-                                if let Err(e) = dc.run_dream(&*backend_daily, &*store_daily, Some("deep")).await {
+                                if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep")).await {
                                     tracing::error!("Daily deep dreaming failed: {:?}", e);
                                 } else {
                                     tracing::info!("Deep dreaming synthesis completed. Running compactions...");
-                                    let _ = cmp.compact_scope(&*backend_daily, &*store_daily, "general").await;
-                                    let _ = cmp.compact_global(&*backend_daily, &*store_daily).await;
+                                    let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
+                                    if scopes.is_empty() {
+                                        scopes.push("general".to_string());
+                                    }
+                                    for scope in scopes {
+                                        let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope).await;
+                                    }
+                                    let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
                                 }
                             }
                         });
@@ -265,36 +309,46 @@ async fn main() -> Result<()> {
                                     last_activity = std::time::Instant::now();
 
                                     // Check threshold triggered synthesis (> 50 unprocessed)
-                                    if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await {
-                                        if unprocessed.len() > 50 {
+                                    if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
+                                        && unprocessed.len() > 50 {
                                             tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
-                                            if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &*store_dream, Some("incremental")).await {
+                                            if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
                                                 tracing::error!("Threshold dreaming failed: {:?}", e);
                                             } else {
-                                                let _ = compactor.compact_scope(&*backend_dream, &*store_dream, "general").await;
-                                                let _ = compactor.compact_global(&*backend_dream, &*store_dream).await;
+                                                let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                if scopes.is_empty() {
+                                                    scopes.push("general".to_string());
+                                                }
+                                                for scope in scopes {
+                                                    let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                }
+                                                let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
                                             }
                                             pending_debounce = false;
                                             continue;
                                         }
-                                    }
                                     pending_debounce = true;
                                 }
                                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)), if pending_debounce => {
                                     if last_activity.elapsed() >= tokio::time::Duration::from_secs(30) {
                                         pending_debounce = false;
-
-                                        if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await {
-                                            if !unprocessed.is_empty() {
+ 
+                                        if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
+                                            && !unprocessed.is_empty() {
                                                 tracing::info!("Idle debounced synthesis starting...");
-                                                if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &*store_dream, Some("incremental")).await {
+                                                if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
                                                     tracing::error!("Debounced incremental dreaming failed: {:?}", e);
                                                 } else {
-                                                    let _ = compactor.compact_scope(&*backend_dream, &*store_dream, "general").await;
-                                                    let _ = compactor.compact_global(&*backend_dream, &*store_dream).await;
+                                                    let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                    if scopes.is_empty() {
+                                                        scopes.push("general".to_string());
+                                                    }
+                                                    for scope in scopes {
+                                                        let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                    }
+                                                    let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
                                                 }
                                             }
-                                        }
                                     }
                                 }
                             }
@@ -340,7 +394,7 @@ async fn main() -> Result<()> {
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             let token_path = mythrax_dir.join("token");
             let auth_token = if token_path.exists() {
-                std::fs::read_to_string(&token_path)?.trim().to_string()
+                crate::auth::load_token(&token_path)?
             } else {
                 "secret-token".to_string()
             };
@@ -374,7 +428,7 @@ async fn main() -> Result<()> {
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             let token_path = mythrax_dir.join("token");
             let auth_token = if token_path.exists() {
-                std::fs::read_to_string(&token_path)?.trim().to_string()
+                crate::auth::load_token(&token_path)?
             } else {
                 "secret-token".to_string()
             };
@@ -578,7 +632,7 @@ async fn main() -> Result<()> {
 
             let backend = SurrealBackend::new(&surreal_url).await?;
             backend.init().await?;
-            let store = MarkdownStore::new(&vault_path)?;
+            let _store = MarkdownStore::new(&vault_path)?;
             let db = backend.db.clone();
             let current_dir = std::env::current_dir()?;
 
@@ -693,9 +747,9 @@ async fn main() -> Result<()> {
                         coordinator.backpropagate_insights(selected_node).await?;
                         
                         // Query the node to check score
-                        let node_val: Option<contracts::HypothesisNode> = backend.db.select(("hypothesis_node", selected_node)).await?;
-                        if let Some(node_node) = node_val {
-                            if let Some(score) = node_node.score {
+                        let node_val: Option<contracts::HypothesisNode> = backend.db.select(("hypothesis_node", selected_node.as_str())).await?;
+                        if let Some(node_node) = node_val
+                            && let Some(score) = node_node.score {
                                 println!("Node {} evaluated with Score: {}", selected_node, score);
                                 if score >= 95.0 {
                                     println!("Acceptance threshold met (Score: {} >= 95.0). Merging refinement.", score);
@@ -704,7 +758,6 @@ async fn main() -> Result<()> {
                                     break;
                                 }
                             }
-                        }
                         
                         current_node = selected_node.clone();
                         step += 1;
@@ -769,7 +822,7 @@ fn backup_vault_folders(vault_root: &std::path::Path) -> Result<()> {
             let src = vault_root.join(f);
             if src.exists() {
                 let dst = backup_dir.join(f);
-                if let Err(_) = std::fs::rename(&src, &dst) {
+                if std::fs::rename(&src, &dst).is_err() {
                     copy_dir_all(&src, &dst)?;
                     let _ = std::fs::remove_dir_all(&src);
                 }
@@ -787,7 +840,7 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
         if ty.is_dir() {
             copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
         } else {
-            std::fs::copy(&entry.path(), &dst.join(entry.file_name()))?;
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
         }
     }
     Ok(())

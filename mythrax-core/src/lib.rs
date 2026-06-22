@@ -1,3 +1,5 @@
+#![allow(async_fn_in_trait)]
+
 pub mod api;
 pub mod cli;
 pub mod contracts;

@@ -1,5 +1,6 @@
 use axum::async_trait;
-use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave};
+use surrealdb_types::SurrealValue;
+use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode, SearchResponse, WisdomSearchResponse};
 use anyhow::{Result, Context};
 use surrealdb::engine::local::{Db, Mem, RocksDb};
 use surrealdb::Surreal;
@@ -33,34 +34,44 @@ pub fn unescape_id_part(part: &str) -> String {
     result
 }
 
-pub fn parse_record_id(id_str: &str) -> Result<surrealdb::sql::Thing> {
+pub fn record_key_to_string(key: &surrealdb::types::RecordIdKey) -> String {
+    match key {
+        surrealdb::types::RecordIdKey::String(s) => s.clone(),
+        surrealdb::types::RecordIdKey::Number(n) => n.to_string(),
+        surrealdb::types::RecordIdKey::Uuid(u) => u.to_string(),
+        other => format!("{:?}", other),
+    }
+}
+
+pub fn parse_record_id(id_str: &str) -> Result<surrealdb::types::RecordId> {
     let parts: Vec<&str> = id_str.splitn(2, ':').collect();
     if parts.len() != 2 {
         anyhow::bail!("Invalid Record ID format: {}", id_str);
     }
     let table = parts[0].to_string();
     let raw_id = unescape_id_part(parts[1]);
-    Ok(surrealdb::sql::Thing {
-        tb: table,
-        id: surrealdb::sql::Id::from(raw_id),
+    Ok(surrealdb::types::RecordId {
+        table: table.into(),
+        key: surrealdb::types::RecordIdKey::from(raw_id),
     })
 }
 
-pub fn format_record_id(thing: &surrealdb::sql::Thing) -> String {
-    let raw_id = match &thing.id {
-        surrealdb::sql::Id::String(s) => unescape_id_part(s),
-        other => unescape_id_part(&other.to_string()),
+pub fn format_record_id(thing: &surrealdb::types::RecordId) -> String {
+    let raw_id = match &thing.key {
+        surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+        other => unescape_id_part(&record_key_to_string(other)),
     };
-    format!("{}:{}", thing.tb, raw_id)
+    format!("{}:{}", thing.table, raw_id)
 }
 
 #[async_trait]
+#[allow(dead_code)]
 pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<()>;
     async fn save_episode(&self, episode: &EpisodeSave) -> Result<String>;
     async fn save_wisdom_rule(&self, rule: &WisdomRule) -> Result<String>;
-    async fn search(&self, query: &str, scope: Option<&str>, deep_insight: bool, limit: usize, offset: usize) -> Result<Vec<SearchResult>>;
-    async fn get_wisdom(&self, query: &str, tier: &str, limit: usize) -> Result<Vec<WisdomRule>>;
+    async fn search(&self, query: &str, scope: Option<&str>, deep_insight: bool, limit: usize, offset: usize, threshold: f32) -> Result<SearchResponse>;
+    async fn get_wisdom(&self, query: &str, tier: &str, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
     async fn apply_migrations(&self) -> Result<()>;
     async fn get_llm_config(&self) -> Result<LlmConfigResponse>;
@@ -71,6 +82,11 @@ pub trait StorageBackend: Send + Sync {
     async fn save_profile_key(&self, key: &str, value: &str) -> Result<()>;
     async fn get_profile_key(&self, key: &str) -> Result<Option<String>>;
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
+    async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
+    async fn relate_nodes(&self, from_id: &str, to_id: &str) -> Result<()>;
+    async fn get_wiki_node_id_by_vault_path(&self, vault_path: &str) -> Result<Option<String>>;
+    async fn get_active_scopes(&self) -> Result<Vec<String>>;
+    async fn delete_by_vault_path(&self, vault_path: &str) -> Result<()>;
 }
 
 pub struct SurrealBackend {
@@ -104,22 +120,25 @@ impl SurrealBackend {
         Ok(Self { db, embedder })
     }
 
+    #[allow(dead_code)]
     pub async fn new_in_memory() -> Result<Self> {
         Self::new("mem://").await
     }
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, SurrealValue)]
 struct SearchRaw {
-    id: surrealdb::sql::Thing,
+    id: surrealdb::types::RecordId,
     title: String,
     content: String,
+    utility: Option<f64>,
+    embedding: Option<Vec<f32>>,
     related_nodes: Option<Vec<RelatedNodeRaw>>,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, SurrealValue)]
 struct RelatedNodeRaw {
-    id: surrealdb::sql::Thing,
+    id: surrealdb::types::RecordId,
     title: Option<String>,
     name: Option<String>,
     content: Option<String>,
@@ -128,6 +147,19 @@ struct RelatedNodeRaw {
     causal_explanation: Option<String>,
     action_to_avoid: Option<String>,
     prescribed_remedy: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug, SurrealValue)]
+struct EpisodeRaw {
+    id: surrealdb::types::RecordId,
+    title: String,
+    content: String,
+    source: Option<String>,
+    scope: Option<String>,
+    vault_path: Option<String>,
+    embedding: Option<Vec<f32>>,
+    processed_in_dream: Option<bool>,
+    source_episode: Option<surrealdb::types::RecordId>,
 }
 
 #[async_trait]
@@ -162,12 +194,12 @@ impl StorageBackend for SurrealBackend {
 
         if let Some(ref vp) = episode.vault_path {
             let check_query = "SELECT VALUE id FROM episode WHERE vault_path = $vault_path LIMIT 1;";
-            let mut response = self.db.query(check_query).bind(("vault_path", vp)).await?;
-            let ids: Option<surrealdb::sql::Thing> = response.take(0)?;
+            let mut response = self.db.query(check_query).bind(("vault_path", vp.as_str())).await?;
+            let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
             if let Some(thing) = ids {
-                ep_uuid = match &thing.id {
-                    surrealdb::sql::Id::String(s) => unescape_id_part(s),
-                    other => unescape_id_part(&other.to_string()),
+                ep_uuid = match &thing.key {
+                    surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                    other => unescape_id_part(&record_key_to_string(other)),
                 };
                 is_update = true;
             }
@@ -176,7 +208,7 @@ impl StorageBackend for SurrealBackend {
         let query_str = if is_update {
             "
                 BEGIN TRANSACTION;
-                LET $ep = type::thing('episode', $ep_uuid);
+                LET $ep = type::record('episode', $ep_uuid);
                 UPDATE $ep MERGE {
                     title: $title,
                     content: $content,
@@ -191,8 +223,8 @@ impl StorageBackend for SurrealBackend {
         } else {
             "
                 BEGIN TRANSACTION;
-                LET $ep = type::thing('episode', $ep_uuid);
-                LET $met = type::thing('metrics', $metrics_uuid);
+                LET $ep = type::record('episode', $ep_uuid);
+                LET $met = type::record('metrics', $metrics_uuid);
                 
                 CREATE $ep CONTENT {
                     title: $title,
@@ -215,7 +247,7 @@ impl StorageBackend for SurrealBackend {
 
         let metrics_uuid = Uuid::new_v4().to_string();
         let scope_val = episode.scope.clone().unwrap_or_else(|| "general".to_string());
-        let vp_val = episode.vault_path.clone().unwrap_or_else(|| "".to_string());
+        let vp_val = episode.vault_path.clone().unwrap_or_default();
 
         let embedding_val = if let Some(ref embedder) = self.embedder {
             let text_to_embed = format!("{}: {}", episode.title, episode.content);
@@ -231,13 +263,13 @@ impl StorageBackend for SurrealBackend {
         };
 
         let response = self.db.query(query_str)
-            .bind(("ep_uuid", &ep_uuid))
-            .bind(("metrics_uuid", &metrics_uuid))
-            .bind(("title", &episode.title))
-            .bind(("content", &episode.content))
-            .bind(("target_scope", &scope_val))
-            .bind(("vault_path", &vp_val))
-            .bind(("embedding", &embedding_val))
+            .bind(("ep_uuid", ep_uuid.as_str()))
+            .bind(("metrics_uuid", metrics_uuid.as_str()))
+            .bind(("title", episode.title.as_str()))
+            .bind(("content", episode.content.as_str()))
+            .bind(("target_scope", scope_val.as_str()))
+            .bind(("vault_path", vp_val.as_str()))
+            .bind(("embedding", embedding_val.clone()))
             .await?;
 
         println!("DEBUG: save_episode query response: {:#?}", response);
@@ -246,7 +278,7 @@ impl StorageBackend for SurrealBackend {
         for entity in &episode.entities {
             let entity_query = "
                 BEGIN TRANSACTION;
-                LET $ent_id = type::thing('entity', $name);
+                LET $ent_id = type::record('entity', $name);
                 INSERT INTO entity (id, name, entity_type, summary, labels, scope)
                 VALUES ($ent_id, $name, $entity_type, $summary, $labels, $target_scope)
                 ON DUPLICATE KEY UPDATE
@@ -255,19 +287,19 @@ impl StorageBackend for SurrealBackend {
                     scope = $target_scope;
                 
                 -- Relate episode to entity
-                LET $ep = type::thing('episode', $ep_uuid);
+                LET $ep = type::record('episode', $ep_uuid);
                 RELATE $ep -> mentions -> $ent_id CONTENT {
                     created_at: time::now()
                 };
                 COMMIT TRANSACTION;
             ";
             let _ = self.db.query(entity_query)
-                .bind(("name", &entity.name))
-                .bind(("entity_type", &entity.entity_type))
-                .bind(("summary", &entity.summary))
-                .bind(("labels", &entity.labels))
-                .bind(("target_scope", &scope_val))
-                .bind(("ep_uuid", &ep_uuid))
+                .bind(("name", entity.name.as_str()))
+                .bind(("entity_type", entity.entity_type.as_str()))
+                .bind(("summary", entity.summary.as_str()))
+                .bind(("labels", entity.labels.clone()))
+                .bind(("target_scope", scope_val.as_str()))
+                .bind(("ep_uuid", ep_uuid.as_str()))
                 .await?
                 .check().context("Entity relation query failed")?;
         }
@@ -281,12 +313,12 @@ impl StorageBackend for SurrealBackend {
 
         if let Some(ref vp) = rule.vault_path {
             let check_query = "SELECT VALUE id FROM wisdom WHERE vault_path = $vault_path LIMIT 1;";
-            let mut response = self.db.query(check_query).bind(("vault_path", vp)).await?;
-            let ids: Option<surrealdb::sql::Thing> = response.take(0)?;
+            let mut response = self.db.query(check_query).bind(("vault_path", vp.as_str())).await?;
+            let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
             if let Some(thing) = ids {
-                rule_uuid = match &thing.id {
-                    surrealdb::sql::Id::String(s) => unescape_id_part(s),
-                    other => unescape_id_part(&other.to_string()),
+                rule_uuid = match &thing.key {
+                    surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                    other => unescape_id_part(&record_key_to_string(other)),
                 };
                 is_update = true;
             }
@@ -295,7 +327,7 @@ impl StorageBackend for SurrealBackend {
         let query_str = if is_update {
             "
                 BEGIN TRANSACTION;
-                LET $rule = type::thing('wisdom', $rule_uuid);
+                LET $rule = type::record('wisdom', $rule_uuid);
                 UPDATE $rule MERGE {
                     target_pattern: $target_pattern,
                     action_to_avoid: $action_to_avoid,
@@ -305,15 +337,16 @@ impl StorageBackend for SurrealBackend {
                     scope: $target_scope,
                     vault_path: $vault_path,
                     source_episodes: $source_episodes,
-                    generator_name: $generator_name
+                    generator_name: $generator_name,
+                    embedding: $embedding
                 };
                 COMMIT TRANSACTION;
             "
         } else {
             "
                 BEGIN TRANSACTION;
-                LET $rule = type::thing('wisdom', $rule_uuid);
-                LET $met = type::thing('metrics', $metrics_uuid);
+                LET $rule = type::record('wisdom', $rule_uuid);
+                LET $met = type::record('metrics', $metrics_uuid);
                 
                 CREATE $rule CONTENT {
                     target_pattern: $target_pattern,
@@ -324,7 +357,8 @@ impl StorageBackend for SurrealBackend {
                     scope: $target_scope,
                     vault_path: $vault_path,
                     source_episodes: $source_episodes,
-                    generator_name: $generator_name
+                    generator_name: $generator_name,
+                    embedding: $embedding
                 };
                 
                 CREATE $met CONTENT {
@@ -338,68 +372,120 @@ impl StorageBackend for SurrealBackend {
         };
 
         let metrics_uuid = Uuid::new_v4().to_string();
-        let vp_val = rule.vault_path.clone().unwrap_or_else(|| "".to_string());
+        let vp_val = rule.vault_path.clone().unwrap_or_default();
+
+        let embedding_val = if let Some(ref embedder) = self.embedder {
+            let text_to_embed = format!(
+                "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
+                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+            );
+            match embedder.embed(&text_to_embed) {
+                Ok(vec) => Some(vec),
+                Err(e) => {
+                    tracing::warn!("Embedding generation failed in save_wisdom_rule: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         let _ = self.db.query(query_str)
-            .bind(("rule_uuid", &rule_uuid))
-            .bind(("metrics_uuid", &metrics_uuid))
-            .bind(("target_pattern", &rule.target_pattern))
-            .bind(("action_to_avoid", &rule.action_to_avoid))
-            .bind(("causal_explanation", &rule.causal_explanation))
-            .bind(("prescribed_remedy", &rule.prescribed_remedy))
-            .bind(("tier", &rule.tier))
-            .bind(("target_scope", &rule.scope))
-            .bind(("vault_path", &vp_val))
-            .bind(("source_episodes", &rule.source_episodes))
-            .bind(("generator_name", &rule.generator_name))
+            .bind(("rule_uuid", rule_uuid.as_str()))
+            .bind(("metrics_uuid", metrics_uuid.as_str()))
+            .bind(("target_pattern", rule.target_pattern.as_str()))
+            .bind(("action_to_avoid", rule.action_to_avoid.as_str()))
+            .bind(("causal_explanation", rule.causal_explanation.as_str()))
+            .bind(("prescribed_remedy", rule.prescribed_remedy.as_str()))
+            .bind(("tier", rule.tier.as_str()))
+            .bind(("target_scope", rule.scope.as_str()))
+            .bind(("vault_path", vp_val.as_str()))
+            .bind(("source_episodes", rule.source_episodes.clone()))
+            .bind(("generator_name", rule.generator_name.as_str()))
+            .bind(("embedding", embedding_val.clone()))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
         Ok(format!("wisdom:{}", rule_uuid))
     }
 
-    async fn search(&self, query: &str, scope: Option<&str>, deep_insight: bool, limit: usize, offset: usize) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, scope: Option<&str>, deep_insight: bool, limit: usize, offset: usize, threshold: f32) -> Result<SearchResponse> {
         let scope_val = scope.map(|s| s.to_string());
         
-        let sql = if deep_insight {
-            "
-            SELECT id, title, content, 
-                   <->(relates_to, mentions)<->(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
-            FROM episode 
-            WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-              AND (scope = $target_scope OR $target_scope = NONE)
-            LIMIT $limit START $offset;
-            "
+        let query_emb = if let Some(ref embedder) = self.embedder {
+            let formatted_query = format!("search_query: {}", query);
+            match embedder.embed(&formatted_query) {
+                Ok(vec) => Some(vec),
+                Err(e) => {
+                    tracing::warn!("Embedding generation failed in search: {}", e);
+                    None
+                }
+            }
         } else {
-            "
-            SELECT id, title, content
-            FROM episode 
-            WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-              AND (scope = $target_scope OR $target_scope = NONE)
-            LIMIT $limit START $offset;
-            "
+            None
         };
 
-        let mut response = self.db.query(sql)
-            .bind(("query", query))
-            .bind(("target_scope", scope_val))
-            .bind(("limit", limit))
-            .bind(("offset", offset))
-            .await?
-            .check().context("Search query failed")?;
+        let response = if let Some(ref q_vec) = query_emb {
+            let sql = if deep_insight {
+                "
+                SELECT id, title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                       <->(relates_to, mentions)<->(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                FROM episode
+                WHERE (scope = $target_scope OR $target_scope = NONE)
+                  AND (embedding <|100, 100|> $query_embedding);
+                "
+            } else {
+                "
+                SELECT id, title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM episode
+                WHERE (scope = $target_scope OR $target_scope = NONE)
+                  AND (embedding <|100, 100|> $query_embedding);
+                "
+            };
+            self.db.query(sql)
+                .bind(("target_scope", scope_val.as_deref()))
+                .bind(("query_embedding", q_vec.clone()))
+                .await?
+        } else {
+            let sql = if deep_insight {
+                "
+                SELECT id, title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                       <->(relates_to, mentions)<->(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                FROM episode 
+                WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                  AND (scope = $target_scope OR $target_scope = NONE);
+                "
+            } else {
+                "
+                SELECT id, title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM episode 
+                WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                  AND (scope = $target_scope OR $target_scope = NONE);
+                "
+            };
+            self.db.query(sql)
+                .bind(("query", query))
+                .bind(("target_scope", scope_val.as_deref()))
+                .await?
+        };
 
+        let mut response = response.check().context("Search query failed")?;
         let episodes: Vec<SearchRaw> = response.take(0)?;
-        let mut results = Vec::new();
+        let mut candidates = Vec::new();
 
         for ep in episodes {
             let mut content = ep.content.clone();
             
-            if deep_insight {
-                if let Some(ref related) = ep.related_nodes {
-                    if !related.is_empty() {
+            if deep_insight
+                && let Some(ref related) = ep.related_nodes
+                    && !related.is_empty() {
                         content.push_str("\n\n---\n### Related Context\n");
                         for node in related {
-                            let table = &node.id.tb;
+                            let table = node.id.table.as_str();
                             if table == "episode" {
                                 if let (Some(t), Some(c)) = (&node.title, &node.content) {
                                     content.push_str(&format!("[Related Episode: {}]\n{}\n\n", t, c));
@@ -439,55 +525,156 @@ impl StorageBackend for SurrealBackend {
                         }
                         content = content.trim_end().to_string();
                     }
-                }
-            }
 
-            results.push(SearchResult {
-                id: format_record_id(&ep.id),
-                title: ep.title,
-                content,
-                similarity: 1.0,
-                utility: 1.0,
-                tier: "Standard".to_string(),
-                embedding: None,
-                vault_path: None,
-                source_episode: None,
-            });
+            let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), ep.embedding.as_ref()) {
+                let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                dot
+            } else {
+                1.0
+            };
+
+            let utility = ep.utility.unwrap_or(1.0) as f32;
+            let blended_score = similarity * (0.7 + 0.3 * utility);
+
+            if blended_score >= threshold {
+                candidates.push(SearchResult {
+                    id: format_record_id(&ep.id),
+                    title: ep.title,
+                    content,
+                    similarity,
+                    utility,
+                    tier: "Standard".to_string(),
+                    embedding: None,
+                    vault_path: None,
+                    source_episode: None,
+                });
+            }
         }
 
-        Ok(results)
+        // Sort by blended score descending
+        candidates.sort_by(|a, b| {
+            let score_a = a.similarity * (0.7 + 0.3 * a.utility);
+            let score_b = b.similarity * (0.7 + 0.3 * b.utility);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let total_matches = candidates.len();
+        let has_more = total_matches > offset + limit;
+        let next_offset = offset + limit;
+
+        let sliced_results = if offset < total_matches {
+            let end = std::cmp::min(offset + limit, total_matches);
+            candidates[offset..end].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        Ok(SearchResponse {
+            results: sliced_results,
+            total_matches,
+            has_more,
+            next_offset,
+        })
     }
 
-    async fn get_wisdom(&self, query: &str, tier: &str, limit: usize) -> Result<Vec<WisdomRule>> {
-        let sql = "
-            SELECT * FROM wisdom 
-            WHERE tier = $tier AND (string::contains(target_pattern, $query) OR string::contains(causal_explanation, $query))
-            LIMIT $limit;
-        ";
-        let mut response = self.db.query(sql)
-            .bind(("tier", tier))
-            .bind(("query", query))
-            .bind(("limit", limit))
-            .await?
-            .check().context("Get wisdom query failed")?;
-
-        let wisdom: Vec<WisdomRule> = response.take(0)?;
-        let normalized_wisdom = wisdom.into_iter().map(|mut w| {
-            if let Some(ref id_str) = w.id {
-                if let Ok(thing) = parse_record_id(&id_str) {
-                    w.id = Some(format_record_id(&thing));
+    async fn get_wisdom(&self, query: &str, tier: &str, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
+        let query_emb = if let Some(ref embedder) = self.embedder {
+            let formatted_query = format!("search_query: {}", query);
+            match embedder.embed(&formatted_query) {
+                Ok(vec) => Some(vec),
+                Err(e) => {
+                    tracing::warn!("Embedding generation failed in get_wisdom: {}", e);
+                    None
                 }
             }
-            w
-        }).collect();
-        Ok(normalized_wisdom)
+        } else {
+            None
+        };
+
+        let response = if let Some(ref q_vec) = query_emb {
+            let sql = "
+                SELECT *,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM wisdom
+                WHERE tier = $tier
+                  AND (embedding <|100, 100|> $query_embedding);
+            ";
+            self.db.query(sql)
+                .bind(("tier", tier))
+                .bind(("query_embedding", q_vec.clone()))
+                .await?
+        } else {
+            let sql = "
+                SELECT *,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM wisdom
+                WHERE tier = $tier
+                  AND (string::contains(target_pattern, $query) OR string::contains(causal_explanation, $query));
+            ";
+            self.db.query(sql)
+                .bind(("tier", tier))
+                .bind(("query", query))
+                .await?
+        };
+
+        let mut response = response.check().context("Get wisdom query failed")?;
+        let wisdom: Vec<WisdomRule> = response.take(0)?;
+        let mut candidates = Vec::new();
+
+        for mut w in wisdom {
+            if let Some(ref id_str) = w.id
+                && let Ok(thing) = parse_record_id(id_str) {
+                    w.id = Some(format_record_id(&thing));
+                }
+
+            let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), w.embedding.as_ref()) {
+                let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                dot
+            } else {
+                1.0
+            };
+
+            let utility = w.utility.unwrap_or(1.0);
+            let blended_score = similarity * (0.7 + 0.3 * utility);
+
+            if blended_score >= threshold {
+                w.similarity = Some(similarity);
+                w.utility = Some(utility);
+                candidates.push(w);
+            }
+        }
+
+        // Sort by blended score descending
+        candidates.sort_by(|a, b| {
+            let score_a = a.similarity.unwrap_or(1.0) * (0.7 + 0.3 * a.utility.unwrap_or(1.0));
+            let score_b = b.similarity.unwrap_or(1.0) * (0.7 + 0.3 * b.utility.unwrap_or(1.0));
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let total_matches = candidates.len();
+        let has_more = total_matches > offset + limit;
+        let next_offset = offset + limit;
+
+        let sliced_results = if offset < total_matches {
+            let end = std::cmp::min(offset + limit, total_matches);
+            candidates[offset..end].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        Ok(WisdomSearchResponse {
+            results: sliced_results,
+            total_matches,
+            has_more,
+            next_offset,
+        })
     }
 
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()> {
         let thing_id = parse_record_id(id)?;
         
         let fetch_sql = "SELECT VALUE utility_score FROM metrics WHERE target_id = $target_id LIMIT 1;";
-        let mut response = self.db.query(fetch_sql).bind(("target_id", &thing_id)).await?.check().context("Fetch metrics query failed")?;
+        let mut response = self.db.query(fetch_sql).bind(("target_id", thing_id.clone())).await?.check().context("Fetch metrics query failed")?;
         let utility_opt: Option<f64> = response.take(0)?;
 
         let prev_utility = utility_opt.unwrap_or(1.0);
@@ -502,7 +689,7 @@ impl StorageBackend for SurrealBackend {
         ";
         let _ = self.db.query(update_sql)
             .bind(("new_utility", new_utility))
-            .bind(("target_id", &thing_id))
+            .bind(("target_id", thing_id.clone()))
             .await?
             .check().context("Update metrics query failed")?;
         
@@ -580,10 +767,10 @@ impl StorageBackend for SurrealBackend {
             };
         ";
         let _ = self.db.query(sql)
-            .bind(("active_provider", &req.provider))
-            .bind(("model", &model))
-            .bind(("cloud_provider", &cloud_provider))
-            .bind(("expires_at", &expires_at))
+            .bind(("active_provider", req.provider.as_str()))
+            .bind(("model", model.as_str()))
+            .bind(("cloud_provider", cloud_provider.as_str()))
+            .bind(("expires_at", expires_at.clone()))
             .await?.check().context("UPSERT config failed")?;
 
         if let Some(ref key) = req.api_key {
@@ -599,19 +786,6 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_unprocessed_episodes(&self) -> Result<Vec<Episode>> {
-        #[derive(serde::Deserialize)]
-        struct EpisodeRaw {
-            id: surrealdb::sql::Thing,
-            title: String,
-            content: String,
-            source: Option<String>,
-            scope: Option<String>,
-            vault_path: Option<String>,
-            embedding: Option<Vec<f32>>,
-            processed_in_dream: Option<bool>,
-            source_episode: Option<surrealdb::sql::Thing>,
-        }
-
         let sql = "SELECT * FROM episode WHERE processed_in_dream = false;";
         let mut response = self.db.query(sql).await?.check().context("Query unprocessed episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
@@ -638,19 +812,6 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_all_episodes(&self) -> Result<Vec<Episode>> {
-        #[derive(serde::Deserialize)]
-        struct EpisodeRaw {
-            id: surrealdb::sql::Thing,
-            title: String,
-            content: String,
-            source: Option<String>,
-            scope: Option<String>,
-            vault_path: Option<String>,
-            embedding: Option<Vec<f32>>,
-            processed_in_dream: Option<bool>,
-            source_episode: Option<surrealdb::sql::Thing>,
-        }
-
         let sql = "SELECT * FROM episode;";
         let mut response = self.db.query(sql).await?.check().context("Query all episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
@@ -670,7 +831,7 @@ impl StorageBackend for SurrealBackend {
 
     async fn save_profile_key(&self, key: &str, value: &str) -> Result<()> {
         let sql = "
-            UPSERT type::thing('profile', $key) CONTENT {
+            UPSERT type::record('profile', $key) CONTENT {
                 key: $key,
                 value: $value
             };
@@ -683,11 +844,11 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_profile_key(&self, key: &str) -> Result<Option<String>> {
-        #[derive(serde::Deserialize)]
+        #[derive(serde::Deserialize, SurrealValue)]
         struct ProfileRaw {
             value: String,
         }
-        let sql = "SELECT value FROM type::thing('profile', $key);";
+        let sql = "SELECT value FROM type::record('profile', $key);";
         let mut response = self.db.query(sql)
             .bind(("key", key))
             .await?.check().context("SELECT profile failed")?;
@@ -698,7 +859,7 @@ impl StorageBackend for SurrealBackend {
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String> {
         let id_str = format!("⟨{}⟩", Uuid::new_v4());
         let query = "
-            CREATE type::thing('handoff', $id) CONTENT {
+            CREATE type::record('handoff', $id) CONTENT {
                 parent_conversation_id: $parent,
                 subagent_conversation_id: $subagent,
                 summary: $summary,
@@ -708,30 +869,137 @@ impl StorageBackend for SurrealBackend {
         ";
         self.db.query(query)
             .bind(("id", id_str.clone()))
-            .bind(("parent", &handoff.parent_conversation_id))
-            .bind(("subagent", &handoff.subagent_conversation_id))
-            .bind(("summary", &handoff.summary))
-            .bind(("path", &handoff.handoff_file_path))
+            .bind(("parent", handoff.parent_conversation_id.as_str()))
+            .bind(("subagent", handoff.subagent_conversation_id.as_str()))
+            .bind(("summary", handoff.summary.as_str()))
+            .bind(("path", handoff.handoff_file_path.as_str()))
             .bind(("target_scope", handoff.scope.as_deref().unwrap_or("general")))
             .await?.check()?;
         Ok(format!("handoff:{}", id_str))
+    }
+
+    async fn save_wiki_node(&self, node: &WikiNode) -> Result<String> {
+        let mut node_uuid = Uuid::new_v4().to_string();
+        let mut is_update = false;
+
+        let check_query = "SELECT VALUE id FROM wiki_node WHERE name = $name LIMIT 1;";
+        let mut response = self.db.query(check_query).bind(("name", node.name.as_str())).await?;
+        let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
+        if let Some(thing) = ids {
+            node_uuid = match &thing.key {
+                surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                other => unescape_id_part(&record_key_to_string(other)),
+            };
+            is_update = true;
+        }
+
+        let query_str = if is_update {
+            "
+                BEGIN TRANSACTION;
+                LET $node = type::record('wiki_node', $node_uuid);
+                UPDATE $node MERGE {
+                    name: $name,
+                    content: $content,
+                    scope: $target_scope,
+                    vault_path: $vault_path,
+                    embedding: $embedding
+                };
+                COMMIT TRANSACTION;
+            "
+        } else {
+            "
+                BEGIN TRANSACTION;
+                LET $node = type::record('wiki_node', $node_uuid);
+                CREATE $node CONTENT {
+                    name: $name,
+                    content: $content,
+                    scope: $target_scope,
+                    vault_path: $vault_path,
+                    embedding: $embedding
+                };
+                COMMIT TRANSACTION;
+            "
+        };
+
+        let vp_val = node.vault_path.clone().unwrap_or_default();
+        let embedding_val = if let Some(ref embedder) = self.embedder {
+            let text_to_embed = format!("{}: {}", node.name, node.content);
+            match embedder.embed(&text_to_embed) {
+                Ok(vec) => Some(vec),
+                Err(e) => {
+                    tracing::warn!("Embedding generation failed in save_wiki_node: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let response = self.db.query(query_str)
+            .bind(("node_uuid", node_uuid.as_str()))
+            .bind(("name", node.name.as_str()))
+            .bind(("content", node.content.as_str()))
+            .bind(("target_scope", node.scope.as_str()))
+            .bind(("vault_path", vp_val.as_str()))
+            .bind(("embedding", embedding_val.clone()))
+            .await?;
+
+        response.check().context("SurrealDB save_wiki_node transaction failed")?;
+
+        Ok(format!("wiki_node:{}", node_uuid))
+    }
+
+    async fn relate_nodes(&self, from_id: &str, to_id: &str) -> Result<()> {
+        let from_thing = parse_record_id(from_id)?;
+        let to_thing = parse_record_id(to_id)?;
+        let sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT { created_at: time::now() };";
+        self.db.query(sql)
+            .bind(("from", from_thing))
+            .bind(("to", to_thing))
+            .await?
+            .check().context("Failed to relate nodes")?;
+        Ok(())
+    }
+
+    async fn get_wiki_node_id_by_vault_path(&self, vault_path: &str) -> Result<Option<String>> {
+        let sql = "SELECT VALUE id FROM wiki_node WHERE vault_path = $vault_path LIMIT 1;";
+        let mut response = self.db.query(sql).bind(("vault_path", vault_path)).await?;
+        let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
+        Ok(ids.map(|thing| format_record_id(&thing)))
+    }
+
+    async fn get_active_scopes(&self) -> Result<Vec<String>> {
+        let sql = "SELECT VALUE DISTINCT scope FROM episode;";
+        let mut response = self.db.query(sql).await?;
+        let mut scopes: Vec<String> = response.take(0)?;
+        if !scopes.contains(&"general".to_string()) {
+            scopes.push("general".to_string());
+        }
+        Ok(scopes)
+    }
+
+    async fn delete_by_vault_path(&self, vault_path: &str) -> Result<()> {
+        let sql1 = "DELETE FROM episode WHERE vault_path = $vault_path;";
+        let sql2 = "DELETE FROM wisdom WHERE vault_path = $vault_path;";
+        let sql3 = "DELETE FROM wiki_node WHERE vault_path = $vault_path;";
+        
+        self.db.query(sql1).bind(("vault_path", vault_path)).await?.check()?;
+        self.db.query(sql2).bind(("vault_path", vault_path)).await?.check()?;
+        self.db.query(sql3).bind(("vault_path", vault_path)).await?.check()?;
+        Ok(())
     }
 }
 
 fn load_api_key(provider: &str) -> Option<String> {
     if let Ok(home) = std::env::var("HOME") {
         let keys_path = std::path::PathBuf::from(&home).join(".mythrax/keys.json");
-        if keys_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&keys_path) {
-                if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content) {
-                    if let Some(val) = map.get(provider) {
-                        if let Some(s) = val.as_str() {
+        if keys_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&keys_path)
+                && let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
+                    && let Some(val) = map.get(provider)
+                        && let Some(s) = val.as_str() {
                             return Some(s.to_string());
                         }
-                    }
-                }
-            }
-        }
     }
     None
 }
@@ -810,9 +1078,9 @@ mod tests {
         let all_eps: Vec<serde_json::Value> = backend.db.select("episode").await.unwrap();
         println!("DEBUG: All episodes in DB: {:?}", all_eps);
 
-        let search_results = backend.search("redis", Some("testing"), false, 2, 0).await.unwrap();
-        assert_eq!(search_results.len(), 1);
-        assert!(search_results[0].content.contains("redis"));
+        let search_results = backend.search("redis", Some("testing"), false, 2, 0, 0.55).await.unwrap();
+        assert_eq!(search_results.results.len(), 1);
+        assert!(search_results.results[0].content.contains("redis"));
 
         backend.record_feedback(&ep_id, false).await.unwrap();
     }
@@ -836,36 +1104,36 @@ mod tests {
 
         // Create a wiki_node
         let _ = backend.db.query("
-            CREATE type::thing('wiki_node', 'pool_size') CONTENT {
+            CREATE type::record('wiki_node', 'pool_size') CONTENT {
                 name: 'Redis Connection Pooling Guidelines',
                 content: 'Set max connections to 50 under high concurrency environments.',
                 scope: 'deep-test'
             };
         ").await.unwrap().check().unwrap();
 
-        let wiki_thing = surrealdb::sql::Thing {
-            tb: "wiki_node".to_string(),
-            id: surrealdb::sql::Id::from("pool_size".to_string()),
+        let wiki_thing = surrealdb::types::RecordId {
+            table: "wiki_node".into(),
+            key: surrealdb::types::RecordIdKey::from("pool_size".to_string()),
         };
 
         // Relate the episode to the wiki_node
         let _ = backend.db.query("RELATE $from -> relates_to -> $to;")
-            .bind(("from", &ep_thing))
-            .bind(("to", &wiki_thing))
+            .bind(("from", ep_thing.clone()))
+            .bind(("to", wiki_thing.clone()))
             .await.unwrap()
             .check().unwrap();
 
         // Perform search WITH deep_insight = true
-        let results_deep = backend.search("Redis", Some("deep-test"), true, 10, 0).await.unwrap();
-        assert_eq!(results_deep.len(), 1);
-        assert!(results_deep[0].content.contains("dropping connections"));
-        assert!(results_deep[0].content.contains("Redis Connection Pooling Guidelines"));
-        assert!(results_deep[0].content.contains("Set max connections to 50"));
+        let results_deep = backend.search("Redis", Some("deep-test"), true, 10, 0, 0.55).await.unwrap();
+        assert_eq!(results_deep.results.len(), 1);
+        assert!(results_deep.results[0].content.contains("dropping connections"));
+        assert!(results_deep.results[0].content.contains("Redis Connection Pooling Guidelines"));
+        assert!(results_deep.results[0].content.contains("Set max connections to 50"));
 
         // Perform search WITHOUT deep_insight = true
-        let results_normal = backend.search("Redis", Some("deep-test"), false, 10, 0).await.unwrap();
-        assert_eq!(results_normal.len(), 1);
-        assert!(results_normal[0].content.contains("dropping connections"));
-        assert!(!results_normal[0].content.contains("Redis Connection Pooling Guidelines"));
+        let results_normal = backend.search("Redis", Some("deep-test"), false, 10, 0, 0.55).await.unwrap();
+        assert_eq!(results_normal.results.len(), 1);
+        assert!(results_normal.results[0].content.contains("dropping connections"));
+        assert!(!results_normal.results[0].content.contains("Redis Connection Pooling Guidelines"));
     }
 }
