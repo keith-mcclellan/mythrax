@@ -104,6 +104,7 @@ pub trait StorageBackend: Send + Sync {
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
     async fn relate_nodes(&self, from_id: &str, to_id: &str) -> Result<()>;
+    async fn get_related_node_ids(&self, from_id: &str) -> Result<Vec<String>>;
     async fn get_wiki_node_id_by_vault_path(&self, vault_path: &str) -> Result<Option<String>>;
     async fn get_active_scopes(&self) -> Result<Vec<String>>;
     async fn delete_by_vault_path(&self, vault_path: &str) -> Result<()>;
@@ -1468,6 +1469,14 @@ impl StorageBackend for SurrealBackend {
             .await?
             .check().context("Failed to relate nodes")?;
         Ok(())
+    }
+
+    async fn get_related_node_ids(&self, from_id: &str) -> Result<Vec<String>> {
+        let from_thing = parse_record_id(from_id)?;
+        let sql = "SELECT VALUE out FROM relates_to WHERE in = $from;";
+        let mut response = self.db.query(sql).bind(("from", from_thing)).await?;
+        let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
+        Ok(ids.into_iter().map(|thing| format_record_id(&thing)).collect())
     }
 
     async fn get_wiki_node_id_by_vault_path(&self, vault_path: &str) -> Result<Option<String>> {

@@ -288,11 +288,32 @@ impl DreamCoordinator {
                         }
 
                         let sys_prompt = "You are a systems synthesizer. Refine the existing architectural insight note by incorporating the details of the new event.";
-                        let content_len = ep.content.len();
-                        let display_content = if content_len > 8000 {
-                            format!("{}... [Truncated {} characters of content due to size]", &ep.content[..8000], content_len - 8000)
+                        let mut display_content = ep.content.clone();
+                        if let Some(ref ep_id) = ep.id {
+                            if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
+                                if !related_ids.is_empty() {
+                                    if let Ok(mem_nodes_resp) = db.get_memory_nodes(&related_ids).await {
+                                        let mut artifacts_text = String::new();
+                                        for node in mem_nodes_resp.wiki_nodes {
+                                            artifacts_text.push_str(&format!(
+                                                "\nArtifact Name: {}\nContent:\n{}\n",
+                                                node.name, node.content
+                                            ));
+                                        }
+                                        if !artifacts_text.is_empty() {
+                                            display_content.push_str("\n\nAssociated Artifacts:\n");
+                                            display_content.push_str(&artifacts_text);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        let content_len = display_content.len();
+                        let display_content = if content_len > 100_000 {
+                            format!("{}... [Truncated {} characters of content due to size]", &display_content[..100_000], content_len - 100_000)
                         } else {
-                            ep.content.clone()
+                            display_content
                         };
                         let prompt_text = format!(
                             "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}",
@@ -300,15 +321,37 @@ impl DreamCoordinator {
                         );
                         let updated_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
 
+                        let mut source_ep_links = Vec::new();
+                        let mut eps_to_link = Vec::new();
+                        if let Ok(mem_nodes) = db.get_memory_nodes(&new_source_episodes).await {
+                            for ep in mem_nodes.episodes {
+                                if let Some(ref path) = ep.vault_path {
+                                    let target = path.strip_suffix(".md").unwrap_or(path);
+                                    source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
+                                    eps_to_link.push((path.clone(), ep.title.clone()));
+                                }
+                            }
+                        }
+                        let source_ep_section = if !source_ep_links.is_empty() {
+                            format!("\n\n## Source Episodes\n{}", source_ep_links.join("\n"))
+                        } else {
+                            String::new()
+                        };
+
                         let relative_path = format!("wiki/{}/insights/{}.md", scope, ins.title.replace(' ', "_"));
                         let new_content = format!(
-                            "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
+                            "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
                             ins.title,
                             scope,
                             new_source_episodes.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
-                            updated_summary
+                            updated_summary,
+                            source_ep_section
                         );
                         store.write_file(&relative_path, &new_content)?;
+
+                        for (ep_path, _ep_title) in eps_to_link {
+                            let _ = store.append_link_to_file(&ep_path, "Insights & Summaries", &relative_path, &ins.title);
+                        }
 
                         if let Some(ref ep_id) = ep.id {
                             db.mark_episode_processed(ep_id).await?;
@@ -371,13 +414,34 @@ impl DreamCoordinator {
             for (cluster_idx, (_, cluster_eps)) in clusters.into_iter().enumerate() {
                 let mut events_text = String::new();
                 for ep in &cluster_eps {
-                    let content_len = ep.content.len();
-                    let display_content = if content_len > 8000 {
-                        format!("{}... [Truncated {} characters of content due to size]", &ep.content[..8000], content_len - 8000)
+                    let mut ep_display_content = ep.content.clone();
+                    if let Some(ref ep_id) = ep.id {
+                        if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
+                            if !related_ids.is_empty() {
+                                if let Ok(mem_nodes_resp) = db.get_memory_nodes(&related_ids).await {
+                                    let mut artifacts_text = String::new();
+                                    for node in mem_nodes_resp.wiki_nodes {
+                                        artifacts_text.push_str(&format!(
+                                            "\nArtifact Name: {}\nContent:\n{}\n",
+                                            node.name, node.content
+                                        ));
+                                    }
+                                    if !artifacts_text.is_empty() {
+                                        ep_display_content.push_str("\n\nAssociated Artifacts:\n");
+                                        ep_display_content.push_str(&artifacts_text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    let content_len = ep_display_content.len();
+                    let ep_display_content = if content_len > 100_000 {
+                        format!("{}... [Truncated {} characters of content due to size]", &ep_display_content[..100_000], content_len - 100_000)
                     } else {
-                        ep.content.clone()
+                        ep_display_content
                     };
-                    events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, display_content));
+                    events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
                 }
 
                 let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
@@ -448,15 +512,37 @@ impl DreamCoordinator {
                     }
                     if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
                         for r in rules {
+                            let mut source_ep_links = Vec::new();
+                            let mut eps_to_link = Vec::new();
+                            if let Ok(mem_nodes) = db.get_memory_nodes(&cluster_ep_ids).await {
+                                for ep in mem_nodes.episodes {
+                                    if let Some(ref path) = ep.vault_path {
+                                        let target = path.strip_suffix(".md").unwrap_or(path);
+                                        source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
+                                        eps_to_link.push((path.clone(), ep.title.clone()));
+                                    }
+                                }
+                            }
+                            let source_ep_section = if !source_ep_links.is_empty() {
+                                format!("\n\n## Source Episodes\n{}", source_ep_links.join("\n"))
+                            } else {
+                                String::new()
+                            };
+
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
                             let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
                             let rule_md = format!(
-                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
                                 r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, scope,
                                 cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy
+                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
+                                source_ep_section
                             );
                             store.write_file(&rule_path, &rule_md)?;
+
+                            for (ep_path, _ep_title) in eps_to_link {
+                                let _ = store.append_link_to_file(&ep_path, "Derived Wisdom Rules", &rule_path, &format!("Wisdom: {}", r.target_pattern));
+                            }
 
                             let rule_contract = WisdomRule {
                                 id: None,
@@ -628,13 +714,34 @@ impl DreamCoordinator {
                             // Format events for LLM
                             let mut events_text = String::new();
                             for ep in &group {
-                                let content_len = ep.content.len();
-                                let display_content = if content_len > 8000 {
-                                    format!("{}... [Truncated {} characters of content due to size]", &ep.content[..8000], content_len - 8000)
+                                let mut ep_display_content = ep.content.clone();
+                                if let Some(ref ep_id) = ep.id {
+                                    if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
+                                        if !related_ids.is_empty() {
+                                            if let Ok(mem_nodes_resp) = db.get_memory_nodes(&related_ids).await {
+                                                let mut artifacts_text = String::new();
+                                                for node in mem_nodes_resp.wiki_nodes {
+                                                    artifacts_text.push_str(&format!(
+                                                        "\nArtifact Name: {}\nContent:\n{}\n",
+                                                        node.name, node.content
+                                                    ));
+                                                }
+                                                if !artifacts_text.is_empty() {
+                                                    ep_display_content.push_str("\n\nAssociated Artifacts:\n");
+                                                    ep_display_content.push_str(&artifacts_text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                let content_len = ep_display_content.len();
+                                let ep_display_content = if content_len > 100_000 {
+                                    format!("{}... [Truncated {} characters of content due to size]", &ep_display_content[..100_000], content_len - 100_000)
                                 } else {
-                                    ep.content.clone()
+                                    ep_display_content
                                 };
-                                events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, display_content));
+                                events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
                             }
 
                             // Call LLM Synthesizer
@@ -665,14 +772,35 @@ impl DreamCoordinator {
                                 let clean_title = analysis.title.replace([' ', '/'], "_");
                                 let insight_uuid = uuid::Uuid::new_v4().to_string();
                                 let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+
+                                let mut source_ep_links = Vec::new();
+                                for ep in &group {
+                                    if let Some(ref path) = ep.vault_path {
+                                        let target = path.strip_suffix(".md").unwrap_or(path);
+                                        source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
+                                    }
+                                }
+                                let source_ep_section = if !source_ep_links.is_empty() {
+                                    format!("\n\n## Source Episodes\n{}", source_ep_links.join("\n"))
+                                } else {
+                                    String::new()
+                                };
+
                                 let insight_content = format!(
-                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
+                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
                                     analysis.title,
                                     scope,
                                     group.iter().map(|ep| format!("  - \"{}\"", ep.id.as_ref().unwrap_or(&String::new()))).collect::<Vec<_>>().join("\n"),
-                                    analysis.summary
+                                    analysis.summary,
+                                    source_ep_section
                                 );
                                 if store.write_file(&relative_path, &insight_content).is_ok() {
+                                    for ep in &group {
+                                        if let Some(ref path) = ep.vault_path {
+                                            let _ = store.append_link_to_file(path, "Insights & Summaries", &relative_path, &analysis.title);
+                                        }
+                                    }
+
                                     // Save WikiNode to SurrealDB
                                     let node_contract = WikiNode {
                                         id: None,

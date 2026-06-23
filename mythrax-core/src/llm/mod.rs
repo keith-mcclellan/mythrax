@@ -57,6 +57,12 @@ impl LLMClient {
         let response_text = match config.active_provider.as_str() {
             "local" => {
                 let url = "http://127.0.0.1:8080/v1/chat/completions";
+                let truncated_prompt = if prompt.len() > 100_000 {
+                    format!("{}... [Truncated due to local context limits]", &prompt[..100_000])
+                } else {
+                    prompt.to_string()
+                };
+
                 let mut messages = Vec::new();
                 if let Some(sys) = system_instruction {
                     messages.push(serde_json::json!({
@@ -66,14 +72,14 @@ impl LLMClient {
                 }
                 messages.push(serde_json::json!({
                     "role": "user",
-                    "content": prompt
+                    "content": truncated_prompt
                 }));
 
                 let payload = serde_json::json!({
                     "model": config.model,
                     "messages": messages,
                     "temperature": 0.2,
-                    "max_tokens": 16384
+                    "max_tokens": 8192
                 });
 
                 // Serialize all local LLM calls — only one request in-flight at a time
@@ -85,7 +91,8 @@ impl LLMClient {
                 let json: serde_json::Value = resp.json().await?;
                 tracing::debug!("Local LLM raw response: {}", json);
                 let content = json["choices"][0]["message"]["content"].clone();
-                if content.is_null() {
+                
+                let result = if content.is_null() {
                     // Gemma 4 / thinking models emit `reasoning` instead of `content`
                     // when finish_reason=length (hit max_tokens mid-thought) or when
                     // the model uses a separate reasoning field.
@@ -102,7 +109,12 @@ impl LLMClient {
                     content.as_str()
                         .with_context(|| format!("Invalid local completion response. Raw JSON: {}", json))?
                         .to_string()
-                }
+                };
+
+                // Pause for 5 seconds to give GPU/cache recovery time before releasing semaphore
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                
+                result
             }
             "cloud" => {
                 match config.cloud_provider.as_str() {
@@ -298,22 +310,31 @@ async fn send_with_retry(
                 let status = resp.status();
                 let body_text = resp.text().await.unwrap_or_default();
                 tracing::warn!("HTTP request failed with status {}: {}", status, body_text);
-                if attempt >= 3 {
+                if attempt >= 5 {
                     anyhow::bail!("HTTP request failed with status {}: {}", status, body_text);
                 }
             }
             Err(e) => {
-                tracing::warn!("HTTP request error on attempt {}: {}", attempt, e);
-                if attempt >= 3 {
+                let err_str = e.to_string();
+                let is_connection_refused = e.is_connect() || err_str.contains("Connection refused") || err_str.contains("connection refused");
+                if is_connection_refused {
+                    tracing::warn!(
+                        "WARNING: Local LLM connection refused. If the server crashed, run: brew services restart mlx-lm"
+                    );
+                } else {
+                    tracing::warn!("HTTP request error on attempt {}: {}", attempt, e);
+                }
+                if attempt >= 5 {
                     return Err(e.into());
                 }
             }
         }
         attempt += 1;
-        let base_ms = 200.0;
+        let base_ms = 500.0;
         let factor = (2.0f64).powi(attempt);
         let jitter = (tokio::time::Instant::now().elapsed().as_nanos() % 100) as f64;
-        let sleep_duration = std::time::Duration::from_millis((base_ms * factor + jitter) as u64);
+        let delay_ms = (base_ms * factor + jitter).min(5000.0);
+        let sleep_duration = std::time::Duration::from_millis(delay_ms as u64);
         tokio::time::sleep(sleep_duration).await;
     }
 }

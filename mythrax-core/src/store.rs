@@ -50,6 +50,37 @@ impl MarkdownStore {
             
         Ok(())
     }
+
+    pub fn append_link_to_file(&self, file_path: &str, section_title: &str, link_path: &str, link_label: &str) -> Result<()> {
+        let dest_path = self.vault_root.join(file_path);
+        if !dest_path.exists() {
+            return Ok(());
+        }
+        let mut content = fs::read_to_string(&dest_path)?;
+        let link_target = link_path.strip_suffix(".md").unwrap_or(link_path);
+        let link_str = format!("- [[{}|{}]]", link_target, link_label);
+
+        if content.contains(&link_str) {
+            return Ok(());
+        }
+
+        let section_header = format!("## {}", section_title);
+        if !content.contains(&section_header) {
+            if !content.ends_with('\n') && !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(&format!("\n{}\n", section_header));
+        }
+
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&link_str);
+        content.push('\n');
+
+        self.write_file(file_path, &content)?;
+        Ok(())
+    }
 }
 
 
@@ -155,5 +186,31 @@ mod tests {
         unsafe {
             std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
         }
+    }
+
+    #[test]
+    fn test_append_link_to_file() {
+        let tmp = tempdir().unwrap();
+        let store = MarkdownStore::new(tmp.path()).unwrap();
+
+        let rel_path = "episodes/test_episode.md";
+        let content = "title: Test\nSome episode content.";
+        store.write_file(rel_path, content).unwrap();
+
+        // 1. Append a link for the first time
+        store.append_link_to_file(rel_path, "Insights & Summaries", "wiki/scope/insights/My_Insight.md", "My Insight").unwrap();
+        
+        let dest = tmp.path().join(rel_path);
+        let read_content_1 = fs::read_to_string(&dest).unwrap();
+        assert!(read_content_1.contains("## Insights & Summaries"));
+        assert!(read_content_1.contains("- [[wiki/scope/insights/My_Insight|My Insight]]"));
+
+        // 2. Append the same link again (should not duplicate)
+        store.append_link_to_file(rel_path, "Insights & Summaries", "wiki/scope/insights/My_Insight.md", "My Insight").unwrap();
+        let read_content_2 = fs::read_to_string(&dest).unwrap();
+        
+        // Count occurrences of the link string
+        let occurrences = read_content_2.matches("[[wiki/scope/insights/My_Insight|My Insight]]").count();
+        assert_eq!(occurrences, 1);
     }
 }

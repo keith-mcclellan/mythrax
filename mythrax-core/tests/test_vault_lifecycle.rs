@@ -207,3 +207,91 @@ fn test_executor_applies_code_changes() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_ingestion_chunking_and_linking() -> Result<()> {
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    let source_dir = tmp.path().join("source");
+    let db_path = tmp.path().join("db");
+    
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(&source_dir)?;
+    
+    // Create folders inside vault
+    let folders = ["episodes", "wiki", "wiki/artifacts", "wisdom", "general", "archive"];
+    for f in &folders {
+        fs::create_dir_all(vault_root.join(f))?;
+    }
+
+    let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
+    let backend = SurrealBackend::new(&surreal_url).await?;
+    backend.init().await?;
+
+    // Create a mock Antigravity folder
+    let session_dir = source_dir.join("session_linking_123");
+    let logs_dir = session_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir)?;
+    
+    // Create a large transcript of ~120,000 characters to trigger chunking into 2 parts (cap = 100k)
+    let mut large_transcript = String::new();
+    large_transcript.push_str("{\"type\":\"USER_INPUT\",\"content\":\"");
+    large_transcript.push_str(&"A".repeat(60000));
+    large_transcript.push_str("\"}\n");
+    large_transcript.push_str("{\"type\":\"PLANNER_RESPONSE\",\"content\":\"");
+    large_transcript.push_str(&"B".repeat(60000));
+    large_transcript.push_str("\"}\n");
+    
+    fs::write(logs_dir.join("transcript.jsonl"), large_transcript)?;
+
+    // Create mock artifacts
+    fs::write(session_dir.join("walkthrough.md"), "Walkthrough artifact content")?;
+    fs::write(session_dir.join("implementation_plan.md"), "Plan artifact content")?;
+
+    // Run bulk ingestion
+    let (count, errors) = bulk_ingest_vault(
+        &vault_root,
+        &source_dir,
+        "antigravity",
+        "testing-linking-scope",
+        &backend
+    ).await?;
+
+    // We ingested 2 episode parts + 2 artifacts = 4 success counts
+    assert_eq!(count, 4);
+    assert!(errors.is_empty());
+
+    // 1. Verify episodes in DB
+    let all_eps = backend.get_all_episodes().await?;
+    // We should have part 1 and part 2
+    assert_eq!(all_eps.len(), 2);
+    
+    let ep_part1 = all_eps.iter().find(|e| e.title.contains("part1")).unwrap();
+    let ep_part2 = all_eps.iter().find(|e| e.title.contains("part2")).unwrap();
+    
+    // 2. Verify links inside files in Obsidian
+    let ep_part1_file = fs::read_to_string(vault_root.join(ep_part1.vault_path.as_ref().unwrap()))?;
+    assert!(ep_part1_file.contains("[[wiki/artifacts/session_linking_123/walkthrough]]"));
+    assert!(ep_part1_file.contains("[[wiki/artifacts/session_linking_123/implementation_plan]]"));
+
+    let ep_part2_file = fs::read_to_string(vault_root.join(ep_part2.vault_path.as_ref().unwrap()))?;
+    assert!(ep_part2_file.contains("[[wiki/artifacts/session_linking_123/walkthrough]]"));
+    assert!(ep_part2_file.contains("[[wiki/artifacts/session_linking_123/implementation_plan]]"));
+
+    // Verify artifact file backlinks
+    let walkthrough_rel_path = "wiki/artifacts/session_linking_123/walkthrough.md";
+    let walkthrough_file = fs::read_to_string(vault_root.join(walkthrough_rel_path))?;
+    assert!(walkthrough_file.contains("Source Episodes:"));
+    assert!(walkthrough_file.contains(&ep_part1.title));
+    assert!(walkthrough_file.contains(&ep_part2.title));
+
+    // 3. Verify graph relationships in SurrealDB
+    let ep1_related = backend.get_related_node_ids(ep_part1.id.as_ref().unwrap()).await?;
+    assert_eq!(ep1_related.len(), 2); // walkthrough & implementation_plan
+    
+    let ep2_related = backend.get_related_node_ids(ep_part2.id.as_ref().unwrap()).await?;
+    assert_eq!(ep2_related.len(), 2);
+
+    Ok(())
+}
+

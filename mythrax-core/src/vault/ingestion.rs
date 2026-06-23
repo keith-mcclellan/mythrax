@@ -349,94 +349,141 @@ pub async fn bulk_ingest_vault(
             for (index, path) in dirs.into_iter().enumerate() {
                 let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
                 let title = format!("antigravity_{}", dir_name);
-                if existing_titles.contains(&title) {
+                let part1_title = format!("{}_part1", title);
+                if existing_titles.contains(&title) || existing_titles.contains(&part1_title) {
                     tracing::info!("processing episode {} of {} complete (skipped - already exists)", index + 1, total_dirs);
                     continue;
                 }
 
+                // 1. Pre-scan markdown artifacts in the conversation folder
+                let conv_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let mut pre_scanned_artifacts = Vec::new();
+                if let Ok(file_entries) = std::fs::read_dir(&path) {
+                    for file_entry in file_entries.flatten() {
+                        let fpath = file_entry.path();
+                        if fpath.is_file() {
+                            let is_md = fpath.extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| e.eq_ignore_ascii_case("md"))
+                                .unwrap_or(false);
+                            if is_md {
+                                let file_stem = fpath.file_stem()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string();
+                                if let Ok(artifact_content) = std::fs::read_to_string(&fpath) {
+                                    if !artifact_content.trim().is_empty() {
+                                        pre_scanned_artifacts.push((file_stem, artifact_content));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. Parse the transcript log
                 let logs_dir = path.join(".system_generated/logs");
                 let mut log_path = logs_dir.join("transcript.jsonl");
                 if !log_path.exists() {
                     log_path = logs_dir.join("transcript_full.jsonl");
                 }
-                if log_path.exists() {
+                
+                let parsed_content = if log_path.exists() {
                     match parse_antigravity_log(&log_path) {
-                        Ok(content) => {
-                            let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                            let title = format!("antigravity_{}", dir_name);
-                            let uuid = uuid::Uuid::new_v4().to_string();
-                            let relative_path = format!("episodes/antigravity_{}_{}.md", dir_name, &uuid[..8]);
-                            
-                            let note_content = format!(
-                                "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}",
-                                title, scope, content
-                            );
-                            if store.write_file(&relative_path, &note_content).is_ok() {
-                                let ep_save = crate::contracts::EpisodeSave {
-                                    title,
-                                    content: note_content,
-                                    entities: vec![],
-                                    scope: Some(scope.to_string()),
-                                    vault_path: Some(relative_path),
-                                    source_episode: None,
-                                };
-                                if db.save_episode(&ep_save).await.is_ok() {
-                                    success_count += 1;
-                                }
-                            }
-                        }
+                        Ok(content) => content,
                         Err(e) => {
                             let err_msg = quarantine_file(&log_path, source_dir, &e.to_string());
                             errors.push(err_msg);
+                            continue;
+                        }
+                    }
+                } else {
+                    continue;
+                };
+
+                // Chunk the parsed log to keep prompt sizes bounded
+                let chunks = chunk_parsed_content(&parsed_content, 100_000);
+                let total_chunks = chunks.len();
+                let mut generated_parts = Vec::new();
+
+                for (chunk_idx, chunk_text) in chunks.iter().enumerate() {
+                    let part_title = if total_chunks > 1 {
+                        format!("antigravity_{}_part{}", dir_name, chunk_idx + 1)
+                    } else {
+                        format!("antigravity_{}", dir_name)
+                    };
+                    
+                    let uuid = uuid::Uuid::new_v4().to_string();
+                    let relative_path = if total_chunks > 1 {
+                        format!("episodes/antigravity_{}_part{}_{}.md", dir_name, chunk_idx + 1, &uuid[..8])
+                    } else {
+                        format!("episodes/antigravity_{}_{}.md", dir_name, &uuid[..8])
+                    };
+
+                    let mut linked_artifacts_section = String::new();
+                    if !pre_scanned_artifacts.is_empty() {
+                        linked_artifacts_section.push_str("\n\n## Linked Artifacts\n");
+                        for (file_stem, _) in &pre_scanned_artifacts {
+                            linked_artifacts_section.push_str(&format!("- [[wiki/artifacts/{}/{}]]\n", conv_id, file_stem));
+                        }
+                    }
+
+                    let note_content = format!(
+                        "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}{}",
+                        part_title, scope, chunk_text, linked_artifacts_section
+                    );
+
+                    if store.write_file(&relative_path, &note_content).is_ok() {
+                        let ep_save = crate::contracts::EpisodeSave {
+                            title: part_title.clone(),
+                            content: note_content,
+                            entities: vec![],
+                            scope: Some(scope.to_string()),
+                            vault_path: Some(relative_path.clone()),
+                            source_episode: None,
+                        };
+                        if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
+                            success_count += 1;
+                            generated_parts.push((part_title, relative_path, episode_saved_id));
                         }
                     }
                 }
 
-                // --- Artifact pass: ingest markdown artifacts directly as WikiNodes ---
-                // These files (walkthrough.md, implementation_plan.md, task.md, etc.)
-                // are already human-readable structured markdown. They go straight into
-                // wiki/artifacts/<conv_id>/ without any LLM processing. The ONNX
-                // embedder runs on the raw content so artifacts are semantically
-                // searchable — no LLM summarization step needed.
-                let conv_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if let Ok(file_entries) = std::fs::read_dir(&path) {
-                    for file_entry in file_entries.flatten() {
-                        let fpath = file_entry.path();
-                        let is_md = fpath.extension()
-                            .and_then(|e| e.to_str())
-                            .map(|e| e.eq_ignore_ascii_case("md"))
-                            .unwrap_or(false);
-                        if !is_md {
-                            continue;
-                        }
-                        let file_stem = fpath.file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-                        match std::fs::read_to_string(&fpath) {
-                            Ok(artifact_content) if !artifact_content.trim().is_empty() => {
-                                let node_name = format!("{}/{}", conv_id, file_stem);
-                                let wiki_rel = format!(
-                                    "wiki/artifacts/{}/{}.md",
-                                    conv_id, file_stem
-                                );
-                                // Write the artifact as-is into the wiki vault
-                                let _ = store.write_file(&wiki_rel, &artifact_content);
-                                // Persist as a WikiNode in the DB — embedding computed
-                                // by the ONNX model, no LLM call made here
-                                let node = crate::contracts::WikiNode {
-                                    id: None,
-                                    name: node_name,
-                                    content: artifact_content,
-                                    scope: scope.to_string(),
-                                    vault_path: Some(wiki_rel),
-                                    embedding: None,
-                                };
-                                if db.save_wiki_node(&node).await.is_ok() {
-                                    success_count += 1;
-                                }
-                            }
-                            _ => {}
+                // 3. Process and write the artifacts, creating bidirectional wikilinks & SurrealDB edges
+                for (file_stem, raw_artifact_content) in pre_scanned_artifacts {
+                    let node_name = format!("{}/{}", conv_id, file_stem);
+                    let wiki_rel = format!("wiki/artifacts/{}/{}.md", conv_id, file_stem);
+                    
+                    let mut backlink_footer = String::new();
+                    if !generated_parts.is_empty() {
+                        backlink_footer.push_str("\n\n---\nSource Episodes: ");
+                        let links: Vec<String> = generated_parts
+                            .iter()
+                            .map(|(part_title, rel_path, _)| {
+                                let link_target = rel_path.strip_suffix(".md").unwrap_or(rel_path);
+                                format!("[[{}|{}]]", link_target, part_title)
+                            })
+                            .collect();
+                        backlink_footer.push_str(&links.join(" | "));
+                        backlink_footer.push('\n');
+                    }
+                    
+                    let artifact_content = format!("{}{}", raw_artifact_content, backlink_footer);
+                    let _ = store.write_file(&wiki_rel, &artifact_content);
+
+                    let node = crate::contracts::WikiNode {
+                        id: None,
+                        name: node_name,
+                        content: artifact_content,
+                        scope: scope.to_string(),
+                        vault_path: Some(wiki_rel),
+                        embedding: None,
+                    };
+
+                    if let Ok(wiki_node_id) = db.save_wiki_node(&node).await {
+                        success_count += 1;
+                        for (_, _, ep_saved_id) in &generated_parts {
+                            let _ = db.relate_nodes(ep_saved_id, &wiki_node_id).await;
                         }
                     }
                 }
@@ -763,6 +810,46 @@ pub async fn bulk_ingest_vault(
     }
 
     Ok((success_count, errors))
+}
+
+fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
+    if content.len() <= limit {
+        return vec![content.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current_chunk = String::new();
+
+    for line in content.lines() {
+        if current_chunk.len() + line.len() + 1 > limit {
+            if !current_chunk.is_empty() {
+                chunks.push(current_chunk.clone());
+                current_chunk.clear();
+            }
+            if line.len() > limit {
+                let mut remaining = line;
+                while remaining.len() > limit {
+                    let (part, rest) = remaining.split_at(limit);
+                    chunks.push(part.to_string());
+                    remaining = rest;
+                }
+                current_chunk = remaining.to_string();
+            } else {
+                current_chunk = line.to_string();
+            }
+        } else {
+            if !current_chunk.is_empty() {
+                current_chunk.push('\n');
+            }
+            current_chunk.push_str(line);
+        }
+    }
+
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    chunks
 }
 
 #[cfg(test)]

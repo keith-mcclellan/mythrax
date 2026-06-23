@@ -324,6 +324,8 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 }
 
 fn format_node_markdown(node: &HypothesisNode) -> String {
+    let scope = node.scope.as_deref().unwrap_or("default");
+
     let parent_link = match &node.parent_id {
         Some(p) => format!("\"[[{}]]\"", p),
         None => "null".to_string(),
@@ -359,6 +361,27 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
         None => "null".to_string(),
     };
 
+    // Format Navigation body section
+    let nav_parent = match &node.parent_id {
+        Some(p) => format!("[[wiki/{}/hypothesis_tree/{}|{}]]", scope, p, p),
+        None => "None".to_string(),
+    };
+
+    let nav_children = if node.children_ids.is_empty() {
+        "None".to_string()
+    } else {
+        let child_bullets: Vec<String> = node.children_ids.iter()
+            .map(|c| format!("  - [[wiki/{}/hypothesis_tree/{}|{}]]", scope, c, c))
+            .collect();
+        format!("\n{}", child_bullets.join("\n"))
+    };
+
+    let navigation_section = format!(
+        "\n\n## Navigation\n- **Parent**: {}\n- **Children**: {}",
+        nav_parent,
+        nav_children
+    );
+
     format!(
         "---\n\
          id: \"{}\"\n\
@@ -374,7 +397,7 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
          code_changes: {}\n\
          ---\n\n\
          # Hypothesis Tree Node: {}\n\n\
-         {}\n",
+         {}{}\n",
         node.node_id,
         parent_link,
         children_links,
@@ -387,6 +410,7 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
         code_ref_str,
         code_changes_str,
         node.node_id,
-        node.hypothesis
+        node.hypothesis,
+        navigation_section
     )
 }
