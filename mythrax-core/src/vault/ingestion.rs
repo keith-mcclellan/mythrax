@@ -289,6 +289,13 @@ pub async fn bulk_ingest_vault(
 
     let store = MarkdownStore::new(vault_root)?;
 
+    let existing_titles: std::collections::HashSet<String> = db.get_all_episodes()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.title)
+        .collect();
+
     let find_files = |exts: &[&str]| -> Vec<PathBuf> {
         let mut files = Vec::new();
         if let Ok(entries) = std::fs::read_dir(source_dir) {
@@ -340,6 +347,13 @@ pub async fn bulk_ingest_vault(
 
             let total_dirs = dirs.len();
             for (index, path) in dirs.into_iter().enumerate() {
+                let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                let title = format!("antigravity_{}", dir_name);
+                if existing_titles.contains(&title) {
+                    tracing::info!("processing episode {} of {} complete (skipped - already exists)", index + 1, total_dirs);
+                    continue;
+                }
+
                 let logs_dir = path.join(".system_generated/logs");
                 let mut log_path = logs_dir.join("transcript.jsonl");
                 if !log_path.exists() {
@@ -434,6 +448,11 @@ pub async fn bulk_ingest_vault(
         "claude" => {
             let files = find_files(&["jsonl"]);
             for file in files {
+                let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                let title = format!("claude_{}", file_stem);
+                if existing_titles.contains(&title) {
+                    continue;
+                }
                 match parse_claude_log(&file) {
                     Ok(content) => {
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
@@ -469,6 +488,10 @@ pub async fn bulk_ingest_vault(
         "cursor" => {
             let db_path = source_dir.join("state.vscdb");
             if db_path.exists() {
+                let title = "cursor_chat".to_string();
+                if existing_titles.contains(&title) {
+                    return Ok((0, vec![]));
+                }
                 match ingest_cursor(&db_path) {
                     Ok(content) => {
                         let title = "cursor_chat".to_string();
@@ -504,6 +527,11 @@ pub async fn bulk_ingest_vault(
         "codex" => {
             let files = find_files(&["json", "jsonl", "toml", "txt"]);
             for file in files {
+                let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                let title = format!("codex_{}", file_stem);
+                if existing_titles.contains(&title) {
+                    continue;
+                }
                 match parse_codex_log(&file) {
                     Ok(content) => {
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
@@ -539,6 +567,11 @@ pub async fn bulk_ingest_vault(
         "opencode" => {
             let files = find_files(&["json"]);
             for file in files {
+                let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                let title = format!("opencode_{}", file_stem);
+                if existing_titles.contains(&title) {
+                    continue;
+                }
                 match parse_opencode_log(&file) {
                     Ok(content) => {
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
@@ -574,6 +607,11 @@ pub async fn bulk_ingest_vault(
         "openclaw" => {
             let files = find_files(&["json", "jsonl"]);
             for file in files {
+                let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                let title = format!("openclaw_{}", file_stem);
+                if existing_titles.contains(&title) {
+                    continue;
+                }
                 match parse_openclaw_log(&file) {
                     Ok(content) => {
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
@@ -609,6 +647,10 @@ pub async fn bulk_ingest_vault(
         "hermes" => {
             let db_path = source_dir.join("state.db");
             if db_path.exists() {
+                let title = "hermes_chat".to_string();
+                if existing_titles.contains(&title) {
+                    return Ok((0, vec![]));
+                }
                 match ingest_hermes(&db_path) {
                     Ok(content) => {
                         let title = "hermes_chat".to_string();
@@ -644,6 +686,11 @@ pub async fn bulk_ingest_vault(
         "generic_jsonl" => {
             let files = find_files(&["jsonl"]);
             for file in files {
+                let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                let title = format!("generic_{}", file_stem);
+                if existing_titles.contains(&title) {
+                    continue;
+                }
                 match parse_generic_jsonl(&file) {
                     Ok(content) => {
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
@@ -679,6 +726,11 @@ pub async fn bulk_ingest_vault(
         "generic_markdown" => {
             let files = find_files(&["md"]);
             for file in files {
+                let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
+                let title = file_stem.to_string();
+                if existing_titles.contains(&title) {
+                    continue;
+                }
                 match parse_generic_markdown(&file, scope) {
                     Ok(note_content) => {
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
