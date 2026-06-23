@@ -66,7 +66,19 @@ echo "Bootstrapping fresh system and config..."
 echo "NOTE: Historical transcript ingestion may take several minutes depending on corpus size."
 "$MYTHRAX_BIN" init antigravity
 
-# 7. Start daemon in background
+# 7. Reprocess any episodes missing vector embeddings (idempotent, safe to run post-ingest)
+echo "Reprocessing any episodes with missing vector embeddings..."
+"$MYTHRAX_BIN" vault reprocess
+
+# 8. Run integrity verification with self-healing
+echo "Verifying vault integrity (with auto-fix)..."
+"$MYTHRAX_BIN" vault verify --fix
+
+# 9. Attempt dreaming/compaction synthesis (requires LLM — skips gracefully if unavailable)
+echo "Generating initial wiki compactions and synthesis (skips if no LLM configured)..."
+"$MYTHRAX_BIN" vault summarize
+
+# 10. Start daemon in background
 echo "Starting daemon..."
 "$MYTHRAX_BIN" daemon start --port 8090 &
 DAEMON_PID=$!
@@ -75,20 +87,9 @@ echo "Daemon started with background PID $DAEMON_PID"
 # Give the daemon a moment to boot
 sleep 2
 
-# 8. Reprocess any episodes missing vector embeddings (idempotent, safe to run post-ingest)
-echo "Reprocessing any episodes with missing vector embeddings..."
-"$MYTHRAX_BIN" vault reprocess
-
-# 9. Run integrity verification with self-healing
-echo "Verifying vault integrity (with auto-fix)..."
-"$MYTHRAX_BIN" vault verify --fix
-
-# 10. Attempt dreaming/compaction synthesis (requires LLM — skips gracefully if unavailable)
-echo "Generating initial wiki compactions and synthesis (skips if no LLM configured)..."
-"$MYTHRAX_BIN" vault summarize
-
 echo "=== Reinitialization completed successfully ==="
 echo ""
 echo "Daemon running on port 8090 (PID: $DAEMON_PID)"
 echo "To run dreaming/compaction later: mythrax vault summarize"
 echo "To configure LLM: mythrax config llm --provider cloud --cloud-provider gemini"
+echo "To run status checks: mythrax status"
