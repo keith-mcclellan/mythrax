@@ -107,7 +107,7 @@ impl Forge {
                                     similarity: None,
                                     utility: None,
                                 };
-                                let _ = self.backend.save_wisdom_rule(&rule_contract).await;
+                                let _ = crate::cognitive::synthesis::save_wisdom_rule_with_deduplication(&*self.backend, &self.store, &rule_contract).await;
                             }
                         }
                         Err(e) => {

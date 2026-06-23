@@ -473,7 +473,7 @@ impl DreamCoordinator {
                                 similarity: None,
                                 utility: None,
                             };
-                            if let Ok(wisdom_id) = db.save_wisdom_rule(&rule_contract).await {
+                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
                                 for ep_id in &cluster_ep_ids {
                                     let _ = db.relate_nodes(ep_id, &wisdom_id).await;
                                 }
@@ -497,10 +497,417 @@ impl DreamCoordinator {
                     total_clusters
                 );
             }
-        }
 
+            // --- DRIFT & SPLIT MANAGEMENT LOGIC START ---
+            
+            // 1. Load all insights for the current scope
+            let existing_insights = load_insights(&store.vault_root);
+            tracing::debug!("Scope: {}, existing_insights count: {}", scope, existing_insights.len());
+            let scope_insights: Vec<InsightNote> = existing_insights
+                .into_iter()
+                .filter(|ins| ins.scope == scope)
+                .collect();
+            tracing::debug!("Scope: {}, scope_insights count: {}", scope, scope_insights.len());
+
+            // 2. Process each insight for drift detection
+            for ins in scope_insights {
+                let source_ids = ins.source_episodes.clone();
+                tracing::debug!("Checking insight: {}, source episodes count: {}", ins.title, source_ids.len());
+                if source_ids.len() < 2 {
+                    continue;
+                }
+
+                // Fetch full episode records
+                if let Ok(nodes_resp) = db.get_memory_nodes(&source_ids).await {
+                    let episodes = nodes_resp.episodes;
+                    tracing::debug!("Fetched episodes count: {}", episodes.len());
+
+                    // 3. Prepare embeddings with local fallback
+                    let mut episode_embeddings = Vec::new();
+                    let mut valid_episodes = Vec::new();
+                    let local_embedder = crate::embeddings::LocalEmbedder::new().ok();
+
+                    for mut ep in episodes {
+                        if ep.embedding.is_none() {
+                            if let Some(ref embedder) = local_embedder {
+                                if let Ok(emb) = embedder.embed(&ep.content) {
+                                    ep.embedding = Some(emb);
+                                }
+                            }
+                        }
+                        if let Some(emb) = &ep.embedding {
+                            episode_embeddings.push(emb.clone());
+                            valid_episodes.push(ep);
+                        }
+                    }
+
+                    tracing::debug!("Valid episodes count: {}", valid_episodes.len());
+                    // Need at least 2 valid episodes with embeddings
+                    if valid_episodes.len() < 2 {
+                        continue;
+                    }
+
+                    // 4. Compute max pairwise cosine distance
+                    let mut max_dist = 0.0;
+                    let mut max_pair = (0, 1);
+                    for i in 0..episode_embeddings.len() {
+                        for j in (i + 1)..episode_embeddings.len() {
+                            let dist = cosine_distance(&episode_embeddings[i], &episode_embeddings[j]);
+                            if dist > max_dist {
+                                max_dist = dist;
+                                max_pair = (i, j);
+                            }
+                        }
+                    }
+
+                    tracing::debug!("Max pairwise distance: {}", max_dist);
+                    // 5. If drift is high (> 0.30), trigger split
+                    if max_dist > 0.30 {
+                        tracing::debug!("Drift > 0.30 detected! Triggering split for: {}", ins.title);
+                        // Prepare references for DBSCAN
+                        let emb_refs: Vec<&[f32]> = episode_embeddings.iter().map(|e| e.as_slice()).collect();
+                        let labels = dbscan(&emb_refs, 0.08, 2);
+
+                        // Group episodes by DBSCAN labels
+                        let mut clusters: std::collections::HashMap<usize, Vec<Episode>> = std::collections::HashMap::new();
+                        let mut outliers = Vec::new();
+
+                        for (idx, label) in labels.into_iter().enumerate() {
+                            let ep = valid_episodes[idx].clone();
+                            if let Some(cid) = label {
+                                clusters.entry(cid).or_default().push(ep);
+                            } else {
+                                outliers.push(ep);
+                            }
+                        }
+
+                        let mut groups: Vec<Vec<Episode>> = Vec::new();
+
+                        // 6. Handle DBSCAN results
+                        if clusters.len() <= 1 {
+                            // Manual Bisection Split
+                            let seed1_emb = &episode_embeddings[max_pair.0];
+                            let seed2_emb = &episode_embeddings[max_pair.1];
+                            
+                            let mut group1 = Vec::new();
+                            let mut group2 = Vec::new();
+
+                            for (k, ep) in valid_episodes.iter().enumerate() {
+                                let dist1 = cosine_distance(&episode_embeddings[k], seed1_emb);
+                                let dist2 = cosine_distance(&episode_embeddings[k], seed2_emb);
+                                
+                                // Assign to closer seed. Ensure seeds themselves are in their respective groups.
+                                if k == max_pair.0 {
+                                    group1.push(ep.clone());
+                                } else if k == max_pair.1 {
+                                    group2.push(ep.clone());
+                                } else if dist1 < dist2 {
+                                    group1.push(ep.clone());
+                                } else {
+                                    group2.push(ep.clone());
+                                }
+                            }
+
+                            if !group1.is_empty() {
+                                groups.push(group1);
+                            }
+                            if !group2.is_empty() {
+                                groups.push(group2);
+                            }
+                        } else {
+                            // Multiple clusters found by DBSCAN
+                            groups = clusters.into_values().collect();
+                        }
+
+                        // 7. Process each resulting group
+                        for group in groups {
+                            if group.is_empty() {
+                                continue;
+                            }
+
+                            // Format events for LLM
+                            let mut events_text = String::new();
+                            for ep in &group {
+                                let content_len = ep.content.len();
+                                let display_content = if content_len > 8000 {
+                                    format!("{}... [Truncated {} characters of content due to size]", &ep.content[..8000], content_len - 8000)
+                                } else {
+                                    ep.content.clone()
+                                };
+                                events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, display_content));
+                            }
+
+                            // Call LLM Synthesizer
+                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
+                            let prompt_text = format!(
+                                "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
+                                events_text
+                            );
+                            
+                            if let Ok(llm_res) = self.llm.completion(db, Some(sys_prompt), &prompt_text).await {
+                                #[derive(serde::Deserialize)]
+                                struct ClusterAnalysis {
+                                    title: String,
+                                    summary: String,
+                                }
+
+                                let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
+                                    Ok(a) => a,
+                                    Err(_) => {
+                                        ClusterAnalysis {
+                                            title: format!("Split Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
+                                            summary: llm_res,
+                                        }
+                                    }
+                                };
+
+                                // Write new insight to disk
+                                let clean_title = analysis.title.replace([' ', '/'], "_");
+                                let insight_uuid = uuid::Uuid::new_v4().to_string();
+                                let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+                                let insight_content = format!(
+                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
+                                    analysis.title,
+                                    scope,
+                                    group.iter().map(|ep| format!("  - \"{}\"", ep.id.as_ref().unwrap_or(&String::new()))).collect::<Vec<_>>().join("\n"),
+                                    analysis.summary
+                                );
+                                if store.write_file(&relative_path, &insight_content).is_ok() {
+                                    // Save WikiNode to SurrealDB
+                                    let node_contract = WikiNode {
+                                        id: None,
+                                        name: analysis.title.clone(),
+                                        content: analysis.summary.clone(),
+                                        scope: scope.to_string(),
+                                        vault_path: Some(relative_path.clone()),
+                                        embedding: None,
+                                    };
+                                    
+                                    if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
+                                        for ep in &group {
+                                            if let Some(ref ep_id) = ep.id {
+                                                let _ = db.relate_nodes(ep_id, &wiki_node_id).await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 8. Delete old drifting insight
+                        let _ = std::fs::remove_file(Path::new(&ins.vault_path));
+                        
+                        let rel_path = Path::new(&ins.vault_path)
+                            .strip_prefix(&store.vault_root)
+                            .unwrap_or(Path::new(&ins.vault_path))
+                            .to_string_lossy()
+                            .to_string();
+                        println!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
+                        let _ = db.delete_by_vault_path(&rel_path).await;
+                    }
+                }
+            }
+            // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
+        }
         Ok(())
     }
+}
+
+pub fn safe_delete_file(vault_root: &std::path::Path, relative_path: &str) -> std::io::Result<()> {
+    let src = vault_root.join(relative_path);
+    if src.exists() {
+        let trash_dir = vault_root.join(".trash");
+        if !trash_dir.exists() {
+            std::fs::create_dir_all(&trash_dir)?;
+        }
+        if let Some(filename) = src.file_name() {
+            let dest = trash_dir.join(filename);
+            std::fs::rename(src, dest)?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn save_wisdom_rule_with_deduplication(
+    db: &dyn StorageBackend,
+    store: &MarkdownStore,
+    rule: &WisdomRule,
+) -> Result<String> {
+    let text_to_embed = format!(
+        "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
+        rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+    );
+    
+    let new_emb = match db.embed(&text_to_embed).await {
+        Ok(emb) => emb,
+        Err(e) => {
+            tracing::warn!("Failed to generate embedding for deduplication: {}", e);
+            return db.save_wisdom_rule(rule).await;
+        }
+    };
+
+    let all_rules = match db.get_all_wisdom_rules().await {
+        Ok(rules) => rules,
+        Err(e) => {
+            tracing::warn!("Failed to get existing rules for deduplication: {}", e);
+            return db.save_wisdom_rule(rule).await;
+        }
+    };
+
+    let mut best_match: Option<(WisdomRule, f32)> = None;
+
+    for mut existing in all_rules {
+        let existing_emb = match existing.embedding.as_ref() {
+            Some(emb) => emb.clone(),
+            None => {
+                let ext_text = format!(
+                    "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
+                    existing.target_pattern, existing.action_to_avoid, existing.causal_explanation, existing.prescribed_remedy
+                );
+                match db.embed(&ext_text).await {
+                    Ok(emb) => {
+                        existing.embedding = Some(emb.clone());
+                        emb
+                    }
+                    Err(_) => continue,
+                }
+            }
+        };
+
+        let sim = dot_product(&new_emb, &existing_emb);
+        if sim > 0.80 {
+            if let Some((_, best_sim)) = best_match.as_ref() {
+                if sim > *best_sim {
+                    best_match = Some((existing, sim));
+                }
+            } else {
+                best_match = Some((existing, sim));
+            }
+        }
+    }
+
+    if let Some((matched, _sim)) = best_match {
+        if matched.tier == "skills" {
+            if let Some(ref vp) = rule.vault_path {
+                let _ = safe_delete_file(&store.vault_root, vp);
+            }
+            if let Some(ref skills_id) = matched.id {
+                for ep in &rule.source_episodes {
+                    let _ = db.relate_nodes(ep, skills_id).await;
+                }
+                return Ok(skills_id.clone());
+            }
+        } else if matched.tier == "dynamic" || matched.tier == "forge" {
+            let system_prompt = "You are an expert software engineer and systems architect. Merge and generalize two similar wisdom rules into a single, high-quality, comprehensive wisdom rule.";
+            let prompt = format!(
+                "Rule 1:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
+                 Rule 2:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
+                 Please merge and generalize these two similar rules into a single comprehensive rule. \
+                 Respond ONLY with a JSON object matching the structure of WisdomRule, with fields:\n\
+                 - target_pattern\n- action_to_avoid\n- causal_explanation\n- prescribed_remedy",
+                matched.target_pattern, matched.action_to_avoid, matched.causal_explanation, matched.prescribed_remedy,
+                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+            );
+
+            let llm = crate::llm::LLMClient::new();
+            match llm.completion(db, Some(system_prompt), &prompt).await {
+                Ok(res) => {
+                    let trimmed = res.trim();
+                    let stripped = if trimmed.starts_with("```json") {
+                        trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                    } else if trimmed.starts_with("```") {
+                        trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                    } else {
+                        trimmed
+                    };
+
+                    #[derive(serde::Deserialize)]
+                    struct MergedFields {
+                        target_pattern: String,
+                        action_to_avoid: String,
+                        causal_explanation: String,
+                        prescribed_remedy: String,
+                    }
+
+                    let parsed_fields = if stripped.starts_with('[') {
+                        if let Ok(list) = serde_json::from_str::<Vec<MergedFields>>(stripped) {
+                            list.into_iter().next()
+                        } else {
+                            None
+                        }
+                    } else {
+                        serde_json::from_str::<MergedFields>(stripped).ok()
+                    };
+
+                    if let Some(fields) = parsed_fields {
+                        let mut merged_eps = matched.source_episodes.clone();
+                        for ep in &rule.source_episodes {
+                            if !merged_eps.contains(ep) {
+                                merged_eps.push(ep.clone());
+                            }
+                        }
+
+                        let final_path = if let Some(ref path) = rule.vault_path {
+                            path.clone()
+                        } else if let Some(ref path) = matched.vault_path {
+                            path.clone()
+                        } else {
+                            format!("wisdom/dynamic/merged_{}.md", &uuid::Uuid::new_v4().to_string()[..8])
+                        };
+
+                        let rule_md = format!(
+                            "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                            fields.target_pattern, fields.action_to_avoid, fields.causal_explanation, fields.prescribed_remedy, rule.scope,
+                            merged_eps.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
+                            fields.target_pattern, fields.action_to_avoid, fields.causal_explanation, fields.prescribed_remedy
+                        );
+
+                        if let Err(e) = store.write_file(&final_path, &rule_md) {
+                            tracing::error!("Failed to write merged rule file: {}", e);
+                        }
+
+                        if let Some(ref old_vp) = matched.vault_path {
+                            let _ = safe_delete_file(&store.vault_root, old_vp);
+                        }
+
+                        if let Some(ref old_vp) = matched.vault_path {
+                            let _ = db.delete_by_vault_path(old_vp).await;
+                        }
+
+                        let merged_contract = WisdomRule {
+                            id: None,
+                            target_pattern: fields.target_pattern,
+                            action_to_avoid: fields.action_to_avoid,
+                            causal_explanation: fields.causal_explanation,
+                            prescribed_remedy: fields.prescribed_remedy,
+                            tier: "dynamic".to_string(),
+                            scope: rule.scope.clone(),
+                            vault_path: Some(final_path),
+                            embedding: None,
+                            source_episodes: merged_eps,
+                            generator_name: "DreamCoordinator".to_string(),
+                            similarity: None,
+                            utility: None,
+                        };
+
+                        match db.save_wisdom_rule(&merged_contract).await {
+                            Ok(saved_id) => return Ok(saved_id),
+                            Err(e) => {
+                                tracing::warn!("Failed to save merged rule to SurrealDB: {}", e);
+                            }
+                        }
+                    } else {
+                        tracing::warn!("Failed to parse LLM response as merged fields: {}", stripped);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("LLM completion failed for rule merge: {}", e);
+                }
+            }
+        }
+    }
+
+    db.save_wisdom_rule(rule).await
 }
 
 #[cfg(test)]

@@ -115,6 +115,8 @@ pub trait StorageBackend: Send + Sync {
     async fn delete_stale_handoffs(&self) -> Result<()>;
     async fn get_memory_nodes(&self, node_ids: &[String]) -> Result<GetMemoryNodesResponse>;
     async fn save_forged_section(&self, batch: &ForgedSectionBatch) -> Result<()>;
+    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
 }
 
 pub struct SurrealBackend {
@@ -1914,6 +1916,32 @@ impl StorageBackend for SurrealBackend {
         }
 
         Ok(())
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        if let Some(ref embedder) = self.embedder {
+            embedder.embed(text)
+        } else {
+            anyhow::bail!("No embedder configured")
+        }
+    }
+
+    async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>> {
+        let sql = "
+            SELECT *,
+                   (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+            FROM wisdom;
+        ";
+        let mut response = self.db.query(sql).await?.check().context("Get all wisdom rules query failed")?;
+        let raws: Vec<WisdomRaw> = response.take(0)?;
+        let mut rules: Vec<WisdomRule> = raws.into_iter().map(|r| r.into_wisdom_rule()).collect();
+        for w in &mut rules {
+            if let Some(ref id_str) = w.id
+                && let Ok(thing) = parse_record_id(id_str) {
+                    w.id = Some(format_record_id(&thing));
+                }
+        }
+        Ok(rules)
     }
 }
 
