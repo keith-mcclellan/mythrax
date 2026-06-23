@@ -174,6 +174,30 @@ pub struct GetMemoryNodesResponse {
     pub wiki_nodes: Vec<WikiNode>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgedConcept {
+    pub name: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgedRule {
+    pub target_pattern: String,
+    pub action_to_avoid: String,
+    pub causal_explanation: String,
+    pub prescribed_remedy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgedSectionBatch {
+    pub doc_title: String,
+    pub scope: String,
+    pub chunk_index: usize,
+    pub chunk_text: String,
+    pub concepts: Vec<ForgedConcept>,
+    pub rules: Vec<ForgedRule>,
+}
+
 
 
 

@@ -53,26 +53,31 @@ impl MarkdownStore {
 }
 
 
-pub fn find_workspace_root() -> PathBuf {
+pub fn find_vault_root() -> PathBuf {
+    if let Ok(val) = std::env::var("MYTHRAX_VAULT_ROOT") {
+        return PathBuf::from(val);
+    }
     if let Ok(val) = std::env::var("MYTHRAX_WORKSPACE_ROOT") {
         return PathBuf::from(val);
     }
-    let mut current = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    loop {
-        if current.join(".git").exists() || current.join("Cargo.toml").exists() {
-            return current;
-        }
-        if let Some(parent) = current.parent() {
-            current = parent.to_path_buf();
-        } else {
-            break;
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        let config_path = PathBuf::from(&home).join(".mythrax").join("config.json");
+        if config_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if let Ok(config_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(vault_root) = config_val["vault_root"].as_str() {
+                        return PathBuf::from(vault_root);
+                    }
+                }
+            }
         }
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    PathBuf::from(&home).join("mythrax-vault")
 }
 
 pub fn save_stm_file(session_id: &str, key: &str, value: &str) -> Result<()> {
-    let root = find_workspace_root();
+    let root = find_vault_root();
     let handoffs_dir = root.join(".handoffs");
     tracing::debug!("save_stm_file session_id={} root={:?} handoffs_dir={:?}", session_id, root, handoffs_dir);
     fs::create_dir_all(&handoffs_dir)?;
@@ -103,7 +108,7 @@ pub fn save_stm_file(session_id: &str, key: &str, value: &str) -> Result<()> {
 }
 
 pub fn delete_stm_file(session_id: &str) -> Result<()> {
-    let root = find_workspace_root();
+    let root = find_vault_root();
     let file_path = root.join(".handoffs").join(format!("stm_{}.json", session_id));
     if file_path.exists() {
         fs::remove_file(file_path)?;
@@ -131,5 +136,24 @@ mod tests {
         let read_content = fs::read_to_string(dest).unwrap();
         assert!(read_content.contains("[REDACTED]"));
         assert!(!read_content.contains("secret"));
+    }
+
+    #[test]
+    fn test_find_vault_root() {
+        unsafe {
+            std::env::set_var("MYTHRAX_VAULT_ROOT", "/tmp/vault_test_env");
+        }
+        assert_eq!(find_vault_root(), PathBuf::from("/tmp/vault_test_env"));
+        unsafe {
+            std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        }
+
+        unsafe {
+            std::env::set_var("MYTHRAX_WORKSPACE_ROOT", "/tmp/workspace_test_env");
+        }
+        assert_eq!(find_vault_root(), PathBuf::from("/tmp/workspace_test_env"));
+        unsafe {
+            std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
+        }
     }
 }

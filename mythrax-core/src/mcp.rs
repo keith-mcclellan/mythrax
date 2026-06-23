@@ -83,6 +83,15 @@ impl McpServer {
     pub async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
         match method {
             "initialize" => {
+                if let Some(root_uri_str) = params.get("rootUri").and_then(|v| v.as_str()) {
+                    if let Ok(url) = url::Url::parse(root_uri_str) {
+                        if let Ok(path) = url.to_file_path() {
+                            unsafe {
+                                std::env::set_var("MYTHRAX_WORKSPACE_ROOT", path);
+                            }
+                        }
+                    }
+                }
                 Ok(json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
@@ -207,6 +216,14 @@ impl McpServer {
                                     "scope": { "type": "string" }
                                 },
                                 "required": ["parent_conversation_id", "subagent_conversation_id", "summary", "handoff_file_path"]
+                            }
+                        },
+                        {
+                            "name": "get_vault_root",
+                            "description": "Retrieve the active Obsidian vault root directory path",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
                             }
                         },
                         {
@@ -621,6 +638,17 @@ impl McpServer {
                         {
                             "type": "text",
                             "text": format!("Handoff saved successfully and related context nodes linked: {}", id)
+                        }
+                    ]
+                }))
+            }
+            "get_vault_root" => {
+                let vault_path = self.store.vault_root.to_string_lossy().to_string();
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": vault_path
                         }
                     ]
                 }))
