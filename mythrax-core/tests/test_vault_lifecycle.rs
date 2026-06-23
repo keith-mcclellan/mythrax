@@ -295,3 +295,89 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_artifact_chunking_during_ingestion() -> Result<()> {
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    let source_dir = tmp.path().join("source");
+    let db_path = tmp.path().join("db");
+    
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(&source_dir)?;
+    
+    // Create folders inside vault
+    let folders = ["episodes", "wiki", "wiki/artifacts", "wisdom", "general", "archive"];
+    for f in &folders {
+        fs::create_dir_all(vault_root.join(f))?;
+    }
+
+    let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
+    let backend = SurrealBackend::new(&surreal_url).await?;
+    backend.init().await?;
+
+    // Create a mock Antigravity folder
+    let session_dir = source_dir.join("session_chunk_artifact_123");
+    let logs_dir = session_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir)?;
+    
+    // Create a small transcript so it is not chunked (1 part)
+    let transcript = "{\"type\":\"USER_INPUT\",\"content\":\"Short user prompt\"}\n";
+    fs::write(logs_dir.join("transcript.jsonl"), transcript)?;
+
+    // Create a large artifact file of ~120,000 characters to trigger chunking into 2 parts (cap = 100k)
+    let mut large_artifact = String::new();
+    large_artifact.push_str("Title: Large Artifact\n\n");
+    for i in 1..=3500 {
+        large_artifact.push_str(&format!("Line {}: Some content text.\n", i));
+    }
+    assert!(large_artifact.len() > 100_000);
+
+    fs::write(session_dir.join("large_plan.md"), &large_artifact)?;
+
+    // Run bulk ingestion
+    let (count, errors) = bulk_ingest_vault(
+        &vault_root,
+        &source_dir,
+        "antigravity",
+        "testing-art-chunking-scope",
+        &backend
+    ).await?;
+
+    // We ingested 1 episode part + 2 artifact parts = 3 success counts
+    assert_eq!(count, 3);
+    assert!(errors.is_empty());
+
+    // 1. Verify episodes in DB
+    let all_eps = backend.get_all_episodes().await?;
+    assert_eq!(all_eps.len(), 1);
+    
+    let ep = &all_eps[0];
+    
+    // 2. Verify links inside the episode in Obsidian
+    let ep_file = fs::read_to_string(vault_root.join(ep.vault_path.as_ref().unwrap()))?;
+    assert!(ep_file.contains("[[wiki/artifacts/session_chunk_artifact_123/large_plan_part1]]"));
+    assert!(ep_file.contains("[[wiki/artifacts/session_chunk_artifact_123/large_plan_part2]]"));
+
+    // Verify artifact file backlinks
+    let art1_rel_path = "wiki/artifacts/session_chunk_artifact_123/large_plan_part1.md";
+    let art2_rel_path = "wiki/artifacts/session_chunk_artifact_123/large_plan_part2.md";
+    
+    assert!(vault_root.join(art1_rel_path).exists());
+    assert!(vault_root.join(art2_rel_path).exists());
+
+    let art1_file = fs::read_to_string(vault_root.join(art1_rel_path))?;
+    assert!(art1_file.contains("Source Episodes:"));
+    assert!(art1_file.contains(&ep.title));
+
+    let art2_file = fs::read_to_string(vault_root.join(art2_rel_path))?;
+    assert!(art2_file.contains("Source Episodes:"));
+    assert!(art2_file.contains(&ep.title));
+
+    // 3. Verify graph relationships in SurrealDB
+    let ep_related = backend.get_related_node_ids(ep.id.as_ref().unwrap()).await?;
+    assert_eq!(ep_related.len(), 2); // large_plan_part1 & large_plan_part2
+
+    Ok(())
+}
+
+

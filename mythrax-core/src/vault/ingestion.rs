@@ -381,6 +381,31 @@ pub async fn bulk_ingest_vault(
                     }
                 }
 
+                // Resolve and chunk the artifacts to keep prompts and embeddings bounded
+                let mut resolved_artifacts = Vec::new();
+                for (file_stem, raw_artifact_content) in pre_scanned_artifacts {
+                    let artifact_chunks = chunk_parsed_content(&raw_artifact_content, 100_000);
+                    let total_art_chunks = artifact_chunks.len();
+                    for (art_idx, chunk_text) in artifact_chunks.into_iter().enumerate() {
+                        let node_name = if total_art_chunks > 1 {
+                            format!("{}/{}_part{}", conv_id, file_stem, art_idx + 1)
+                        } else {
+                            format!("{}/{}", conv_id, file_stem)
+                        };
+                        let wiki_rel = if total_art_chunks > 1 {
+                            format!("wiki/artifacts/{}/{}_part{}.md", conv_id, file_stem, art_idx + 1)
+                        } else {
+                            format!("wiki/artifacts/{}/{}.md", conv_id, file_stem)
+                        };
+                        let wikilink = if total_art_chunks > 1 {
+                            format!("wiki/artifacts/{}/{}_part{}", conv_id, file_stem, art_idx + 1)
+                        } else {
+                            format!("wiki/artifacts/{}/{}", conv_id, file_stem)
+                        };
+                        resolved_artifacts.push((node_name, wiki_rel, wikilink, chunk_text));
+                    }
+                }
+
                 // 2. Parse the transcript log
                 let logs_dir = path.join(".system_generated/logs");
                 let mut log_path = logs_dir.join("transcript.jsonl");
@@ -421,10 +446,10 @@ pub async fn bulk_ingest_vault(
                     };
 
                     let mut linked_artifacts_section = String::new();
-                    if !pre_scanned_artifacts.is_empty() {
+                    if !resolved_artifacts.is_empty() {
                         linked_artifacts_section.push_str("\n\n## Linked Artifacts\n");
-                        for (file_stem, _) in &pre_scanned_artifacts {
-                            linked_artifacts_section.push_str(&format!("- [[wiki/artifacts/{}/{}]]\n", conv_id, file_stem));
+                        for (_, _, wikilink, _) in &resolved_artifacts {
+                            linked_artifacts_section.push_str(&format!("- [[{}]]\n", wikilink));
                         }
                     }
 
@@ -450,10 +475,7 @@ pub async fn bulk_ingest_vault(
                 }
 
                 // 3. Process and write the artifacts, creating bidirectional wikilinks & SurrealDB edges
-                for (file_stem, raw_artifact_content) in pre_scanned_artifacts {
-                    let node_name = format!("{}/{}", conv_id, file_stem);
-                    let wiki_rel = format!("wiki/artifacts/{}/{}.md", conv_id, file_stem);
-                    
+                for (node_name, wiki_rel, _, chunk_text) in resolved_artifacts {
                     let mut backlink_footer = String::new();
                     if !generated_parts.is_empty() {
                         backlink_footer.push_str("\n\n---\nSource Episodes: ");
@@ -468,7 +490,7 @@ pub async fn bulk_ingest_vault(
                         backlink_footer.push('\n');
                     }
                     
-                    let artifact_content = format!("{}{}", raw_artifact_content, backlink_footer);
+                    let artifact_content = format!("{}{}", chunk_text, backlink_footer);
                     let _ = store.write_file(&wiki_rel, &artifact_content);
 
                     let node = crate::contracts::WikiNode {
