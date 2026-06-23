@@ -5,30 +5,174 @@ description: Always query Mythrax memory via the MCP server before starting task
 
 # Mythrax Unified Memory, Integrity & Cognitive Guidance
 
-You are equipped with the **Mythrax** MCP server, which exposes tools for semantic memory storage, retrieval, reinforcement, compliance verification, vault integrity self-healing, and cognitive hypothesis execution.
+You are equipped with the **Mythrax** MCP server, which exposes tools for semantic memory storage, retrieval, reinforcement, compliance verification, vault integrity self-healing, cognitive hypothesis execution, short-term memory sharing between agents, and document ingestion via Forge.
+
+---
 
 ## MCP Tools Reference
+
 Use these native tools directly instead of executing custom scripts in the shell:
-- `search_memories(query: str, scope: Optional[str] = "general", limit: int = 5)`: Execute a semantic vector search query over saved episodes.
-- `search_wisdom(query: str, tier: str, limit: int = 5)`: Search wisdom rules.
-- `save_episode(title: str, content: str, entities: List[dict], scope: Optional[str] = "general", vault_path: Optional[str] = None)`: Save a new episodic context.
-- `record_feedback(id: str, success: bool)`: Apply reinforcement learning utility adjustment.
-- `get_llm_config()`: Fetch the active LLM provider configurations.
-- `update_llm_config(provider: str, duration: Optional[str] = "permanent", model: Optional[str] = None, cloud_provider: Optional[str] = None, api_key: Optional[str] = None)`: Update active model settings and API keys.
-- `verify_compliance(workspace_path: Optional[str] = None)`: Execute all workspace compliance audits securely inside the MCP server.
-- `bulk_ingest(source: str, harness: str, scope: Optional[str] = "general")`: Bulk ingest transcript logs from client harnesses.
-- `organize_vault()`: Organize vault directories, deduplicate files, and maintain structure.
-- `summarize_episodes(scope: Optional[str] = "general")`: Run compaction and dreaming cycles to summarize episodes into wisdom.
-- `verify_vault_integrity(fix: bool = False)`: Execute database-to-filesystem and graph relationship verification, running self-healing repairs when `fix=true`.
-- `reprocess_embeddings()`: Compute and save vector embeddings for episodes that were saved with missing model files.
+
+| Tool | Signature | Purpose |
+|------|-----------|---------|
+| `search_memories` | `(query, scope?, limit?)` | Semantic vector search over saved episodes |
+| `search_wisdom` | `(query, tier, limit?)` | Search wisdom rules by tier |
+| `save_episode` | `(title, content, entities, scope?, vault_path?)` | Persist episodic context |
+| `record_feedback` | `(id, success)` | Reinforcement learning utility adjustment |
+| `get_llm_config` | `()` | Fetch active LLM provider configuration |
+| `update_llm_config` | `(provider, duration?, model?, cloud_provider?, api_key?)` | Update model settings |
+| `verify_compliance` | `(workspace_path?)` | Execute workspace compliance audits |
+| `bulk_ingest` | `(source, harness, scope?)` | Bulk ingest transcript logs |
+| `organize_vault` | `()` | Organize vault directories, deduplicate |
+| `summarize_episodes` | `(scope?)` | Run compaction + dreaming cycles |
+| `verify_vault_integrity` | `(fix?)` | DB-to-filesystem self-healing verification |
+| `reprocess_embeddings` | `()` | Compute embeddings for episodes missing vectors |
+| `put_short_term` | `(session_id, key, value)` | Write a key-value pair to STM for the session |
+| `get_short_term` | `(session_id, key)` | Read a key-value pair from STM |
+| `clear_short_term` | `(session_id)` | Clear STM and delete `.handoffs/stm_<session_id>.json` |
+| `forge_source` | `(source_path, scope?)` | Ingest a document (PDF/text/markdown) to extract WisdomRules and WikiNodes |
+
+---
 
 ## Compliance Requirements
-1. **Always Search Memories First**: In every prompt turn, you must query memories at least once by invoking `search_memories`.
-2. **Log Episodic Memory**: At the end of a coding task, save a summary of what you did using `save_episode` (automatically reinforced by git post-commit hooks).
-3. **Record Feedback**: After running pytest or cargo test validation, call `record_feedback` to reinforce the utility of the retrieved wisdom.
-4. **Self-Healing Integrity Audits**: Before dreaming or summarization, call `verify_vault_integrity(fix=true)` to align files on disk with the database cache.
+
+1. **Always Search Memories First**: In every prompt turn, query memories at least once via `search_memories`.
+2. **Log Episodic Memory**: After a coding task, call `save_episode` with a summary of decisions.
+3. **Record Feedback**: After `cargo test` or `pytest` passes, call `record_feedback` to reinforce retrieved wisdom.
+4. **Self-Healing Integrity Audits**: Before dreaming or summarization, call `verify_vault_integrity(fix=true)`.
+
+---
+
+## Agent Handoff Protocol (Zero-Eager-Prompting)
+
+When delegating work to a subagent, minimize context window usage:
+
+### Spawning a Subagent
+
+1. **Write the contract** to `.handoffs/handoff_<task_id>.md` at the workspace root.
+2. **Spawn the subagent** with a minimal prompt:
+   > *"Read and execute the handoff at `file:///absolute/path/.handoffs/handoff_<task_id>.md` and rules at `file:///Users/keith/.gemini/AGENT.md`. Output first: `Execution Check: [Karpathy Rules applied? Yes/No]`"*
+3. **Lazy context via file URLs**: Reference large files as links (`[file.rs](file:///path#L50-L100)`) — never paste content.
+
+### Handoff Contract Template (`.handoffs/handoff_<task_id>.md`)
+
+```markdown
+# Agent Handoff: [Task Name]
+- **From:** [Parent Agent ID]  **To:** [Subagent ID]  **Status:** PENDING
+
+## 1. Objective & Scope
+[What to build/fix. What is explicitly out of scope.]
+
+## 2. Success Criteria
+- [ ] Verifiable criterion 1
+- [ ] Verifiable criterion 2
+
+## 3. Scoped Target Context
+- **Target:** [file.rs](file:///absolute/path/file.rs#L10-L50)
+- **AST Symbol:** `impl Forge::ingest_document`
+
+## 4. Verification Command
+`cargo test --test test_forge`
+
+## 5. Assumptions & Tradeoffs
+- **Assumption:** [Document it]
+```
+
+### Return Handoff Template (`.handoffs/handoff_<task_id>_return.md`)
+
+```markdown
+# Agent Handoff Return: [Task Name]
+- **Status:** COMPLETED / FAILED
+
+## 1. Summary of Changes
+## 2. Modified Files
+## 3. Verification Results
+## 4. Context Preservation (edge cases, remaining work)
+```
+
+### LLM Sub-Call Optimization
+
+When calling `openai_chat` or similar stateless LLM APIs:
+- **Scoped prompts**: Pass only the target function/class signature, not whole files.
+- **Diff-only output**: Instruct the model to return search-and-replace blocks only.
+- **Strip non-functional tokens**: Remove docstrings, dead imports before injection.
+- **No-explanation constraint**: System prompt must say "return only code, zero explanation".
+- **Bound max_tokens**: Set to expected output size to prevent runaway generation.
+
+---
+
+## Short Term Memory (STM) for Agent Handoffs
+
+STM is a lightweight key-value store shared between parent and subagent during a session. It persists to SurrealDB and is dual-written to `.handoffs/stm_<session_id>.json`.
+
+**Usage pattern:**
+```
+# Parent writes active variables before spawning subagent
+put_short_term(session_id="abc123", key="target_file", value="/path/to/file.rs")
+put_short_term(session_id="abc123", key="error_context", value="SurrealDB id field mismatch")
+
+# Subagent reads them
+get_short_term(session_id="abc123", key="target_file")
+
+# Parent clears after task completes (also deletes the local .json file)
+clear_short_term(session_id="abc123")
+```
+
+**Security**: STM values are sanitized by `SecretFilter` before writing to disk (API keys and tokens are masked).
+
+---
+
+## Forge: Document Ingestion Pipeline
+
+Use `forge_source` to extract structured knowledge from reference documents (PDFs, books, skill guides):
+
+```
+forge_source(source_path="/path/to/guide.pdf", scope="coding")
+```
+
+Forge will:
+1. Extract text (PDF via `pdf-extract`, or raw text for `.md`/`.txt`)
+2. Chunk into 2000-token windows with 10% overlap
+3. Call the local LLM to extract `WisdomRule`s and `WikiNode`s per chunk
+4. Write markdown files to `vault/wisdom/forge/` and `vault/wiki/forge/`
+5. Persist to SurrealDB for semantic search
+
+### Automated Skill Skeletonization
+
+Verbose `SKILL.md` files should be lean (< 200 tokens of rules). Run Forge to skeletonize:
+- `## Examples` sections → extracted to `examples/examples.md`
+- `## References` sections → extracted to `references/references.md`
+- `SKILL.md` is rewritten with pointers to subdirectory files
+
+---
+
+## Memory Conflict Resolution
+
+When retrieved memories conflict, apply this precedence hierarchy (highest wins):
+
+1. **User Prompt / `AGENT.md` / `AGENTS.md`** — absolute precedence
+2. **Active workspace skills** (`.agents/skills/<name>/SKILL.md`) — overrides global
+3. **Developer/empirical episodes** — dynamic debugging memories override static docs
+4. **Ingested Forge wisdom** (`tier: "forge"`) — static guidelines from books/manuals
+5. **Global default skills** — lowest precedence
+
+Within the same tier, the **more recent** record (higher `updated_at`) wins.
+
+**If a conflict is found**: Document it in the implementation plan under "User Review Required" — showing the conflict, the rule applied, and the resolution. If completely unresolvable (equal rank + age), prompt the user directly.
+
+---
+
+## Pagination-Aware Search
+
+Search results include a `PAGINATION NOTICE` when more results exist. Follow-up fetching rules:
+- **Skills / wisdom matches**: Follow-up pagination is **required**.
+- **Developer episodes / logs**: Follow-up pagination is **optional** (recommended for complex tasks).
+
+---
 
 ## Cognitive Hypothesis Tree Search (HTR)
+
 When executing HTR cognitive runs:
-- Hypothesis nodes are stored in `wiki/<scope>/hypothesis_tree/<node_id>.md`.
-- Ensure all test execution outputs and LLM critic reviews conform to the tree structure.
+- Hypothesis nodes live at `wiki/<scope>/hypothesis_tree/<node_id>.md`
+- Use `htr_run` for automated end-to-end loops, or `htr_init` → `htr_ideate` → `htr_execute` → `htr_backprop` → `htr_merge` for manual control
+- All test execution outputs and LLM critic reviews must conform to the tree structure

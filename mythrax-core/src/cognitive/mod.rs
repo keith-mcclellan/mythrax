@@ -4,5 +4,6 @@ pub mod harvest;
 pub mod executor;
 pub mod critic;
 pub mod arbor;
+pub mod forge;
 
 pub use arbor::*;

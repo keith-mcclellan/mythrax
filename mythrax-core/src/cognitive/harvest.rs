@@ -147,9 +147,9 @@ impl Harvester {
         if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&response) {
             for r in rules {
                 let rule_uuid = uuid::Uuid::new_v4().to_string();
-                let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                let rule_path = format!("wisdom/skills/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
                 let rule_md = format!(
-                    "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"general\"\ngenerator_name: \"CrossSkillHarvester\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                    "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"skills\"\nscope: \"general\"\ngenerator_name: \"CrossSkillHarvester\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                     r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
                     r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy
                 );
@@ -161,7 +161,7 @@ impl Harvester {
                     action_to_avoid: r.action_to_avoid,
                     causal_explanation: r.causal_explanation,
                     prescribed_remedy: r.prescribed_remedy,
-                    tier: "dynamic".to_string(),
+                    tier: "skills".to_string(),
                     scope: "general".to_string(),
                     vault_path: Some(rule_path),
                     embedding: None,

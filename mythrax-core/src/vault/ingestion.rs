@@ -308,6 +308,7 @@ pub async fn bulk_ingest_vault(
 
     match harness_type {
         "antigravity" => {
+            let mut dirs = Vec::new();
             if let Ok(entries) = std::fs::read_dir(source_dir) {
                 for entry in entries.flatten() {
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -315,45 +316,119 @@ pub async fn bulk_ingest_vault(
                         if path.file_name().map(|n| n == "quarantine").unwrap_or(false) {
                             continue;
                         }
+                        
                         let logs_dir = path.join(".system_generated/logs");
-                        let mut log_path = logs_dir.join("transcript.jsonl");
-                        if !log_path.exists() {
-                            log_path = logs_dir.join("transcript_full.jsonl");
-                        }
-                        if log_path.exists() {
-                            match parse_antigravity_log(&log_path) {
-                                Ok(content) => {
-                                    let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                                    let title = format!("antigravity_{}", dir_name);
-                                    let uuid = uuid::Uuid::new_v4().to_string();
-                                    let relative_path = format!("episodes/antigravity_{}_{}.md", dir_name, &uuid[..8]);
-                                    
-                                    let note_content = format!(
-                                        "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}",
-                                        title, scope, content
-                                    );
-                                    if store.write_file(&relative_path, &note_content).is_ok() {
-                                        let ep_save = crate::contracts::EpisodeSave {
-                                            title,
-                                            content: note_content,
-                                            entities: vec![],
-                                            scope: Some(scope.to_string()),
-                                            vault_path: Some(relative_path),
-                                            source_episode: None,
-                                        };
-                                        if db.save_episode(&ep_save).await.is_ok() {
-                                            success_count += 1;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let err_msg = quarantine_file(&log_path, source_dir, &e.to_string());
-                                    errors.push(err_msg);
-                                }
-                            }
+                        let log_exists = logs_dir.join("transcript.jsonl").exists() || logs_dir.join("transcript_full.jsonl").exists();
+                        
+                        let has_md = if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                            sub_entries.flatten().any(|se| {
+                                se.path().extension()
+                                    .and_then(|ext| ext.to_str())
+                                    .map(|ext| ext.eq_ignore_ascii_case("md"))
+                                    .unwrap_or(false)
+                            })
+                        } else {
+                            false
+                        };
+
+                        if log_exists || has_md {
+                            dirs.push(path);
                         }
                     }
                 }
+            }
+
+            let total_dirs = dirs.len();
+            for (index, path) in dirs.into_iter().enumerate() {
+                let logs_dir = path.join(".system_generated/logs");
+                let mut log_path = logs_dir.join("transcript.jsonl");
+                if !log_path.exists() {
+                    log_path = logs_dir.join("transcript_full.jsonl");
+                }
+                if log_path.exists() {
+                    match parse_antigravity_log(&log_path) {
+                        Ok(content) => {
+                            let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                            let title = format!("antigravity_{}", dir_name);
+                            let uuid = uuid::Uuid::new_v4().to_string();
+                            let relative_path = format!("episodes/antigravity_{}_{}.md", dir_name, &uuid[..8]);
+                            
+                            let note_content = format!(
+                                "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}",
+                                title, scope, content
+                            );
+                            if store.write_file(&relative_path, &note_content).is_ok() {
+                                let ep_save = crate::contracts::EpisodeSave {
+                                    title,
+                                    content: note_content,
+                                    entities: vec![],
+                                    scope: Some(scope.to_string()),
+                                    vault_path: Some(relative_path),
+                                    source_episode: None,
+                                };
+                                if db.save_episode(&ep_save).await.is_ok() {
+                                    success_count += 1;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let err_msg = quarantine_file(&log_path, source_dir, &e.to_string());
+                            errors.push(err_msg);
+                        }
+                    }
+                }
+
+                // --- Artifact pass: ingest markdown artifacts directly as WikiNodes ---
+                // These files (walkthrough.md, implementation_plan.md, task.md, etc.)
+                // are already human-readable structured markdown. They go straight into
+                // wiki/artifacts/<conv_id>/ without any LLM processing. The ONNX
+                // embedder runs on the raw content so artifacts are semantically
+                // searchable — no LLM summarization step needed.
+                let conv_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if let Ok(file_entries) = std::fs::read_dir(&path) {
+                    for file_entry in file_entries.flatten() {
+                        let fpath = file_entry.path();
+                        let is_md = fpath.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.eq_ignore_ascii_case("md"))
+                            .unwrap_or(false);
+                        if !is_md {
+                            continue;
+                        }
+                        let file_stem = fpath.file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        match std::fs::read_to_string(&fpath) {
+                            Ok(artifact_content) if !artifact_content.trim().is_empty() => {
+                                let node_name = format!("{}/{}", conv_id, file_stem);
+                                let wiki_rel = format!(
+                                    "wiki/artifacts/{}/{}.md",
+                                    conv_id, file_stem
+                                );
+                                // Write the artifact as-is into the wiki vault
+                                let _ = store.write_file(&wiki_rel, &artifact_content);
+                                // Persist as a WikiNode in the DB — embedding computed
+                                // by the ONNX model, no LLM call made here
+                                let node = crate::contracts::WikiNode {
+                                    id: None,
+                                    name: node_name,
+                                    content: artifact_content,
+                                    scope: scope.to_string(),
+                                    vault_path: Some(wiki_rel),
+                                    embedding: None,
+                                };
+                                if db.save_wiki_node(&node).await.is_ok() {
+                                    success_count += 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Log a clean progress message at INFO level
+                tracing::info!("processing episode {} of {} complete", index + 1, total_dirs);
             }
         }
         "claude" => {

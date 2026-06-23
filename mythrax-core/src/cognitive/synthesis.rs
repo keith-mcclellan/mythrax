@@ -244,7 +244,8 @@ impl DreamCoordinator {
             scope_groups.entry(scope).or_default().push(ep);
         }
 
-        for (scope, new_episodes) in scope_groups {
+        let total_scopes = scope_groups.len();
+        for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
             let mut candidates = Vec::new();
 
             if active_mode == "incremental" {
@@ -261,7 +262,8 @@ impl DreamCoordinator {
                     }
                 }
 
-                for ep in new_episodes {
+                let total_new_episodes = new_episodes.len();
+                for (ep_idx, ep) in new_episodes.into_iter().enumerate() {
                     let mut matched_insight: Option<(&InsightNote, f32)> = None;
                     if let Some(ref ep_emb) = ep.embedding {
                         for (ins, cent) in &centroids {
@@ -286,9 +288,15 @@ impl DreamCoordinator {
                         }
 
                         let sys_prompt = "You are a systems synthesizer. Refine the existing architectural insight note by incorporating the details of the new event.";
+                        let content_len = ep.content.len();
+                        let display_content = if content_len > 8000 {
+                            format!("{}... [Truncated {} characters of content due to size]", &ep.content[..8000], content_len - 8000)
+                        } else {
+                            ep.content.clone()
+                        };
                         let prompt_text = format!(
                             "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}",
-                            ins.content, ep.title, ep.content
+                            ins.content, ep.title, display_content
                         );
                         let updated_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
 
@@ -318,6 +326,16 @@ impl DreamCoordinator {
                             && let Some(ref ep_id) = ep.id {
                                 let _ = db.relate_nodes(ep_id, &wiki_node_id).await;
                             }
+
+                        tracing::info!(
+                            "Dreaming scope {}/{} ('{}'): incremental episode {} of {} complete (merged into '{}')",
+                            scope_idx + 1,
+                            total_scopes,
+                            scope,
+                            ep_idx + 1,
+                            total_new_episodes,
+                            ins.title
+                        );
                     } else {
                         candidates.push(ep);
                     }
@@ -349,10 +367,17 @@ impl DreamCoordinator {
                 }
             }
 
-            for (_, cluster_eps) in clusters {
+            let total_clusters = clusters.len();
+            for (cluster_idx, (_, cluster_eps)) in clusters.into_iter().enumerate() {
                 let mut events_text = String::new();
                 for ep in &cluster_eps {
-                    events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep.content));
+                    let content_len = ep.content.len();
+                    let display_content = if content_len > 8000 {
+                        format!("{}... [Truncated {} characters of content due to size]", &ep.content[..8000], content_len - 8000)
+                    } else {
+                        ep.content.clone()
+                    };
+                    events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, display_content));
                 }
 
                 let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
@@ -462,6 +487,15 @@ impl DreamCoordinator {
                         db.mark_episode_processed(ep_id).await?;
                     }
                 }
+
+                tracing::info!(
+                    "Dreaming scope {}/{} ('{}'): cluster {} of {} complete",
+                    scope_idx + 1,
+                    total_scopes,
+                    scope,
+                    cluster_idx + 1,
+                    total_clusters
+                );
             }
         }
 

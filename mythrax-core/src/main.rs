@@ -27,8 +27,13 @@ use contracts::Episode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing to stderr with a default filter level (warn for external, info for mythrax)
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,mythrax=info,mythrax_core=info"));
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .init();
 
     let cli = Cli::parse();
 
@@ -283,6 +288,12 @@ async fn main() -> Result<()> {
                             let cmp = crate::cognitive::compactor::Compactor::new();
                             loop {
                                 tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
+                                
+                                tracing::info!("Daily scheduled background handoff cleanup starting...");
+                                if let Err(e) = backend_daily.delete_stale_handoffs().await {
+                                    tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
+                                }
+
                                 tracing::info!("Daily scheduled deep dreaming starting...");
                                 if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep")).await {
                                     tracing::error!("Daily deep dreaming failed: {:?}", e);
@@ -555,13 +566,47 @@ async fn main() -> Result<()> {
                 }
                 VaultAction::Summarize { scope } => {
                     let scope_name = scope.as_deref().unwrap_or("general");
-                    let compactor = cognitive::compactor::Compactor::new();
-                    let coordinator = cognitive::synthesis::DreamCoordinator::new();
 
-                    coordinator.run_dream(&backend, &store, None).await?;
-                    compactor.compact_scope(&backend, &store, scope_name).await?;
-                    compactor.compact_global(&backend, &store).await?;
-                    println!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name);
+                    // Check LLM availability before attempting dream/compact cycles
+                    // which require an LLM call. Skip gracefully if unavailable.
+                    let llm_ready = match backend.get_llm_config().await {
+                        Ok(cfg) => {
+                            if cfg.active_provider == "local" {
+                                // Probe local endpoint
+                                let probe = reqwest::Client::builder()
+                                    .timeout(std::time::Duration::from_secs(3))
+                                    .build()
+                                    .ok()
+                                    .and_then(|c| Some(c));
+                                let reachable = if let Some(client) = probe {
+                                    client.get("http://127.0.0.1:8080/v1/models").send().await.is_ok()
+                                } else {
+                                    false
+                                };
+                                if !reachable {
+                                    println!("WARNING: Local LLM endpoint at http://127.0.0.1:8080 is not reachable.");
+                                    println!("Skipping dreaming/compaction. Run 'mythrax vault summarize' after starting the local model.");
+                                }
+                                reachable
+                            } else {
+                                true // cloud providers don't need a local probe
+                            }
+                        }
+                        Err(_) => {
+                            println!("WARNING: No LLM configuration found. Skipping dreaming/compaction.");
+                            println!("Configure an LLM first with: mythrax config llm --provider cloud --cloud-provider gemini");
+                            false
+                        }
+                    };
+
+                    if llm_ready {
+                        let compactor = cognitive::compactor::Compactor::new();
+                        let coordinator = cognitive::synthesis::DreamCoordinator::new();
+                        coordinator.run_dream(&backend, &store, None).await?;
+                        compactor.compact_scope(&backend, &store, scope_name).await?;
+                        compactor.compact_global(&backend, &store).await?;
+                        println!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name);
+                    }
                 }
                 VaultAction::Verify { fix } => {
                     let all_eps = backend.get_all_episodes().await?;
@@ -764,6 +809,43 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        Commands::Forge { source_path, scope } => {
+            let home = std::env::var("HOME").context("HOME env var not set")?;
+            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+            let config_path = mythrax_dir.join("config.json");
+
+            let vault_path = if config_path.exists() {
+                let content = std::fs::read_to_string(&config_path)?;
+                let val: serde_json::Value = serde_json::from_str(&content)?;
+                PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+            } else {
+                PathBuf::from(&home).join("mythrax-vault")
+            };
+
+            let surreal_url = if config_path.exists() {
+                let content = std::fs::read_to_string(&config_path)?;
+                let val: serde_json::Value = serde_json::from_str(&content)?;
+                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
+            } else {
+                "mem://".to_string()
+            };
+
+            let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
+            backend.init().await?;
+            let store = Arc::new(MarkdownStore::new(&vault_path)?);
+
+            let source_path_buf = PathBuf::from(&source_path);
+            let content = if source_path_buf.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("pdf")) {
+                cognitive::forge::extract_pdf_text(&source_path_buf)?
+            } else {
+                std::fs::read_to_string(&source_path_buf)?
+            };
+
+            let scope_str = scope.as_deref().unwrap_or("general");
+            let forge = cognitive::forge::Forge::new(backend.clone(), store.clone());
+            forge.ingest_document(&content, scope_str, &source_path).await?;
+            println!("Forge ingestion complete for: {}", source_path);
         }
     }
 

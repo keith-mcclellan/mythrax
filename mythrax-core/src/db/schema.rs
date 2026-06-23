@@ -62,13 +62,13 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS summary ON handoff TYPE string;
     DEFINE FIELD IF NOT EXISTS handoff_file_path ON handoff TYPE string;
     DEFINE FIELD IF NOT EXISTS scope ON handoff TYPE string DEFAULT 'general';
+    DEFINE FIELD IF NOT EXISTS status ON handoff TYPE string DEFAULT 'PENDING';
+    DEFINE FIELD IF NOT EXISTS created_at ON handoff TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS embedding ON handoff TYPE option<array<float>>;
     DEFINE INDEX IF NOT EXISTS handoff_scope ON handoff FIELDS scope;
     DEFINE INDEX IF NOT EXISTS handoff_parent ON handoff FIELDS parent_conversation_id;
     DEFINE INDEX IF NOT EXISTS handoff_subagent ON handoff FIELDS subagent_conversation_id;
     DEFINE INDEX IF NOT EXISTS handoff_hnsw ON TABLE handoff FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
-
-
     DEFINE TABLE IF NOT EXISTS profile SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS key ON profile TYPE string;
     DEFINE FIELD IF NOT EXISTS value ON profile TYPE string;
@@ -93,4 +93,11 @@ pub const INIT_SCHEMA: &str = "
 
     DEFINE TABLE IF NOT EXISTS mentions SCHEMALESS;
     DEFINE FIELD IF NOT EXISTS created_at ON mentions TYPE datetime DEFAULT time::now();
+
+    DEFINE TABLE IF NOT EXISTS short_term_memory SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS session_id ON short_term_memory TYPE string;
+    DEFINE FIELD IF NOT EXISTS key ON short_term_memory TYPE string;
+    DEFINE FIELD IF NOT EXISTS value ON short_term_memory TYPE string;
+    DEFINE FIELD IF NOT EXISTS updated_at ON short_term_memory TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS stm_session_key ON short_term_memory FIELDS session_id, key UNIQUE;
 ";

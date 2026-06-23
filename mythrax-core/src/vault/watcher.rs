@@ -185,7 +185,13 @@ pub async fn sync_file_to_db(
                 action_to_avoid: frontmatter.action_to_avoid,
                 causal_explanation: frontmatter.causal_explanation,
                 prescribed_remedy: frontmatter.prescribed_remedy,
-                tier: frontmatter.tier.unwrap_or_else(|| "dynamic".to_string()),
+                tier: frontmatter.tier.unwrap_or_else(|| {
+                    if rel_path.contains("wisdom/skills/") {
+                        "skills".to_string()
+                    } else {
+                        "dynamic".to_string()
+                    }
+                }),
                 scope: frontmatter.scope.unwrap_or_else(|| "general".to_string()),
                 vault_path: Some(rel_path),
                 embedding: None,
@@ -437,5 +443,26 @@ mod tests {
         let results2 = backend.search("updated body", Some("bi-testing"), false, 1, 0, 0.55).await.unwrap();
         assert_eq!(results2.results.len(), 1);
         assert_eq!(results2.results[0].title, "Watcher Test Updated");
+    }
+
+    #[tokio::test]
+    async fn test_watcher_sync_skills_tier() {
+        let temp = tempdir().unwrap();
+        let backend: Arc<dyn StorageBackend> = Arc::new(SurrealBackend::new_in_memory().await.unwrap());
+        backend.init().await.unwrap();
+        
+        let store = Arc::new(MarkdownStore::new(temp.path()).unwrap());
+        
+        let relative_path = "wisdom/skills/test_skill_rule.md";
+        let rule_content = "---\ntarget_pattern: \"test-pattern\"\naction_to_avoid: \"test-action\"\ncausal_explanation: \"test-explanation\"\nprescribed_remedy: \"test-remedy\"\n---\n";
+        store.write_file(relative_path, rule_content).unwrap();
+        
+        sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
+        
+        // Retrieve wisdom rule using get_wisdom with tier "skills"
+        let results = backend.get_wisdom("test-pattern", "skills", 10, 0, 0.0).await.unwrap();
+        assert_eq!(results.results.len(), 1);
+        assert_eq!(results.results[0].tier, "skills");
+        assert_eq!(results.results[0].target_pattern, "test-pattern");
     }
 }

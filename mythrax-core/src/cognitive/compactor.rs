@@ -39,6 +39,7 @@ impl Compactor {
             return Ok(());
         }
 
+        let total_chunks = (scope_insights.len() as f32 / 5.0).ceil() as usize;
         for (chunk_idx, chunk) in scope_insights.chunks(5).enumerate() {
             let mut combined_content = String::new();
             for ins in chunk {
@@ -83,6 +84,8 @@ impl Compactor {
                     }
                 }
             }
+
+            tracing::info!("Compacting scope '{}': chunk {} of {} complete", scope, chunk_idx + 1, total_chunks);
         }
 
         Ok(())

@@ -2,7 +2,12 @@
 # reinitialize_mythrax.sh - Automates database/vault cleanup and re-ingestion
 set -euo pipefail
 
+# Resolve project root relative to this script so it runs correctly from any working directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 echo "=== Mythrax Reinitialization Protocol ==="
+echo "Project root: $PROJECT_ROOT"
 
 # 1. Stop active daemon and kill running processes to release file locks
 echo "Stopping active daemon and any running mythrax processes..."
@@ -37,23 +42,26 @@ else
     echo "Vault root directory $VAULT_ROOT not found. Skipping vault backup."
 fi
 
-# 4. Wipe active RocksDB database
+# 4. Wipe active RocksDB database (binary init also wipes this, but doing it here
+#    ensures the file lock is released before cargo build even starts)
 echo "Wiping RocksDB database cache..."
 rm -rf ~/.mythrax/db
 
-# 5. Build in release mode
-echo "Building mythrax binary in release mode..."
-cargo build --release --manifest-path mythrax-core/Cargo.toml
+# 5. Verify compiled binary is present
+echo "Verifying compiled mythrax binary exists..."
 
 # Resolve binary path
-MYTHRAX_BIN="./mythrax-core/target/release/mythrax"
+MYTHRAX_BIN="$PROJECT_ROOT/mythrax-core/target/release/mythrax"
 if [ ! -f "$MYTHRAX_BIN" ]; then
     echo "Error: Compiled binary not found at $MYTHRAX_BIN"
     exit 1
 fi
 
-# 6. Run init with antigravity harness (bootstraps database, folders, and runs configuration & logs discovery)
+# 6. Run init with antigravity harness (bootstraps database, folders, config & log discovery)
+# Note: This will auto-discover and ingest ~/.gemini/antigravity/brain/ transcripts.
+# For large corpora this can take 15-30 min. Progress is silent — it is working.
 echo "Bootstrapping fresh system and config..."
+echo "NOTE: Historical transcript ingestion may take several minutes depending on corpus size."
 "$MYTHRAX_BIN" init antigravity
 
 # 7. Start daemon in background
@@ -65,13 +73,20 @@ echo "Daemon started with background PID $DAEMON_PID"
 # Give the daemon a moment to boot
 sleep 2
 
-# 8. Generate initial summaries
-echo "Generating initial wiki compactions and synthesis..."
+# 8. Reprocess any episodes missing vector embeddings (idempotent, safe to run post-ingest)
+echo "Reprocessing any episodes with missing vector embeddings..."
+"$MYTHRAX_BIN" vault reprocess
+
+# 9. Run integrity verification with self-healing
+echo "Verifying vault integrity (with auto-fix)..."
+"$MYTHRAX_BIN" vault verify --fix
+
+# 10. Attempt dreaming/compaction synthesis (requires LLM — skips gracefully if unavailable)
+echo "Generating initial wiki compactions and synthesis (skips if no LLM configured)..."
 "$MYTHRAX_BIN" vault summarize
 
-# 9. Run integrity verification to assert valid vector embeddings
-echo "Verifying vault integrity..."
-"$MYTHRAX_BIN" vault verify
-
 echo "=== Reinitialization completed successfully ==="
-
+echo ""
+echo "Daemon running on port 8090 (PID: $DAEMON_PID)"
+echo "To run dreaming/compaction later: mythrax vault summarize"
+echo "To configure LLM: mythrax config llm --provider cloud --cloud-provider gemini"

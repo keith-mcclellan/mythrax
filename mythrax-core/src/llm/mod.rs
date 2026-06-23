@@ -1,5 +1,16 @@
 use crate::db::StorageBackend;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use std::sync::OnceLock;
+use tokio::sync::Semaphore;
+
+/// Process-global semaphore that limits concurrent local LLM requests to 1.
+/// This prevents memory pressure when running on a machine with a constrained
+/// model context window (e.g. 16k tokens on Apple Silicon).
+static LOCAL_LLM_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+
+fn local_llm_semaphore() -> &'static Semaphore {
+    LOCAL_LLM_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+}
 
 pub struct LLMClient {
     client: reqwest::Client,
@@ -29,6 +40,16 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
+        if let Ok(mock) = std::env::var("MYTHRAX_MOCK_LLM") {
+            if mock == "true" {
+                if prompt.contains("Wisdom") || prompt.contains("rules") || prompt.contains("Wisdom Rules") {
+                    return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]"#.to_string());
+                } else {
+                    return Ok(r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string());
+                }
+            }
+        }
+
         let config = db.get_llm_config().await?;
         
         let response_text = match config.active_provider.as_str() {
@@ -49,16 +70,37 @@ impl LLMClient {
                 let payload = serde_json::json!({
                     "model": config.model,
                     "messages": messages,
-                    "temperature": 0.2
+                    "temperature": 0.2,
+                    "max_tokens": 16384
                 });
+
+                // Serialize all local LLM calls — only one request in-flight at a time
+                let _permit = local_llm_semaphore().acquire().await
+                    .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
 
                 let req = self.client.post(url).json(&payload);
                 let resp = send_with_retry(&self.client, req).await?;
                 let json: serde_json::Value = resp.json().await?;
-                json["choices"][0]["message"]["content"]
-                    .as_str()
-                    .context("Invalid local completion response")?
-                    .to_string()
+                tracing::debug!("Local LLM raw response: {}", json);
+                let content = json["choices"][0]["message"]["content"].clone();
+                if content.is_null() {
+                    // Gemma 4 / thinking models emit `reasoning` instead of `content`
+                    // when finish_reason=length (hit max_tokens mid-thought) or when
+                    // the model uses a separate reasoning field.
+                    let alt = json["choices"][0]["message"]["reasoning"]
+                        .as_str()
+                        .or_else(|| json["choices"][0]["message"]["reasoning_content"].as_str())
+                        .or_else(|| json["choices"][0]["text"].as_str());
+                    if let Some(text) = alt {
+                        text.to_string()
+                    } else {
+                        anyhow::bail!("Invalid local completion response. Raw JSON: {}", json);
+                    }
+                } else {
+                    content.as_str()
+                        .with_context(|| format!("Invalid local completion response. Raw JSON: {}", json))?
+                        .to_string()
+                }
             }
             "cloud" => {
                 match config.cloud_provider.as_str() {

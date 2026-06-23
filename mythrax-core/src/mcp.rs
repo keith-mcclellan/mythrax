@@ -80,7 +80,7 @@ impl McpServer {
         Ok(())
     }
 
-    async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
+    pub async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
         match method {
             "initialize" => {
                 Ok(json!({
@@ -90,13 +90,49 @@ impl McpServer {
                     },
                     "serverInfo": {
                         "name": "mythrax",
-                        "version": "0.1.0"
+                        "version": "0.2.0"
                     }
                 }))
             }
             "tools/list" => {
                 Ok(json!({
                     "tools": [
+                        {
+                            "name": "put_short_term",
+                            "description": "Store a key-value pair in session-based short-term memory",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "session_id": { "type": "string" },
+                                    "key": { "type": "string" },
+                                    "value": { "type": "string" }
+                                },
+                                "required": ["session_id", "key", "value"]
+                            }
+                        },
+                        {
+                            "name": "get_short_term",
+                            "description": "Retrieve a value from session-based short-term memory by session_id and key",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "session_id": { "type": "string" },
+                                    "key": { "type": "string" }
+                                },
+                                "required": ["session_id"]
+                            }
+                        },
+                        {
+                            "name": "clear_short_term",
+                            "description": "Clear all short-term memory keys for a given session_id",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "session_id": { "type": "string" }
+                                },
+                                "required": ["session_id"]
+                            }
+                        },
                         {
                             "name": "search_memories",
                             "description": "Execute semantic memory search over saved episodes",
@@ -125,6 +161,20 @@ impl McpServer {
                                     "threshold": { "type": "number" }
                                 },
                                 "required": ["query", "tier"]
+                            }
+                        },
+                        {
+                            "name": "get_memory_nodes",
+                            "description": "Hydrate specific database records (episodes, wisdom rules, wiki nodes) by their Record IDs",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "node_ids": {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                },
+                                "required": ["node_ids"]
                             }
                         },
                         {
@@ -314,6 +364,18 @@ impl McpServer {
                                 },
                                 "required": ["scope", "hypothesis", "files", "test_command"]
                             }
+                        },
+                        {
+                            "name": "forge_source",
+                            "description": "Forge a source document (extracting rules and wiki nodes)",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "source_path": { "type": "string" },
+                                    "scope": { "type": "string" }
+                                },
+                                "required": ["source_path"]
+                            }
                         }
                     ]
                 }))
@@ -329,8 +391,90 @@ impl McpServer {
         }
     }
 
-    async fn call_tool(&self, name: &str, args: Value) -> Result<Value> {
+    pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value> {
         match name {
+            "put_short_term" => {
+                let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+                let key = args.get("key").and_then(|v| v.as_str()).context("Missing key")?;
+                let value = args.get("value").and_then(|v| v.as_str()).context("Missing value")?;
+
+                self.backend.save_stm(session_id, key, value).await?;
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Short-term memory saved for session '{}': {} = {}", session_id, key, value)
+                        }
+                    ]
+                }))
+            }
+            "get_short_term" => {
+                let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+                let key = args.get("key").and_then(|v| v.as_str());
+
+                let map = self.backend.get_stm(session_id, key).await?;
+                let text = match key {
+                    Some(k) => match map.get(k) {
+                        Some(val) => val.clone(),
+                        None => format!("Key '{}' not found in session '{}'", k, session_id),
+                    },
+                    None => serde_json::to_string_pretty(&map)?,
+                };
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": text
+                        }
+                    ]
+                }))
+            }
+            "clear_short_term" => {
+                let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+
+                self.backend.clear_stm(session_id).await?;
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Short-term memory cleared for session '{}'", session_id)
+                        }
+                    ]
+                }))
+            }
+            "get_memory_nodes" => {
+                let node_ids_val = args.get("node_ids").context("Missing node_ids")?;
+                let node_ids_arr = node_ids_val.as_array().context("node_ids must be an array")?;
+                let mut node_ids = Vec::new();
+                for v in node_ids_arr {
+                    if let Some(s) = v.as_str() {
+                        node_ids.push(s.to_string());
+                    }
+                }
+
+                let response = self.backend.get_memory_nodes(&node_ids).await?;
+                // Strip embeddings for output
+                let mut stripped_response = response.clone();
+                for ep in &mut stripped_response.episodes {
+                    ep.embedding = None;
+                }
+                for r in &mut stripped_response.wisdom_rules {
+                    r.embedding = None;
+                }
+                for node in &mut stripped_response.wiki_nodes {
+                    node.embedding = None;
+                }
+
+                let text = serde_json::to_string_pretty(&stripped_response)?;
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": text
+                        }
+                    ]
+                }))
+            }
             "search_memories" => {
                 let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
                 let scope = args.get("scope").and_then(|v| v.as_str());
@@ -805,6 +949,29 @@ impl McpServer {
                         {
                             "type": "text",
                             "text": status_msg
+                        }
+                    ]
+                }))
+            }
+            "forge_source" => {
+                let source_path = args.get("source_path").and_then(|v| v.as_str()).context("Missing source_path")?;
+                let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+
+                let source_path_buf = std::path::PathBuf::from(source_path);
+                let content = if source_path_buf.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("pdf")) {
+                    crate::cognitive::forge::extract_pdf_text(&source_path_buf)?
+                } else {
+                    std::fs::read_to_string(&source_path_buf)?
+                };
+
+                let forge = crate::cognitive::forge::Forge::new(self.backend.clone(), self.store.clone());
+                forge.ingest_document(&content, scope, source_path).await?;
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Successfully forged source document '{}'", source_path)
                         }
                     ]
                 }))

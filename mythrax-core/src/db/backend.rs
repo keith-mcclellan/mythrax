@@ -1,6 +1,6 @@
 use axum::async_trait;
 use surrealdb_types::SurrealValue;
-use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode, SearchResponse, WisdomSearchResponse};
+use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode, SearchResponse, WisdomSearchResponse, GetMemoryNodesResponse};
 use anyhow::{Result, Context};
 use surrealdb::engine::local::{Db, Mem, RocksDb};
 use surrealdb::Surreal;
@@ -65,7 +65,6 @@ pub fn format_record_id(thing: &surrealdb::types::RecordId) -> String {
 }
 
 #[async_trait]
-#[allow(dead_code)]
 pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<()>;
     async fn save_episode(&self, episode: &EpisodeSave) -> Result<String>;
@@ -73,6 +72,8 @@ pub trait StorageBackend: Send + Sync {
     async fn search(&self, query: &str, scope: Option<&str>, deep_insight: bool, limit: usize, offset: usize, threshold: f32) -> Result<SearchResponse>;
     async fn get_wisdom(&self, query: &str, tier: &str, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
+    /// Reserved: schema migration runner (deferred until multi-version migration support).
+    #[allow(dead_code)]
     async fn apply_migrations(&self) -> Result<()>;
     async fn get_llm_config(&self) -> Result<LlmConfigResponse>;
     async fn update_llm_config(&self, req: &LlmConfigRequest) -> Result<()>;
@@ -80,6 +81,8 @@ pub trait StorageBackend: Send + Sync {
     async fn mark_episode_processed(&self, id: &str) -> Result<()>;
     async fn get_all_episodes(&self) -> Result<Vec<Episode>>;
     async fn save_profile_key(&self, key: &str, value: &str) -> Result<()>;
+    /// Reserved: profile key reader (deferred pending agent config API).
+    #[allow(dead_code)]
     async fn get_profile_key(&self, key: &str) -> Result<Option<String>>;
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
@@ -87,6 +90,14 @@ pub trait StorageBackend: Send + Sync {
     async fn get_wiki_node_id_by_vault_path(&self, vault_path: &str) -> Result<Option<String>>;
     async fn get_active_scopes(&self) -> Result<Vec<String>>;
     async fn delete_by_vault_path(&self, vault_path: &str) -> Result<()>;
+    async fn save_stm(&self, session_id: &str, key: &str, value: &str) -> Result<()>;
+    async fn get_stm(&self, session_id: &str, key: Option<&str>) -> Result<std::collections::HashMap<String, String>>;
+    async fn clear_stm(&self, session_id: &str) -> Result<()>;
+    /// Reserved: external handoff status updates (deferred pending MCP handoff tool).
+    #[allow(dead_code)]
+    async fn update_handoff_status(&self, id: &str, status: &str) -> Result<()>;
+    async fn delete_stale_handoffs(&self) -> Result<()>;
+    async fn get_memory_nodes(&self, node_ids: &[String]) -> Result<GetMemoryNodesResponse>;
 }
 
 pub struct SurrealBackend {
@@ -127,6 +138,43 @@ impl SurrealBackend {
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
+struct WisdomRaw {
+    id: surrealdb::types::RecordId,
+    target_pattern: String,
+    action_to_avoid: String,
+    causal_explanation: String,
+    prescribed_remedy: String,
+    tier: String,
+    scope: String,
+    vault_path: Option<String>,
+    embedding: Option<Vec<f32>>,
+    source_episodes: Option<Vec<String>>,
+    generator_name: String,
+    utility: Option<f32>,
+}
+
+impl WisdomRaw {
+    fn into_wisdom_rule(self) -> WisdomRule {
+        let id_str = format_record_id(&self.id);
+        WisdomRule {
+            id: Some(id_str),
+            target_pattern: self.target_pattern,
+            action_to_avoid: self.action_to_avoid,
+            causal_explanation: self.causal_explanation,
+            prescribed_remedy: self.prescribed_remedy,
+            tier: self.tier,
+            scope: self.scope,
+            vault_path: self.vault_path,
+            embedding: self.embedding,
+            source_episodes: self.source_episodes.unwrap_or_default(),
+            generator_name: self.generator_name,
+            similarity: None,
+            utility: self.utility,
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Debug, SurrealValue)]
 struct SearchRaw {
     id: surrealdb::types::RecordId,
     title: String,
@@ -150,6 +198,21 @@ struct RelatedNodeRaw {
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
+struct SearchWisdomRaw {
+    id: surrealdb::types::RecordId,
+    target_pattern: String,
+    action_to_avoid: String,
+    causal_explanation: String,
+    prescribed_remedy: String,
+    tier: String,
+    scope: String,
+    embedding: Option<Vec<f32>>,
+    generator_name: String,
+    utility: Option<f64>,
+    related_nodes: Option<Vec<RelatedNodeRaw>>,
+}
+
+#[derive(serde::Deserialize, Debug, SurrealValue)]
 struct EpisodeRaw {
     id: surrealdb::types::RecordId,
     title: String,
@@ -160,6 +223,86 @@ struct EpisodeRaw {
     embedding: Option<Vec<f32>>,
     processed_in_dream: Option<bool>,
     source_episode: Option<surrealdb::types::RecordId>,
+}
+
+/// Full hydrated Handoff contract — returned by queries; construction deferred pending
+/// the agent-tracking dashboard feature. Suppressed until then.
+#[allow(dead_code)]
+#[derive(serde::Deserialize, Debug, SurrealValue)]
+struct HandoffRaw {
+    id: surrealdb::types::RecordId,
+    parent_conversation_id: String,
+    subagent_conversation_id: String,
+    summary: String,
+    handoff_file_path: String,
+    scope: Option<String>,
+    status: Option<String>,
+    created_at: Option<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize, Debug, SurrealValue)]
+struct WikiNodeRaw {
+    id: surrealdb::types::RecordId,
+    name: String,
+    content: String,
+    scope: String,
+    vault_path: Option<String>,
+    embedding: Option<Vec<f32>>,
+}
+
+fn get_tier_boost(tier: &str) -> f32 {
+    match tier {
+        "skills" | "wisdom" => 1.2,
+        "wiki_node" | "insight" | "project_brief" | "system_playbook" => 1.1,
+        _ => 1.0, // e.g. "episode"
+    }
+}
+
+fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]) {
+    if related_nodes.is_empty() {
+        return;
+    }
+    content.push_str("\n\n---\n### Related Context\n");
+    for node in related_nodes {
+        let table = node.id.table.as_str();
+        if table == "episode" {
+            if let (Some(t), Some(c)) = (&node.title, &node.content) {
+                content.push_str(&format!("[Related Episode: {}]\n{}\n\n", t, c));
+            }
+        } else if table == "wiki_node" {
+            if let (Some(n), Some(c)) = (&node.name, &node.content) {
+                content.push_str(&format!("[Related Wiki Node: {}]\n{}\n\n", n, c));
+            }
+        } else if table == "entity" {
+            if let (Some(n), Some(s)) = (&node.name, &node.summary) {
+                content.push_str(&format!("[Related Entity: {}]\n{}\n\n", n, s));
+            }
+        } else if table == "wisdom" {
+            let pattern = node.target_pattern.as_deref().unwrap_or("");
+            let avoid = node.action_to_avoid.as_deref().unwrap_or("");
+            let explanation = node.causal_explanation.as_deref().unwrap_or("");
+            let remedy = node.prescribed_remedy.as_deref().unwrap_or("");
+            content.push_str(&format!(
+                "[Related Wisdom: {}]\nAction to avoid: {}\nCausal explanation: {}\nPrescribed remedy: {}\n\n",
+                pattern, avoid, explanation, remedy
+            ));
+        } else if table == "hypothesis_node" {
+            if let Some(c) = &node.content {
+                content.push_str(&format!("[Related Hypothesis]\n{}\n\n", c));
+            }
+        } else if table == "handoff" {
+            if let Some(s) = &node.summary {
+                content.push_str(&format!("[Related Handoff]\n{}\n\n", s));
+            }
+        } else {
+            if let Some(c) = &node.content {
+                content.push_str(&format!("[Related {}]\n{}\n\n", table, c));
+            } else if let Some(s) = &node.summary {
+                content.push_str(&format!("[Related {}]\n{}\n\n", table, s));
+            }
+        }
+    }
+    *content = content.trim_end().to_string();
 }
 
 #[async_trait]
@@ -272,7 +415,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("embedding", embedding_val.clone()))
             .await?;
 
-        println!("DEBUG: save_episode query response: {:#?}", response);
+        tracing::debug!("save_episode query response: {:?}", response);
         response.check().context("SurrealDB save_episode transaction failed")?;
 
         for entity in &episode.entities {
@@ -434,12 +577,38 @@ impl StorageBackend for SurrealBackend {
                 FROM episode
                 WHERE (scope = $target_scope OR $target_scope = NONE)
                   AND (embedding <|100, 100|> $query_embedding);
+
+                SELECT id, name AS title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                       <->(relates_to, mentions)<->(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                FROM wiki_node
+                WHERE (scope = $target_scope OR $target_scope = NONE)
+                  AND (embedding <|100, 100|> $query_embedding);
+
+                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                       <->(relates_to, mentions)<->(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                FROM wisdom
+                WHERE (scope = $target_scope OR $target_scope = NONE)
+                  AND (embedding <|100, 100|> $query_embedding);
                 "
             } else {
                 "
                 SELECT id, title, content, embedding,
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM episode
+                WHERE (scope = $target_scope OR $target_scope = NONE)
+                  AND (embedding <|100, 100|> $query_embedding);
+
+                SELECT id, name AS title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM wiki_node
+                WHERE (scope = $target_scope OR $target_scope = NONE)
+                  AND (embedding <|100, 100|> $query_embedding);
+
+                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM wisdom
                 WHERE (scope = $target_scope OR $target_scope = NONE)
                   AND (embedding <|100, 100|> $query_embedding);
                 "
@@ -457,6 +626,20 @@ impl StorageBackend for SurrealBackend {
                 FROM episode 
                 WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
                   AND (scope = $target_scope OR $target_scope = NONE);
+
+                SELECT id, name AS title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                       <->(relates_to, mentions)<->(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                FROM wiki_node 
+                WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
+                  AND (scope = $target_scope OR $target_scope = NONE);
+
+                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                       <->(relates_to, mentions)<->(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                FROM wisdom 
+                WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
+                  AND (scope = $target_scope OR $target_scope = NONE);
                 "
             } else {
                 "
@@ -464,6 +647,18 @@ impl StorageBackend for SurrealBackend {
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM episode 
                 WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                  AND (scope = $target_scope OR $target_scope = NONE);
+
+                SELECT id, name AS title, content, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM wiki_node 
+                WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
+                  AND (scope = $target_scope OR $target_scope = NONE);
+
+                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding,
+                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                FROM wisdom 
+                WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
                   AND (scope = $target_scope OR $target_scope = NONE);
                 "
             };
@@ -475,56 +670,15 @@ impl StorageBackend for SurrealBackend {
 
         let mut response = response.check().context("Search query failed")?;
         let episodes: Vec<SearchRaw> = response.take(0)?;
+        let wiki_nodes: Vec<SearchRaw> = response.take(1)?;
+        let wisdom_rules: Vec<SearchWisdomRaw> = response.take(2)?;
         let mut candidates = Vec::new();
 
         for ep in episodes {
             let mut content = ep.content.clone();
-            
-            if deep_insight
-                && let Some(ref related) = ep.related_nodes
-                    && !related.is_empty() {
-                        content.push_str("\n\n---\n### Related Context\n");
-                        for node in related {
-                            let table = node.id.table.as_str();
-                            if table == "episode" {
-                                if let (Some(t), Some(c)) = (&node.title, &node.content) {
-                                    content.push_str(&format!("[Related Episode: {}]\n{}\n\n", t, c));
-                                }
-                            } else if table == "wiki_node" {
-                                if let (Some(n), Some(c)) = (&node.name, &node.content) {
-                                    content.push_str(&format!("[Related Wiki Node: {}]\n{}\n\n", n, c));
-                                }
-                            } else if table == "entity" {
-                                if let (Some(n), Some(s)) = (&node.name, &node.summary) {
-                                    content.push_str(&format!("[Related Entity: {}]\n{}\n\n", n, s));
-                                }
-                            } else if table == "wisdom" {
-                                let pattern = node.target_pattern.as_deref().unwrap_or("");
-                                let avoid = node.action_to_avoid.as_deref().unwrap_or("");
-                                let explanation = node.causal_explanation.as_deref().unwrap_or("");
-                                let remedy = node.prescribed_remedy.as_deref().unwrap_or("");
-                                content.push_str(&format!(
-                                    "[Related Wisdom: {}]\nAction to avoid: {}\nCausal explanation: {}\nPrescribed remedy: {}\n\n",
-                                    pattern, avoid, explanation, remedy
-                                ));
-                            } else if table == "hypothesis_node" {
-                                if let Some(c) = &node.content {
-                                    content.push_str(&format!("[Related Hypothesis]\n{}\n\n", c));
-                                }
-                            } else if table == "handoff" {
-                                if let Some(s) = &node.summary {
-                                    content.push_str(&format!("[Related Handoff]\n{}\n\n", s));
-                                }
-                            } else {
-                                if let Some(c) = &node.content {
-                                    content.push_str(&format!("[Related {}]\n{}\n\n", table, c));
-                                } else if let Some(s) = &node.summary {
-                                    content.push_str(&format!("[Related {}]\n{}\n\n", table, s));
-                                }
-                            }
-                        }
-                        content = content.trim_end().to_string();
-                    }
+            if deep_insight && let Some(ref related) = ep.related_nodes {
+                append_related_context(&mut content, related);
+            }
 
             let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), ep.embedding.as_ref()) {
                 let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
@@ -534,7 +688,9 @@ impl StorageBackend for SurrealBackend {
             };
 
             let utility = ep.utility.unwrap_or(1.0) as f32;
-            let blended_score = similarity * (0.7 + 0.3 * utility);
+            let tier = "episode".to_string();
+            let tier_boost = get_tier_boost(&tier);
+            let blended_score = similarity * (0.7 + 0.3 * utility) * tier_boost;
 
             if blended_score >= threshold {
                 candidates.push(SearchResult {
@@ -543,7 +699,76 @@ impl StorageBackend for SurrealBackend {
                     content,
                     similarity,
                     utility,
-                    tier: "Standard".to_string(),
+                    tier,
+                    embedding: None,
+                    vault_path: None,
+                    source_episode: None,
+                });
+            }
+        }
+
+        for node in wiki_nodes {
+            let mut content = node.content.clone();
+            if deep_insight && let Some(ref related) = node.related_nodes {
+                append_related_context(&mut content, related);
+            }
+
+            let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), node.embedding.as_ref()) {
+                let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                dot
+            } else {
+                1.0
+            };
+
+            let utility = node.utility.unwrap_or(1.0) as f32;
+            let tier = "insight".to_string();
+            let tier_boost = get_tier_boost(&tier);
+            let blended_score = similarity * (0.7 + 0.3 * utility) * tier_boost;
+
+            if blended_score >= threshold {
+                candidates.push(SearchResult {
+                    id: format_record_id(&node.id),
+                    title: node.title,
+                    content,
+                    similarity,
+                    utility,
+                    tier,
+                    embedding: None,
+                    vault_path: None,
+                    source_episode: None,
+                });
+            }
+        }
+
+        for rule in wisdom_rules {
+            let mut content = format!(
+                "**Action to Avoid**: {}\n**Why**: {}\n**Prescribed Remedy**: {}",
+                rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+            );
+            if deep_insight && let Some(ref related) = rule.related_nodes {
+                append_related_context(&mut content, related);
+            }
+
+            let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), rule.embedding.as_ref()) {
+                let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                dot
+            } else {
+                1.0
+            };
+
+            let utility = rule.utility.unwrap_or(1.0) as f32;
+            let tier = rule.tier.clone();
+            let tier_boost = get_tier_boost(&tier);
+            let blended_score = similarity * (0.7 + 0.3 * utility) * tier_boost;
+
+            if blended_score >= threshold {
+                candidates.push(SearchResult {
+                    id: format_record_id(&rule.id),
+                    title: rule.target_pattern,
+                    content,
+                    similarity,
+                    utility,
+                    tier,
                     embedding: None,
                     vault_path: None,
                     source_episode: None,
@@ -553,8 +778,8 @@ impl StorageBackend for SurrealBackend {
 
         // Sort by blended score descending
         candidates.sort_by(|a, b| {
-            let score_a = a.similarity * (0.7 + 0.3 * a.utility);
-            let score_b = b.similarity * (0.7 + 0.3 * b.utility);
+            let score_a = a.similarity * (0.7 + 0.3 * a.utility) * get_tier_boost(&a.tier);
+            let score_b = b.similarity * (0.7 + 0.3 * b.utility) * get_tier_boost(&b.tier);
             score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
         });
 
@@ -618,7 +843,8 @@ impl StorageBackend for SurrealBackend {
         };
 
         let mut response = response.check().context("Get wisdom query failed")?;
-        let wisdom: Vec<WisdomRule> = response.take(0)?;
+        let raws: Vec<WisdomRaw> = response.take(0)?;
+        let wisdom: Vec<WisdomRule> = raws.into_iter().map(|r| r.into_wisdom_rule()).collect();
         let mut candidates = Vec::new();
 
         for mut w in wisdom {
@@ -857,14 +1083,16 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String> {
-        let id_str = format!("⟨{}⟩", Uuid::new_v4());
+        let id_str = Uuid::new_v4().to_string();
         let query = "
             CREATE type::record('handoff', $id) CONTENT {
                 parent_conversation_id: $parent,
                 subagent_conversation_id: $subagent,
                 summary: $summary,
                 handoff_file_path: $path,
-                scope: $target_scope
+                scope: $target_scope,
+                status: 'PENDING',
+                created_at: time::now()
             };
         ";
         self.db.query(query)
@@ -988,7 +1216,198 @@ impl StorageBackend for SurrealBackend {
         self.db.query(sql3).bind(("vault_path", vault_path)).await?.check()?;
         Ok(())
     }
+
+    async fn save_stm(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+        let sql = "
+            UPSERT type::record('short_term_memory', [$session_id, $key]) CONTENT {
+                session_id: $session_id,
+                key: $key,
+                value: $value,
+                updated_at: time::now()
+            };
+        ";
+        self.db.query(sql)
+            .bind(("session_id", session_id))
+            .bind(("key", key))
+            .bind(("value", value))
+            .await?.check()?;
+
+        // Dual-write to local JSON file
+        crate::store::save_stm_file(session_id, key, value)?;
+        Ok(())
+    }
+
+    async fn get_stm(&self, session_id: &str, key: Option<&str>) -> Result<std::collections::HashMap<String, String>> {
+        if let Some(k) = key {
+            let sql = "SELECT VALUE value FROM type::record('short_term_memory', [$session_id, $key]);";
+            let mut response = self.db.query(sql)
+                .bind(("session_id", session_id))
+                .bind(("key", k))
+                .await?.check()?;
+            let value: Option<String> = response.take(0)?;
+            let mut map = std::collections::HashMap::new();
+            if let Some(v) = value {
+                map.insert(k.to_string(), v);
+            }
+            Ok(map)
+        } else {
+            let sql = "SELECT key, value FROM short_term_memory WHERE session_id = $session_id;";
+            let mut response = self.db.query(sql)
+                .bind(("session_id", session_id))
+                .await?.check()?;
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+            struct StmRecord {
+                key: String,
+                value: String,
+            }
+            let records: Vec<StmRecord> = response.take(0)?;
+            let mut map = std::collections::HashMap::new();
+            for r in records {
+                map.insert(r.key, r.value);
+            }
+            Ok(map)
+        }
+    }
+
+    async fn clear_stm(&self, session_id: &str) -> Result<()> {
+        let sql = "DELETE FROM short_term_memory WHERE session_id = $session_id;";
+        self.db.query(sql)
+            .bind(("session_id", session_id))
+            .await?.check()?;
+
+        // Delete local JSON file
+        crate::store::delete_stm_file(session_id)?;
+        Ok(())
+    }
+
+    async fn update_handoff_status(&self, id: &str, status: &str) -> Result<()> {
+        let thing_id = parse_record_id(id)?;
+        let sql = "UPDATE $id SET status = $status;";
+        self.db.query(sql)
+            .bind(("id", thing_id))
+            .bind(("status", status))
+            .await?.check()?;
+        Ok(())
+    }
+
+    async fn delete_stale_handoffs(&self) -> Result<()> {
+        let select_sql = "
+            SELECT 
+                id, 
+                parent_conversation_id, 
+                subagent_conversation_id, 
+                summary, 
+                handoff_file_path, 
+                scope, 
+                status, 
+                created_at 
+            FROM handoff 
+            WHERE (status = 'COMPLETED' OR status = 'FAILED') 
+              AND created_at < time::now() - 7d;
+        ";
+        let mut response = self.db.query(select_sql).await?.check()?;
+        let raw_handoffs: Vec<HandoffRaw> = response.take(0)?;
+        tracing::debug!("delete_stale_handoffs raw_handoffs={:?}", raw_handoffs);
+        
+        // Delete files from disk and matching STM DB records
+        for h in &raw_handoffs {
+            let path = std::path::Path::new(&h.handoff_file_path);
+            if path.exists() {
+                let _ = std::fs::remove_file(path);
+            }
+            if let Some(parent) = path.parent() {
+                let stm_file_sub = parent.join(format!("stm_{}.json", h.subagent_conversation_id));
+                if stm_file_sub.exists() {
+                    let _ = std::fs::remove_file(stm_file_sub);
+                }
+                let stm_file_parent = parent.join(format!("stm_{}.json", h.parent_conversation_id));
+                if stm_file_parent.exists() {
+                    let _ = std::fs::remove_file(stm_file_parent);
+                }
+            }
+            
+            // Delete matching short term memory records from SurrealDB
+            let clean_stm_sql = "DELETE FROM short_term_memory WHERE session_id = $parent OR session_id = $subagent;";
+            let _ = self.db.query(clean_stm_sql)
+                .bind(("parent", h.parent_conversation_id.as_str()))
+                .bind(("subagent", h.subagent_conversation_id.as_str()))
+                .await?.check()?;
+        }
+
+        let delete_sql = "
+            DELETE FROM handoff 
+            WHERE (status = 'COMPLETED' OR status = 'FAILED') 
+              AND created_at < time::now() - 7d;
+        ";
+        let _ = self.db.query(delete_sql).await?.check()?;
+
+        Ok(())
+    }
+
+    async fn get_memory_nodes(&self, node_ids: &[String]) -> Result<GetMemoryNodesResponse> {
+        let mut episodes = Vec::new();
+        let mut wisdom_rules = Vec::new();
+        let mut wiki_nodes = Vec::new();
+
+        for id_str in node_ids {
+            let thing_id = match parse_record_id(id_str) {
+                Ok(tid) => tid,
+                Err(_) => continue,
+            };
+
+            match thing_id.table.as_str() {
+                "episode" => {
+                    let ep_opt: Option<EpisodeRaw> = self.db.select(thing_id.clone()).await?;
+                    if let Some(raw) = ep_opt {
+                        let ep = Episode {
+                            id: Some(format_record_id(&raw.id)),
+                            title: raw.title,
+                            content: raw.content,
+                            source: raw.source,
+                            scope: raw.scope,
+                            vault_path: raw.vault_path,
+                            embedding: raw.embedding,
+                            processed_in_dream: raw.processed_in_dream,
+                            source_episode: raw.source_episode.map(|t| format_record_id(&t)),
+                        };
+                        episodes.push(ep);
+                    }
+                }
+                "wisdom" => {
+                    let rule_opt: Option<WisdomRaw> = self.db.select(thing_id.clone()).await?;
+                    if let Some(raw) = rule_opt {
+                        wisdom_rules.push(raw.into_wisdom_rule());
+                    }
+                }
+                "wiki_node" => {
+                    let node_opt: Option<WikiNodeRaw> = self.db.select(thing_id.clone()).await?;
+                    if let Some(raw) = node_opt {
+                        let node = WikiNode {
+                            id: Some(format_record_id(&raw.id)),
+                            name: raw.name,
+                            content: raw.content,
+                            scope: raw.scope,
+                            vault_path: raw.vault_path,
+                            embedding: raw.embedding,
+                        };
+                        wiki_nodes.push(node);
+                    }
+                }
+                _ => {
+                    tracing::warn!("get_memory_nodes called with unknown table: {}", thing_id.table);
+                }
+            }
+        }
+
+        Ok(GetMemoryNodesResponse {
+            episodes,
+            wisdom_rules,
+            wiki_nodes,
+        })
+    }
+
 }
+
 
 fn load_api_key(provider: &str) -> Option<String> {
     if let Ok(home) = std::env::var("HOME") {
@@ -1135,5 +1554,126 @@ mod tests {
         assert_eq!(results_normal.results.len(), 1);
         assert!(results_normal.results[0].content.contains("dropping connections"));
         assert!(!results_normal.results[0].content.contains("Redis Connection Pooling Guidelines"));
+    }
+
+    #[tokio::test]
+    async fn test_get_memory_nodes() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        // 1. Seed an episode
+        let episode = EpisodeSave {
+            title: "Hydration Episode".to_string(),
+            content: "Testing node hydration capabilities.".to_string(),
+            entities: vec![],
+            scope: Some("hydration-test".to_string()),
+            vault_path: None,
+            source_episode: None,
+        };
+        let ep_id = backend.save_episode(&episode).await.unwrap();
+
+        // 2. Seed a wisdom rule
+        let rule = WisdomRule {
+            id: None,
+            target_pattern: "hydration-pattern".to_string(),
+            action_to_avoid: "avoiding hydration".to_string(),
+            causal_explanation: "leads to dry tests".to_string(),
+            prescribed_remedy: "hydrate it".to_string(),
+            tier: "dynamic".to_string(),
+            scope: "hydration-test".to_string(),
+            vault_path: None,
+            embedding: None,
+            source_episodes: vec![],
+            generator_name: "test".to_string(),
+            similarity: None,
+            utility: None,
+        };
+        let rule_id = backend.save_wisdom_rule(&rule).await.unwrap();
+
+        // 3. Seed a wiki node
+        let node = WikiNode {
+            id: None,
+            name: "Hydration Guide".to_string(),
+            content: "Pour water on tests.".to_string(),
+            scope: "hydration-test".to_string(),
+            vault_path: None,
+            embedding: None,
+        };
+        let wiki_id = backend.save_wiki_node(&node).await.unwrap();
+
+        // Query get_memory_nodes
+        let response = backend.get_memory_nodes(&[ep_id.clone(), rule_id.clone(), wiki_id.clone()]).await.unwrap();
+        
+        assert_eq!(response.episodes.len(), 1);
+        assert_eq!(response.episodes[0].title, "Hydration Episode");
+        
+        assert_eq!(response.wisdom_rules.len(), 1);
+        assert_eq!(response.wisdom_rules[0].target_pattern, "hydration-pattern");
+
+        assert_eq!(response.wiki_nodes.len(), 1);
+        assert_eq!(response.wiki_nodes[0].name, "Hydration Guide");
+    }
+
+    #[tokio::test]
+    async fn test_multi_tier_search_ranking() {
+        let mut backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+        backend.embedder = None;
+
+        // 1. Seed an episode containing 'concurrency'
+        let episode = EpisodeSave {
+            title: "Concurrency Episode".to_string(),
+            content: "Concurrency is hard.".to_string(),
+            entities: vec![],
+            scope: Some("ranking-test".to_string()),
+            vault_path: None,
+            source_episode: None,
+        };
+        let _ = backend.save_episode(&episode).await.unwrap();
+
+        // 2. Seed a wisdom rule containing 'concurrency'
+        let rule = WisdomRule {
+            id: None,
+            target_pattern: "Concurrency pattern".to_string(),
+            action_to_avoid: "avoiding concurrency".to_string(),
+            causal_explanation: "causes slow code".to_string(),
+            prescribed_remedy: "use concurrency safely".to_string(),
+            tier: "skills".to_string(), // Skills tier boost = 1.2
+            scope: "ranking-test".to_string(),
+            vault_path: None,
+            embedding: None,
+            source_episodes: vec![],
+            generator_name: "test".to_string(),
+            similarity: None,
+            utility: None,
+        };
+        let _ = backend.save_wisdom_rule(&rule).await.unwrap();
+
+        // 3. Seed a wiki node containing 'concurrency'
+        let node = WikiNode {
+            id: None,
+            name: "Concurrency Guide".to_string(),
+            content: "Concurrency best practices.".to_string(),
+            scope: "ranking-test".to_string(),
+            vault_path: None,
+            embedding: None,
+        };
+        let _ = backend.save_wiki_node(&node).await.unwrap();
+
+        // Execute text search (query_emb will be None, similarity defaults to 1.0)
+        let response = backend.search("Concurrency", Some("ranking-test"), false, 10, 0, 0.0).await.unwrap();
+
+        println!("DEBUG RESULTS: {:?}", response.results);
+        assert_eq!(response.results.len(), 3);
+        
+        // Assert sorting order based on tier boosts: skills (1.2) > wiki/insight (1.1) > episode (1.0)
+        assert_eq!(response.results[0].tier, "skills");
+        assert_eq!(response.results[0].title, "Concurrency pattern");
+
+        assert_eq!(response.results[1].tier, "insight");
+        assert_eq!(response.results[1].title, "Concurrency Guide");
+
+        assert_eq!(response.results[2].tier, "episode");
+        assert_eq!(response.results[2].title, "Concurrency Episode");
     }
 }

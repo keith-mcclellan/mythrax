@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use surrealdb_types::SurrealValue;
 
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
     pub name: String,
@@ -116,7 +118,22 @@ pub struct HandoffSave {
     pub scope: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Full hydrated Handoff — reserved for agent-tracking API; construction deferred.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct Handoff {
+    pub id: Option<String>,
+    pub parent_conversation_id: String,
+    pub subagent_conversation_id: String,
+    pub summary: String,
+    pub handoff_file_path: String,
+    pub scope: Option<String>,
+    pub status: Option<String>,
+    pub created_at: Option<String>,
+    pub embedding: Option<Vec<f32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct WikiNode {
     pub id: Option<String>,
     pub name: String,
@@ -125,6 +142,7 @@ pub struct WikiNode {
     pub vault_path: Option<String>,
     pub embedding: Option<Vec<f32>>,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResponse {
@@ -141,6 +159,19 @@ pub struct WisdomSearchResponse {
     pub has_more: bool,
     pub next_offset: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetMemoryNodesRequest {
+    pub node_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetMemoryNodesResponse {
+    pub episodes: Vec<Episode>,
+    pub wisdom_rules: Vec<WisdomRule>,
+    pub wiki_nodes: Vec<WikiNode>,
+}
+
 
 
 

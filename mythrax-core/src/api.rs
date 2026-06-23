@@ -5,7 +5,7 @@ use axum::{
 };
 use std::sync::Arc;
 use crate::db::StorageBackend;
-use crate::contracts::{EpisodeSave, Feedback, LlmConfigRequest, LlmConfigResponse, HandoffSave, SearchResponse};
+use crate::contracts::{EpisodeSave, Feedback, LlmConfigRequest, LlmConfigResponse, HandoffSave, SearchResponse, GetMemoryNodesRequest, GetMemoryNodesResponse};
 use crate::store::MarkdownStore;
 use crate::vault::watcher::WatchIgnoreList;
 use serde_json::{json, Value};
@@ -27,6 +27,7 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/v1/handoffs", post(save_handoff_handler))
         .route("/v1/wisdom/harvest", post(harvest_handler))
         .route("/v1/dream", post(dream_handler))
+        .route("/v1/nodes", post(get_memory_nodes_handler))
         .with_state(state)
 }
 
@@ -192,6 +193,24 @@ async fn dream_handler(
     }
 }
 
+async fn get_memory_nodes_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(payload): Json<GetMemoryNodesRequest>,
+) -> Result<Json<GetMemoryNodesResponse>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    match state.backend.get_memory_nodes(&payload.node_ids).await {
+        Ok(res) => Ok(Json(res)),
+        Err(e) => {
+            tracing::error!("get_memory_nodes failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,13 +252,32 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
         // Test AUTHORIZED request
-        let response = app
+        let response = app.clone()
             .oneshot(
                 Request::builder()
                     .method("GET")
                     .uri("/v1/config/llm")
                     .header("X-Mythrax-Token", "secret-token")
                     .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test POST /v1/nodes (Authorized)
+        let request_body = serde_json::json!({
+            "node_ids": ["episode:test-uuid"]
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/nodes")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&request_body).unwrap()))
                     .unwrap(),
             )
             .await

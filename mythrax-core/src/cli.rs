@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "mythrax", version = "0.1.0", about = "Mythrax Local Memory and Cognitive Daemon CLI")]
+#[command(name = "mythrax", version = "0.2.0", about = "Mythrax Local Memory and Cognitive Daemon CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -57,6 +57,14 @@ pub enum Commands {
     },
     /// Start the MCP server over stdin/stdout
     Mcp,
+    /// Forge a source document to extract rules and wiki nodes
+    Forge {
+        /// Path to the source file (text, markdown, or PDF)
+        source_path: String,
+        /// Optional scope (defaults to 'general')
+        #[arg(short, long)]
+        scope: Option<String>,
+    },
     /// Vault management and lifecycle operations
     Vault {
         #[command(subcommand)]
