@@ -387,7 +387,7 @@ mod tests {
         
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
-        let results = backend.search("Body content", Some("watcher-testing"), false, 1, 0, 0.55, None, false, true).await.unwrap();
+        let results = backend.search("Body content", Some("watcher-testing"), false, 1, 0, 0.55, None, false, true, true).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Watcher Test");
     }
@@ -423,7 +423,7 @@ mod tests {
         assert!(ignore_list.is_ignored(&abs_path));
         
         // Verify content in DB
-        let results = backend.search("bidirectional sync", Some("bi-testing"), false, 1, 0, 0.55, None, false, true).await.unwrap();
+        let results = backend.search("bidirectional sync", Some("bi-testing"), false, 1, 0, 0.55, None, false, true, true).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Bidirectional Test");
         
@@ -440,7 +440,7 @@ mod tests {
         sync_file_to_db(&abs_path, &backend, &store).await.unwrap();
         
         // Verify DB got updated
-        let results2 = backend.search("updated body", Some("bi-testing"), false, 1, 0, 0.55, None, false, true).await.unwrap();
+        let results2 = backend.search("updated body", Some("bi-testing"), false, 1, 0, 0.55, None, false, true, true).await.unwrap();
         assert_eq!(results2.results.len(), 1);
         assert_eq!(results2.results[0].title, "Watcher Test Updated");
     }

@@ -82,8 +82,9 @@ async fn search_handler(
     let token_budget = payload.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
     let allow_downward = payload.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
     let include_episodes = payload.get("include_episodes").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_artifacts = payload.get("include_artifacts").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    match state.backend.search(query, scope, deep_insight, limit, offset, threshold, token_budget, allow_downward, include_episodes).await {
+    match state.backend.search(query, scope, deep_insight, limit, offset, threshold, token_budget, allow_downward, include_episodes, include_artifacts).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => {
             tracing::error!("Search failed: {:?}", e);
