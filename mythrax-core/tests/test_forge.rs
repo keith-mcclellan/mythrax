@@ -1,7 +1,7 @@
 use std::fs;
 use anyhow::Result;
 use tempfile::tempdir;
-use mythrax_core::cognitive::forge::{extract_pdf_text, chunk_text};
+use mythrax_core::cognitive::forge::{extract_pdf_text, chunk_text, parse_markdown_toc, split_into_logical_sections, TOCEntry};
 use mythrax_core::db::{SurrealBackend, StorageBackend};
 
 fn create_lopdf_pdf() -> Vec<u8> {
@@ -134,10 +134,7 @@ async fn test_ingest_document() -> Result<()> {
         relative_wiki
     );
 
-    // Clear environment variable
-    unsafe {
-        std::env::remove_var("MYTHRAX_MOCK_LLM");
-    }
+
 
     Ok(())
 }
@@ -192,4 +189,110 @@ Here is a reference link:
     assert!(references_content.contains("[rustdoc]"));
 
     Ok(())
+}
+
+#[test]
+fn test_markdown_toc_parsing() {
+    let md_content = "\
+# Section 1
+This is text in section 1.
+
+## Subsection 1.1
+This is subsection 1.1 text.
+
+# Section 2
+Text in section 2.
+";
+    let entries = parse_markdown_toc(md_content);
+    
+    assert_eq!(entries.len(), 3);
+    
+    assert_eq!(entries[0].title, "Section 1");
+    assert_eq!(entries[0].start_byte, md_content.find("# Section 1").unwrap());
+    assert_eq!(entries[0].end_byte, md_content.find("## Subsection 1.1").unwrap());
+    
+    assert_eq!(entries[1].title, "Subsection 1.1");
+    assert_eq!(entries[1].start_byte, md_content.find("## Subsection 1.1").unwrap());
+    assert_eq!(entries[1].end_byte, md_content.find("# Section 2").unwrap());
+    
+    assert_eq!(entries[2].title, "Section 2");
+    assert_eq!(entries[2].start_byte, md_content.find("# Section 2").unwrap());
+    assert_eq!(entries[2].end_byte, md_content.len());
+}
+
+#[tokio::test]
+async fn test_extract_toc_via_llm_mock() -> Result<()> {
+    unsafe {
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
+    
+    let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
+    backend.init().await?;
+    let tmp = tempdir()?;
+    let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(tmp.path())?);
+    
+    let forge = mythrax_core::cognitive::forge::Forge::new(backend, store);
+    
+    let content = "Some document text to analyze.";
+    let toc = forge.extract_toc_via_llm(content).await?;
+    
+    assert_eq!(toc.len(), 1);
+    assert_eq!(toc[0].title, "test_title");
+    assert_eq!(toc[0].start_byte, 0);
+    assert_eq!(toc[0].end_byte, content.len());
+    
+
+    Ok(())
+}
+
+#[test]
+fn test_logical_section_splitting_and_grouping() {
+    let content = "Small section one text. Small section two text. Large section three text that will be split.";
+    let toc = vec![
+        TOCEntry {
+            title: "Sec 1".to_string(),
+            start_byte: 0,
+            end_byte: 23,
+        },
+        TOCEntry {
+            title: "Sec 2".to_string(),
+            start_byte: 24,
+            end_byte: 47,
+        },
+        TOCEntry {
+            title: "Sec 3".to_string(),
+            start_byte: 48,
+            end_byte: content.len(),
+        },
+    ];
+    
+    let sections = split_into_logical_sections(content, &toc);
+    
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].title, "Sec 1 - Sec 3");
+    assert_eq!(sections[0].content.trim(), content.trim());
+    
+    let many_words: Vec<String> = (0..22000).map(|i| format!("w{}", i)).collect();
+    let large_text = many_words.join(" ");
+    let large_content = format!("Small intro. {}", large_text);
+    
+    let large_toc = vec![
+        TOCEntry {
+            title: "Small Intro".to_string(),
+            start_byte: 0,
+            end_byte: 12,
+        },
+        TOCEntry {
+            title: "Huge Body".to_string(),
+            start_byte: 13,
+            end_byte: large_content.len(),
+        },
+    ];
+    
+    let large_sections = split_into_logical_sections(&large_content, &large_toc);
+    
+    assert!(large_sections.len() >= 3);
+    assert_eq!(large_sections[0].title, "Small Intro");
+    assert!(large_sections[1].title.starts_with("Huge Body (Part 1)"));
+    assert!(large_sections[2].title.starts_with("Huge Body (Part 2)"));
 }

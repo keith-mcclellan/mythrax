@@ -99,7 +99,7 @@ impl McpServer {
                     },
                     "serverInfo": {
                         "name": "mythrax",
-                        "version": "0.3.0"
+                        "version": "0.4.0"
                     }
                 }))
             }
@@ -409,6 +409,52 @@ impl McpServer {
                                     "scope": { "type": "string" }
                                 },
                                 "required": ["source_path"]
+                            }
+                        },
+                        {
+                            "name": "save_forged_assets",
+                            "description": "Expose transactional asset saving backend directly, saving grounding chunk, concepts, and rules",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "doc_title": { "type": "string" },
+                                    "scope": { "type": "string" },
+                                    "chunk_index": { "type": "integer" },
+                                    "chunk_text": { "type": "string" },
+                                    "concepts": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": { "type": "string" },
+                                                "content": { "type": "string" }
+                                            },
+                                            "required": ["name", "content"]
+                                        }
+                                    },
+                                    "rules": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "target_pattern": { "type": "string" },
+                                                "action_to_avoid": { "type": "string" },
+                                                "causal_explanation": { "type": "string" },
+                                                "prescribed_remedy": { "type": "string" }
+                                            },
+                                            "required": ["target_pattern", "action_to_avoid", "causal_explanation", "prescribed_remedy"]
+                                        }
+                                    }
+                                },
+                                "required": ["doc_title", "scope", "chunk_index", "chunk_text", "concepts", "rules"]
+                            }
+                        },
+                        {
+                            "name": "get_forge_instructions",
+                            "description": "Retrieve the current forge guidelines, prompt templates, and extraction instructions",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
                             }
                         }
                     ]
@@ -1054,6 +1100,52 @@ impl McpServer {
                         {
                             "type": "text",
                             "text": format!("Successfully forged source document '{}'", source_path)
+                        }
+                    ]
+                }))
+            }
+            "save_forged_assets" => {
+                let batch: crate::contracts::ForgedSectionBatch = serde_json::from_value(args.clone())
+                    .context("Failed to parse ForgedSectionBatch arguments")?;
+                self.backend.save_forged_section(&batch).await?;
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Successfully saved forged assets for document '{}'", batch.doc_title)
+                        }
+                    ]
+                }))
+            }
+            "get_forge_instructions" => {
+                let instructions = "\
+# Forge Guidelines & Extraction Instructions
+
+## 1. Wisdom Rules Extraction
+- **System Instruction:** \"You are a systems synthesizer. Analyze the text chunk and extract system-level Wisdom Rules to prevent mistakes. Respond ONLY with a JSON array of rules.\"
+- **Prompt Template:**
+```json
+Respond ONLY with a JSON array of rules, each containing exactly:
+- target_pattern (string)
+- action_to_avoid (string)
+- causal_explanation (string)
+- prescribed_remedy (string)
+```
+
+## 2. Concept Wiki Nodes Extraction
+- **System Instruction:** \"You are a systems synthesizer. Analyze the text chunk and extract key concepts or architectural definitions for a systems wiki. Respond ONLY with a JSON array of nodes.\"
+- **Prompt Template:**
+```json
+Respond ONLY with a JSON array of nodes, each containing exactly:
+- name (string concept title)
+- content (string explanation or definition)
+```";
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": instructions
                         }
                     ]
                 }))

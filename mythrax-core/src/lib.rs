@@ -1,4 +1,5 @@
 #![allow(async_fn_in_trait)]
+#![recursion_limit = "512"]
 
 pub mod api;
 pub mod cli;

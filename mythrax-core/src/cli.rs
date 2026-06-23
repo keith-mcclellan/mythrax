@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "mythrax", version = "0.3.0", about = "Mythrax Local Memory and Cognitive Daemon CLI")]
+#[command(name = "mythrax", version = "0.4.0", about = "Mythrax Local Memory and Cognitive Daemon CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -129,7 +129,7 @@ pub enum ConfigAction {
         /// Duration ('temporary' or 'permanent')
         #[arg(short, long)]
         duration: Option<String>,
-        /// Model identifier (e.g. 'gemini-1.5-flash', 'mlx-community/gemma-4-26b-a4b-it-4bit')
+        /// Model identifier (e.g. 'gemini-1.5-flash', 'mlx-community/Qwen3.6-35B-A3B-4bit')
         #[arg(short, long)]
         model: Option<String>,
         /// Cloud provider name ('gemini', 'anthropic')

@@ -5,7 +5,7 @@ use axum::{
 };
 use std::sync::Arc;
 use crate::db::StorageBackend;
-use crate::contracts::{EpisodeSave, Feedback, LlmConfigRequest, LlmConfigResponse, HandoffSave, SearchResponse, GetMemoryNodesRequest, GetMemoryNodesResponse};
+use crate::contracts::{EpisodeSave, Feedback, LlmConfigRequest, LlmConfigResponse, HandoffSave, SearchResponse, GetMemoryNodesRequest, GetMemoryNodesResponse, ForgedSectionBatch};
 use crate::store::MarkdownStore;
 use crate::vault::watcher::WatchIgnoreList;
 use serde_json::{json, Value};
@@ -28,6 +28,7 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/v1/wisdom/harvest", post(harvest_handler))
         .route("/v1/dream", post(dream_handler))
         .route("/v1/nodes", post(get_memory_nodes_handler))
+        .route("/v1/forge/save", post(save_forged_assets_handler))
         .with_state(state)
 }
 
@@ -209,6 +210,29 @@ async fn get_memory_nodes_handler(
         Ok(res) => Ok(Json(res)),
         Err(e) => {
             tracing::error!("get_memory_nodes failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn save_forged_assets_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ForgedSectionBatch>,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    match state.backend.save_forged_section(&payload).await {
+        Ok(_) => {
+            if let Some(ref tx) = state.dream_tx {
+                let _ = tx.send(()).await;
+            }
+            Ok(Json(json!({ "status": "success" })))
+        }
+        Err(e) => {
+            tracing::error!("API failed to save forged section: {:?}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

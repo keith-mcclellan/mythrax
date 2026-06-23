@@ -2,7 +2,7 @@ use std::fs;
 use anyhow::Result;
 use tempfile::tempdir;
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::HandoffSave;
+use mythrax_core::contracts::{HandoffSave, ForgedSectionBatch, ForgedConcept, ForgedRule};
 
 use std::sync::Mutex;
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -17,6 +17,7 @@ async fn test_stm_db_operations() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
+        std::env::remove_var("MYTHRAX_VAULT_ROOT");
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
     }
     let backend = SurrealBackend::new_in_memory().await?;
@@ -68,6 +69,7 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
+        std::env::remove_var("MYTHRAX_VAULT_ROOT");
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
     }
 
@@ -148,6 +150,7 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
     let handoffs_dir = workspace_root.join(".handoffs");
     fs::create_dir_all(&handoffs_dir)?;
     unsafe {
+        std::env::remove_var("MYTHRAX_VAULT_ROOT");
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
     }
 
@@ -269,6 +272,384 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
     assert!(!stm3.is_empty());
     let stm4 = backend.get_stm("sess4", None).await?;
     assert!(!stm4.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_save_forged_section_lifecycle() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("episodes"))?;
+    fs::create_dir_all(vault_root.join("wiki"))?;
+    fs::create_dir_all(vault_root.join("wisdom"))?;
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
+    }
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    // Create a batch
+    let batch = ForgedSectionBatch {
+        doc_title: "My System Playbook!".to_string(),
+        scope: "production".to_string(),
+        chunk_index: 0,
+        chunk_text: "We should avoid hardcoding API keys in our deployment scripts. For example, api_key: 'sk-123' must be prevented.".to_string(),
+        concepts: vec![
+            ForgedConcept {
+                name: "API Secret Management".to_string(),
+                content: "Centralized environment secrets storage.".to_string(),
+            }
+        ],
+        rules: vec![
+            ForgedRule {
+                target_pattern: "Avoid Hardcoded API Keys".to_string(),
+                action_to_avoid: "hardcoding api_key = 'sk-...'".to_string(),
+                causal_explanation: "This leaks credentials to source control.".to_string(),
+                prescribed_remedy: "Use environment variables or vault references instead.".to_string(),
+            }
+        ],
+    };
+
+    // Save batch
+    backend.save_forged_section(&batch).await?;
+
+    // 1. Verify files are written to disk with SecretFilter sanitization
+    let doc_slug = "my_system_playbook";
+
+    // Chunk file
+    let chunk_path = vault_root.join(format!("episodes/forge/{}/chunk_0.md", doc_slug));
+    assert!(chunk_path.exists());
+    let chunk_content = fs::read_to_string(&chunk_path)?;
+    assert!(chunk_content.contains("title: \"My System Playbook! - Chunk 0\""));
+    assert!(chunk_content.contains("scope: \"production\""));
+    assert!(chunk_content.contains("source: \"forge\""));
+    assert!(chunk_content.contains("api_key: \"[REDACTED]\"")); // Check secret cleaning!
+    assert!(!chunk_content.contains("sk-123"));
+
+    // Concept file
+    let wiki_dir = vault_root.join(format!("wiki/forge/{}", doc_slug));
+    assert!(wiki_dir.exists());
+    let wiki_files: Vec<_> = fs::read_dir(&wiki_dir)?
+        .map(|r| r.unwrap().path())
+        .collect();
+    assert_eq!(wiki_files.len(), 1);
+    let wiki_path = &wiki_files[0];
+    let wiki_name = wiki_path.file_name().unwrap().to_str().unwrap();
+    assert!(wiki_name.starts_with("concept_api_secret_management_"));
+    let wiki_content = fs::read_to_string(wiki_path)?;
+    assert!(wiki_content.contains("name: \"API Secret Management\""));
+    assert!(wiki_content.contains("Centralized environment secrets storage."));
+
+    // Wisdom file
+    let wisdom_dir = vault_root.join(format!("wisdom/forge/{}", doc_slug));
+    assert!(wisdom_dir.exists());
+    let wisdom_files: Vec<_> = fs::read_dir(&wisdom_dir)?
+        .map(|r| r.unwrap().path())
+        .collect();
+    assert_eq!(wisdom_files.len(), 1);
+    let wisdom_path = &wisdom_files[0];
+    let wisdom_name = wisdom_path.file_name().unwrap().to_str().unwrap();
+    assert!(wisdom_name.starts_with("rule_avoid_hardcoded_api_keys_"));
+    let wisdom_content = fs::read_to_string(wisdom_path)?;
+    assert!(wisdom_content.contains("target_pattern: \"Avoid Hardcoded API Keys\""));
+    assert!(wisdom_content.contains("tier: \"forge\""));
+    assert!(wisdom_content.contains("Use environment variables or vault references instead."));
+
+    // 2. Verify database records are inserted and relations exist
+    // Fetch episode
+    let mut ep_resp = backend.db.query("SELECT * FROM episode WHERE source = 'forge' LIMIT 1;").await?;
+    let episodes: Vec<serde_json::Value> = ep_resp.take(0)?;
+    assert_eq!(episodes.len(), 1);
+    let ep = &episodes[0];
+    assert_eq!(ep["title"].as_str().unwrap(), "My System Playbook! - Chunk 0");
+    assert!(ep["content"].as_str().unwrap().contains("api_key: \"[REDACTED]\""));
+
+    // Fetch wiki node
+    let mut wiki_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'API Secret Management' LIMIT 1;").await?;
+    let wiki_nodes: Vec<serde_json::Value> = wiki_resp.take(0)?;
+    assert_eq!(wiki_nodes.len(), 1);
+
+    // Fetch wisdom
+    let mut wisdom_resp = backend.db.query("SELECT * FROM wisdom WHERE target_pattern = 'Avoid Hardcoded API Keys' LIMIT 1;").await?;
+    let wisdom_rules: Vec<serde_json::Value> = wisdom_resp.take(0)?;
+    assert_eq!(wisdom_rules.len(), 1);
+    assert_eq!(wisdom_rules[0]["tier"].as_str().unwrap(), "forge");
+
+    // Verify relations: Playbook (WisdomRule) -> relates_to -> Concept (WikiNode) -> relates_to -> Chunk (Episode)
+    let ep_id = ep["id"].as_str().unwrap();
+    let wiki_id = wiki_nodes[0]["id"].as_str().unwrap();
+    let wisdom_id = wisdom_rules[0]["id"].as_str().unwrap();
+
+    let mut rel_resp1 = backend.db.query("SELECT * FROM relates_to WHERE in = $wiki_id AND out = $ep_id;")
+        .bind(("ep_id", mythrax_core::db::parse_record_id(ep_id)?))
+        .bind(("wiki_id", mythrax_core::db::parse_record_id(wiki_id)?))
+        .await?;
+    let rels1: Vec<serde_json::Value> = rel_resp1.take(0)?;
+    assert_eq!(rels1.len(), 1);
+
+    let mut rel_resp2 = backend.db.query("SELECT * FROM relates_to WHERE in = $wisdom_id AND out = $wiki_id;")
+        .bind(("wisdom_id", mythrax_core::db::parse_record_id(wisdom_id)?))
+        .bind(("wiki_id", mythrax_core::db::parse_record_id(wiki_id)?))
+        .await?;
+    let rels2: Vec<serde_json::Value> = rel_resp2.take(0)?;
+    assert_eq!(rels2.len(), 1);
+
+    // Verify metrics records are created
+    let mut met_resp = backend.db.query("SELECT * FROM metrics;").await?;
+    let metrics_records: Vec<serde_json::Value> = met_resp.take(0)?;
+    assert!(metrics_records.len() >= 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_save_forged_section_rollback() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
+    }
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    // Create a batch
+    let batch = ForgedSectionBatch {
+        doc_title: "Rollback Doc".to_string(),
+        scope: "production".to_string(),
+        chunk_index: 0,
+        chunk_text: "Some chunk text".to_string(),
+        concepts: vec![
+            ForgedConcept {
+                name: "Rollback Concept".to_string(),
+                content: "Rollback content".to_string(),
+            }
+        ],
+        rules: vec![
+            ForgedRule {
+                target_pattern: "Rollback Rule".to_string(),
+                action_to_avoid: "avoid".to_string(),
+                causal_explanation: "why".to_string(),
+                prescribed_remedy: "remedy".to_string(),
+            }
+        ],
+    };
+
+    // Break SurrealDB so the transaction fails
+    backend.db.query("REMOVE TABLE wiki_node;").await?.check()?;
+
+    // Call save_forged_section - it should return Err
+    let res = backend.save_forged_section(&batch).await;
+    assert!(res.is_err());
+
+    // Verify no files are left in the vault
+    let chunk_file = vault_root.join("episodes/forge/rollback_doc/chunk_0.md");
+    assert!(!chunk_file.exists());
+
+    let wiki_dir = vault_root.join("wiki/forge/rollback_doc");
+    if wiki_dir.exists() {
+        let entries: Vec<_> = fs::read_dir(wiki_dir)?.collect();
+        assert!(entries.is_empty());
+    }
+
+    let wisdom_dir = vault_root.join("wisdom/forge/rollback_doc");
+    if wisdom_dir.exists() {
+        let entries: Vec<_> = fs::read_dir(wisdom_dir)?.collect();
+        assert!(entries.is_empty());
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_mcp_forge_tools() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("episodes"))?;
+    fs::create_dir_all(vault_root.join("wiki"))?;
+    fs::create_dir_all(vault_root.join("wisdom"))?;
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
+    }
+
+    let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
+    backend.init().await?;
+    let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root)?);
+    let mcp_server = mythrax_core::mcp::McpServer::new(backend.clone(), store);
+
+    // 1. Call get_forge_instructions
+    let inst_resp = mcp_server.handle_request("tools/call", serde_json::json!({
+        "name": "get_forge_instructions",
+        "arguments": {}
+    })).await?;
+
+    let inst_text = inst_resp["content"][0]["text"].as_str().unwrap();
+    assert!(inst_text.contains("Wisdom Rules Extraction"));
+    assert!(inst_text.contains("Concept Wiki Nodes Extraction"));
+
+    // 2. Call save_forged_assets
+    let batch = serde_json::json!({
+        "doc_title": "MCP Forge Doc",
+        "scope": "development",
+        "chunk_index": 1,
+        "chunk_text": "Grounding chunk content.",
+        "concepts": [
+            {
+                "name": "MCP Concept",
+                "content": "MCP concept definition."
+            }
+        ],
+        "rules": [
+            {
+                "target_pattern": "MCP Rule",
+                "action_to_avoid": "avoiding mcp",
+                "causal_explanation": "explanation",
+                "prescribed_remedy": "remedy"
+            }
+        ]
+    });
+
+    let save_resp = mcp_server.handle_request("tools/call", serde_json::json!({
+        "name": "save_forged_assets",
+        "arguments": batch
+    })).await?;
+
+    let save_text = save_resp["content"][0]["text"].as_str().unwrap();
+    assert!(save_text.contains("Successfully saved forged assets"));
+
+    // Verify files on disk
+    let chunk_path = vault_root.join("episodes/forge/mcp_forge_doc/chunk_1.md");
+    assert!(chunk_path.exists());
+
+    // Verify DB entry
+    let mut ep_resp = backend.db.query("SELECT * FROM episode WHERE source = 'forge' LIMIT 1;").await?;
+    let episodes: Vec<serde_json::Value> = ep_resp.take(0)?;
+    assert_eq!(episodes.len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_api_save_forged_assets() -> Result<()> {
+    use axum::http::Request;
+    use tower::util::ServiceExt;
+    use mythrax_core::api::{ApiState, create_router};
+    use mythrax_core::vault::watcher::WatchIgnoreList;
+
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("episodes"))?;
+    fs::create_dir_all(vault_root.join("wiki"))?;
+    fs::create_dir_all(vault_root.join("wisdom"))?;
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
+    }
+
+    let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
+    backend.init().await?;
+    let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root)?);
+    let ignore_list = std::sync::Arc::new(WatchIgnoreList::new());
+
+    let state = std::sync::Arc::new(ApiState {
+        backend: backend.clone(),
+        auth_token: "secret-api-token".to_string(),
+        store,
+        ignore_list,
+        dream_tx: None,
+    });
+
+    let app = create_router(state);
+
+    let batch = serde_json::json!({
+        "doc_title": "API Forge Doc",
+        "scope": "production",
+        "chunk_index": 2,
+        "chunk_text": "API grounding chunk content.",
+        "concepts": [
+            {
+                "name": "API Concept",
+                "content": "API concept definition."
+            }
+        ],
+        "rules": [
+            {
+                "target_pattern": "API Rule",
+                "action_to_avoid": "avoiding api",
+                "causal_explanation": "explanation",
+                "prescribed_remedy": "remedy"
+            }
+        ]
+    });
+
+    // 1. Test Unauthorized
+    let response = app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/forge/save")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(serde_json::to_vec(&batch).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    // 2. Test Success (Authorized)
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/forge/save")
+                .header("X-Mythrax-Token", "secret-api-token")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(serde_json::to_vec(&batch).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+    // Verify files on disk
+    let chunk_path = vault_root.join("episodes/forge/api_forge_doc/chunk_2.md");
+    assert!(chunk_path.exists());
+
+    // Verify DB entry
+    let mut ep_resp = backend.db.query("SELECT * FROM episode WHERE source = 'forge' AND title = 'API Forge Doc - Chunk 2' LIMIT 1;").await?;
+    let episodes: Vec<serde_json::Value> = ep_resp.take(0)?;
+    assert_eq!(episodes.len(), 1);
 
     Ok(())
 }
