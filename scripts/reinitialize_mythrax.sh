@@ -13,6 +13,8 @@ echo "Project root: $PROJECT_ROOT"
 echo "Stopping active daemon and any running mythrax processes..."
 pkill -f "mythrax daemon" || true
 pkill -f "mythrax_mcp" || true
+pkill -f "target/release/mythrax" || true
+pkill -f "target/debug/mythrax" || true
 sleep 1
 
 # 2. Retrieve vault root from ~/.mythrax/config.json, default to ~/mythrax-vault
@@ -32,7 +34,7 @@ if [ -d "$VAULT_ROOT" ]; then
     BACKUP_DIR="$VAULT_ROOT/.trash/backup_$TIMESTAMP"
     echo "Backing up existing vault directories to: $BACKUP_DIR"
     mkdir -p "$BACKUP_DIR"
-    for folder in episodes wiki wisdom general archive; do
+    for folder in episodes wiki wisdom general archive .handoffs; do
         if [ -d "$VAULT_ROOT/$folder" ]; then
             echo "Moving folder to backup: $folder"
             mv "$VAULT_ROOT/$folder" "$BACKUP_DIR/"
@@ -42,10 +44,10 @@ else
     echo "Vault root directory $VAULT_ROOT not found. Skipping vault backup."
 fi
 
-# 4. Wipe active RocksDB database (binary init also wipes this, but doing it here
-#    ensures the file lock is released before cargo build even starts)
-echo "Wiping RocksDB database cache..."
+# 4. Wipe active RocksDB database and stale locks
+echo "Wiping RocksDB database cache and stale lock files..."
 rm -rf ~/.mythrax/db
+rm -f ~/.mythrax/daemon.pid
 
 # 5. Verify compiled binary is present
 echo "Verifying compiled mythrax binary exists..."
