@@ -85,6 +85,7 @@ pub trait StorageBackend: Send + Sync {
         threshold: f32,
         token_budget: Option<usize>,
         allow_downward: bool,
+        include_episodes: bool,
     ) -> Result<SearchResponse>;
     async fn get_wisdom(&self, query: &str, tier: &str, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
@@ -117,6 +118,7 @@ pub trait StorageBackend: Send + Sync {
     async fn save_forged_section(&self, batch: &ForgedSectionBatch) -> Result<()>;
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
+    async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()>;
 }
 
 pub struct SurrealBackend {
@@ -162,6 +164,76 @@ impl SurrealBackend {
     #[allow(dead_code)]
     pub async fn new_in_memory() -> Result<Self> {
         Self::new("mem://").await
+    }
+
+    fn compact_search_result(&self, item: &mut SearchResult, remaining_budget: usize) -> bool {
+        let title_tokens = self.count_text_tokens(&format!("{}\n", item.title));
+        if title_tokens >= remaining_budget {
+            return false;
+        }
+        let content_budget = remaining_budget - title_tokens;
+
+        // Try wisdom rule compaction
+        if item.content.contains("**Why**:") {
+            let why_prefix = "\n**Why**:";
+            let remedy_prefix = "\n**Prescribed Remedy**:";
+            if let Some(why_start) = item.content.find(why_prefix) {
+                if let Some(remedy_start) = item.content.find(remedy_prefix) {
+                    let avoid_part = &item.content[..why_start];
+                    let remedy_part = &item.content[remedy_start..];
+                    let compacted_content = format!("{}{}", avoid_part, remedy_part);
+                    let compacted_tokens = self.count_text_tokens(&compacted_content);
+                    if compacted_tokens <= content_budget {
+                        item.content = compacted_content;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Try paragraph compaction
+        let paragraphs: Vec<&str> = item.content.split("\n\n").collect();
+        if paragraphs.len() > 1 {
+            let mut compacted_content = paragraphs[0].to_string();
+            compacted_content.push_str("\n\n... [Truncated (Inner-Node Compaction)]");
+            let compacted_tokens = self.count_text_tokens(&compacted_content);
+            if compacted_tokens <= content_budget {
+                item.content = compacted_content;
+                return true;
+            }
+        }
+
+        // Hard character binary search truncation fallback
+        let original_content = item.content.clone();
+        let mut low = 0;
+        let mut high = original_content.len();
+        let mut best_fit = String::new();
+
+        while low <= high {
+            let mid = (low + high) / 2;
+            let candidate_content = if mid < original_content.len() {
+                format!("{}... [Truncated (Inner-Node Compaction)]", &original_content[..mid])
+            } else {
+                original_content.clone()
+            };
+            let tokens = self.count_text_tokens(&candidate_content);
+            if tokens <= content_budget {
+                best_fit = candidate_content;
+                low = mid + 1;
+            } else {
+                if mid == 0 {
+                    break;
+                }
+                high = mid - 1;
+            }
+        }
+
+        if !best_fit.is_empty() {
+            item.content = best_fit;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -592,6 +664,7 @@ impl StorageBackend for SurrealBackend {
         threshold: f32,
         token_budget: Option<usize>,
         allow_downward: bool,
+        include_episodes: bool,
     ) -> Result<SearchResponse> {
         let scope_val = scope.map(|s| s.to_string());
         
@@ -609,107 +682,140 @@ impl StorageBackend for SurrealBackend {
         };
 
         let traversal = if allow_downward { "<->" } else { "->" };
+        let related_targets = if include_episodes {
+            "episode, entity, wiki_node, wisdom, hypothesis_node, handoff"
+        } else {
+            "entity, wiki_node, wisdom, hypothesis_node, handoff"
+        };
 
-        let response = if let Some(ref q_vec) = query_emb {
-            let sql = if deep_insight {
-                format!(
-                    "
-                    SELECT id, title, content, embedding, vault_path,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
-                    FROM episode
-                    WHERE (scope = $target_scope OR $target_scope = NONE)
-                      AND (embedding <|100, 100|> $query_embedding);
+        let mut sql = String::new();
 
-                    SELECT id, name AS title, content, embedding, vault_path,
+        if let Some(ref _q_vec) = query_emb {
+            if include_episodes {
+                if deep_insight {
+                    sql.push_str(&format!(
+                        "SELECT id, title, content, embedding, vault_path,
+                               (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                        FROM episode
+                        WHERE (scope = $target_scope OR $target_scope = NONE)
+                          AND (embedding <|100, 100|> $query_embedding);
+                        ",
+                        traversal = traversal,
+                        related_targets = related_targets
+                    ));
+                } else {
+                    sql.push_str("
+                        SELECT id, title, content, embedding, vault_path,
+                               (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                        FROM episode
+                        WHERE (scope = $target_scope OR $target_scope = NONE)
+                          AND (embedding <|100, 100|> $query_embedding);
+                    ");
+                }
+            }
+
+            if deep_insight {
+                sql.push_str(&format!(
+                    "SELECT id, name AS title, content, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wiki_node
                     WHERE (scope = $target_scope OR $target_scope = NONE)
                       AND (embedding <|100, 100|> $query_embedding);
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wisdom
                     WHERE (scope = $target_scope OR $target_scope = NONE)
                       AND (embedding <|100, 100|> $query_embedding);
                     ",
-                    traversal = traversal
-                )
+                    traversal = traversal,
+                    related_targets = related_targets
+                ));
             } else {
-                "
-                SELECT id, title, content, embedding, vault_path,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM episode
-                WHERE (scope = $target_scope OR $target_scope = NONE)
-                  AND (embedding <|100, 100|> $query_embedding);
-
-                SELECT id, name AS title, content, embedding, vault_path,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM wiki_node
-                WHERE (scope = $target_scope OR $target_scope = NONE)
-                  AND (embedding <|100, 100|> $query_embedding);
-
-                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM wisdom
-                WHERE (scope = $target_scope OR $target_scope = NONE)
-                  AND (embedding <|100, 100|> $query_embedding);
-                ".to_string()
-            };
-            self.db.query(&sql)
-                .bind(("target_scope", scope_val.as_deref()))
-                .bind(("query_embedding", q_vec.clone()))
-                .await?
-        } else {
-            let sql = if deep_insight {
-                format!(
-                    "
-                    SELECT id, title, content, embedding, vault_path,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
-                    FROM episode 
-                    WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                      AND (scope = $target_scope OR $target_scope = NONE);
-
+                sql.push_str("
                     SELECT id, name AS title, content, embedding, vault_path,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wiki_node
+                    WHERE (scope = $target_scope OR $target_scope = NONE)
+                      AND (embedding <|100, 100|> $query_embedding);
+
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wisdom
+                    WHERE (scope = $target_scope OR $target_scope = NONE)
+                      AND (embedding <|100, 100|> $query_embedding);
+                ");
+            }
+        } else {
+            if include_episodes {
+                if deep_insight {
+                    sql.push_str(&format!(
+                        "SELECT id, title, content, embedding, vault_path,
+                               (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                        FROM episode 
+                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                          AND (scope = $target_scope OR $target_scope = NONE);
+                        ",
+                        traversal = traversal,
+                        related_targets = related_targets
+                    ));
+                } else {
+                    sql.push_str("
+                        SELECT id, title, content, embedding, vault_path,
+                               (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                        FROM episode 
+                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                          AND (scope = $target_scope OR $target_scope = NONE);
+                    ");
+                }
+            }
+
+            if deep_insight {
+                sql.push_str(&format!(
+                    "SELECT id, name AS title, content, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wiki_node 
                     WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
                       AND (scope = $target_scope OR $target_scope = NONE);
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}(episode, entity, wiki_node, wisdom, hypothesis_node, handoff).* AS related_nodes
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wisdom 
                     WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
                       AND (scope = $target_scope OR $target_scope = NONE);
                     ",
-                    traversal = traversal
-                )
+                    traversal = traversal,
+                    related_targets = related_targets
+                ));
             } else {
-                "
-                SELECT id, title, content, embedding, vault_path,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM episode 
-                WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                  AND (scope = $target_scope OR $target_scope = NONE);
+                sql.push_str("
+                    SELECT id, name AS title, content, embedding, vault_path,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wiki_node 
+                    WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
+                      AND (scope = $target_scope OR $target_scope = NONE);
 
-                SELECT id, name AS title, content, embedding, vault_path,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM wiki_node 
-                WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
-                  AND (scope = $target_scope OR $target_scope = NONE);
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wisdom 
+                    WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
+                      AND (scope = $target_scope OR $target_scope = NONE);
+                ");
+            }
+        }
 
-                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM wisdom 
-                WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
-                  AND (scope = $target_scope OR $target_scope = NONE);
-                ".to_string()
-            };
+        let response = if let Some(ref q_vec) = query_emb {
+            self.db.query(&sql)
+                .bind(("target_scope", scope_val.as_deref()))
+                .bind(("query_embedding", q_vec.clone()))
+                .await?
+        } else {
             self.db.query(&sql)
                 .bind(("query", query))
                 .bind(("target_scope", scope_val.as_deref()))
@@ -717,9 +823,17 @@ impl StorageBackend for SurrealBackend {
         };
 
         let mut response = response.check().context("Search query failed")?;
-        let episodes: Vec<SearchRaw> = response.take(0)?;
-        let wiki_nodes: Vec<SearchRaw> = response.take(1)?;
-        let wisdom_rules: Vec<SearchWisdomRaw> = response.take(2)?;
+        let (episodes, wiki_nodes, wisdom_rules) = if include_episodes {
+            let eps: Vec<SearchRaw> = response.take(0)?;
+            let wns: Vec<SearchRaw> = response.take(1)?;
+            let wrs: Vec<SearchWisdomRaw> = response.take(2)?;
+            (eps, wns, wrs)
+        } else {
+            let wns: Vec<SearchRaw> = response.take(0)?;
+            let wrs: Vec<SearchWisdomRaw> = response.take(1)?;
+            (Vec::new(), wns, wrs)
+        };
+
         let mut candidates = Vec::new();
 
         for ep in episodes {
@@ -876,14 +990,21 @@ impl StorageBackend for SurrealBackend {
             let mut omitted = Vec::new();
             let mut cumulative_tokens = 0;
 
-            for item in candidates {
+            for mut item in candidates {
                 let text = format!("{}\n{}", item.title, item.content);
                 let tokens = self.count_text_tokens(&text);
                 if cumulative_tokens + tokens <= budget {
                     cumulative_tokens += tokens;
                     kept.push(item);
                 } else {
-                    omitted.push(item.id.clone());
+                    let remaining_budget = budget - cumulative_tokens;
+                    if self.compact_search_result(&mut item, remaining_budget) {
+                        let compacted_text = format!("{}\n{}", item.title, item.content);
+                        cumulative_tokens += self.count_text_tokens(&compacted_text);
+                        kept.push(item);
+                    } else {
+                        omitted.push(item.id.clone());
+                    }
                 }
             }
 
@@ -1463,7 +1584,7 @@ impl StorageBackend for SurrealBackend {
                 created_at 
             FROM handoff 
             WHERE (status = 'COMPLETED' OR status = 'FAILED') 
-              AND created_at < time::now() - 7d;
+              AND created_at < time::now() - 3d;
         ";
         let mut response = self.db.query(select_sql).await?.check()?;
         let raw_handoffs: Vec<HandoffRaw> = response.take(0)?;
@@ -1497,10 +1618,46 @@ impl StorageBackend for SurrealBackend {
         let delete_sql = "
             DELETE FROM handoff 
             WHERE (status = 'COMPLETED' OR status = 'FAILED') 
-              AND created_at < time::now() - 7d;
+              AND created_at < time::now() - 3d;
         ";
         let _ = self.db.query(delete_sql).await?.check()?;
 
+        Ok(())
+    }
+
+    async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()> {
+        // Delete short_term_memory records older than 3 days
+        let prune_stm_sql = "DELETE FROM short_term_memory WHERE updated_at < time::now() - 3d;";
+        let _ = self.db.query(prune_stm_sql).await?.check()?;
+
+        // Clean up completed/failed handoffs and associated STMs
+        self.delete_stale_handoffs().await?;
+
+        // Scan .handoffs/ folder and delete stm_*.json files older than 3 days
+        let handoffs_dir = vault_root.join(".handoffs");
+        if handoffs_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(handoffs_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                            if filename.starts_with("stm_") {
+                                if let Ok(metadata) = entry.metadata() {
+                                    if let Ok(modified) = metadata.modified() {
+                                        if let Ok(elapsed) = modified.elapsed() {
+                                            if elapsed.as_secs() > 3 * 24 * 3600 {
+                                                let _ = std::fs::remove_file(&path);
+                                                tracing::info!("Pruned stale STM file: {:?}", path);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2034,7 +2191,7 @@ mod tests {
         let all_eps: Vec<serde_json::Value> = backend.db.select("episode").await.unwrap();
         println!("DEBUG: All episodes in DB: {:?}", all_eps);
 
-        let search_results = backend.search("redis", Some("testing"), false, 2, 0, 0.55, None, false).await.unwrap();
+        let search_results = backend.search("redis", Some("testing"), false, 2, 0, 0.55, None, false, true).await.unwrap();
         assert_eq!(search_results.results.len(), 1);
         assert!(search_results.results[0].content.contains("redis"));
 
@@ -2080,14 +2237,14 @@ mod tests {
             .check().unwrap();
 
         // Perform search WITH deep_insight = true
-        let results_deep = backend.search("Redis", Some("deep-test"), true, 10, 0, 0.55, None, true).await.unwrap();
+        let results_deep = backend.search("Redis", Some("deep-test"), true, 10, 0, 0.55, None, true, true).await.unwrap();
         assert_eq!(results_deep.results.len(), 1);
         assert!(results_deep.results[0].content.contains("dropping connections"));
         assert!(results_deep.results[0].content.contains("Redis Connection Pooling Guidelines"));
         assert!(results_deep.results[0].content.contains("Set max connections to 50"));
 
         // Perform search WITHOUT deep_insight = true
-        let results_normal = backend.search("Redis", Some("deep-test"), false, 10, 0, 0.55, None, false).await.unwrap();
+        let results_normal = backend.search("Redis", Some("deep-test"), false, 10, 0, 0.55, None, false, true).await.unwrap();
         assert_eq!(results_normal.results.len(), 1);
         assert!(results_normal.results[0].content.contains("dropping connections"));
         assert!(!results_normal.results[0].content.contains("Redis Connection Pooling Guidelines"));
@@ -2198,7 +2355,7 @@ mod tests {
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
         // Execute text search (query_emb will be None, similarity defaults to 1.0)
-        let response = backend.search("Concurrency", Some("ranking-test"), false, 10, 0, 0.0, None, false).await.unwrap();
+        let response = backend.search("Concurrency", Some("ranking-test"), false, 10, 0, 0.0, None, false, true).await.unwrap();
 
         println!("DEBUG RESULTS: {:?}", response.results);
         assert_eq!(response.results.len(), 3);
@@ -2280,14 +2437,14 @@ mod tests {
         // Relate Episode -> relates_to -> WikiNode (Upward)
         backend.relate_nodes(&ep_id, &node_id).await.unwrap();
 
-        let results_upward = backend.search("Parent Insight", Some("directional-test"), true, 10, 0, 0.85, None, false).await.unwrap();
+        let results_upward = backend.search("Parent Insight", Some("directional-test"), true, 10, 0, 0.85, None, false, true).await.unwrap();
         println!("DEBUG: results_upward: {:#?}", results_upward.results);
         assert_eq!(results_upward.results.len(), 1);
         let content_upward = &results_upward.results[0].content;
         assert!(!content_upward.contains("Child Episode"));
 
         // 3. Search with allow_downward = true
-        let results_downward = backend.search("Parent Insight", Some("directional-test"), true, 10, 0, 0.85, None, true).await.unwrap();
+        let results_downward = backend.search("Parent Insight", Some("directional-test"), true, 10, 0, 0.85, None, true, true).await.unwrap();
         assert_eq!(results_downward.results.len(), 1);
         let content_downward = &results_downward.results[0].content;
         assert!(content_downward.contains("Child Episode"));
@@ -2328,7 +2485,7 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search("Pattern", Some("budget-test"), false, 10, 0, 0.0, Some(30), false).await.unwrap();
+        let response = backend.search("Pattern", Some("budget-test"), false, 10, 0, 0.0, Some(30), false, true).await.unwrap();
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
@@ -2339,5 +2496,167 @@ mod tests {
         let omitted = response.omitted_ids.unwrap();
         assert_eq!(omitted.len(), 1);
         assert!(omitted[0].starts_with("episode:"));
+    }
+
+    #[tokio::test]
+    async fn test_search_wisdom_compaction() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let skill_rule = WisdomRule {
+            id: None,
+            target_pattern: "Avoid manual steps".to_string(),
+            action_to_avoid: "doing things manually".to_string(),
+            causal_explanation: "This is a very long explanation explaining why doing things manually is bad, error-prone, slow, and non-deterministic".to_string(),
+            prescribed_remedy: "automate all steps".to_string(),
+            tier: "skills".to_string(),
+            scope: "compaction-test".to_string(),
+            vault_path: None,
+            embedding: None,
+            source_episodes: vec![],
+            generator_name: "test".to_string(),
+            similarity: None,
+            utility: None,
+        };
+        backend.save_wisdom_rule(&skill_rule).await.unwrap();
+
+        // Search with large budget - full content should include the "Why" explanation
+        let res_large = backend.search("Avoid", Some("compaction-test"), false, 10, 0, 0.0, Some(1000), false, true).await.unwrap();
+        assert_eq!(res_large.results.len(), 1);
+        assert!(res_large.results[0].content.contains("**Why**:"));
+
+        // Dynamically compute the budget needed for compacted content
+        let text_compacted = format!("{}\n**Action to Avoid**: {}\n**Prescribed Remedy**: {}", 
+            skill_rule.target_pattern, skill_rule.action_to_avoid, skill_rule.prescribed_remedy);
+        let tokens_compacted = backend.count_text_tokens(&text_compacted);
+
+        // Search with tight budget - should strip "**Why**:" and fit under budget
+        let res_small = backend.search("Avoid", Some("compaction-test"), false, 10, 0, 0.0, Some(tokens_compacted + 5), false, true).await.unwrap();
+        assert_eq!(res_small.results.len(), 1);
+        assert!(!res_small.results[0].content.contains("**Why**:"));
+        assert!(res_small.results[0].content.contains("**Action to Avoid**:"));
+        assert!(res_small.results[0].content.contains("**Prescribed Remedy**:"));
+    }
+
+    #[tokio::test]
+    async fn test_search_paragraph_and_truncation_compaction() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        // Save a multi-paragraph WikiNode
+        let node1 = WikiNode {
+            id: None,
+            name: "Multi-Paragraph Node".to_string(),
+            content: "First paragraph here.\n\nSecond paragraph contains a lot of additional details. It goes on and on to explain everything about performance, cognitive capabilities, memory hierarchies, and database pruning in the mythrax daemon system. We want this paragraph to be extremely long so that its token count is significantly higher than the first paragraph and the truncation suffix combined, making compaction highly effective and necessary to fit within small budgets.".to_string(),
+            scope: "compaction-test".to_string(),
+            vault_path: None,
+            embedding: None,
+        };
+        backend.save_wiki_node(&node1).await.unwrap();
+
+        // Search with large budget - full content
+        let res_large = backend.search("Multi-Paragraph", Some("compaction-test"), false, 10, 0, 0.0, Some(1000), false, true).await.unwrap();
+        assert_eq!(res_large.results.len(), 1);
+        assert!(res_large.results[0].content.contains("Second paragraph"));
+
+        // Dynamically compute the budget needed for compacted content
+        let compacted_content = format!("First paragraph here.\n\n... [Truncated (Inner-Node Compaction)]");
+        let text_compacted = format!("{}\n{}", node1.name, compacted_content);
+        let tokens_compacted = backend.count_text_tokens(&text_compacted);
+
+        // Search with small budget -> first paragraph + suffix
+        let res_small = backend.search("Multi-Paragraph", Some("compaction-test"), false, 10, 0, 0.0, Some(tokens_compacted + 5), false, true).await.unwrap();
+        assert_eq!(res_small.results.len(), 1);
+        assert!(res_small.results[0].content.contains("First paragraph here."));
+        assert!(!res_small.results[0].content.contains("Second paragraph"));
+        assert!(res_small.results[0].content.contains("... [Truncated (Inner-Node Compaction)]"));
+
+        // Save a single long paragraph WikiNode
+        let node2 = WikiNode {
+            id: None,
+            name: "Single-Paragraph Node".to_string(),
+            content: "This is a single very long paragraph without any newlines whatsoever. We want to test that the binary search character truncation fallback mechanism works perfectly when the budget is constrained. Therefore, we write a very long description with many words and spaces so that the token count of the full text is significantly larger than the budget and the truncation suffix combined.".to_string(),
+            scope: "compaction-test-single-para".to_string(),
+            vault_path: None,
+            embedding: None,
+        };
+        backend.save_wiki_node(&node2).await.unwrap();
+
+        // Dynamically compute the budget for a truncated version (e.g. half the content length)
+        let half_len = node2.content.len() / 2;
+        let truncated_content = format!("{}... [Truncated (Inner-Node Compaction)]", &node2.content[..half_len]);
+        let text_truncated = format!("{}\n{}", node2.name, truncated_content);
+        let tokens_truncated = backend.count_text_tokens(&text_truncated);
+
+        // Search with tight budget -> character-truncated
+        let res_trunc = backend.search("Single-Paragraph", Some("compaction-test-single-para"), false, 10, 0, 0.0, Some(tokens_truncated + 5), false, true).await.unwrap();
+        assert_eq!(res_trunc.results.len(), 1);
+        assert!(res_trunc.results[0].content.contains("... [Truncated (Inner-Node Compaction)]"));
+        assert!(res_trunc.results[0].content.len() < node2.content.len());
+    }
+
+    #[tokio::test]
+    async fn test_search_excludes_episodes_by_default() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        // Save an Episode
+        let ep = EpisodeSave {
+            title: "Test Episode".to_string(),
+            content: "Secret content in the episode".to_string(),
+            entities: vec![],
+            scope: Some("exclusion-test".to_string()),
+            vault_path: None,
+            source_episode: None,
+        };
+        backend.save_episode(&ep).await.unwrap();
+
+        // Search with include_episodes = false (default behavior) -> should NOT find the episode
+        let res_default = backend.search("Secret", Some("exclusion-test"), false, 10, 0, 0.0, None, false, false).await.unwrap();
+        assert_eq!(res_default.results.len(), 0);
+
+        // Search with include_episodes = true -> should find the episode
+        let res_include = backend.search("Secret", Some("exclusion-test"), false, 10, 0, 0.0, None, false, true).await.unwrap();
+        assert_eq!(res_include.results.len(), 1);
+        assert_eq!(res_include.results[0].title, "Test Episode");
+    }
+
+    #[tokio::test]
+    async fn test_graph_traversal_excludes_episodes() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        // Create an Episode and a WikiNode
+        let ep_id = backend.save_episode(&EpisodeSave {
+            title: "Child Episode".to_string(),
+            content: "Contains info".to_string(),
+            entities: vec![],
+            scope: Some("graph-exclusion-test".to_string()),
+            vault_path: None,
+            source_episode: None,
+        }).await.unwrap();
+
+        let node = WikiNode {
+            id: None,
+            name: "Parent Insight".to_string(),
+            content: "Insight summary".to_string(),
+            scope: "graph-exclusion-test".to_string(),
+            vault_path: None,
+            embedding: None,
+        };
+        let node_id = backend.save_wiki_node(&node).await.unwrap();
+
+        // Relate Episode -> relates_to -> WikiNode (Upward)
+        backend.relate_nodes(&ep_id, &node_id).await.unwrap();
+
+        // Search with deep_insight = true, allow_downward = true and include_episodes = true -> child episode should be traversed and included
+        let res_include = backend.search("Parent Insight", Some("graph-exclusion-test"), true, 10, 0, 0.85, None, true, true).await.unwrap();
+        assert_eq!(res_include.results.len(), 1);
+        assert!(res_include.results[0].content.contains("Child Episode"));
+
+        // Search with deep_insight = true, allow_downward = true and include_episodes = false -> child episode should NOT be traversed
+        let res_exclude = backend.search("Parent Insight", Some("graph-exclusion-test"), true, 10, 0, 0.85, None, true, false).await.unwrap();
+        assert_eq!(res_exclude.results.len(), 1);
+        assert!(!res_exclude.results[0].content.contains("Child Episode"));
     }
 }

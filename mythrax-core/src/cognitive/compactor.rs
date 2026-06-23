@@ -29,6 +29,7 @@ impl Compactor {
         store: &MarkdownStore,
         scope: &str,
     ) -> Result<()> {
+        let _ = db.prune_stale_memories(&store.vault_root).await;
         let insights = load_insights(&store.vault_root);
         let scope_insights: Vec<_> = insights
             .into_iter()
@@ -212,6 +213,7 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
     ) -> Result<()> {
+        let _ = db.prune_stale_memories(&store.vault_root).await;
         let compaction_dir = store.vault_root.join("wiki/compaction");
         if !compaction_dir.exists() {
             return Ok(());

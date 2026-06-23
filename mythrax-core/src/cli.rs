@@ -48,6 +48,9 @@ pub enum Commands {
         /// Maximum number of results
         #[arg(short, long, default_value_t = 5)]
         limit: usize,
+        /// Include raw episodes in search results
+        #[arg(short, long)]
+        episodes: bool,
     },
     /// Run safety compliance audits on the active directory
     Verify {
@@ -145,6 +148,15 @@ pub enum ConfigAction {
 pub enum DaemonAction {
     /// Start the Mythrax background daemon
     Start {
+        /// Port to bind the daemon REST API to
+        #[arg(short, long, default_value_t = 8090)]
+        port: u16,
+        /// Path to the Obsidian vault to watch
+        #[arg(short, long)]
+        vault: Option<String>,
+    },
+    /// Run the Mythrax background daemon in the foreground
+    Run {
         /// Port to bind the daemon REST API to
         #[arg(short, long, default_value_t = 8090)]
         port: u16,

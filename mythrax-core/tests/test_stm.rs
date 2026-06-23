@@ -653,3 +653,63 @@ async fn test_api_save_forged_assets() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_stm_continuous_pruning() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    let handoffs_dir = vault_root.join(".handoffs");
+    fs::create_dir_all(&handoffs_dir)?;
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    // Create a 4-day-old handoff file and stm file
+    let old_handoff_file = handoffs_dir.join("old_handoff.md");
+    let old_stm_file = handoffs_dir.join("stm_old_sess.json");
+    fs::write(&old_handoff_file, "old handoff content")?;
+    fs::write(&old_stm_file, "{}")?;
+    
+    // Set modification time of old stm file to 4 days ago using std::fs::File::set_modified
+    let file = fs::OpenOptions::new().write(true).open(&old_stm_file)?;
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(4 * 24 * 3600))?;
+    drop(file);
+
+    // Create a fresh stm file (2 hours old)
+    let fresh_stm_file = handoffs_dir.join("stm_fresh_sess.json");
+    fs::write(&fresh_stm_file, "{}")?;
+    let file = fs::OpenOptions::new().write(true).open(&fresh_stm_file)?;
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600))?;
+    drop(file);
+
+    // Insert an STM record into SurrealDB and set updated_at to 4 days ago
+    backend.save_stm("old_sess", "k1", "v1").await?;
+    backend.db.query("UPDATE type::record('short_term_memory', [$session_id, $key]) SET updated_at = time::now() - 4d;")
+        .bind(("session_id", "old_sess"))
+        .bind(("key", "k1"))
+        .await?.check()?;
+
+    // Insert a fresh STM record (2 hours old)
+    backend.save_stm("fresh_sess", "k2", "v2").await?;
+
+    // Run pruning
+    backend.prune_stale_memories(&vault_root).await?;
+
+    // Assertions
+    assert!(!old_stm_file.exists(), "Old STM file should be pruned");
+    assert!(fresh_stm_file.exists(), "Fresh STM file should be preserved");
+
+    // Check DB
+    let old_stm_map = backend.get_stm("old_sess", None).await?;
+    assert!(old_stm_map.is_empty(), "Old STM record in DB should be pruned");
+
+    let fresh_stm_map = backend.get_stm("fresh_sess", None).await?;
+    assert_eq!(fresh_stm_map.get("k2").unwrap(), "v2", "Fresh STM record in DB should be preserved");
+
+    Ok(())
+}

@@ -176,7 +176,7 @@ async fn main() -> Result<()> {
         }
         Commands::Daemon { action } => {
             match action {
-                DaemonAction::Start { port, vault } => {
+                DaemonAction::Start { port, vault } | DaemonAction::Run { port, vault } => {
                     let home = std::env::var("HOME").context("HOME env var not set")?;
                     let mythrax_dir = PathBuf::from(&home).join(".mythrax");
                     let config_path = mythrax_dir.join("config.json");
@@ -217,171 +217,199 @@ async fn main() -> Result<()> {
                     let pid = std::process::id();
                     std::fs::write(&pid_path, pid.to_string())?;
 
-                    // Initialize storage backend
-                    let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
-                    backend.init().await?;
+                    let run_res = async {
+                        // Initialize storage backend
+                        let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
+                        backend.init().await?;
 
-                    // Reprocess missing embeddings on startup
-                    let backend_startup = backend.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        if backend_startup.embedder.is_some() {
-                            tracing::info!("Checking for episodes with missing embeddings...");
-                            let sql = "SELECT * FROM episode WHERE embedding IS NONE;";
-                            match backend_startup.db.query(sql).await {
-                                Ok(mut response) => {
-                                    if let Ok(episodes) = response.take::<Vec<Episode>>(0)
-                                        && !episodes.is_empty() {
-                                            tracing::info!("Found {} episodes with missing embeddings. Regenerating...", episodes.len());
-                                            for ep in episodes {
-                                                if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
-                                                    let text_to_embed = format!("{}: {}", ep.title, ep.content);
-                                                    if let Ok(vec) = embedder.embed(&text_to_embed)
-                                                        && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                            let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                            let _ = backend_startup.db.query(update_sql)
-                                                                .bind(("id", thing))
-                                                                .bind(("embedding", vec))
-                                                                .await;
-                                                        }
-                                                }
-                                            }
-                                            tracing::info!("Finished regenerating missing embeddings.");
-                                        }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to query missing embeddings on startup: {:?}", e);
-                                }
-                            }
+                        // Run initial stale memory/handoff pruning on startup
+                        if let Err(e) = backend.prune_stale_memories(&vault_path).await {
+                            tracing::error!("Failed to run startup memory pruning: {:?}", e);
                         }
-                    });
 
-                    // Initialize Markdown Store
-                    let store = Arc::new(MarkdownStore::new(&vault_path)?);
-
-                    // Initialize Watch Ignore List
-                    let ignore_list = Arc::new(WatchIgnoreList::new());
-
-                    // Setup dreaming channel
-                    let (dream_tx, mut dream_rx) = tokio::sync::mpsc::channel::<()>(100);
-
-                    // Start File-Watcher
-                    let _watcher = vault::watcher::start_watching(
-                        vault_path,
-                        ignore_list.clone(),
-                        backend.clone(),
-                        store.clone(),
-                        Some(dream_tx.clone()),
-                    )?;
-
-                    // Spawn the tokio background scheduler loop
-                    let backend_dream = backend.clone();
-                    let store_dream = store.clone();
-                    tokio::spawn(async move {
-                        let dream_coordinator = crate::cognitive::synthesis::DreamCoordinator::new();
-                        let compactor = crate::cognitive::compactor::Compactor::new();
-
-                        // Spawn daily scheduler
-                        let backend_daily = backend_dream.clone();
-                        let store_daily = store_dream.clone();
+                        // Reprocess missing embeddings on startup
+                        let backend_startup = backend.clone();
                         tokio::spawn(async move {
-                            let dc = crate::cognitive::synthesis::DreamCoordinator::new();
-                            let cmp = crate::cognitive::compactor::Compactor::new();
-                            loop {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
-                                
-                                tracing::info!("Daily scheduled background handoff cleanup starting...");
-                                if let Err(e) = backend_daily.delete_stale_handoffs().await {
-                                    tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
-                                }
-
-                                tracing::info!("Daily scheduled deep dreaming starting...");
-                                if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep")).await {
-                                    tracing::error!("Daily deep dreaming failed: {:?}", e);
-                                } else {
-                                    tracing::info!("Deep dreaming synthesis completed. Running compactions...");
-                                    let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
-                                    if scopes.is_empty() {
-                                        scopes.push("general".to_string());
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            if backend_startup.embedder.is_some() {
+                                tracing::info!("Checking for episodes with missing embeddings...");
+                                let sql = "SELECT * FROM episode WHERE embedding IS NONE;";
+                                match backend_startup.db.query(sql).await {
+                                    Ok(mut response) => {
+                                        if let Ok(episodes) = response.take::<Vec<Episode>>(0)
+                                            && !episodes.is_empty() {
+                                                tracing::info!("Found {} episodes with missing embeddings. Regenerating...", episodes.len());
+                                                for ep in episodes {
+                                                    if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
+                                                        let text_to_embed = format!("{}: {}", ep.title, ep.content);
+                                                        if let Ok(vec) = embedder.embed(&text_to_embed)
+                                                            && let Ok(thing) = crate::db::parse_record_id(id_str) {
+                                                                let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                                let _ = backend_startup.db.query(update_sql)
+                                                                    .bind(("id", thing))
+                                                                    .bind(("embedding", vec))
+                                                                    .await;
+                                                            }
+                                                    }
+                                                }
+                                                tracing::info!("Finished regenerating missing embeddings.");
+                                            }
                                     }
-                                    for scope in scopes {
-                                        let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope).await;
+                                    Err(e) => {
+                                        tracing::error!("Failed to query missing embeddings on startup: {:?}", e);
                                     }
-                                    let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
                                 }
                             }
                         });
 
-                        let mut last_activity = std::time::Instant::now();
-                        let mut pending_debounce = false;
+                        // Initialize Markdown Store
+                        let store = Arc::new(MarkdownStore::new(&vault_path)?);
 
-                        loop {
-                            tokio::select! {
-                                Some(_) = dream_rx.recv() => {
-                                    last_activity = std::time::Instant::now();
+                        // Initialize Watch Ignore List
+                        let ignore_list = Arc::new(WatchIgnoreList::new());
 
-                                    // Check threshold triggered synthesis (> 50 unprocessed)
-                                    if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
-                                        && unprocessed.len() > 50 {
-                                            tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
-                                            if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
-                                                tracing::error!("Threshold dreaming failed: {:?}", e);
-                                            } else {
-                                                let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                if scopes.is_empty() {
-                                                    scopes.push("general".to_string());
-                                                }
-                                                for scope in scopes {
-                                                    let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
-                                                }
-                                                let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
-                                            }
-                                            pending_debounce = false;
-                                            continue;
+                        // Setup dreaming channel
+                        let (dream_tx, mut dream_rx) = tokio::sync::mpsc::channel::<()>(100);
+
+                        // Start File-Watcher
+                        let _watcher = vault::watcher::start_watching(
+                            vault_path,
+                            ignore_list.clone(),
+                            backend.clone(),
+                            store.clone(),
+                            Some(dream_tx.clone()),
+                        )?;
+
+                        // Spawn the tokio background scheduler loop
+                        let backend_dream = backend.clone();
+                        let store_dream = store.clone();
+                        tokio::spawn(async move {
+                            let dream_coordinator = crate::cognitive::synthesis::DreamCoordinator::new();
+                            let compactor = crate::cognitive::compactor::Compactor::new();
+
+                            // Spawn daily scheduler
+                            let backend_daily = backend_dream.clone();
+                            let store_daily = store_dream.clone();
+                            tokio::spawn(async move {
+                                let dc = crate::cognitive::synthesis::DreamCoordinator::new();
+                                let cmp = crate::cognitive::compactor::Compactor::new();
+                                loop {
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
+                                    
+                                    tracing::info!("Daily scheduled background handoff cleanup starting...");
+                                    if let Err(e) = backend_daily.delete_stale_handoffs().await {
+                                        tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
+                                    }
+
+                                    tracing::info!("Daily scheduled deep dreaming starting...");
+                                    if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep")).await {
+                                        tracing::error!("Daily deep dreaming failed: {:?}", e);
+                                    } else {
+                                        tracing::info!("Deep dreaming synthesis completed. Running compactions...");
+                                        let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
+                                        if scopes.is_empty() {
+                                            scopes.push("general".to_string());
                                         }
-                                    pending_debounce = true;
+                                        for scope in scopes {
+                                            let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope).await;
+                                        }
+                                        let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
+                                    }
                                 }
-                                _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)), if pending_debounce => {
-                                    if last_activity.elapsed() >= tokio::time::Duration::from_secs(30) {
-                                        pending_debounce = false;
- 
-                                        if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
-                                            && !unprocessed.is_empty() {
-                                                tracing::info!("Idle debounced synthesis starting...");
-                                                if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
-                                                    tracing::error!("Debounced incremental dreaming failed: {:?}", e);
-                                                } else {
-                                                    let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                    if scopes.is_empty() {
-                                                        scopes.push("general".to_string());
+                            });
+
+                            let mut last_activity = std::time::Instant::now();
+                            let mut pending_debounce = false;
+
+                            loop {
+                                tokio::select! {
+                                    val = dream_rx.recv() => {
+                                        match val {
+                                            Some(_) => {
+                                                last_activity = std::time::Instant::now();
+
+                                                // Check threshold triggered synthesis (> 50 unprocessed)
+                                                if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
+                                                    && unprocessed.len() > 50 {
+                                                        tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
+                                                        if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
+                                                            tracing::error!("Threshold dreaming failed: {:?}", e);
+                                                        } else {
+                                                            let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                            if scopes.is_empty() {
+                                                                scopes.push("general".to_string());
+                                                            }
+                                                            for scope in scopes {
+                                                                let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                            }
+                                                            let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
+                                                        }
+                                                        pending_debounce = false;
+                                                        continue;
                                                     }
-                                                    for scope in scopes {
-                                                        let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
-                                                    }
-                                                    let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
-                                                }
+                                                pending_debounce = true;
                                             }
+                                            None => {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)), if pending_debounce => {
+                                        if last_activity.elapsed() >= tokio::time::Duration::from_secs(30) {
+                                            pending_debounce = false;
+ 
+                                            if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
+                                                && !unprocessed.is_empty() {
+                                                    tracing::info!("Idle debounced synthesis starting...");
+                                                    if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
+                                                        tracing::error!("Debounced incremental dreaming failed: {:?}", e);
+                                                    } else {
+                                                        let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                        if scopes.is_empty() {
+                                                            scopes.push("general".to_string());
+                                                        }
+                                                        for scope in scopes {
+                                                            let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                        }
+                                                        let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
+                                                    }
+                                                }
+                                        }
                                     }
                                 }
                             }
+                        });
+
+                        // Create API State
+                        let state = Arc::new(api::ApiState {
+                            backend,
+                            auth_token,
+                            store: store.clone(),
+                            ignore_list: ignore_list.clone(),
+                            dream_tx: Some(dream_tx),
+                        });
+
+                        // Build router and start Axum listener
+                        let app = api::create_router(state);
+                        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                        
+                        let listener = tokio::net::TcpListener::bind(&addr).await?;
+                        
+                        tokio::select! {
+                            res = axum::serve(listener, app) => {
+                                if let Err(e) = res {
+                                    tracing::error!("Daemon server crashed: {:?}", e);
+                                }
+                            }
+                            _ = tokio::signal::ctrl_c() => {
+                                tracing::info!("SIGINT/Ctrl+C received. Cleaning up PID file and shutting down...");
+                            }
                         }
-                    });
+                        Ok::<(), anyhow::Error>(())
+                    }.await;
 
-                    // Create API State
-                    let state = Arc::new(api::ApiState {
-                        backend,
-                        auth_token,
-                        store: store.clone(),
-                        ignore_list: ignore_list.clone(),
-                        dream_tx: Some(dream_tx),
-                    });
-
-                    // Build router and start Axum listener
-                    let app = api::create_router(state);
-                    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-                    
-                    let listener = tokio::net::TcpListener::bind(&addr).await?;
-                    axum::serve(listener, app).await.context("Daemon server crashed")?;
+                    let _ = std::fs::remove_file(pid_path);
+                    run_res?;
                 }
                 DaemonAction::Stop => {
                     stop_daemon()?;
@@ -434,7 +462,7 @@ async fn main() -> Result<()> {
                 println!("Failed to save episode: {}", res.status());
             }
         }
-        Commands::Search { query, scope, limit } => {
+        Commands::Search { query, scope, limit, episodes } => {
             // Read config
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
@@ -449,7 +477,8 @@ async fn main() -> Result<()> {
             let payload = serde_json::json!({
                 "query": query,
                 "scope": scope,
-                "limit": limit
+                "limit": limit,
+                "include_episodes": episodes
             });
 
             let res = client.post("http://127.0.0.1:8090/v1/search")

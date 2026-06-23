@@ -141,3 +141,138 @@ fn test_forge_pdf_exits_zero() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn test_cli_daemon_run_and_cleanup() {
+    let tmp = tempdir().expect("temp dir");
+    let mut child = cmd(tmp.path())
+        .args(["daemon", "run", "--port", "18091"])
+        .spawn()
+        .expect("spawn daemon run");
+
+    // Poll for the PID file to be created (up to 10 seconds)
+    let pid_file = tmp.path().join(".mythrax/daemon.pid");
+    let mut found = false;
+    for _ in 0..100 {
+        if pid_file.exists() {
+            found = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(found, "PID file should be created at {:?}", pid_file);
+
+    // Wait for the TCP port to be open to ensure Axum is running and signals are handled
+    let addr = "127.0.0.1:18091";
+    let mut port_open = false;
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(addr).is_ok() {
+            port_open = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(port_open, "Daemon port 18091 should be listening");
+
+    // Read the PID file and verify it contains the child's PID
+    let pid_content = fs::read_to_string(&pid_file).expect("read PID file");
+    assert_eq!(pid_content.trim(), child.id().to_string());
+
+    // Send SIGINT (signal 2) to the child process
+    let status = Command::new("kill")
+        .args(["-2", &child.id().to_string()])
+        .status()
+        .expect("send SIGINT via kill");
+    assert!(status.success(), "kill command should succeed");
+
+    // Wait for the child process to exit
+    let exit_status = child.wait().expect("wait for child");
+    assert!(exit_status.success() || exit_status.code().is_none());
+
+    // Check if the PID file has been deleted
+    assert!(!pid_file.exists(), "PID file should be deleted on clean SIGINT exit");
+}
+
+#[test]
+fn test_cli_search_episodes_flag() {
+    let tmp = tempdir().expect("temp dir");
+    
+    // Start daemon on port 8090
+    let mut daemon = cmd(tmp.path())
+        .args(["daemon", "run", "--port", "8090"])
+        .spawn()
+        .expect("spawn daemon");
+
+    // Poll to let daemon boot and write the PID file
+    let pid_file = tmp.path().join(".mythrax/daemon.pid");
+    let mut found = false;
+    for _ in 0..100 {
+        if pid_file.exists() {
+            found = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(found, "Daemon PID file should be created");
+
+    // Wait for the TCP port to be open to ensure Axum is running and signals are handled
+    let addr = "127.0.0.1:8090";
+    let mut port_open = false;
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(addr).is_ok() {
+            port_open = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(port_open, "Daemon port 8090 should be listening");
+
+    // Create a temporary document to save
+    let doc_file = tmp.path().join("search_test_doc.md");
+    fs::write(
+        &doc_file,
+        "# SpecialSearchQueryPattern\n\nThis is a specific test case content for e2e search.",
+    )
+    .expect("write doc");
+
+    // Save episode via CLI
+    let save_status = cmd(tmp.path())
+        .args(["save", "--file", doc_file.to_str().unwrap(), "--scope", "e2e_search_test"])
+        .status()
+        .expect("spawn save");
+    assert!(save_status.success(), "save command should succeed");
+
+    // Perform default search (should exclude episodes)
+    let search_default_out = cmd(tmp.path())
+        .args(["search", "SpecialSearchQueryPattern", "--scope", "e2e_search_test"])
+        .output()
+        .expect("spawn search default");
+    assert!(search_default_out.status.success());
+    let default_stdout = String::from_utf8_lossy(&search_default_out.stdout);
+    assert!(
+        default_stdout.contains("\"results\": []"),
+        "Default search should exclude episode, got stdout: {}",
+        default_stdout
+    );
+
+    // Perform search with --episodes flag
+    let search_episodes_out = cmd(tmp.path())
+        .args(["search", "SpecialSearchQueryPattern", "--scope", "e2e_search_test", "--episodes"])
+        .output()
+        .expect("spawn search with --episodes");
+    assert!(search_episodes_out.status.success());
+    let episodes_stdout = String::from_utf8_lossy(&search_episodes_out.stdout);
+    assert!(
+        episodes_stdout.contains("SpecialSearchQueryPattern"),
+        "Search with --episodes should include episode, got stdout: {}",
+        episodes_stdout
+    );
+
+    // Stop daemon cleanly
+    let status = Command::new("kill")
+        .args(["-2", &daemon.id().to_string()])
+        .status()
+        .expect("kill daemon");
+    assert!(status.success());
+    let _ = daemon.wait();
+}

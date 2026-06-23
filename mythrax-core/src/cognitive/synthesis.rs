@@ -709,6 +709,9 @@ impl DreamCoordinator {
             }
             // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
         }
+        if let Err(e) = db.prune_stale_memories(&store.vault_root).await {
+            tracing::error!("Dreaming pruning failed: {:?}", e);
+        }
         Ok(())
     }
 }

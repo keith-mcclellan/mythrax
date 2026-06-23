@@ -144,7 +144,7 @@ impl McpServer {
                         },
                         {
                             "name": "search_memories",
-                            "description": "Execute semantic memory search over saved episodes",
+                            "description": "Execute semantic memory search over saved insights and wisdom rules. Raw episodes are excluded by default to avoid context bloat.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -154,7 +154,8 @@ impl McpServer {
                                     "offset": { "type": "integer" },
                                     "threshold": { "type": "number" },
                                     "token_budget": { "type": "integer" },
-                                    "allow_downward": { "type": "boolean" }
+                                    "allow_downward": { "type": "boolean" },
+                                    "include_episodes": { "type": "boolean" }
                                 },
                                 "required": ["query"]
                             }
@@ -563,8 +564,9 @@ impl McpServer {
                 let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
                 let token_budget = args.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
                 let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
+                let include_episodes = args.get("include_episodes").and_then(|v| v.as_bool()).unwrap_or(false);
 
-                let search_res = self.backend.search(query, scope, false, limit, offset, threshold, token_budget, allow_downward).await?;
+                let search_res = self.backend.search(query, scope, false, limit, offset, threshold, token_budget, allow_downward, include_episodes).await?;
                 let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                     r.embedding = None;
                     serde_json::to_value(&r).unwrap()
