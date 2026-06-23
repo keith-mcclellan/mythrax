@@ -15,7 +15,7 @@ Use these native tools directly instead of executing custom scripts in the shell
 
 | Tool | Signature | Purpose |
 |------|-----------|---------|
-| `search_memories` | `(query, scope?, limit?)` | Semantic vector search over saved episodes |
+| `search_memories` | `(query, scope?, limit?, token_budget?, allow_downward?)` | Semantic vector search over saved episodes |
 | `search_wisdom` | `(query, tier, limit?)` | Search wisdom rules by tier |
 | `save_episode` | `(title, content, entities, scope?, vault_path?)` | Persist episodic context |
 | `record_feedback` | `(id, success)` | Reinforcement learning utility adjustment |
@@ -30,6 +30,8 @@ Use these native tools directly instead of executing custom scripts in the shell
 | `put_short_term` | `(session_id, key, value)` | Write a key-value pair to STM for the session |
 | `get_short_term` | `(session_id, key)` | Read a key-value pair from STM |
 | `clear_short_term` | `(session_id)` | Clear STM and delete `.handoffs/stm_<session_id>.json` |
+| `save_handoff` | `(parent_conversation_id, subagent_conversation_id, summary, handoff_file_path, scope?)` | Save parent-to-subagent task handoff and link context nodes |
+| `get_memory_nodes` | `(node_ids)` | Hydrate specific database records by record IDs |
 | `forge_source` | `(source_path, scope?)` | Ingest a document (PDF/text/markdown) to extract WisdomRules and WikiNodes |
 
 ---
@@ -43,22 +45,28 @@ Use these native tools directly instead of executing custom scripts in the shell
 
 ---
 
-## Agent Handoff Protocol (Zero-Eager-Prompting)
+## Agent Handoff Protocol (Zero-Eager-Prompting) & Smart Handoffs (v0.3.0)
 
-When delegating work to a subagent, minimize context window usage:
+When delegating work to a subagent, minimize context window usage and establish graph-linked memory associations:
 
 ### Spawning a Subagent
 
 1. **Write the contract** to `.handoffs/handoff_<task_id>.md` at the workspace root.
-2. **Spawn the subagent** with a minimal prompt:
+2. **Link context and register handoff**:
+   - Write active context node record IDs (e.g. WikiNodes or WisdomRules) to STM under key `"distilled_context_nodes"` using the `put_short_term` tool.
+   - Call the `save_handoff` MCP tool to create the handoff record and automatically link it to the context nodes via `relates_to` edges in SurrealDB.
+3. **Spawn the subagent** with a minimal prompt:
    > *"Read and execute the handoff at `file:///absolute/path/.handoffs/handoff_<task_id>.md` and rules at `file:///Users/keith/.gemini/AGENT.md`. Output first: `Execution Check: [Karpathy Rules applied? Yes/No]`"*
-3. **Lazy context via file URLs**: Reference large files as links (`[file.rs](file:///path#L50-L100)`) — never paste content.
+4. **Hydrate context nodes**: The subagent reads the node IDs from STM (via `get_short_term`) and calls the `get_memory_nodes` MCP tool to hydrate the active context nodes in a single call.
+5. **Lazy context via file URLs**: Reference large files as links (`[file.rs](file:///path#L50-L100)`) — never paste content.
 
 ### Handoff Contract Template (`.handoffs/handoff_<task_id>.md`)
 
 ```markdown
 # Agent Handoff: [Task Name]
 - **From:** [Parent Agent ID]  **To:** [Subagent ID]  **Status:** PENDING
+- **STM Session ID:** [Session ID]
+- **Distilled Context Nodes:** [List of record IDs (e.g. `["wiki_node:insights_123", "wisdom:rule_456"]`)]
 
 ## 1. Objective & Scope
 [What to build/fix. What is explicitly out of scope.]
@@ -101,22 +109,54 @@ When calling `openai_chat` or similar stateless LLM APIs:
 
 ---
 
-## Short Term Memory (STM) for Agent Handoffs
+## Short Term Memory (STM) & Smart Handoffs (v0.3.0)
 
-STM is a lightweight key-value store shared between parent and subagent during a session. It persists to SurrealDB and is dual-written to `.handoffs/stm_<session_id>.json`.
+STM is a lightweight key-value store shared between parent and subagent during a session. It persists to SurrealDB, is dual-written to `.handoffs/stm_<session_id>.json`, and is used to dynamically link context nodes during handoffs.
 
-**Usage pattern:**
-```
+### 1. Basic Key-Value Sharing
+```python
 # Parent writes active variables before spawning subagent
 put_short_term(session_id="abc123", key="target_file", value="/path/to/file.rs")
 put_short_term(session_id="abc123", key="error_context", value="SurrealDB id field mismatch")
 
 # Subagent reads them
 get_short_term(session_id="abc123", key="target_file")
+```
+
+### 2. Smart Handoffs (Graph-Linked Handoffs)
+During handoff, the parent can store a list of active node record IDs in STM under the key `"distilled_context_nodes"`. When saving the handoff via the `save_handoff` tool, the backend automatically reads this key, creates the handoff record, and links it to those nodes via `relates_to` edges. The subagent can then retrieve the IDs and hydrate all nodes in a single call.
+
+```python
+# 1. Parent writes active node IDs to its STM
+put_short_term(
+    session_id="parent_session_id",
+    key="distilled_context_nodes",
+    value='["wiki_node:insights_123", "wisdom:rule_456"]'
+)
+
+# 2. Parent saves the handoff via MCP (automatically links the handoff to the context nodes via relates_to edges)
+save_handoff(
+    parent_conversation_id="parent_session_id",
+    subagent_conversation_id="subagent_session_id",
+    summary="Task brief summary",
+    handoff_file_path=".handoffs/handoff_task_123.md",
+    scope="general"
+)
+
+# 3. Subagent reads key from its STM
+get_short_term(
+    session_id="subagent_session_id",
+    key="distilled_context_nodes"
+)
+
+# 4. Subagent hydrates all context nodes in one call
+get_memory_nodes(
+    node_ids=["wiki_node:insights_123", "wisdom:rule_456"]
+)
+```
 
 # Parent clears after task completes (also deletes the local .json file)
-clear_short_term(session_id="abc123")
-```
+clear_short_term(session_id="parent_session_id")
 
 **Security**: STM values are sanitized by `SecretFilter` before writing to disk (API keys and tokens are masked).
 
