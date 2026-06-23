@@ -2,7 +2,7 @@ use std::fs;
 use anyhow::Result;
 use tempfile::tempdir;
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{EpisodeSave, WikiNode};
+use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::store::MarkdownStore;
 use mythrax_core::cognitive::arbor::{ArborCoordinator, ArborLlmClient};
 

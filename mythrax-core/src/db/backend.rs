@@ -2525,7 +2525,7 @@ mod tests {
 
         // 2. Create an Episode (Priority 4)
         let ep = EpisodeSave {
-            title: "Episode Title".to_string(),
+            title: "Episode Title with Pattern".to_string(),
             content: "Episode body content".to_string(),
             entities: vec![],
             scope: Some("budget-test".to_string()),

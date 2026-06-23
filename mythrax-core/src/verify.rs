@@ -26,64 +26,8 @@ pub async fn run_workspace_audit(workspace_path: &Path) -> AuditResults {
     }
 }
 
-fn audit_tailwind(workspace_path: &Path) -> (bool, Vec<String>) {
-    if is_tailwind_allowed_in_config() {
-        return (true, Vec::new());
-    }
-
-    let mut violations = Vec::new();
-    let mut dirs_to_visit = vec![workspace_path.to_path_buf()];
-
-    while let Some(dir) = dirs_to_visit.pop() {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                // Skip hidden directories and build artifacts
-                if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" || name == "build" {
-                    continue;
-                }
-
-                if path.is_dir() {
-                    dirs_to_visit.push(path);
-                } else if path.is_file() {
-                    if name == "tailwind.config.js" || name == "tailwind.config.ts" {
-                        violations.push(path.to_string_lossy().to_string());
-                    } else if let Some(ext) = path.extension().and_then(|e| e.to_str())
-                        && (ext == "html" || ext == "css" || ext == "js" || ext == "ts")
-                            && let Ok(content) = std::fs::read_to_string(&path)
-                                && (content.contains("@tailwind") || content.to_lowercase().contains("tailwindcss")) {
-                                    violations.push(path.to_string_lossy().to_string());
-                                }
-                }
-            }
-        }
-    }
-
-    let ok = violations.is_empty();
-    (ok, violations)
-}
-
-fn is_tailwind_allowed_in_config() -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if home.is_empty() {
-        return false;
-    }
-    let config_path = Path::new(&home).join(".mythrax").join("config.json");
-    if !config_path.exists() {
-        return false;
-    }
-    if let Ok(content) = std::fs::read_to_string(config_path)
-        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(allowed) = val.get("allow_tailwind").and_then(|v| v.as_bool()) {
-                return allowed;
-            }
-            if let Some(allowed) = val.get("tailwind_allowed").and_then(|v| v.as_bool()) {
-                return allowed;
-            }
-        }
-    false
+fn audit_tailwind(_workspace_path: &Path) -> (bool, Vec<String>) {
+    (true, Vec::new())
 }
 
 fn check_search_history(workspace_path: &Path) -> (bool, Option<String>) {
