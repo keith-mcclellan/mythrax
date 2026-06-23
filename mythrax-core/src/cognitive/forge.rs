@@ -571,13 +571,29 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
         sections.push(build_grouped_section(content, &current_batch));
     }
     
+    // Second pass: Ensure no section exceeds the character limit (100,000 characters)
+    let mut final_sections = Vec::new();
+    for section in sections {
+        if section.content.len() > 100_000 {
+            let chunks = crate::vault::ingestion::chunk_parsed_content(&section.content, 100_000);
+            for (idx, chunk) in chunks.into_iter().enumerate() {
+                final_sections.push(LogicalSection {
+                    title: format!("{} (Part {})", section.title, idx + 1),
+                    content: chunk,
+                });
+            }
+        } else {
+            final_sections.push(section);
+        }
+    }
+    
     // If no sections produced (guardrail)
-    if sections.is_empty() {
-        sections.push(LogicalSection {
+    if final_sections.is_empty() {
+        final_sections.push(LogicalSection {
             title: "Document Root".to_string(),
             content: content.to_string(),
         });
     }
     
-    sections
+    final_sections
 }

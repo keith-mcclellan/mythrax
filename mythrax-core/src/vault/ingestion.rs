@@ -834,7 +834,7 @@ pub async fn bulk_ingest_vault(
     Ok((success_count, errors))
 }
 
-fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
+pub fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
     if content.len() <= limit {
         return vec![content.to_string()];
     }

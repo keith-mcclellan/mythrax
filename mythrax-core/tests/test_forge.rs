@@ -296,3 +296,28 @@ fn test_logical_section_splitting_and_grouping() {
     assert!(large_sections[1].title.starts_with("Huge Body (Part 1)"));
     assert!(large_sections[2].title.starts_with("Huge Body (Part 2)"));
 }
+
+#[test]
+fn test_second_pass_character_chunking() {
+    let mut very_long_text = String::new();
+    for _ in 1..=5000 {
+        very_long_text.push_str("This is a line of text that is fairly repetitive to build up characters quickly.\n");
+    }
+    assert!(very_long_text.len() > 100_000);
+
+    let toc = vec![
+        TOCEntry {
+            title: "Long Chapter".to_string(),
+            start_byte: 0,
+            end_byte: very_long_text.len(),
+        }
+    ];
+
+    let sections = split_into_logical_sections(&very_long_text, &toc);
+    assert!(sections.len() >= 2);
+    assert!(sections[0].title.starts_with("Long Chapter (Part 1)"));
+    assert!(sections[1].title.starts_with("Long Chapter (Part 2)"));
+    assert!(sections[0].content.len() <= 100_000);
+    assert!(sections[1].content.len() <= 100_000);
+}
+
