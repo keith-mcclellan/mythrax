@@ -59,6 +59,9 @@ When delegating work to a subagent, minimize context window usage and establish 
    > *"Read and execute the handoff at `file:///absolute/path/.handoffs/handoff_<task_id>.md` and rules at `file:///Users/keith/.gemini/AGENT.md`. Output first: `Execution Check: [Karpathy Rules applied? Yes/No]`"*
 4. **Hydrate context nodes**: The subagent reads the node IDs from STM (via `get_short_term`) and calls the `get_memory_nodes` MCP tool to hydrate the active context nodes in a single call.
 5. **Lazy context via file URLs**: Reference large files as links (`[file.rs](file:///path#L50-L100)`) — never paste content.
+6. **AST Symbol & Code Structure Targeting**:
+   - **Parent Action**: When identifying code to edit or review, target specific AST symbols (e.g., `struct Config`, `impl SurrealBackend`, `fn save_handoff`) and provide direct line-anchored links (e.g., `[save_handoff](file:///path/to/backend.rs#L1187-L1258)`).
+   - **Subagent Action**: Use line-scoped `view_file` (specifying `StartLine` and `EndLine`) to read only the target AST symbols, preventing context window pollution from unrelated code.
 
 ### Handoff Contract Template (`.handoffs/handoff_<task_id>.md`)
 
