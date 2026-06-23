@@ -839,31 +839,108 @@ pub fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
         return vec![content.to_string()];
     }
 
+    let normalized = content.replace("\r\n", "\n");
     let mut chunks = Vec::new();
     let mut current_chunk = String::new();
 
-    for line in content.lines() {
-        if current_chunk.len() + line.len() + 1 > limit {
-            if !current_chunk.is_empty() {
-                chunks.push(current_chunk.clone());
-                current_chunk.clear();
-            }
-            if line.len() > limit {
-                let mut remaining = line;
-                while remaining.len() > limit {
-                    let (part, rest) = remaining.split_at(limit);
-                    chunks.push(part.to_string());
-                    remaining = rest;
-                }
-                current_chunk = remaining.to_string();
-            } else {
-                current_chunk = line.to_string();
-            }
+    for paragraph in normalized.split("\n\n") {
+        if paragraph.is_empty() {
+            continue;
+        }
+
+        let needed_len = if current_chunk.is_empty() {
+            paragraph.len()
         } else {
+            current_chunk.len() + 2 + paragraph.len()
+        };
+
+        if needed_len <= limit {
             if !current_chunk.is_empty() {
-                current_chunk.push('\n');
+                current_chunk.push_str("\n\n");
             }
-            current_chunk.push_str(line);
+            current_chunk.push_str(paragraph);
+        } else {
+            // It doesn't fit.
+            // If the paragraph itself fits within a single chunk, we keep it intact
+            // by flushing the current chunk and placing it in a new one.
+            if paragraph.len() <= limit {
+                if !current_chunk.is_empty() {
+                    chunks.push(current_chunk.clone());
+                    current_chunk.clear();
+                }
+                current_chunk = paragraph.to_string();
+            } else {
+                // If the paragraph is larger than the limit, we split it by lines.
+                // We do NOT flush the current chunk immediately; we fill it with lines first.
+                let mut is_first_line = true;
+                for line in paragraph.split('\n') {
+                    let join_len = if is_first_line { 2 } else { 1 };
+                    let needed_len = if current_chunk.is_empty() {
+                        line.len()
+                    } else {
+                        current_chunk.len() + join_len + line.len()
+                    };
+
+                    if needed_len <= limit {
+                        if !current_chunk.is_empty() {
+                            if is_first_line {
+                                current_chunk.push_str("\n\n");
+                            } else {
+                                current_chunk.push('\n');
+                            }
+                        }
+                        current_chunk.push_str(line);
+                        is_first_line = false;
+                    } else {
+                        // The line doesn't fit in current_chunk.
+                        // If the line itself fits within a single chunk, we keep it intact
+                        // by flushing the current chunk and starting a new one.
+                        if line.len() <= limit {
+                            if !current_chunk.is_empty() {
+                                chunks.push(current_chunk.clone());
+                                current_chunk.clear();
+                            }
+                            current_chunk = line.to_string();
+                            is_first_line = false;
+                        } else {
+                            // If the line is larger than the limit, we split it by characters.
+                            // We split the line, filling the current_chunk first.
+                            let mut remaining = line;
+                            
+                            // If current_chunk has some space, let's fill it up to the limit
+                            if !current_chunk.is_empty() {
+                                let join_str = if is_first_line { "\n\n" } else { "\n" };
+                                let space_left = limit.saturating_sub(current_chunk.len() + join_str.len());
+                                if space_left > 0 && remaining.len() > space_left {
+                                    let (part, rest) = remaining.split_at(space_left);
+                                    current_chunk.push_str(join_str);
+                                    current_chunk.push_str(part);
+                                    chunks.push(current_chunk.clone());
+                                    current_chunk.clear();
+                                    remaining = rest;
+                                } else if space_left >= remaining.len() {
+                                    current_chunk.push_str(join_str);
+                                    current_chunk.push_str(remaining);
+                                    remaining = "";
+                                } else {
+                                    // Not enough space even for the join delimiter
+                                    chunks.push(current_chunk.clone());
+                                    current_chunk.clear();
+                                }
+                            }
+                            
+                            // Now split the rest of the line
+                            while remaining.len() > limit {
+                                let (part, rest) = remaining.split_at(limit);
+                                chunks.push(part.to_string());
+                                remaining = rest;
+                            }
+                            current_chunk = remaining.to_string();
+                            is_first_line = false;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -903,5 +980,42 @@ mod tests {
         assert!(parsed_md.contains("scope: \"testing\""));
         assert!(parsed_md.contains("title: \"note\""));
         assert!(parsed_md.contains("Some markdown body"));
+    }
+
+    #[test]
+    fn test_chunk_parsed_content_simple() {
+        let content = "Hello world";
+        let chunks = chunk_parsed_content(content, 100);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "Hello world");
+    }
+
+    #[test]
+    fn test_chunk_parsed_content_paragraph_boundary() {
+        let content = "Paragraph one is here.\n\nParagraph two is there.";
+        let chunks = chunk_parsed_content(content, 25);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], "Paragraph one is here.");
+        assert_eq!(chunks[1], "Paragraph two is there.");
+    }
+
+    #[test]
+    fn test_chunk_parsed_content_line_fallback() {
+        let content = "Line one here.\nLine two there.";
+        let chunks = chunk_parsed_content(content, 18);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], "Line one here.");
+        assert_eq!(chunks[1], "Line two there.");
+    }
+
+    #[test]
+    fn test_chunk_parsed_content_character_fallback() {
+        let content = "VeryLongSingleLineTextExceedingLimit";
+        let chunks = chunk_parsed_content(content, 10);
+        assert_eq!(chunks.len(), 4);
+        assert_eq!(chunks[0], "VeryLongSi");
+        assert_eq!(chunks[1], "ngleLineTe");
+        assert_eq!(chunks[2], "xtExceedin");
+        assert_eq!(chunks[3], "gLimit");
     }
 }
