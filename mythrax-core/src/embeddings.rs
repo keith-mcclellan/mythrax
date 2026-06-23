@@ -128,6 +128,12 @@ impl LocalEmbedder {
 
         Ok(sum_embeddings)
     }
+
+    pub fn count_tokens(&self, text: &str) -> Result<usize> {
+        let encoding = self.tokenizer.encode(text, true)
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+        Ok(encoding.get_ids().len())
+    }
 }
 
 #[cfg(test)]

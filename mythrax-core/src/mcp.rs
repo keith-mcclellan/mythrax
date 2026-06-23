@@ -90,7 +90,7 @@ impl McpServer {
                     },
                     "serverInfo": {
                         "name": "mythrax",
-                        "version": "0.2.0"
+                        "version": "0.3.0"
                     }
                 }))
             }
@@ -143,7 +143,9 @@ impl McpServer {
                                     "scope": { "type": "string" },
                                     "limit": { "type": "integer" },
                                     "offset": { "type": "integer" },
-                                    "threshold": { "type": "number" }
+                                    "threshold": { "type": "number" },
+                                    "token_budget": { "type": "integer" },
+                                    "allow_downward": { "type": "boolean" }
                                 },
                                 "required": ["query"]
                             }
@@ -190,6 +192,21 @@ impl McpServer {
                                     "vault_path": { "type": "string" }
                                 },
                                 "required": ["title", "content"]
+                            }
+                        },
+                        {
+                            "name": "save_handoff",
+                            "description": "Save a handoff record from parent agent to subagent, linking it to any distilled context nodes in STM",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "parent_conversation_id": { "type": "string" },
+                                    "subagent_conversation_id": { "type": "string" },
+                                    "summary": { "type": "string" },
+                                    "handoff_file_path": { "type": "string" },
+                                    "scope": { "type": "string" }
+                                },
+                                "required": ["parent_conversation_id", "subagent_conversation_id", "summary", "handoff_file_path"]
                             }
                         },
                         {
@@ -481,8 +498,10 @@ impl McpServer {
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
                 let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
+                let token_budget = args.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
+                let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
 
-                let search_res = self.backend.search(query, scope, false, limit, offset, threshold).await?;
+                let search_res = self.backend.search(query, scope, false, limit, offset, threshold, token_budget, allow_downward).await?;
                 let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                     r.embedding = None;
                     serde_json::to_value(&r).unwrap()
@@ -495,6 +514,15 @@ impl McpServer {
                         "\n\n=== PAGINATION NOTICE: There are {} more matching memories. To retrieve the next page, query search_memories with offset={} and limit={}. ===",
                         remainder, search_res.next_offset, limit
                     ));
+                }
+
+                if let Some(ref omitted) = search_res.omitted_ids {
+                    if !omitted.is_empty() {
+                        text.push_str(&format!(
+                            "\n\n=== BUDGET NOTICE: The following record IDs were omitted due to token budget limits ({} tokens):\n{:?} ===",
+                            token_budget.unwrap_or(0), omitted
+                        ));
+                    }
                 }
 
                 Ok(json!({
@@ -567,6 +595,32 @@ impl McpServer {
                         {
                             "type": "text",
                             "text": format!("Episode saved successfully: {}", id)
+                        }
+                    ]
+                }))
+            }
+            "save_handoff" => {
+                let parent_conversation_id = args.get("parent_conversation_id").and_then(|v| v.as_str()).context("Missing parent_conversation_id")?.to_string();
+                let subagent_conversation_id = args.get("subagent_conversation_id").and_then(|v| v.as_str()).context("Missing subagent_conversation_id")?.to_string();
+                let summary = args.get("summary").and_then(|v| v.as_str()).context("Missing summary")?.to_string();
+                let handoff_file_path = args.get("handoff_file_path").and_then(|v| v.as_str()).context("Missing handoff_file_path")?.to_string();
+                let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                let handoff = crate::contracts::HandoffSave {
+                    parent_conversation_id,
+                    subagent_conversation_id,
+                    summary,
+                    handoff_file_path,
+                    scope,
+                };
+
+                let id = self.backend.save_handoff(&handoff).await?;
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Handoff saved successfully and related context nodes linked: {}", id)
                         }
                     ]
                 }))

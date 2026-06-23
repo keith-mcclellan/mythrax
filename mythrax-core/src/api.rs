@@ -78,7 +78,10 @@ async fn search_handler(
     let offset = payload.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let threshold = payload.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
 
-    match state.backend.search(query, scope, deep_insight, limit, offset, threshold).await {
+    let token_budget = payload.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
+    let allow_downward = payload.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    match state.backend.search(query, scope, deep_insight, limit, offset, threshold, token_budget, allow_downward).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => {
             tracing::error!("Search failed: {:?}", e);

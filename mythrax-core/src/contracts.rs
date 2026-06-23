@@ -150,6 +150,8 @@ pub struct SearchResponse {
     pub total_matches: usize,
     pub has_more: bool,
     pub next_offset: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
