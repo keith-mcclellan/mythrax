@@ -3091,10 +3091,11 @@ dependencies = [
 
 [[package]]
 name = "mythrax-core"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
+ "chrono",
  "clap",
  "lopdf",
  "notify",

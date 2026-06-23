@@ -120,6 +120,7 @@ pub trait StorageBackend: Send + Sync {
     async fn save_forged_section(&self, batch: &ForgedSectionBatch) -> Result<()>;
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
+    async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>>;
     async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()>;
 }
 
@@ -352,6 +353,20 @@ struct WikiNodeRaw {
     scope: String,
     vault_path: Option<String>,
     embedding: Option<Vec<f32>>,
+}
+
+impl WikiNodeRaw {
+    fn into_wiki_node(self) -> WikiNode {
+        let id_str = format_record_id(&self.id);
+        WikiNode {
+            id: Some(id_str),
+            name: self.name,
+            content: self.content,
+            scope: self.scope,
+            vault_path: self.vault_path,
+            embedding: self.embedding,
+        }
+    }
 }
 
 fn get_tier_boost(tier: &str) -> f32 {
@@ -1505,7 +1520,7 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_active_scopes(&self) -> Result<Vec<String>> {
-        let sql = "SELECT VALUE DISTINCT scope FROM episode;";
+        let sql = "SELECT VALUE scope FROM episode GROUP BY scope;";
         let mut response = self.db.query(sql).await?;
         let mut scopes: Vec<String> = response.take(0)?;
         if !scopes.contains(&"general".to_string()) {
@@ -2127,6 +2142,14 @@ impl StorageBackend for SurrealBackend {
         }
         Ok(rules)
     }
+
+    async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>> {
+        let sql = "SELECT * FROM wiki_node;";
+        let mut response = self.db.query(sql).await?.check().context("Get all wiki nodes query failed")?;
+        let raws: Vec<WikiNodeRaw> = response.take(0)?;
+        let nodes: Vec<WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
+        Ok(nodes)
+    }
 }
 
 
@@ -2512,7 +2535,7 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search("Pattern", Some("budget-test"), false, 10, 0, 0.0, Some(30), false, true, true).await.unwrap();
+        let response = backend.search("Pattern", Some("budget-test"), true, 10, 0, 0.0, Some(30), false, true, true).await.unwrap();
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
@@ -2523,6 +2546,30 @@ mod tests {
         let omitted = response.omitted_ids.unwrap();
         assert_eq!(omitted.len(), 1);
         assert!(omitted[0].starts_with("episode:"));
+    }
+
+    #[tokio::test]
+    async fn test_get_all_wiki_nodes() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let node = WikiNode {
+            id: None,
+            name: "Test Node".to_string(),
+            content: "Test Content".to_string(),
+            scope: "test-scope".to_string(),
+            vault_path: Some("wiki/test.md".to_string()),
+            embedding: None,
+        };
+
+        let node_id = backend.save_wiki_node(&node).await.unwrap();
+        assert!(node_id.starts_with("wiki_node:"));
+
+        let all_nodes = backend.get_all_wiki_nodes().await.unwrap();
+        assert_eq!(all_nodes.len(), 1);
+        assert_eq!(all_nodes[0].name, "Test Node");
+        assert_eq!(all_nodes[0].content, "Test Content");
+        assert_eq!(all_nodes[0].scope, "test-scope");
     }
 
     #[tokio::test]

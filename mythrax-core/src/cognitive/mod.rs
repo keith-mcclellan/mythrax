@@ -5,5 +5,6 @@ pub mod executor;
 pub mod critic;
 pub mod arbor;
 pub mod forge;
+pub mod meta_skill;
 
 pub use arbor::*;

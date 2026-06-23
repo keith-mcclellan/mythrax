@@ -1,6 +1,6 @@
 [package]
 name = "mythrax-core"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 
 [dependencies]
@@ -27,6 +27,8 @@ pulldown-cmark = "0.10"
 subtle = "2.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 pdf-extract = "0.10.0"
+chrono = { version = "0.4", features = ["serde"] }
+
 
 [dev-dependencies]
 tempfile = "3.8"

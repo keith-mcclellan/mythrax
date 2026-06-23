@@ -42,7 +42,13 @@ impl LLMClient {
     ) -> Result<String> {
         if let Ok(mock) = std::env::var("MYTHRAX_MOCK_LLM") {
             if mock == "true" {
-                if prompt.contains("Wisdom") || prompt.contains("rules") || prompt.contains("Wisdom Rules") {
+                if prompt.contains("Validate if these should merge") {
+                    return Ok(r#"{"should_merge": true, "suggested_name": "git-workflow", "reason": "Redundant playbooks"}"#.to_string());
+                } else if prompt.contains("Playbooks to Merge") {
+                    return Ok("---\nname: meta-git-workflow\ndescription: Consolidated git meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nConsolidated instructions here.\n".to_string());
+                } else if prompt.contains("meta-skill synthesizer") || prompt.contains("Context Data:") {
+                    return Ok("---\nname: meta-test-scope\ndescription: Synthesized meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nSynthesized instructions here.\n".to_string());
+                } else if prompt.contains("Wisdom") || prompt.contains("rules") || prompt.contains("Wisdom Rules") {
                     return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]"#.to_string());
                 } else if prompt.contains("TOC") || prompt.contains("Table of Contents") {
                     return Ok(r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string());

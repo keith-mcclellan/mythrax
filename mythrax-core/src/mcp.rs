@@ -247,6 +247,41 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "synthesize_meta_skills",
+                            "description": "Synthesize and publish meta-skills from wisdom rules, forged docs, and playbooks",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "detect_skill_merges",
+                            "description": "Detect redundant or overlapping skill playbooks that are candidates for merging",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "merge_skills",
+                            "description": "Consolidate multiple playbooks into a single target meta-skill, clean up meta-skills, and archive custom playbooks",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "source_skills": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "List of skill names or directories to consolidate"
+                                    },
+                                    "target_name": {
+                                        "type": "string",
+                                        "description": "Name for the consolidated meta-skill (e.g. 'git')"
+                                    }
+                                },
+                                "required": ["source_skills", "target_name"]
+                            }
+                        },
+                        {
                             "name": "bulk_ingest",
                             "description": "Bulk ingest transcript logs into the memory vault",
                             "inputSchema": {
@@ -732,6 +767,52 @@ impl McpServer {
                         {
                             "type": "text",
                             "text": "Wisdom rules harvested successfully."
+                        }
+                    ]
+                }))
+            }
+            "synthesize_meta_skills" => {
+                let synthesizer = crate::cognitive::meta_skill::MetaSkillSynthesizer::new();
+                let published = synthesizer.synthesize_meta_skills(&*self.backend, &self.store).await?;
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Meta skills synthesized successfully: {:?}", published)
+                        }
+                    ]
+                }))
+            }
+            "detect_skill_merges" => {
+                let synthesizer = crate::cognitive::meta_skill::MetaSkillSynthesizer::new();
+                let suggestions = synthesizer.detect_skill_merges(&*self.backend, &self.store).await?;
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Merge suggestions generated and written to wiki/skill_merge_suggestions.md. Suggestions: {:?}", suggestions)
+                        }
+                    ]
+                }))
+            }
+            "merge_skills" => {
+                let source_val = args.get("source_skills").context("Missing source_skills")?;
+                let source_arr = source_val.as_array().context("source_skills must be an array")?;
+                let mut source_skills = Vec::new();
+                for val in source_arr {
+                    let s = val.as_str().context("source_skills elements must be strings")?.to_string();
+                    source_skills.push(s);
+                }
+                let target_name = args.get("target_name").and_then(|v| v.as_str()).context("Missing target_name")?;
+
+                let synthesizer = crate::cognitive::meta_skill::MetaSkillSynthesizer::new();
+                let result_skill = synthesizer.merge_skills(&*self.backend, &self.store, &source_skills, target_name).await?;
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Skills successfully merged into: {}", result_skill)
                         }
                     ]
                 }))
