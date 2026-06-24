@@ -1283,7 +1283,7 @@ fn merge_antigravity_permissions(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn merge_antigravity_hooks(path: &std::path::Path, exe_path: &str) -> Result<()> {
+fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1305,8 +1305,14 @@ fn merge_antigravity_hooks(path: &std::path::Path, exe_path: &str) -> Result<()>
             "PreInvocation".to_string(),
             serde_json::json!([
                 {
-                    "type": "command",
-                    "command": format!("{} verify", exe_path)
+                    "type": "mcp",
+                    "server": "mythrax",
+                    "tool": "verify_compliance"
+                },
+                {
+                    "type": "mcp",
+                    "server": "mythrax",
+                    "tool": "pre_invocation_hook"
                 }
             ])
         );

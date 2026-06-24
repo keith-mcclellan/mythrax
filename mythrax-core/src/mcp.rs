@@ -255,6 +255,19 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "pre_invocation_hook",
+                            "description": "Pre-invocation hook to sync state, verify vault integrity, and resolve context (subagent handoffs, HTR negative constraints, and root agent hybrid search with abstraction priority)",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "session_id": { "type": "string" },
+                                    "query": { "type": "string" },
+                                    "workspace_path": { "type": "string" }
+                                },
+                                "required": ["session_id"]
+                            }
+                        },
+                        {
                             "name": "harvest_skill_wisdom",
                             "description": "Harvest skill wisdom from playbooks and config",
                             "inputSchema": {
@@ -907,6 +920,227 @@ impl McpServer {
                     ]
                 }))
             }
+            "pre_invocation_hook" => {
+                let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+                let query = args.get("query").and_then(|v| v.as_str());
+                let workspace_path = args.get("workspace_path").and_then(|v| v.as_str());
+
+                // 1. State Sync & Vault Integrity
+                self.backend.journal_state(&self.store.vault_root, Some(session_id)).await?;
+
+                let all_eps = self.backend.get_all_episodes().await?;
+                for ep in &all_eps {
+                    if let Some(ref vp) = ep.vault_path {
+                        let path = self.store.vault_root.join(vp);
+                        if !path.exists() {
+                            let save = crate::contracts::EpisodeSave {
+                                title: ep.title.clone(),
+                                content: ep.content.clone(),
+                                entities: vec![],
+                                scope: ep.scope.clone(),
+                                vault_path: Some(vp.clone()),
+                                source_episode: ep.source_episode.clone(),
+                                session_id: None,
+                                task_id: None,
+                            };
+                            let markdown = crate::vault::watcher::format_episode_markdown(&save);
+                            self.store.write_file(vp, &markdown)?;
+                        }
+                    }
+                }
+
+                // 2. Subagent Path (Handoff Check)
+                let mut handoffs_resp = self.backend.db.query("SELECT parent_conversation_id, summary, scope FROM handoff WHERE subagent_conversation_id = $subagent AND status = 'PENDING';")
+                    .bind(("subagent", session_id))
+                    .await?;
+                let handoffs: Vec<serde_json::Value> = handoffs_resp.take(0)?;
+
+                let stm_map = self.backend.get_stm(session_id, None).await?;
+                let mut parts = Vec::new();
+
+                if !handoffs.is_empty() {
+                    let active_handoff = &handoffs[0];
+                    let parent_conversation_id = active_handoff.get("parent_conversation_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let summary = active_handoff.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                    let scope = active_handoff.get("scope").and_then(|v| v.as_str());
+
+                    parts.push(format!(
+                        "### 📌 Handoff Metadata\n- **Parent Conversation**: `{}`\n- **Summary**: {}\n",
+                        parent_conversation_id, summary
+                    ));
+
+                    // Render stashed STM key-values
+                    let mut stm_parts = Vec::new();
+                    for (k, v) in &stm_map {
+                        if k != "distilled_context_nodes" && !k.starts_with('_') {
+                            stm_parts.push(format!("- **{}**: {}", k, v));
+                        }
+                    }
+                    if !stm_parts.is_empty() {
+                        parts.push(format!("### 🔑 Stashed Session Variables\n{}\n", stm_parts.join("\n")));
+                    }
+
+                    // Check if distilled_context_nodes exists in STM
+                    let mut node_ids = Vec::new();
+                    if let Some(nodes_str) = stm_map.get("distilled_context_nodes") {
+                        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(nodes_str) {
+                            node_ids = parsed;
+                        } else if let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(nodes_str) {
+                            for val in values {
+                                if let Some(s) = val.as_str() {
+                                    node_ids.push(s.to_string());
+                                }
+                            }
+                        } else {
+                            let cleaned = nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
+                            for part in cleaned.split(',') {
+                                let part = part.trim().trim_matches('"');
+                                if !part.is_empty() {
+                                    node_ids.push(part.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    if !node_ids.is_empty() {
+                        // Hydrate directly and skip semantic search
+                        let hydrated = self.backend.get_memory_nodes(&node_ids).await?;
+                        parts.push("## Hydrated Context Nodes\n".to_string());
+                        for wiki in hydrated.wiki_nodes {
+                            parts.push(format!("### 📚 Distilled Insight: {}\nScope: {}\n{}\n", wiki.name, wiki.scope, wiki.content));
+                        }
+                        for wisdom in hydrated.wisdom_rules {
+                            parts.push(format!(
+                                "### 💡 Wisdom Rule: {}\n- **Avoid**: {}\n- **Causal**: {}\n- **Remedy**: {}\n",
+                                wisdom.target_pattern, wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy
+                            ));
+                        }
+                        for ep in hydrated.episodes {
+                            if let Some(ref ep_id) = ep.id {
+                                let rendered = self.format_episode_or_parent(ep_id, &ep.title, &ep.content, ep.scope.as_deref()).await?;
+                                parts.push(rendered);
+                            }
+                        }
+                    } else {
+                        // Semantic search on handoff summary
+                        let search_res = self.backend.search(
+                            summary,
+                            scope,
+                            false,
+                            15,
+                            0,
+                            0.55,
+                            None,
+                            false,
+                            true,
+                            false
+                        ).await?;
+
+                        parts.push("## Retrieved Semantic Context\n".to_string());
+                        for res in search_res.results {
+                            if res.id.starts_with("wisdom:") {
+                                parts.push(format!("### 💡 Wisdom Rule: {}\n{}\n", res.title, res.content));
+                            } else if res.id.starts_with("wiki_node:") {
+                                parts.push(format!("### 📚 Distilled Insight: {}\n{}\n", res.title, res.content));
+                            } else if res.id.starts_with("episode:") {
+                                let rendered = self.format_episode_or_parent(&res.id, &res.title, &res.content, None).await?;
+                                parts.push(rendered);
+                            }
+                        }
+                    }
+                } else {
+                    // 3. Root Agent Path
+                    let workspace_path_str = workspace_path.map(|s| s.to_string())
+                        .unwrap_or_else(|| std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string()));
+                    let path = std::path::Path::new(&workspace_path_str);
+                    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                    let folder_name = canonical.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("general")
+                        .to_string();
+                    let dynamic_scope = folder_name;
+
+                    let search_query = query.unwrap_or("general context");
+                    let search_res = self.backend.search(
+                        search_query,
+                        Some(&dynamic_scope),
+                        false,
+                        15,
+                        0,
+                        0.55,
+                        None,
+                        false,
+                        true,
+                        false
+                    ).await?;
+
+                    parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));
+                    let mut high_confidence_memories_found = false;
+                    for res in search_res.results {
+                        if res.id.starts_with("wisdom:") {
+                            if res.similarity >= 0.55 {
+                                parts.push(format!("### 💡 Wisdom Rule: {}\n{}\n", res.title, res.content));
+                            }
+                        } else if res.id.starts_with("episode:") {
+                            if res.similarity >= 0.70 {
+                                high_confidence_memories_found = true;
+                                let rendered = self.format_episode_or_parent(&res.id, &res.title, &res.content, None).await?;
+                                parts.push(rendered);
+                            }
+                        } else {
+                            parts.push(format!("### 📝 Record: {}\n{}\n", res.title, res.content));
+                        }
+                    }
+
+                    if !high_confidence_memories_found {
+                        parts.push(format!(
+                            "\n> [!IMPORTANT]\n> **Pinned Deep-Search Instruction**: No high-confidence memory episodes were found. If you need deeper historical context or past resolutions, please invoke the 'search_memories' tool with a specific query.\n"
+                        ));
+                    }
+                }
+
+                // 4. Arbor HTR Constraints
+                let active_node_opt = stm_map.get("active_hypothesis_node")
+                    .or_else(|| stm_map.get("active_node"))
+                    .cloned();
+
+                if let Some(active_node_id) = active_node_opt {
+                    let mut hyp_res = self.backend.db.query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;")
+                        .bind(("node_id", active_node_id.as_str()))
+                        .await?;
+                    let hyp_nodes: Vec<crate::contracts::HypothesisNode> = hyp_res.take(0)?;
+                    if let Some(hyp_node) = hyp_nodes.first() {
+                        if let Some(ref parent_id) = hyp_node.parent_id {
+                            let mut siblings_res = self.backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
+                                .bind(("parent_id", parent_id.as_str()))
+                                .bind(("node_id", active_node_id.as_str()))
+                                .await?;
+                            let siblings: Vec<crate::contracts::HypothesisNode> = siblings_res.take(0)?;
+                            if !siblings.is_empty() {
+                                let mut constraint_parts = Vec::new();
+                                constraint_parts.push("\n### ⚠️ Arbor HTR Negative Constraints".to_string());
+                                constraint_parts.push("The following sibling hypotheses have failed or been pruned in this HTR execution. Avoid repeating these approaches:".to_string());
+                                for sib in siblings {
+                                    let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
+                                    let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
+                                    constraint_parts.push(format!("- **Approach to Avoid**: `{}` (Status: {})\n  - **Reason**: {}", sib.hypothesis, status_label, reason));
+                                }
+                                parts.push(constraint_parts.join("\n"));
+                            }
+                        }
+                    }
+                }
+
+                let final_context = parts.join("\n");
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": final_context
+                        }
+                    ]
+                }))
+            }
             "harvest_skill_wisdom" => {
                 let harvester = crate::cognitive::harvest::Harvester::new();
                 harvester.harvest_skills(&*self.backend, &self.store).await?;
@@ -1404,6 +1638,47 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
         }
 
         result
+    }
+
+    async fn format_episode_or_parent(&self, ep_id: &str, ep_title: &str, ep_content: &str, ep_scope: Option<&str>) -> Result<String> {
+        if let Ok(rec_id) = crate::db::parse_record_id(ep_id) {
+            let mut parent_resp = self.backend.db.query("SELECT VALUE out FROM relates_to WHERE in = $ep_id;").bind(("ep_id", rec_id)).await?;
+            let parent_ids: Vec<surrealdb::types::RecordId> = parent_resp.take(0)?;
+            if !parent_ids.is_empty() {
+                let mut parent_ids_strings = Vec::new();
+                for pid in parent_ids {
+                    parent_ids_strings.push(crate::db::backend::format_record_id(&pid));
+                }
+                let parents = self.backend.get_memory_nodes(&parent_ids_strings).await?;
+                let mut parts = Vec::new();
+                for p_wiki in parents.wiki_nodes {
+                    parts.push(format!(
+                        "### 📚 Distilled Insight: {}\nScope: {}\n{}\n",
+                        p_wiki.name, p_wiki.scope, p_wiki.content
+                    ));
+                }
+                for p_wisdom in parents.wisdom_rules {
+                    parts.push(format!(
+                        "### 💡 Wisdom Rule: {}\n- **Avoid**: {}\n- **Causal**: {}\n- **Remedy**: {}\n",
+                        p_wisdom.target_pattern, p_wisdom.action_to_avoid, p_wisdom.causal_explanation, p_wisdom.prescribed_remedy
+                    ));
+                }
+                if !parts.is_empty() {
+                    return Ok(parts.join("\n"));
+                }
+            }
+        }
+
+        // Distilled Memory Card fallback
+        let summary = if ep_content.len() > 200 {
+            format!("{}...", &ep_content[..200])
+        } else {
+            ep_content.to_string()
+        };
+        Ok(format!(
+            "#### 📑 Memory Card: {}\n- **ID**: `{}`\n- **Scope**: `{}`\n- **Summary**: {}\n*For follow-up queries on this memory, use:* `get_memory_nodes [\"{}\"]`\n",
+            ep_title, ep_id, ep_scope.unwrap_or("general"), summary, ep_id
+        ))
     }
 }
 

@@ -713,3 +713,94 @@ async fn test_stm_continuous_pruning() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_pre_invocation_hook_flow() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("episodes"))?;
+    fs::create_dir_all(vault_root.join("wiki"))?;
+    fs::create_dir_all(vault_root.join("wisdom"))?;
+
+    let workspace_root = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace_root)?;
+    unsafe {
+        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
+    }
+
+    let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
+    backend.init().await?;
+    let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root)?);
+    let mcp_server = mythrax_core::mcp::McpServer::new(backend.clone(), store);
+
+    // 1. Create a handoff
+    let handoff = HandoffSave {
+        parent_conversation_id: "parent_123".to_string(),
+        subagent_conversation_id: "subagent_456".to_string(),
+        summary: "Build a new hook feature".to_string(),
+        handoff_file_path: "handoff_test.md".to_string(),
+        scope: Some("general".to_string()),
+    };
+    backend.save_handoff(&handoff).await?;
+
+    // 2. Insert the wisdom rule in the database so it can be hydrated
+    let rule = mythrax_core::contracts::WisdomRule {
+        id: Some("wisdom:rule_abc".to_string()),
+        target_pattern: "Test Pattern".to_string(),
+        action_to_avoid: "Avoiding test".to_string(),
+        causal_explanation: "Causal details".to_string(),
+        prescribed_remedy: "Remedy details".to_string(),
+        tier: "dynamic".to_string(),
+        scope: "general".to_string(),
+        vault_path: Some("wisdom/rule_abc.md".to_string()),
+        embedding: None,
+        source_episodes: vec![],
+        generator_name: "test".to_string(),
+        similarity: None,
+        utility: Some(50.0),
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
+    };
+    let saved_id = backend.save_wisdom_rule(&rule).await?;
+
+    // 3. Add distilled context nodes to STM
+    backend.save_stm("subagent_456", "distilled_context_nodes", &format!("[\"{}\"]", saved_id)).await?;
+
+    // 4. Call pre_invocation_hook via MCP
+    let args = serde_json::json!({
+        "session_id": "subagent_456",
+        "query": "test query"
+    });
+    let resp = mcp_server.handle_request("tools/call", serde_json::json!({
+        "name": "pre_invocation_hook",
+        "arguments": args
+    })).await?;
+
+    let text = resp["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Handoff Metadata"), "Expected Handoff Metadata in: {}", text);
+    assert!(text.contains("Test Pattern"), "Expected Test Pattern in: {}", text);
+    assert!(text.contains("Avoiding test"), "Expected Avoiding test in: {}", text);
+
+    // 5. Test root agent path (when no handoff active)
+    let args_root = serde_json::json!({
+        "session_id": "root_session_789",
+        "query": "test query",
+        "workspace_path": workspace_root.to_str().unwrap()
+    });
+    let resp_root = mcp_server.handle_request("tools/call", serde_json::json!({
+        "name": "pre_invocation_hook",
+        "arguments": args_root
+    })).await?;
+    let text_root = resp_root["content"][0]["text"].as_str().unwrap();
+    assert!(text_root.contains("Retrieved Semantic Context"), "Expected Retrieved Semantic Context in: {}", text_root);
+    assert!(text_root.contains("Pinned Deep-Search Instruction"), "Expected Pinned Deep-Search Instruction in: {}", text_root);
+
+    Ok(())
+}
