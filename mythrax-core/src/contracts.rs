@@ -25,6 +25,8 @@ pub struct Episode {
     pub embedding: Option<Vec<f32>>,
     pub processed_in_dream: Option<bool>,
     pub source_episode: Option<String>,
+    pub last_retrieved_at: Option<String>,
+    pub utility: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

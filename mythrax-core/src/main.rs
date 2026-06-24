@@ -317,6 +317,11 @@ async fn main() -> Result<()> {
                                         }
                                         let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
                                     }
+                                    
+                                    tracing::info!("Daily scheduled auditor calibration starting...");
+                                    if let Err(e) = cli::run_auditor(&*backend_daily).await {
+                                        tracing::error!("Daily auditor calibration failed: {:?}", e);
+                                    }
                                 }
                             });
 
@@ -1038,6 +1043,18 @@ async fn main() -> Result<()> {
             println!("=============================");
             println!("Please resume your work.");
         }
+        Commands::MergeVault => {
+            cli::handle_merge_vault().await?;
+        }
+        Commands::InstallHook => {
+            handle_install_hook().await?;
+        }
+        Commands::PreCommit => {
+            handle_pre_commit().await?;
+        }
+        Commands::Audit => {
+            handle_audit().await?;
+        }
     }
 
     Ok(())
@@ -1471,3 +1488,99 @@ async fn config_harness_action(
     
     Ok(())
 }
+
+
+
+async fn handle_install_hook() -> Result<()> {
+    let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let git_dir = workspace_root.join(".git");
+    if !git_dir.exists() {
+        anyhow::bail!("Not a git repository (missing .git directory at {:?})", workspace_root);
+    }
+
+    let hooks_dir = git_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+    let pre_commit_path = hooks_dir.join("pre-commit");
+
+    let hook_script = r#"#!/bin/sh
+# Mythrax pre-commit hook to clean secrets from shared rules
+exec mythrax pre-commit
+"#;
+
+    std::fs::write(&pre_commit_path, hook_script)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&pre_commit_path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&pre_commit_path, perms)?;
+    }
+
+    println!("Successfully installed git pre-commit hook at: {:?}", pre_commit_path);
+    Ok(())
+}
+
+async fn handle_pre_commit() -> Result<()> {
+    let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    println!("Running SecretFilter on staged files under .mythrax-shared...");
+    
+    let output = std::process::Command::new("git")
+        .args(&["diff", "--cached", "--name-only", "--diff-filter=ACM"])
+        .current_dir(&workspace_root)
+        .output()?;
+    
+    if !output.status.success() {
+        anyhow::bail!("Failed to run git diff: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let staged_files: Vec<&str> = stdout_str.lines().collect();
+
+    for file_rel in staged_files {
+        if file_rel.starts_with(".mythrax-shared/") {
+            let abs_path = workspace_root.join(file_rel);
+            if abs_path.exists() && abs_path.is_file() {
+                let content = std::fs::read_to_string(&abs_path)?;
+                let cleaned = mythrax_core::secret_filter::SecretFilter::clean(&content);
+                if cleaned != content {
+                    std::fs::write(&abs_path, cleaned)?;
+                    let _ = std::process::Command::new("git")
+                        .args(&["add", file_rel])
+                        .current_dir(&workspace_root)
+                        .status();
+                    println!("Sanitized and re-staged: {}", file_rel);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_audit() -> Result<()> {
+    let home = std::env::var("HOME").context("HOME env var not set")?;
+    let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");
+    let config_path = mythrax_dir.join("config.json");
+
+    let surreal_url = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path)?;
+        let val: serde_json::Value = serde_json::from_str(&content)?;
+        val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
+    } else {
+        "mem://".to_string()
+    };
+
+    let backend = db::SurrealBackend::new(&surreal_url).await?;
+    backend.init().await?;
+    cli::run_auditor(&backend).await
+}
+
+

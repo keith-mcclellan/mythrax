@@ -493,7 +493,7 @@ mod tests {
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
         // Retrieve wisdom rule using get_wisdom with tier "skills"
-        let results = backend.get_wisdom("test-pattern", "skills", 10, 0, 0.0).await.unwrap();
+        let results = backend.get_wisdom("test-pattern", Some("skills"), 10, 0, 0.0).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].tier, "skills");
         assert_eq!(results.results[0].target_pattern, "test-pattern");

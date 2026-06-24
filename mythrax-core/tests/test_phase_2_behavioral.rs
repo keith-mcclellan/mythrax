@@ -110,6 +110,8 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         embedding: Some(vec![0.1; 768]), // Mock embedding
         processed_in_dream: Some(false),
         source_episode: None,
+        last_retrieved_at: None,
+        utility: None,
     };
     let ep2 = mythrax_core::contracts::Episode {
         id: None,
@@ -121,6 +123,8 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         embedding: Some(vec![0.11; 768]), // Close embedding to form a cluster
         processed_in_dream: Some(false),
         source_episode: None,
+        last_retrieved_at: None,
+        utility: None,
     };
 
     backend.save_episode(&EpisodeSave {

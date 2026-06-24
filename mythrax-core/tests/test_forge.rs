@@ -123,7 +123,7 @@ async fn test_ingest_document() -> Result<()> {
 
     // 2. Records in SurrealDB
     // Query dynamic wisdom rules in DB
-    let rules = backend.get_wisdom("test_pattern", "dynamic", 5, 0, 0.0).await?;
+    let rules = backend.get_wisdom("test_pattern", Some("dynamic"), 5, 0, 0.0).await?;
     assert!(!rules.results.is_empty(), "Should save wisdom rules in SurrealDB");
 
     // Query wiki nodes: verify vault_path is persisted in DB

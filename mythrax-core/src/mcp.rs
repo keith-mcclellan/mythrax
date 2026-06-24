@@ -173,7 +173,7 @@ impl McpServer {
                                     "offset": { "type": "integer" },
                                     "threshold": { "type": "number" }
                                 },
-                                "required": ["query", "tier"]
+                                "required": ["query"]
                             }
                         },
                         {
@@ -619,8 +619,35 @@ impl McpServer {
                 let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
                 let include_episodes = args.get("include_episodes").and_then(|v| v.as_bool()).unwrap_or(false);
                 let include_artifacts = args.get("include_artifacts").and_then(|v| v.as_bool()).unwrap_or(false);
+                let session_id = args.get("session_id").and_then(|v| v.as_str());
 
                 let search_res = self.backend.search(query, scope, false, limit, offset, threshold, token_budget, allow_downward, include_episodes, include_artifacts).await?;
+                
+                if let Some(sess_id) = session_id {
+                    let mut cited_ids = Vec::new();
+                    for r in &search_res.results {
+                        if r.tier == "episode" {
+                            cited_ids.push(r.id.clone());
+                        }
+                    }
+                    if !cited_ids.is_empty() {
+                        let mut existing_citations = Vec::new();
+                        if let Ok(stm_map) = self.backend.get_stm(sess_id, Some("_session_citations")).await {
+                            if let Some(existing_str) = stm_map.get("_session_citations") {
+                                if let Ok(parsed) = serde_json::from_str::<Vec<String>>(existing_str) {
+                                    existing_citations = parsed;
+                                }
+                            }
+                        }
+                        existing_citations.extend(cited_ids);
+                        existing_citations.sort();
+                        existing_citations.dedup();
+                        if let Ok(serialized) = serde_json::to_string(&existing_citations) {
+                            let _ = self.backend.save_stm(sess_id, "_session_citations", &serialized).await;
+                        }
+                    }
+                }
+
                 let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                     r.embedding = None;
                     serde_json::to_value(&r).unwrap()
@@ -657,7 +684,7 @@ impl McpServer {
             }
             "search_wisdom" => {
                 let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
-                let tier = args.get("tier").and_then(|v| v.as_str()).context("Missing tier")?;
+                let tier = args.get("tier").and_then(|v| v.as_str());
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
                 let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
@@ -795,14 +822,50 @@ impl McpServer {
                 let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
 
                 let handoff = crate::contracts::HandoffSave {
-                    parent_conversation_id,
-                    subagent_conversation_id,
+                    parent_conversation_id: parent_conversation_id.clone(),
+                    subagent_conversation_id: subagent_conversation_id.clone(),
                     summary,
-                    handoff_file_path,
+                    handoff_file_path: handoff_file_path.clone(),
                     scope,
                 };
 
                 let id = self.backend.save_handoff(&handoff).await?;
+
+                // T6: Citations Footnotes
+                if let Ok(stm_map) = self.backend.get_stm(&parent_conversation_id, Some("_session_citations")).await {
+                    if let Some(citations_str) = stm_map.get("_session_citations") {
+                        if let Ok(episode_ids) = serde_json::from_str::<Vec<String>>(citations_str) {
+                            if !episode_ids.is_empty() {
+                                if let Ok(nodes_resp) = self.backend.get_memory_nodes(&episode_ids).await {
+                                    let mut footnote = String::new();
+                                    footnote.push_str("\n\n### Citations\n");
+                                    let vault_root = self.store.vault_root.clone();
+                                    for ep in nodes_resp.episodes {
+                                        if let Some(ref vp) = ep.vault_path {
+                                            let abs_path = vault_root.join(vp);
+                                            footnote.push_str(&format!("- [{}]((file://{}))\n", ep.title, abs_path.display()));
+                                        }
+                                    }
+                                    
+                                    let abs_handoff_path = if std::path::Path::new(&handoff_file_path).is_absolute() {
+                                        std::path::PathBuf::from(&handoff_file_path)
+                                    } else {
+                                        vault_root.join(&handoff_file_path)
+                                    };
+
+                                    if abs_handoff_path.exists() {
+                                        if let Ok(mut content) = std::fs::read_to_string(&abs_handoff_path) {
+                                            if !content.contains("### Citations") {
+                                                content.push_str(&footnote);
+                                                let _ = std::fs::write(&abs_handoff_path, content);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 Ok(json!({
                     "content": [

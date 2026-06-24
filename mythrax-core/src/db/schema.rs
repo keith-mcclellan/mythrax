@@ -21,6 +21,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS processed_in_dream ON episode TYPE bool DEFAULT false;
     DEFINE FIELD IF NOT EXISTS embedding ON episode TYPE option<array<float>>;
     DEFINE FIELD IF NOT EXISTS source_episode ON episode TYPE option<record<episode>>;
+    DEFINE FIELD IF NOT EXISTS last_retrieved_at ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS utility ON episode TYPE option<float>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
 

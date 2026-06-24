@@ -78,6 +78,7 @@ impl Compactor {
         scope: &str,
     ) -> Result<()> {
         let _ = db.prune_stale_memories(&store.vault_root).await;
+        let _ = self.archive_decayed_episodes(db, store).await;
         let insights = load_insights(&store.vault_root);
         let scope_insights: Vec<_> = insights
             .into_iter()
@@ -298,6 +299,7 @@ impl Compactor {
         store: &MarkdownStore,
     ) -> Result<()> {
         let _ = db.prune_stale_memories(&store.vault_root).await;
+        let _ = self.archive_decayed_episodes(db, store).await;
         let compaction_dir = store.vault_root.join("wiki/compaction");
         if !compaction_dir.exists() {
             return Ok(());
@@ -371,6 +373,60 @@ impl Compactor {
             }
         }
 
+        Ok(())
+    }
+
+    async fn archive_decayed_episodes(
+        &self,
+        db: &dyn StorageBackend,
+        store: &MarkdownStore,
+    ) -> Result<()> {
+        let episodes = db.get_all_episodes().await?;
+        for ep in episodes {
+            let utility = ep.utility.unwrap_or(50.0);
+            if utility < 5.0 {
+                // 1. Move physical file to vault/archive/
+                if let Some(ref vp) = ep.vault_path {
+                    let src_file = store.vault_root.join(vp);
+                    if src_file.exists() {
+                        let archive_dir = store.vault_root.join("vault/archive");
+                        let _ = std::fs::create_dir_all(&archive_dir);
+                        let filename = std::path::Path::new(vp)
+                            .file_name()
+                            .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
+                        let dest_file = archive_dir.join(filename);
+                        let _ = std::fs::rename(&src_file, &dest_file);
+                    }
+                    
+                    // 2. Generate high-level Raptor summary using the LLM
+                    let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.";
+                    let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
+                    if let Ok(summary) = self.llm.completion(db, Some(sys_prompt), &prompt).await {
+                        // 3. Save as wiki Raptor summary node
+                        let uuid = uuid::Uuid::new_v4().to_string();
+                        let wiki_rel = format!("wiki/archive/raptor_summary_{}.md", &uuid[..8]);
+                        let wiki_content = format!(
+                            "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
+                            ep.title, ep.title, summary
+                        );
+                        let _ = store.write_file(&wiki_rel, &wiki_content);
+
+                        let node_contract = WikiNode {
+                            id: None,
+                            name: format!("Raptor Summary: {}", ep.title),
+                            content: summary,
+                            scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+                            vault_path: Some(wiki_rel),
+                            embedding: None,
+                        };
+                        let _ = db.save_wiki_node(&node_contract).await;
+                    }
+
+                    // 4. Delete the active record from database
+                    db.delete_by_vault_path(vp).await?;
+                }
+            }
+        }
         Ok(())
     }
 }
