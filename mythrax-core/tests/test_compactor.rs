@@ -237,6 +237,8 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         scope: Some("scope1".to_string()),
         vault_path: None,
         source_episode: None,
+        session_id: None,
+        task_id: None,
     };
     let id1 = backend.save_episode(&episode1).await?;
 
@@ -247,6 +249,8 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         scope: Some("scope1".to_string()),
         vault_path: None,
         source_episode: None,
+        session_id: None,
+        task_id: None,
     };
     let id2 = backend.save_episode(&episode2).await?;
 
@@ -257,6 +261,8 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         scope: Some("scope1".to_string()),
         vault_path: None,
         source_episode: None,
+        session_id: None,
+        task_id: None,
     };
     let id3 = backend.save_episode(&episode3).await?;
 
@@ -267,6 +273,8 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         scope: Some("scope1".to_string()),
         vault_path: None,
         source_episode: None,
+        session_id: None,
+        task_id: None,
     };
     let id4 = backend.save_episode(&episode4).await?;
 

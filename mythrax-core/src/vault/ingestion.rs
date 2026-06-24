@@ -466,6 +466,8 @@ pub async fn bulk_ingest_vault(
                             scope: Some(scope.to_string()),
                             vault_path: Some(relative_path.clone()),
                             source_episode: None,
+                            session_id: None,
+                            task_id: None,
                         };
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;
@@ -541,6 +543,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -578,6 +582,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -620,6 +626,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -660,6 +668,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -700,6 +710,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -737,6 +749,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -779,6 +793,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -815,6 +831,8 @@ pub async fn bulk_ingest_vault(
                                 scope: Some(scope.to_string()),
                                 vault_path: Some(relative_path),
                                 source_episode: None,
+                                session_id: None,
+                                task_id: None,
                             };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;

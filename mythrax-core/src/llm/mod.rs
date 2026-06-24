@@ -40,16 +40,43 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
+        let config = db.get_llm_config().await?;
+        self.completion_explicit(
+            db,
+            &config.active_provider,
+            &config.cloud_provider,
+            &config.model,
+            system_instruction,
+            prompt,
+        )
+        .await
+    }
+
+    pub async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
         if let Ok(mock) = std::env::var("MYTHRAX_MOCK_LLM") {
             if mock == "true" {
-                if prompt.contains("Validate if these should merge") {
+                if prompt.contains("Analyze the following dialog") {
+                    return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
+                } else if prompt.contains("Validate if these should merge") {
                     return Ok(r#"{"should_merge": true, "suggested_name": "git-workflow", "reason": "Redundant playbooks"}"#.to_string());
                 } else if prompt.contains("Playbooks to Merge") {
                     return Ok("---\nname: meta-git-workflow\ndescription: Consolidated git meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nConsolidated instructions here.\n".to_string());
                 } else if prompt.contains("meta-skill synthesizer") || prompt.contains("Context Data:") {
                     return Ok("---\nname: meta-test-scope\ndescription: Synthesized meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nSynthesized instructions here.\n".to_string());
                 } else if prompt.contains("Wisdom") || prompt.contains("rules") || prompt.contains("Wisdom Rules") {
-                    return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]"#.to_string());
+                    if prompt.contains("aesthetic") || prompt.contains("procedural") || prompt.contains("rule_type") || prompt.contains("Events:") {
+                        return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy", "rule_type": "procedural"}]"#.to_string());
+                    } else {
+                        return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]"#.to_string());
+                    }
                 } else if prompt.contains("TOC") || prompt.contains("Table of Contents") {
                     return Ok(r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string());
                 } else {
@@ -60,7 +87,7 @@ impl LLMClient {
 
         let config = db.get_llm_config().await?;
         
-        let response_text = match config.active_provider.as_str() {
+        let response_text = match active_provider {
             "local" => {
                 let url = "http://127.0.0.1:8080/v1/chat/completions";
                 let truncated_prompt = if prompt.len() > 100_000 {
@@ -82,7 +109,7 @@ impl LLMClient {
                 }));
 
                 let payload = serde_json::json!({
-                    "model": config.model,
+                    "model": model,
                     "messages": messages,
                     "temperature": 0.2,
                     "max_tokens": 8192
@@ -123,12 +150,12 @@ impl LLMClient {
                 result
             }
             "cloud" => {
-                match config.cloud_provider.as_str() {
+                match cloud_provider {
                     "gemini" => {
                         let api_key = config.api_key.clone().unwrap_or_else(|| std::env::var("GEMINI_API_KEY").unwrap_or_default());
                         let url = format!(
                             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                            config.model, api_key
+                            model, api_key
                         );
                         
                         let mut payload = serde_json::json!({
@@ -169,7 +196,7 @@ impl LLMClient {
                         let url = "https://api.anthropic.com/v1/messages";
                         
                         let mut payload = serde_json::json!({
-                            "model": config.model,
+                            "model": model,
                             "max_tokens": 4096,
                             "messages": [
                                 {

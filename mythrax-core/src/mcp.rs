@@ -200,9 +200,25 @@ impl McpServer {
                                     "content": { "type": "string" },
                                     "entities": { "type": "array" },
                                     "scope": { "type": "string" },
-                                    "vault_path": { "type": "string" }
+                                    "vault_path": { "type": "string" },
+                                    "session_id": { "type": "string" },
+                                    "task_id": { "type": "string" }
                                 },
                                 "required": ["title", "content"]
+                            }
+                        },
+                        {
+                            "name": "diagnose_failure",
+                            "description": "Diagnose a command or compiler failure, returning a remedy if a past resolution matches",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "stdout": { "type": "string" },
+                                    "stderr": { "type": "string" },
+                                    "exit_code": { "type": "integer" },
+                                    "command": { "type": "string" }
+                                },
+                                "required": ["stderr"]
                             }
                         },
                         {
@@ -509,7 +525,7 @@ impl McpServer {
     }
 
     pub async fn call_tool(&self, name: &str, args: Value) -> Result<Value> {
-        match name {
+        let result = match name {
             "put_short_term" => {
                 let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
                 let key = args.get("key").and_then(|v| v.as_str()).context("Missing key")?;
@@ -582,7 +598,8 @@ impl McpServer {
                     node.embedding = None;
                 }
 
-                let text = serde_json::to_string_pretty(&stripped_response)?;
+                let mut text = serde_json::to_string_pretty(&stripped_response)?;
+                text = crate::cognitive::paging::intercept_and_restore_symbols(&self.backend, &text).await;
                 Ok(json!({
                     "content": [
                         {
@@ -627,6 +644,8 @@ impl McpServer {
                     }
                 }
 
+                text = crate::cognitive::paging::intercept_and_restore_symbols(&self.backend, &text).await;
+
                 Ok(json!({
                     "content": [
                         {
@@ -658,6 +677,8 @@ impl McpServer {
                     ));
                 }
 
+                text = crate::cognitive::paging::intercept_and_restore_symbols(&self.backend, &text).await;
+
                 Ok(json!({
                     "content": [
                         {
@@ -672,6 +693,8 @@ impl McpServer {
                 let content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?.to_string();
                 let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
                 let vault_path = args.get("vault_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let session_id = args.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let task_id = args.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string());
                 
                 let mut entities = vec![];
                 if let Some(arr) = args.get("entities").and_then(|v| v.as_array()) {
@@ -683,14 +706,43 @@ impl McpServer {
 
                 let episode = crate::contracts::EpisodeSave {
                     title,
-                    content,
+                    content: content.clone(),
                     entities,
-                    scope,
+                    scope: scope.clone(),
                     vault_path,
                     source_episode: None,
+                    session_id,
+                    task_id,
                 };
 
                 let id = self.backend.save_episode(&episode).await?;
+
+                // T1: Zero-Touch Mistake Learning case-insensitive check
+                let content_lower = content.to_lowercase();
+                let correction_indicators = [
+                    "you forgot",
+                    "incorrect",
+                    "that was a mistake",
+                    "that's wrong",
+                    "you made a mistake",
+                    "wrong choice",
+                    "not right",
+                    "should have",
+                    "didn't run",
+                ];
+                let has_correction = correction_indicators.iter().any(|&ind| content_lower.contains(ind));
+
+                if has_correction {
+                    let backend_clone = self.backend.clone();
+                    let store_clone = self.store.clone();
+                    let content_clone = content.clone();
+                    let scope_clone = scope.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = run_llm_critic(backend_clone, store_clone, content_clone, scope_clone).await {
+                            tracing::error!("Error running LLM critic: {:?}", e);
+                        }
+                    });
+                }
 
                 Ok(json!({
                     "content": [
@@ -700,6 +752,40 @@ impl McpServer {
                         }
                     ]
                 }))
+            }
+            "diagnose_failure" => {
+                let stdout = args.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+                let stderr = args.get("stderr").and_then(|v| v.as_str()).context("Missing stderr")?;
+                
+                let diagnosis = self.backend.diagnose_error_internal(stderr, stdout).await?;
+                let resp = match diagnosis {
+                    Some((explanation, remedy)) => {
+                        json!({
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": format!(
+                                        "=== DIAGNOSIS FOUND ===\nCausal Explanation: {}\nPrescribed Remedy: {}",
+                                        explanation, remedy
+                                    )
+                                }
+                            ],
+                            "causal_explanation": explanation,
+                            "prescribed_remedy": remedy
+                        })
+                    }
+                    None => {
+                        json!({
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "No matching diagnostic signature or similar failure was found in the database."
+                                }
+                            ]
+                        })
+                    }
+                };
+                Ok(resp)
             }
             "save_handoff" => {
                 let parent_conversation_id = args.get("parent_conversation_id").and_then(|v| v.as_str()).context("Missing parent_conversation_id")?.to_string();
@@ -886,6 +972,8 @@ impl McpServer {
                                     scope: ep.scope.clone(),
                                     vault_path: Some(vp.clone()),
                                     source_episode: ep.source_episode.clone(),
+                                    session_id: None,
+                                    task_id: None,
                                 };
                                 let markdown = crate::vault::watcher::format_episode_markdown(&save);
                                 self.store.write_file(vp, &markdown)?;
@@ -915,6 +1003,8 @@ impl McpServer {
                             scope: ep.scope.clone(),
                             vault_path: ep.vault_path.clone(),
                             source_episode: ep.source_episode.clone(),
+                            session_id: None,
+                            task_id: None,
                         };
                         self.backend.save_episode(&save).await?;
                         count += 1;
@@ -1238,6 +1328,130 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
             _ => {
                 anyhow::bail!("Tool not found: {}", name)
             }
+        };
+
+        if result.is_ok() && matches!(name, "put_short_term" | "clear_short_term" | "save_episode" | "save_handoff" | "save_forged_assets" | "htr_init" | "htr_ideate" | "htr_execute" | "htr_backprop" | "htr_merge" | "htr_run") {
+            let session_id_opt = args.get("session_id")
+                .or_else(|| args.get("subagent_conversation_id"))
+                .or_else(|| args.get("scope"))
+                .and_then(|v| v.as_str());
+            if let Err(e) = self.backend.journal_state(&self.store.vault_root, session_id_opt).await {
+                tracing::error!("Failed to write dual-durability journal: {:?}", e);
+            }
         }
+
+        result
     }
+}
+
+pub async fn run_llm_critic(
+    backend: Arc<crate::db::SurrealBackend>,
+    store: Arc<MarkdownStore>,
+    content: String,
+    scope: Option<String>,
+) -> Result<()> {
+    let allow_cloud_fallback = match backend.db.query("SELECT allow_cloud_fallback FROM config:settings;").await {
+        Ok(mut resp) => {
+            use surrealdb_types::SurrealValue;
+            #[derive(serde::Serialize, serde::Deserialize, Debug, SurrealValue)]
+            struct FallbackSettings {
+                allow_cloud_fallback: Option<bool>,
+            }
+            if let Ok(Some(settings)) = resp.take::<Option<FallbackSettings>>(0) {
+                settings.allow_cloud_fallback.unwrap_or(true)
+            } else {
+                true
+            }
+        }
+        Err(_) => true,
+    };
+
+    let system_instruction = "You are a systems critic. Analyze the dialog context/episode content showing a mistake, and extract a structured Wisdom Rule to prevent this mistake in the future. Respond ONLY with a JSON object.";
+    let prompt = format!(
+        "Analyze the following dialog context and extract a single Wisdom Rule to prevent the mistake:\n\n\
+        {}\n\n\
+        Respond ONLY with a JSON object containing exactly these fields:\n\
+        - target_pattern (context or trigger pattern, e.g., 'git merge conflict')\n\
+        - action_to_avoid (the specific incorrect action taken, e.g., 'manually editing conflict markers without tools')\n\
+        - causal_explanation (why it is bad / what happens, e.g., 'leads to malformed syntax and compiler failures')\n\
+        - prescribed_remedy (what to do instead, e.g., 'use git merge-tool or structured 3-way merge library')\n\n\
+        Ensure it is a valid JSON object.",
+        content
+    );
+
+    let llm = crate::llm::LLMClient::new();
+    let response_text = match llm.completion_explicit(
+        &*backend,
+        "local",
+        "gemini",
+        "mlx-community/Qwen3.6-35B-A3B-4bit",
+        Some(system_instruction),
+        &prompt,
+    ).await {
+        Ok(res) => res,
+        Err(e) => {
+            if allow_cloud_fallback {
+                tracing::warn!("Local LLM critic failed, falling back to cloud: {:?}", e);
+                let config = backend.get_llm_config().await?;
+                let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                    "gemini-1.5-flash"
+                } else {
+                    &config.model
+                };
+                llm.completion_explicit(
+                    &*backend,
+                    "cloud",
+                    &config.cloud_provider,
+                    cloud_model,
+                    Some(system_instruction),
+                    &prompt,
+                ).await?
+            } else {
+                return Err(e);
+            }
+        }
+    };
+
+    #[derive(serde::Deserialize, serde::Serialize, Debug)]
+    struct CriticWisdom {
+        target_pattern: String,
+        action_to_avoid: String,
+        causal_explanation: String,
+        prescribed_remedy: String,
+    }
+
+    let critic_wisdom: CriticWisdom = serde_json::from_str(&response_text)
+        .or_else(|_| {
+            let cleaned = crate::llm::strip_code_fences(&response_text);
+            serde_json::from_str(&cleaned)
+        })?;
+
+    let active_scope = scope.unwrap_or_else(|| {
+        std::env::var("MYTHRAX_ACTIVE_SCOPE").unwrap_or_else(|_| "general".to_string())
+    });
+
+    let rule_uuid = uuid::Uuid::new_v4().to_string();
+    let rule_path = format!("wisdom/dynamic/wisdom_rule_{}.md", &rule_uuid[..8]);
+
+    let rule_save = crate::contracts::WisdomRule {
+        id: None,
+        target_pattern: critic_wisdom.target_pattern,
+        action_to_avoid: critic_wisdom.action_to_avoid,
+        causal_explanation: critic_wisdom.causal_explanation,
+        prescribed_remedy: critic_wisdom.prescribed_remedy,
+        tier: "dynamic".to_string(),
+        scope: active_scope,
+        vault_path: Some(rule_path.clone()),
+        embedding: None,
+        source_episodes: vec![],
+        generator_name: "LlmCritic".to_string(),
+        similarity: None,
+        utility: Some(50.0),
+    };
+
+    let markdown = crate::vault::watcher::format_wisdom_markdown(&rule_save);
+    store.write_file(&rule_path, &markdown)?;
+    backend.save_wisdom_rule(&rule_save).await?;
+
+    Ok(())
 }

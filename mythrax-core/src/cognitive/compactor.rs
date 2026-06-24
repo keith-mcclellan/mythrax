@@ -23,6 +23,54 @@ impl Compactor {
         }
     }
 
+    pub async fn delta_compact_checkpoints(&self, db: &dyn StorageBackend) -> Result<String> {
+        let checkpoints = db.get_checkpoints().await?;
+        if checkpoints.is_empty() {
+            return Ok("No checkpoints found.".to_string());
+        }
+
+        let mut prompt_content = String::new();
+        for (i, chk) in checkpoints.iter().enumerate() {
+            let timestamp = chk.get("timestamp").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let project_type = chk.get("project_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let exit_code = chk.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
+            let errors = chk.get("compiler_errors").and_then(|v| v.as_str()).unwrap_or("");
+            let git_diff = chk.get("git_diff").and_then(|v| v.as_str()).unwrap_or("");
+
+            if i < 2 {
+                prompt_content.push_str(&format!(
+                    "### Checkpoint {} (Raw - High Fidelity)\n\
+                     Timestamp: {}\n\
+                     Project Type: {}\n\
+                     Compiler Exit Code: {}\n\
+                     Compiler/Linter Output:\n{}\n\
+                     Git Diff:\n{}\n\n",
+                    i + 1, timestamp, project_type, exit_code, errors, git_diff
+                ));
+            } else {
+                let compact_diff = if git_diff.len() > 200 {
+                    let summary_prompt = format!("Summarize this git diff briefly (under 50 words):\n\n{}", git_diff);
+                    self.llm.completion(db, Some("You are a code summarizer."), &summary_prompt).await.unwrap_or_else(|_| "Git diff summary failed".to_string())
+                } else {
+                    git_diff.to_string()
+                };
+
+                prompt_content.push_str(&format!(
+                    "### Checkpoint {} (Compressed Summary)\n\
+                     Timestamp: {}\n\
+                     Project Type: {}\n\
+                     Compiler Exit Code: {}\n\
+                     Summary of Changes:\n{}\n\n",
+                    i + 1, timestamp, project_type, exit_code, compact_diff
+                ));
+            }
+        }
+
+        let sys_prompt = "You are a master systems architect. Analyze the sequence of checkpoints and summarize the transitions between them, detailing how the codebase evolved, what errors were resolved, and the progression of active changes.";
+        let summary = self.llm.completion(db, Some(sys_prompt), &prompt_content).await?;
+        Ok(summary)
+    }
+
     pub async fn compact_scope(
         &self,
         db: &dyn StorageBackend,
@@ -127,22 +175,40 @@ impl Compactor {
                 combined_content.push_str(&format!("Insight Title: {}\nInsight Body:\n{}\n\n", ins.title, ins.content));
             }
 
+            // Extract anchors and clean content
+            let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
+
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
-            let prompt_text = format!("Insights:\n\n{}", combined_content);
+            let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+
+            let stm_anchors = get_active_stm_anchors(&store.vault_root);
+            let mut all_anchors = extracted_anchors;
+            for sa in stm_anchors {
+                if !all_anchors.contains(&sa) {
+                    all_anchors.push(sa);
+                }
+            }
 
             let first_title = member_insights.first().map(|(c, _)| c.title.as_str()).unwrap_or("compaction");
             let slug = first_title.to_lowercase().replace([' ', '/'], "_");
             let uuid = uuid::Uuid::new_v4().to_string();
             let relative_path = format!("wiki/compaction/{}_{}_{}.md", scope, slug, &uuid[..8]);
 
-            let file_content = format!(
+            let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
                 scope,
                 cluster_id,
                 scope,
                 summary
             );
+
+            if !all_anchors.is_empty() {
+                file_content.push_str("\n\n## Attention Anchors\n");
+                for anchor in &all_anchors {
+                    file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
+                }
+            }
             store.write_file(&relative_path, &file_content)?;
 
             let node_contract = WikiNode {
@@ -171,19 +237,37 @@ impl Compactor {
                 combined_content.push_str(&format!("Insight Title: {}\nInsight Body:\n{}\n\n", ins.title, ins.content));
             }
 
+            // Extract anchors and clean content
+            let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
+
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
-            let prompt_text = format!("Insights:\n\n{}", combined_content);
+            let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+
+            let stm_anchors = get_active_stm_anchors(&store.vault_root);
+            let mut all_anchors = extracted_anchors;
+            for sa in stm_anchors {
+                if !all_anchors.contains(&sa) {
+                    all_anchors.push(sa);
+                }
+            }
 
             let uuid = uuid::Uuid::new_v4().to_string();
             let relative_path = format!("wiki/compaction/{}_miscellaneous_{}.md", scope, &uuid[..8]);
 
-            let file_content = format!(
+            let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: \"miscellaneous\"\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
                 scope,
                 scope,
                 summary
             );
+
+            if !all_anchors.is_empty() {
+                file_content.push_str("\n\n## Attention Anchors\n");
+                for anchor in &all_anchors {
+                    file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
+                }
+            }
             store.write_file(&relative_path, &file_content)?;
 
             let node_contract = WikiNode {
@@ -242,16 +326,33 @@ impl Compactor {
             return Ok(());
         }
 
+        let (cleaned_compaction, extracted_anchors) = extract_attention_anchors(&combined_compaction);
+
         let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.";
-        let prompt_text = format!("Architectural Compactions:\n\n{}", combined_compaction);
+        let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
         let global_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+
+        let stm_anchors = get_active_stm_anchors(&store.vault_root);
+        let mut all_anchors = extracted_anchors;
+        for sa in stm_anchors {
+            if !all_anchors.contains(&sa) {
+                all_anchors.push(sa);
+            }
+        }
 
         let uuid = uuid::Uuid::new_v4().to_string();
         let relative_path = format!("wiki/general/global_compaction_{}.md", &uuid[..8]);
-        let file_content = format!(
+        let mut file_content = format!(
             "---\ntype: \"global_compaction\"\n---\n\n# Global Systems Synthesis\n\n{}",
             global_summary
         );
+
+        if !all_anchors.is_empty() {
+            file_content.push_str("\n\n## Attention Anchors\n");
+            for anchor in &all_anchors {
+                file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
+            }
+        }
         store.write_file(&relative_path, &file_content)?;
 
         let node_contract = WikiNode {
@@ -272,4 +373,89 @@ impl Compactor {
 
         Ok(())
     }
+}
+
+pub fn extract_attention_anchors(text: &str) -> (String, Vec<String>) {
+    let mut clean_lines = Vec::new();
+    let mut anchors = Vec::new();
+
+    for line in text.lines() {
+        let line_lower = line.to_lowercase();
+        if line_lower.contains("@attention-anchor") || line_lower.contains("[anchor:") {
+            let mut anchor_text = line.to_string();
+            if let Some(pos) = line_lower.find("@attention-anchor") {
+                anchor_text = line[pos + "@attention-anchor".len()..].to_string();
+            } else if let Some(pos) = line_lower.find("[anchor:") {
+                anchor_text = line[pos + "[anchor:".len()..].to_string();
+                if anchor_text.ends_with(']') {
+                    anchor_text.pop();
+                }
+            }
+            let trimmed = anchor_text.trim_start_matches(':').trim();
+            if !trimmed.is_empty() {
+                anchors.push(trimmed.to_string());
+            }
+        } else {
+            clean_lines.push(line);
+        }
+    }
+
+    (clean_lines.join("\n"), anchors)
+}
+
+fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
+    let mut anchors = Vec::new();
+    let handoffs_dir = vault_root.join(".handoffs");
+    if !handoffs_dir.exists() {
+        return anchors;
+    }
+
+    if let Ok(entries) = std::fs::read_dir(handoffs_dir) {
+        let mut stm_files = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path.file_name().map_or(false, |name| name.to_string_lossy().starts_with("stm_"))
+                && path.extension().map_or(false, |ext| ext == "json") {
+                    if let Ok(metadata) = entry.metadata() {
+                        if let Ok(modified) = metadata.modified() {
+                            stm_files.push((path, modified));
+                        }
+                    }
+                }
+        }
+
+        stm_files.sort_by(|a, b| b.1.cmp(&a.1));
+
+        if let Some((most_recent_path, _)) = stm_files.first() {
+            if let Ok(content) = std::fs::read_to_string(most_recent_path) {
+                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(anchors_val) = json_val.get("_active_anchors") {
+                        if let Some(arr) = anchors_val.as_array() {
+                            for val in arr {
+                                if let Some(s) = val.as_str() {
+                                    anchors.push(s.to_string());
+                                }
+                            }
+                        } else if let Some(s) = anchors_val.as_str() {
+                            if s.starts_with('[') && s.ends_with(']') {
+                                if let Ok(arr) = serde_json::from_str::<Vec<String>>(s) {
+                                    anchors.extend(arr);
+                                }
+                            } else {
+                                for part in s.split(&[',', '\n'][..]) {
+                                    let trimmed = part.trim();
+                                    if !trimmed.is_empty() {
+                                        anchors.push(trimmed.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    anchors
 }

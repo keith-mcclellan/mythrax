@@ -122,6 +122,9 @@ pub trait StorageBackend: Send + Sync {
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
     async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>>;
     async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()>;
+    async fn diagnose_error_internal(&self, stderr: &str, stdout: &str) -> Result<Option<(String, String)>>;
+    async fn journal_state(&self, vault_root: &std::path::Path, session_id: Option<&str>) -> Result<()>;
+    async fn get_checkpoints(&self) -> Result<Vec<serde_json::Value>>;
 }
 
 pub struct SurrealBackend {
@@ -238,6 +241,47 @@ impl SurrealBackend {
             false
         }
     }
+
+    pub fn resolve_active_scope(&self) -> String {
+        let start_path = if let Ok(workspace_root) = std::env::var("MYTHRAX_WORKSPACE_ROOT") {
+            std::path::PathBuf::from(workspace_root)
+        } else if let Ok(cwd) = std::env::current_dir() {
+            cwd
+        } else {
+            return "general".to_string();
+        };
+
+        let mut current = start_path.as_path();
+        loop {
+            let is_marker = current.join(".git").exists()
+                || current.join(".agents").exists()
+                || current.join("Cargo.toml").exists()
+                || current.join("package.json").exists();
+
+            if is_marker {
+                if let Some(name_os) = current.file_name() {
+                    if let Some(name_str) = name_os.to_str() {
+                        let normalized: String = name_str
+                            .chars()
+                            .filter(|c| c.is_alphanumeric())
+                            .map(|c| c.to_ascii_lowercase())
+                            .collect();
+                        if !normalized.is_empty() {
+                            return normalized;
+                        }
+                    }
+                }
+                break;
+            }
+
+            if let Some(parent) = current.parent() {
+                current = parent;
+            } else {
+                break;
+            }
+        }
+        "general".to_string()
+    }
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -286,6 +330,8 @@ struct SearchRaw {
     embedding: Option<Vec<f32>>,
     vault_path: Option<String>,
     related_nodes: Option<Vec<RelatedNodeRaw>>,
+    prev_episodes: Option<Vec<EpisodeRaw>>,
+    next_episodes: Option<Vec<EpisodeRaw>>,
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -566,7 +612,41 @@ impl StorageBackend for SurrealBackend {
                 .check().context("Entity relation query failed")?;
         }
 
-        Ok(format!("episode:{}", ep_uuid))
+        let new_ep_id = format!("episode:{}", ep_uuid);
+
+        if let Some(ref sess_id) = episode.session_id {
+            let tracking_key = if let Some(ref t_id) = episode.task_id {
+                format!("_last_episode_id_{}", t_id)
+            } else {
+                "_last_episode_id".to_string()
+            };
+
+            // Get last episode ID from STM
+            if let Ok(stm_map) = self.get_stm(sess_id, Some(&tracking_key)).await {
+                if let Some(last_ep_id) = stm_map.get(&tracking_key) {
+                    // Relate last_ep_id to new_ep_id
+                    let from_thing = parse_record_id(last_ep_id);
+                    let to_thing = parse_record_id(&new_ep_id);
+                    if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
+                        let relate_query = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
+                        if let Err(e) = self.db.query(relate_query)
+                            .bind(("from", from))
+                            .bind(("to", to))
+                            .await
+                        {
+                            tracing::warn!("Failed to relate temporal episodes: {:?}", e);
+                        }
+                    }
+                }
+            }
+
+            // Save new episode ID to STM
+            if let Err(e) = self.save_stm(sess_id, &tracking_key, &new_ep_id).await {
+                tracing::warn!("Failed to save last episode ID to STM: {:?}", e);
+            }
+        }
+
+        Ok(new_ep_id)
     }
 
     async fn save_wisdom_rule(&self, rule: &WisdomRule) -> Result<String> {
@@ -587,23 +667,44 @@ impl StorageBackend for SurrealBackend {
         }
 
         let query_str = if is_update {
-            "
-                BEGIN TRANSACTION;
-                LET $rule = type::record('wisdom', $rule_uuid);
-                UPDATE $rule MERGE {
-                    target_pattern: $target_pattern,
-                    action_to_avoid: $action_to_avoid,
-                    causal_explanation: $causal_explanation,
-                    prescribed_remedy: $prescribed_remedy,
-                    tier: $tier,
-                    scope: $target_scope,
-                    vault_path: $vault_path,
-                    source_episodes: $source_episodes,
-                    generator_name: $generator_name,
-                    embedding: $embedding
-                };
-                COMMIT TRANSACTION;
-            "
+            if rule.utility.is_some() {
+                "
+                    BEGIN TRANSACTION;
+                    LET $rule = type::record('wisdom', $rule_uuid);
+                    UPDATE $rule MERGE {
+                        target_pattern: $target_pattern,
+                        action_to_avoid: $action_to_avoid,
+                        causal_explanation: $causal_explanation,
+                        prescribed_remedy: $prescribed_remedy,
+                        tier: $tier,
+                        scope: $target_scope,
+                        vault_path: $vault_path,
+                        source_episodes: $source_episodes,
+                        generator_name: $generator_name,
+                        embedding: $embedding
+                    };
+                    UPDATE metrics SET utility_score = $utility_score WHERE target_id = $rule;
+                    COMMIT TRANSACTION;
+                ".to_string()
+            } else {
+                "
+                    BEGIN TRANSACTION;
+                    LET $rule = type::record('wisdom', $rule_uuid);
+                    UPDATE $rule MERGE {
+                        target_pattern: $target_pattern,
+                        action_to_avoid: $action_to_avoid,
+                        causal_explanation: $causal_explanation,
+                        prescribed_remedy: $prescribed_remedy,
+                        tier: $tier,
+                        scope: $target_scope,
+                        vault_path: $vault_path,
+                        source_episodes: $source_episodes,
+                        generator_name: $generator_name,
+                        embedding: $embedding
+                    };
+                    COMMIT TRANSACTION;
+                ".to_string()
+            }
         } else {
             "
                 BEGIN TRANSACTION;
@@ -625,12 +726,12 @@ impl StorageBackend for SurrealBackend {
                 
                 CREATE $met CONTENT {
                     target_id: $rule,
-                    utility_score: 1.0,
+                    utility_score: $utility_score,
                     access_count: 0
                 };
                 
                 COMMIT TRANSACTION;
-            "
+            ".to_string()
         };
 
         let metrics_uuid = Uuid::new_v4().to_string();
@@ -652,7 +753,9 @@ impl StorageBackend for SurrealBackend {
             None
         };
 
-        let _ = self.db.query(query_str)
+        let utility_val = rule.utility.unwrap_or(1.0);
+
+        let _ = self.db.query(query_str.as_str())
             .bind(("rule_uuid", rule_uuid.as_str()))
             .bind(("metrics_uuid", metrics_uuid.as_str()))
             .bind(("target_pattern", rule.target_pattern.as_str()))
@@ -665,6 +768,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("source_episodes", rule.source_episodes.clone()))
             .bind(("generator_name", rule.generator_name.as_str()))
             .bind(("embedding", embedding_val.clone()))
+            .bind(("utility_score", utility_val))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
@@ -684,7 +788,11 @@ impl StorageBackend for SurrealBackend {
         include_episodes: bool,
         include_artifacts: bool,
     ) -> Result<SearchResponse> {
-        let scope_val = scope.map(|s| s.to_string());
+        let resolved_scope = match scope {
+            Some(s) if !s.is_empty() && s != "all" => s.to_string(),
+            _ => self.resolve_active_scope(),
+        };
+        let search_all = scope == Some("all");
         
         let query_emb = if let Some(ref embedder) = self.embedder {
             let formatted_query = format!("search_query: {}", query);
@@ -720,9 +828,11 @@ impl StorageBackend for SurrealBackend {
                     sql.push_str(&format!(
                         "SELECT id, title, content, embedding, vault_path,
                                (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
+                               <-followed_by<-episode.* AS prev_episodes,
+                               ->followed_by->episode.* AS next_episodes
                         FROM episode
-                        WHERE (scope = $target_scope OR $target_scope = NONE)
+                        WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND (embedding <|100, 100|> $query_embedding);
                         ",
                         traversal = traversal,
@@ -733,7 +843,7 @@ impl StorageBackend for SurrealBackend {
                         SELECT id, title, content, embedding, vault_path,
                                (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                         FROM episode
-                        WHERE (scope = $target_scope OR $target_scope = NONE)
+                        WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND (embedding <|100, 100|> $query_embedding);
                     ");
                 }
@@ -745,7 +855,7 @@ impl StorageBackend for SurrealBackend {
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wiki_node
-                    WHERE (scope = $target_scope OR $target_scope = NONE)
+                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|100, 100|> $query_embedding)
                       {wiki_node_filter};
 
@@ -753,7 +863,7 @@ impl StorageBackend for SurrealBackend {
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wisdom
-                    WHERE (scope = $target_scope OR $target_scope = NONE)
+                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|100, 100|> $query_embedding);
                     ",
                     traversal = traversal,
@@ -765,14 +875,14 @@ impl StorageBackend for SurrealBackend {
                     "SELECT id, name AS title, content, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wiki_node
-                    WHERE (scope = $target_scope OR $target_scope = NONE)
+                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|100, 100|> $query_embedding)
                       {wiki_node_filter};
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wisdom
-                    WHERE (scope = $target_scope OR $target_scope = NONE)
+                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|100, 100|> $query_embedding);
                     ",
                     wiki_node_filter = wiki_node_filter
@@ -784,10 +894,12 @@ impl StorageBackend for SurrealBackend {
                     sql.push_str(&format!(
                         "SELECT id, title, content, embedding, vault_path,
                                (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
+                               <-followed_by<-episode.* AS prev_episodes,
+                               ->followed_by->episode.* AS next_episodes
                         FROM episode 
                         WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                          AND (scope = $target_scope OR $target_scope = NONE);
+                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                         ",
                         traversal = traversal,
                         related_targets = related_targets
@@ -798,7 +910,7 @@ impl StorageBackend for SurrealBackend {
                                (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                         FROM episode 
                         WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                          AND (scope = $target_scope OR $target_scope = NONE);
+                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                     ");
                 }
             }
@@ -810,7 +922,7 @@ impl StorageBackend for SurrealBackend {
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wiki_node 
                     WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
-                      AND (scope = $target_scope OR $target_scope = NONE)
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                       {wiki_node_filter};
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
@@ -818,7 +930,7 @@ impl StorageBackend for SurrealBackend {
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wisdom 
                     WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
-                      AND (scope = $target_scope OR $target_scope = NONE);
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                     ",
                     traversal = traversal,
                     related_targets = related_targets,
@@ -830,14 +942,14 @@ impl StorageBackend for SurrealBackend {
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wiki_node 
                     WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
-                      AND (scope = $target_scope OR $target_scope = NONE)
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                       {wiki_node_filter};
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wisdom 
                     WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
-                      AND (scope = $target_scope OR $target_scope = NONE);
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                     ",
                     wiki_node_filter = wiki_node_filter
                 ));
@@ -846,13 +958,15 @@ impl StorageBackend for SurrealBackend {
 
         let response = if let Some(ref q_vec) = query_emb {
             self.db.query(&sql)
-                .bind(("target_scope", scope_val.as_deref()))
+                .bind(("target_scope", resolved_scope.as_str()))
+                .bind(("search_all", search_all))
                 .bind(("query_embedding", q_vec.clone()))
                 .await?
         } else {
             self.db.query(&sql)
                 .bind(("query", query))
-                .bind(("target_scope", scope_val.as_deref()))
+                .bind(("target_scope", resolved_scope.as_str()))
+                .bind(("search_all", search_all))
                 .await?
         };
 
@@ -874,6 +988,46 @@ impl StorageBackend for SurrealBackend {
             let mut content = ep.content.clone();
             if deep_insight && let Some(ref related) = ep.related_nodes {
                 append_related_context(&mut content, related);
+            }
+
+            let mut related_nodes_list = None;
+            if deep_insight {
+                let mut list = Vec::new();
+                if let Some(ref prevs) = ep.prev_episodes {
+                    for prev in prevs {
+                        list.push(SearchResult {
+                            id: format_record_id(&prev.id),
+                            title: prev.title.clone(),
+                            content: prev.content.clone(),
+                            similarity: 1.0,
+                            utility: 1.0,
+                            tier: "episode".to_string(),
+                            embedding: None,
+                            vault_path: prev.vault_path.clone(),
+                            source_episode: prev.source_episode.as_ref().map(|t| format_record_id(t)),
+                            related_nodes: None,
+                        });
+                    }
+                }
+                if let Some(ref nexts) = ep.next_episodes {
+                    for next in nexts {
+                        list.push(SearchResult {
+                            id: format_record_id(&next.id),
+                            title: next.title.clone(),
+                            content: next.content.clone(),
+                            similarity: 1.0,
+                            utility: 1.0,
+                            tier: "episode".to_string(),
+                            embedding: None,
+                            vault_path: next.vault_path.clone(),
+                            source_episode: next.source_episode.as_ref().map(|t| format_record_id(t)),
+                            related_nodes: None,
+                        });
+                    }
+                }
+                if !list.is_empty() {
+                    related_nodes_list = Some(list);
+                }
             }
 
             let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), ep.embedding.as_ref()) {
@@ -899,6 +1053,7 @@ impl StorageBackend for SurrealBackend {
                     embedding: None,
                     vault_path: ep.vault_path.clone(),
                     source_episode: None,
+                    related_nodes: related_nodes_list,
                 });
             }
         }
@@ -932,6 +1087,7 @@ impl StorageBackend for SurrealBackend {
                     embedding: None,
                     vault_path: node.vault_path.clone(),
                     source_episode: None,
+                    related_nodes: None,
                 });
             }
         }
@@ -968,6 +1124,7 @@ impl StorageBackend for SurrealBackend {
                     embedding: None,
                     vault_path: rule.vault_path.clone(),
                     source_episode: None,
+                    related_nodes: None,
                 });
             }
         }
@@ -1069,6 +1226,8 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_wisdom(&self, query: &str, tier: &str, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
+        let active_scope = self.resolve_active_scope();
+
         let query_emb = if let Some(ref embedder) = self.embedder {
             let formatted_query = format!("search_query: {}", query);
             match embedder.embed(&formatted_query) {
@@ -1088,10 +1247,12 @@ impl StorageBackend for SurrealBackend {
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM wisdom
                 WHERE tier = $tier
+                  AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
                   AND (embedding <|100, 100|> $query_embedding);
             ";
             self.db.query(sql)
                 .bind(("tier", tier))
+                .bind(("active_scope", active_scope.as_str()))
                 .bind(("query_embedding", q_vec.clone()))
                 .await?
         } else {
@@ -1100,11 +1261,13 @@ impl StorageBackend for SurrealBackend {
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM wisdom
                 WHERE tier = $tier
+                  AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
                   AND (string::contains(target_pattern, $query) OR string::contains(causal_explanation, $query));
             ";
             self.db.query(sql)
                 .bind(("tier", tier))
                 .bind(("query", query))
+                .bind(("active_scope", active_scope.as_str()))
                 .await?
         };
 
@@ -2150,6 +2313,198 @@ impl StorageBackend for SurrealBackend {
         let nodes: Vec<WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
         Ok(nodes)
     }
+
+    async fn diagnose_error_internal(&self, stderr: &str, stdout: &str) -> Result<Option<(String, String)>> {
+        let combined = format!("{}\n{}", stderr, stdout);
+
+        let mut matched_signature = None;
+
+        use std::sync::OnceLock;
+        static RUST_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+        static TS_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+        static PERM_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+        static LOCK_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+
+        let rust_re = RUST_REGEX.get_or_init(|| regex::Regex::new(r"(E\d{4})").unwrap());
+        let ts_re = TS_REGEX.get_or_init(|| regex::Regex::new(r"(TS\d{4})").unwrap());
+        let perm_re = PERM_REGEX.get_or_init(|| regex::Regex::new(r"(?i)(401\s+Unauthorized|403\s+Forbidden|Permission\s+denied|permission_denied)").unwrap());
+        let lock_re = LOCK_REGEX.get_or_init(|| regex::Regex::new(r"(?i)(lock\s+acquisition\s+failure|RocksDB\s+lock|lock\s+conflict)").unwrap());
+
+        if let Some(caps) = rust_re.captures(&combined) {
+            matched_signature = Some(caps.get(1).unwrap().as_str().to_string());
+        } else if let Some(caps) = ts_re.captures(&combined) {
+            matched_signature = Some(caps.get(1).unwrap().as_str().to_string());
+        } else if perm_re.is_match(&combined) {
+            matched_signature = Some("permission".to_string());
+        } else if lock_re.is_match(&combined) {
+            matched_signature = Some("lock".to_string());
+        }
+
+        if let Some(sig) = matched_signature {
+            let sql = "SELECT causal_explanation, prescribed_remedy FROM wisdom WHERE string::contains(target_pattern, $sig) LIMIT 1;";
+            let res = self.db.query(sql).bind(("sig", sig.as_str())).await?;
+            let mut res = res.check()?;
+            #[derive(serde::Deserialize, Debug, SurrealValue)]
+            struct WisdomRemedy {
+                causal_explanation: String,
+                prescribed_remedy: String,
+            }
+            let rules: Vec<WisdomRemedy> = res.take(0)?;
+            if let Some(rule) = rules.into_iter().next() {
+                return Ok(Some((rule.causal_explanation, rule.prescribed_remedy)));
+            }
+        }
+
+        if let Some(ref embedder) = self.embedder {
+            let embed_text = if combined.len() > 500 {
+                &combined[..500]
+            } else {
+                &combined
+            };
+            if let Ok(q_vec) = embedder.embed(embed_text) {
+                let sql = "
+                    SELECT causal_explanation, prescribed_remedy, embedding FROM wisdom
+                    WHERE (embedding <|1, 10|> $query_embedding);
+                ";
+                let res = self.db.query(sql).bind(("query_embedding", q_vec.clone())).await?;
+                let mut res = res.check()?;
+                #[derive(serde::Deserialize, Debug, SurrealValue)]
+                struct WisdomVectorRaw {
+                    causal_explanation: String,
+                    prescribed_remedy: String,
+                    embedding: Option<Vec<f32>>,
+                }
+                let rules: Vec<WisdomVectorRaw> = res.take(0)?;
+                let mut best_match = None;
+                let mut best_similarity = 0.0_f32;
+
+                for r in rules {
+                    if let Some(ref e_vec) = r.embedding {
+                        let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                        if dot > best_similarity {
+                            best_similarity = dot;
+                            best_match = Some(r);
+                        }
+                    }
+                }
+
+                if best_similarity >= 0.70 {
+                    if let Some(r) = best_match {
+                        return Ok(Some((r.causal_explanation, r.prescribed_remedy)));
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn journal_state(&self, vault_root: &std::path::Path, session_id: Option<&str>) -> Result<()> {
+        let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        
+        let task_md_path = workspace_root.join("task.md");
+        let task_checklist = if task_md_path.exists() {
+            std::fs::read_to_string(&task_md_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Query HTR tree state (all hypothesis nodes)
+        let mut response = self.db.query("SELECT * FROM hypothesis_node;").await?;
+        let htr_tree_state: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
+
+        // Query active STM keys
+        let mut stm_response = if let Some(sid) = session_id {
+            self.db.query("SELECT key, value FROM short_term_memory WHERE session_id = $session_id;")
+                .bind(("session_id", sid))
+                .await?
+        } else {
+            self.db.query("SELECT key, value FROM short_term_memory;").await?
+        };
+        
+        let stm_records: Vec<serde_json::Value> = stm_response.take(0).unwrap_or_default();
+        let mut active_stm = serde_json::Map::new();
+        for rec in stm_records {
+            if let Some(key) = rec.get("key").and_then(|v| v.as_str()) {
+                if let Some(value) = rec.get("value") {
+                    active_stm.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+
+        // Get current git commit
+        let git_commit = std::process::Command::new("git")
+            .args(&["rev-parse", "HEAD"])
+            .current_dir(&workspace_root)
+            .output()
+            .ok()
+            .and_then(|out| {
+                if out.status.success() {
+                    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "HEAD".to_string());
+
+        // Save to SurrealDB session_state table
+        let session_id_val = session_id.unwrap_or("default_session");
+        let sql = "
+            UPSERT type::record('session_state', $session_id) CONTENT {
+                session_id: $session_id,
+                task_checklist: $task_checklist,
+                htr_tree_state: $htr_tree_state,
+                active_stm: $active_stm,
+                git_commit: $git_commit,
+                timestamp: time::now()
+            };
+        ";
+        self.db.query(sql)
+            .bind(("session_id", session_id_val))
+            .bind(("task_checklist", task_checklist.clone()))
+            .bind(("htr_tree_state", htr_tree_state.clone()))
+            .bind(("active_stm", serde_json::Value::Object(active_stm.clone())))
+            .bind(("git_commit", git_commit.clone()))
+            .await?.check()?;
+
+        // Save to local JSON backup
+        let mythrax_dir = vault_root.join(".mythrax");
+        std::fs::create_dir_all(&mythrax_dir)?;
+        let journal_path = mythrax_dir.join("session_journal.json");
+        
+        let journal_json = serde_json::json!({
+            "session_id": session_id_val,
+            "task_checklist": task_checklist,
+            "htr_tree_state": htr_tree_state,
+            "active_stm": active_stm,
+            "git_commit": git_commit,
+            "timestamp": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        });
+
+        // Atomic write via temp file
+        let tmp_path = journal_path.with_extension("tmp");
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::File::create(&tmp_path)?;
+            file.write_all(serde_json::to_string_pretty(&journal_json)?.as_bytes())?;
+            file.sync_all()?;
+        }
+        std::fs::rename(tmp_path, journal_path)?;
+
+        Ok(())
+    }
+
+    async fn get_checkpoints(&self) -> Result<Vec<serde_json::Value>> {
+        let mut response = self.db.query("SELECT * FROM checkpoint_node ORDER BY timestamp DESC;").await?;
+        let records: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
+        Ok(records)
+    }
 }
 
 
@@ -2229,6 +2584,8 @@ mod tests {
             scope: Some("testing".to_string()),
             vault_path: Some("test_path.md".to_string()),
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
 
         let ep_id = backend.save_episode(&episode).await.unwrap();
@@ -2260,6 +2617,8 @@ mod tests {
             scope: Some("deep-test".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
 
         let ep_id = backend.save_episode(&episode).await.unwrap();
@@ -2313,6 +2672,8 @@ mod tests {
             scope: Some("hydration-test".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
         let ep_id = backend.save_episode(&episode).await.unwrap();
 
@@ -2372,6 +2733,8 @@ mod tests {
             scope: Some("ranking-test".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
         let _ = backend.save_episode(&episode).await.unwrap();
 
@@ -2437,6 +2800,8 @@ mod tests {
             scope: Some("testing".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         }).await.unwrap();
 
         backend.save_stm(parent_id, "distilled_context_nodes", &format!("[\"{}\"]", ep_id)).await.unwrap();
@@ -2472,6 +2837,8 @@ mod tests {
             scope: Some("directional-test".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         }).await.unwrap();
 
         let node = WikiNode {
@@ -2531,6 +2898,8 @@ mod tests {
             scope: Some("budget-test".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
         backend.save_episode(&ep).await.unwrap();
 
@@ -2682,6 +3051,8 @@ mod tests {
             scope: Some("exclusion-test".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
         backend.save_episode(&ep).await.unwrap();
 
@@ -2708,6 +3079,8 @@ mod tests {
             scope: Some("graph-exclusion-test".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         }).await.unwrap();
 
         let node = WikiNode {

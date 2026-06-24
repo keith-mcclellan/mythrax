@@ -498,7 +498,12 @@ impl DreamCoordinator {
 
                 let sys_wisdom = "You are a systems synthesizer. Analyze the events and extract system-level Wisdom Rules to avoid mistakes. Respond with a JSON array of rules.";
                 let prompt_wisdom = format!(
-                    "Events:\n\n{}Respond ONLY with a JSON array of objects, each containing:\n- target_pattern (context/trigger)\n- action_to_avoid (what to avoid)\n- causal_explanation (why to avoid)\n- prescribed_remedy (what to do instead)",
+                    "Events:\n\n{}Respond ONLY with a JSON array of objects, each containing exactly:\n\
+                    - target_pattern (string: context/trigger)\n\
+                    - action_to_avoid (string: what to avoid)\n\
+                    - causal_explanation (string: why to avoid)\n\
+                    - prescribed_remedy (string: what to do instead)\n\
+                    - rule_type (string: must be either \"aesthetic\" or \"procedural\". \"aesthetic\" rules govern styling, CSS, visual layouts, colors, or UI tokens. \"procedural\" rules govern workflows, TDD, testing, git, database logic, or compilers.)",
                     events_text
                 );
 
@@ -509,9 +514,14 @@ impl DreamCoordinator {
                         action_to_avoid: String,
                         causal_explanation: String,
                         prescribed_remedy: String,
+                        #[serde(default)]
+                        rule_type: Option<String>,
                     }
                     if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
                         for r in rules {
+                            let rule_type = r.rule_type.as_deref().unwrap_or("aesthetic").to_lowercase();
+                            let is_procedural = rule_type == "procedural";
+
                             let mut source_ep_links = Vec::new();
                             let mut eps_to_link = Vec::new();
                             if let Ok(mem_nodes) = db.get_memory_nodes(&cluster_ep_ids).await {
@@ -530,10 +540,19 @@ impl DreamCoordinator {
                             };
 
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                            let (rule_path, final_tier, final_scope) = if is_procedural {
+                                // Save to global/wisdom/permanent/
+                                let relative_global_path = format!("global/wisdom/permanent/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                                (relative_global_path, "permanent".to_string(), "general".to_string())
+                            } else {
+                                // Save to wisdom/dynamic/ (local)
+                                let relative_local_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                                (relative_local_path, "dynamic".to_string(), scope.clone())
+                            };
+
                             let rule_md = format!(
-                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, scope,
+                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
+                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier, final_scope,
                                 cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
                                 r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
                                 source_ep_section
@@ -550,8 +569,8 @@ impl DreamCoordinator {
                                 action_to_avoid: r.action_to_avoid,
                                 causal_explanation: r.causal_explanation,
                                 prescribed_remedy: r.prescribed_remedy,
-                                tier: "dynamic".to_string(),
-                                scope: scope.clone(),
+                                tier: final_tier,
+                                scope: final_scope,
                                 vault_path: Some(rule_path),
                                 embedding: None,
                                 source_episodes: cluster_ep_ids.clone(),

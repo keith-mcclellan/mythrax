@@ -211,7 +211,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         let commit_sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         let executor = crate::cognitive::executor::ArborExecutor::new(self.repo_path.clone());
-        let (_success, logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes)?;
+        let (_success, logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes, &self.backend).await?;
 
         node.result = Some(logs);
         

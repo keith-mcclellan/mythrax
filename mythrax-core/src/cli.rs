@@ -78,6 +78,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: HtrAction,
     },
+    /// Recover from a crash using dual-durability journals
+    Recover {
+        /// The session ID to recover
+        #[arg(short, long)]
+        session: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

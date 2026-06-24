@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use anyhow::{Result, anyhow};
+use crate::db::StorageBackend;
 
 pub struct ArborExecutor {
     repo_path: PathBuf,
@@ -11,12 +12,13 @@ impl ArborExecutor {
         Self { repo_path }
     }
 
-    pub fn execute(
+    pub async fn execute(
         &self,
         node_id: &str,
         commit_sha: &str,
         test_command: &str,
         code_changes: &Option<std::collections::HashMap<String, String>>,
+        backend: &crate::db::SurrealBackend,
     ) -> Result<(bool, String)> {
         let worktree_dir = format!("/tmp/worktree-node-{}", node_id);
         let worktree_path = PathBuf::from(&worktree_dir);
@@ -85,7 +87,16 @@ impl ArborExecutor {
         let success = output.status.success();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let combined_logs = format!("{}\n{}", stdout, stderr);
+        let mut combined_logs = format!("{}\n{}", stdout, stderr);
+
+        if !success {
+            if let Ok(Some((explanation, remedy))) = backend.diagnose_error_internal(&stderr, &stdout).await {
+                combined_logs.push_str(&format!(
+                    "\n---\n[MYTHRAX AUTO-DIAGNOSTIC]: A matching failure was resolved in the database.\n- Causal Explanation: {}\n- Prescribed Remedy: {}\n---\n",
+                    explanation, remedy
+                ));
+            }
+        }
 
         // Clean up
         self.cleanup_worktree(node_id)?;

@@ -100,4 +100,17 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS value ON short_term_memory TYPE string;
     DEFINE FIELD IF NOT EXISTS updated_at ON short_term_memory TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS stm_session_key ON short_term_memory FIELDS session_id, key UNIQUE;
+
+    DEFINE TABLE IF NOT EXISTS followed_by SCHEMAFULL TYPE RELATION IN episode OUT episode;
+    DEFINE FIELD IF NOT EXISTS duration ON followed_by TYPE option<duration>;
+    DEFINE FIELD IF NOT EXISTS created_at ON followed_by TYPE datetime DEFAULT time::now();
+
+    DEFINE TABLE IF NOT EXISTS superseded_by SCHEMAFULL TYPE RELATION IN wisdom OUT wisdom;
+    DEFINE FIELD IF NOT EXISTS reason ON superseded_by TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS created_at ON superseded_by TYPE datetime DEFAULT time::now();
+
+    DEFINE TABLE IF NOT EXISTS session_state SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS checkpoint_node SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS symbol_archive SCHEMALESS;
 ";
+

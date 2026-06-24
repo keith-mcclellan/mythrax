@@ -59,6 +59,11 @@ pub fn start_watching(
 
     watcher.watch(&vault_root, RecursiveMode::Recursive)?;
 
+    let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
+    if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
+        watcher.watch(global_dir, RecursiveMode::Recursive)?;
+    }
+
     // Spawn a tokio task to handle events
     let backend_clone = backend.clone();
     let store_clone = store.clone();
@@ -89,12 +94,16 @@ pub fn start_watching(
                             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                                 continue;
                             }
-                            if let Ok(rel_path) = path.strip_prefix(&vault_root) {
-                                let rel_path_str = rel_path.to_string_lossy().to_string();
-                                tracing::info!("File removed from vault, deleting from DB: {}", rel_path_str);
-                                if let Err(e) = backend_clone.delete_by_vault_path(&rel_path_str).await {
-                                    tracing::error!("Failed to delete file {} from DB: {:?}", rel_path_str, e);
-                                }
+                            let rel_path_str = if let Ok(rel_path) = path.strip_prefix(&vault_root) {
+                                rel_path.to_string_lossy().to_string()
+                            } else if let Ok(rel_path) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+                                rel_path.to_string_lossy().to_string()
+                            } else {
+                                path.to_string_lossy().to_string()
+                            };
+                            tracing::info!("File removed from vault, deleting from DB: {}", rel_path_str);
+                            if let Err(e) = backend_clone.delete_by_vault_path(&rel_path_str).await {
+                                tracing::error!("Failed to delete file {} from DB: {:?}", rel_path_str, e);
                             }
                         }
                     }
@@ -132,6 +141,7 @@ struct WisdomFrontmatter {
     scope: Option<String>,
     source_episodes: Option<Vec<String>>,
     generator_name: Option<String>,
+    utility: Option<f32>,
 }
 
 pub async fn sync_file_to_db(
@@ -148,10 +158,13 @@ pub async fn sync_file_to_db(
     let plain_body = extract_plain_text(&body);
 
     // Compute relative path
-    let rel_path = path.strip_prefix(&store.vault_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string();
+    let rel_path = if let Ok(rel) = path.strip_prefix(&store.vault_root) {
+        rel.to_string_lossy().to_string()
+    } else if let Ok(rel) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+        rel.to_string_lossy().to_string()
+    } else {
+        path.to_string_lossy().to_string()
+    };
 
     if rel_path.contains("episodes/") {
         let frontmatter: EpisodeFrontmatter = yaml_opt
@@ -170,14 +183,35 @@ pub async fn sync_file_to_db(
             scope: frontmatter.scope,
             vault_path: Some(rel_path),
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
 
         backend.save_episode(&episode).await?;
-    } else if rel_path.contains("wisdom/") {
+    } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
         if let Some(yaml_val) = yaml_opt {
             let frontmatter: WisdomFrontmatter = serde_json::from_value(
                 serde_json::to_value(yaml_val).unwrap_or_default()
             ).context("Failed to parse Wisdom frontmatter")?;
+
+            let is_global = rel_path.starts_with("global/") || rel_path.contains("/global/");
+            let final_tier = if is_global {
+                "permanent".to_string()
+            } else {
+                frontmatter.tier.unwrap_or_else(|| {
+                    if rel_path.contains("wisdom/skills/") {
+                        "skills".to_string()
+                    } else {
+                        "dynamic".to_string()
+                    }
+                })
+            };
+
+            let final_scope = if is_global {
+                "general".to_string()
+            } else {
+                frontmatter.scope.unwrap_or_else(|| "general".to_string())
+            };
 
             let rule = WisdomRule {
                 id: None,
@@ -185,20 +219,14 @@ pub async fn sync_file_to_db(
                 action_to_avoid: frontmatter.action_to_avoid,
                 causal_explanation: frontmatter.causal_explanation,
                 prescribed_remedy: frontmatter.prescribed_remedy,
-                tier: frontmatter.tier.unwrap_or_else(|| {
-                    if rel_path.contains("wisdom/skills/") {
-                        "skills".to_string()
-                    } else {
-                        "dynamic".to_string()
-                    }
-                }),
-                scope: frontmatter.scope.unwrap_or_else(|| "general".to_string()),
+                tier: final_tier,
+                scope: final_scope,
                 vault_path: Some(rel_path),
                 embedding: None,
                 source_episodes: frontmatter.source_episodes.unwrap_or_default(),
                 generator_name: frontmatter.generator_name.unwrap_or_else(|| "manual".to_string()),
                 similarity: None,
-                utility: None,
+                utility: frontmatter.utility,
             };
 
             backend.save_wisdom_rule(&rule).await?;
@@ -362,6 +390,9 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     yaml_val.insert("scope".to_string(), serde_json::json!(rule.scope));
     yaml_val.insert("source_episodes".to_string(), serde_json::json!(rule.source_episodes));
     yaml_val.insert("generator_name".to_string(), serde_json::json!(rule.generator_name));
+    if let Some(utility) = rule.utility {
+        yaml_val.insert("utility".to_string(), serde_json::json!(utility));
+    }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
     format!("---\n{}---\n", yaml_str.trim())
@@ -409,6 +440,8 @@ mod tests {
             scope: Some("bi-testing".to_string()),
             vault_path: None,
             source_episode: None,
+            session_id: None,
+            task_id: None,
         };
         
         let ep_id = save_episode_bidirectional(&episode, &backend, &store, &ignore_list).await.unwrap();

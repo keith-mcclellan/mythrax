@@ -35,6 +35,8 @@ pub struct EpisodeSave {
     pub scope: Option<String>,
     pub vault_path: Option<String>,
     pub source_episode: Option<String>,
+    pub session_id: Option<String>,
+    pub task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +50,8 @@ pub struct SearchResult {
     pub embedding: Option<Vec<f32>>,
     pub vault_path: Option<String>,
     pub source_episode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_nodes: Option<Vec<SearchResult>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]

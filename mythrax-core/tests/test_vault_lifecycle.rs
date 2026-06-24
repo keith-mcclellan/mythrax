@@ -23,6 +23,8 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
         scope: Some("testing".to_string()),
         vault_path: Some("episodes/persist_test.md".to_string()),
         source_episode: None,
+        session_id: None,
+        task_id: None,
     };
     let ep_id = backend.save_episode(&ep).await?;
     assert!(ep_id.contains("episode:"));
@@ -99,6 +101,8 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
         scope: Some("reprocess-test".to_string()),
         vault_path: Some("episodes/stub.md".to_string()),
         source_episode: None,
+        session_id: None,
+        task_id: None,
     };
     let stub_id = backend.save_episode(&save_stub).await?;
     
@@ -126,6 +130,8 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
                 scope: ep.scope.clone(),
                 vault_path: ep.vault_path.clone(),
                 source_episode: ep.source_episode.clone(),
+                session_id: None,
+                task_id: None,
             };
             backend.save_episode(&s).await?;
             reprocess_count += 1;
@@ -148,8 +154,8 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_executor_applies_code_changes() -> Result<()> {
+#[tokio::test]
+async fn test_executor_applies_code_changes() -> Result<()> {
     let tmp = tempdir()?;
     let repo_dir = tmp.path().join("repo");
     fs::create_dir_all(&repo_dir)?;
@@ -171,8 +177,8 @@ fn test_executor_applies_code_changes() -> Result<()> {
         .current_dir(&repo_dir)
         .status();
 
-    // Create a base file
-    fs::write(repo_dir.join("base.txt"), "hello world")?;
+    // Create a dummy file to commit so there is a HEAD commit
+    fs::write(repo_dir.join("base.txt"), "hello")?;
     let _ = std::process::Command::new("git")
         .args(["add", "base.txt"])
         .current_dir(&repo_dir)
@@ -194,13 +200,17 @@ fn test_executor_applies_code_changes() -> Result<()> {
     let mut code_changes = std::collections::HashMap::new();
     code_changes.insert("src/calc.rs".to_string(), "pub fn add(a: i32, b: i32) -> i32 { a + b }".to_string());
 
+    let backend = mythrax_core::db::SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
     // Execute test command
     let (success, logs) = executor.execute(
         "test-node",
         &commit_sha,
         "cat src/calc.rs",
         &Some(code_changes),
-    )?;
+        &backend,
+    ).await?;
 
     assert!(success);
     assert!(logs.contains("pub fn add(a: i32, b: i32) -> i32 { a + b }"));

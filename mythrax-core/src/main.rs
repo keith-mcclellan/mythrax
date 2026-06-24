@@ -1,20 +1,10 @@
 #![allow(async_fn_in_trait)]
 #![recursion_limit = "512"]
 
-mod contracts;
-mod db;
-mod api;
-mod secret_filter;
-mod store;
-mod embeddings;
-mod vault;
-mod wal;
-mod cli;
-mod verify;
-mod auth;
-mod llm;
-mod cognitive;
-mod mcp;
+use mythrax_core::{
+    api, auth, cli, cognitive, contracts, db, llm, mcp, store, vault,
+    verify,
+};
 
 use clap::Parser;
 use std::path::{Path, PathBuf};
@@ -193,7 +183,7 @@ async fn main() -> Result<()> {
                     };
 
                     let auth_token = if token_path.exists() {
-                        crate::auth::load_token(&token_path)?
+                        auth::load_token(&token_path)?
                     } else {
                         "secret-token".to_string()
                     };
@@ -242,9 +232,9 @@ async fn main() -> Result<()> {
                                                 for ep in episodes {
                                                     if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
                                                         let text_to_embed = format!("{}: {}", ep.title, ep.content);
-                                                        if let Ok(vec) = embedder.embed(&text_to_embed)
-                                                            && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                                let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                          if let Ok(vec) = embedder.embed(&text_to_embed)
+                                                             && let Ok(thing) = db::parse_record_id(id_str) {
+                                                                 let update_sql = "UPDATE $id SET embedding = $embedding;";
                                                                 let _ = backend_startup.db.query(update_sql)
                                                                     .bind(("id", thing))
                                                                     .bind(("embedding", vec))
@@ -273,26 +263,38 @@ async fn main() -> Result<()> {
 
                         // Start File-Watcher
                         let _watcher = vault::watcher::start_watching(
-                            vault_path,
+                            vault_path.clone(),
                             ignore_list.clone(),
                             backend.clone(),
                             store.clone(),
                             Some(dream_tx.clone()),
                         )?;
 
+                        // Spawn background checkpointing daemon
+                        let backend_chk = backend.clone();
+                        let vault_chk = vault_path.clone();
+                        tokio::spawn(async move {
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(600)).await; // 10 minutes
+                                if let Err(e) = run_checkpoint(&*backend_chk, &vault_chk).await {
+                                    tracing::error!("Checkpointing daemon error: {:?}", e);
+                                }
+                            }
+                        });
+
                         // Spawn the tokio background scheduler loop
                         let backend_dream = backend.clone();
                         let store_dream = store.clone();
                         tokio::spawn(async move {
-                            let dream_coordinator = crate::cognitive::synthesis::DreamCoordinator::new();
-                            let compactor = crate::cognitive::compactor::Compactor::new();
+                            let dream_coordinator = cognitive::synthesis::DreamCoordinator::new();
+                            let compactor = cognitive::compactor::Compactor::new();
 
                             // Spawn daily scheduler
                             let backend_daily = backend_dream.clone();
                             let store_daily = store_dream.clone();
                             tokio::spawn(async move {
-                                let dc = crate::cognitive::synthesis::DreamCoordinator::new();
-                                let cmp = crate::cognitive::compactor::Compactor::new();
+                                let dc = cognitive::synthesis::DreamCoordinator::new();
+                                let cmp = cognitive::compactor::Compactor::new();
                                 loop {
                                     tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
                                     
@@ -434,7 +436,7 @@ async fn main() -> Result<()> {
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             let token_path = mythrax_dir.join("token");
             let auth_token = if token_path.exists() {
-                crate::auth::load_token(&token_path)?
+                auth::load_token(&token_path)?
             } else {
                 "secret-token".to_string()
             };
@@ -468,7 +470,7 @@ async fn main() -> Result<()> {
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             let token_path = mythrax_dir.join("token");
             let auth_token = if token_path.exists() {
-                crate::auth::load_token(&token_path)?
+                auth::load_token(&token_path)?
             } else {
                 "secret-token".to_string()
             };
@@ -654,6 +656,8 @@ async fn main() -> Result<()> {
                                         scope: ep.scope.clone(),
                                         vault_path: Some(vp.clone()),
                                         source_episode: ep.source_episode.clone(),
+                                        session_id: None,
+                                        task_id: None,
                                     };
                                     let markdown = vault::watcher::format_episode_markdown(&save);
                                     store.write_file(vp, &markdown)?;
@@ -675,6 +679,8 @@ async fn main() -> Result<()> {
                                 scope: ep.scope.clone(),
                                 vault_path: ep.vault_path.clone(),
                                 source_episode: ep.source_episode.clone(),
+                                session_id: None,
+                                task_id: None,
                             };
                             backend.save_episode(&save).await?;
                             count += 1;
@@ -877,8 +883,246 @@ async fn main() -> Result<()> {
             forge.ingest_document(&content, scope_str, &source_path).await?;
             println!("Forge ingestion complete for: {}", source_path);
         }
+        Commands::Recover { session } => {
+            let home = std::env::var("HOME").context("HOME env var not set")?;
+            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+            let config_path = mythrax_dir.join("config.json");
+
+            let vault_path = if config_path.exists() {
+                let content = std::fs::read_to_string(&config_path)?;
+                let val: serde_json::Value = serde_json::from_str(&content)?;
+                PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+            } else {
+                PathBuf::from(&home).join("mythrax-vault")
+            };
+
+            let surreal_url = if config_path.exists() {
+                let content = std::fs::read_to_string(&config_path)?;
+                let val: serde_json::Value = serde_json::from_str(&content)?;
+                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
+            } else {
+                "mem://".to_string()
+            };
+
+            let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+            println!("Starting recovery routine for session: {}...", session);
+
+            let mut journal_opt = None;
+            
+            if let Ok(backend) = SurrealBackend::new(&surreal_url).await {
+                if let Ok(_) = backend.init().await {
+                    let sql = "SELECT * FROM type::record('session_state', $session);";
+                    let query_res = tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        backend.db.query(sql).bind(("session", session.clone()))
+                    ).await;
+
+                    if let Ok(Ok(mut resp)) = query_res {
+                        if let Ok(Some(val)) = resp.take::<Option<serde_json::Value>>(0) {
+                            println!("Successfully loaded session state from SurrealDB.");
+                            journal_opt = Some(val);
+                        }
+                    }
+                }
+            }
+
+            let journal = match journal_opt {
+                Some(j) => j,
+                None => {
+                    println!("Database query timed out or failed. Falling back to local backup file...");
+                    let backup_path = vault_path.join(".mythrax/session_journal.json");
+                    if backup_path.exists() {
+                        let content = std::fs::read_to_string(&backup_path)?;
+                        let val: serde_json::Value = serde_json::from_str(&content)?;
+                        println!("Successfully loaded session state from local backup file: {:?}", backup_path);
+                        val
+                    } else {
+                        anyhow::bail!("Recovery failed: No session journal found in database or local backup file.");
+                    }
+                }
+            };
+
+            let task_checklist = journal["task_checklist"].as_str().unwrap_or("");
+            let active_stm = &journal["active_stm"];
+            let git_commit = journal.get("git_commit")
+                .and_then(|v| v.as_str())
+                .unwrap_or("HEAD")
+                .to_string();
+
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let backup_branch = format!("recovery-stash-{}", timestamp);
+            
+            println!("Creating backup branch: {}...", backup_branch);
+            let _ = std::process::Command::new("git")
+                .args(&["checkout", "-b", &backup_branch])
+                .current_dir(&workspace_root)
+                .status();
+
+            println!("Stashing workspace changes...");
+            let _ = std::process::Command::new("git")
+                .args(&["stash", "save", &format!("Recovery stash for session {}", session)])
+                .current_dir(&workspace_root)
+                .status();
+
+            println!("Resetting workspace to commit: {}...", git_commit);
+            let _ = std::process::Command::new("git")
+                .args(&["reset", "--hard", &git_commit])
+                .current_dir(&workspace_root)
+                .status();
+
+            println!("Swapping provider to cloud fallback...");
+            if config_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&config_path) {
+                    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        val["active_provider"] = serde_json::Value::String("cloud".to_string());
+                        if val.get("cloud_provider").is_none() {
+                            val["cloud_provider"] = serde_json::Value::String("gemini".to_string());
+                        }
+                        if val.get("model").is_none() {
+                            val["model"] = serde_json::Value::String("gemini-1.5-flash".to_string());
+                        }
+                        let _ = std::fs::write(&config_path, serde_json::to_string_pretty(&val)?);
+                    }
+                }
+            }
+
+            if let Ok(backend) = SurrealBackend::new(&surreal_url).await {
+                if let Ok(_) = backend.init().await {
+                    let update_sql = "
+                        UPSERT config:settings CONTENT {
+                            active_provider: 'cloud',
+                            cloud_provider: 'gemini',
+                            model: 'gemini-1.5-flash',
+                            is_override: false
+                        };
+                    ";
+                    let _ = backend.db.query(update_sql).await;
+
+                    println!("Rehydrating active STM keys into database...");
+                    if let Some(obj) = active_stm.as_object() {
+                        for (key, val) in obj {
+                            if let Some(val_str) = val.as_str() {
+                                let stm_sql = "
+                                    UPSERT type::record('short_term_memory', [$session_id, $key]) CONTENT {
+                                        session_id: $session_id,
+                                        key: $key,
+                                        value: $value,
+                                        updated_at: time::now()
+                                    };
+                                ";
+                                let _ = backend.db.query(stm_sql)
+                                    .bind(("session_id", session.clone()))
+                                    .bind(("key", key.clone()))
+                                    .bind(("value", val_str))
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            println!("Rehydrating task checklist in task.md...");
+            let task_md_path = workspace_root.join("task.md");
+            std::fs::write(&task_md_path, task_checklist)?;
+
+            println!("Recovery complete!");
+            println!("=== REHYDRATED TASK STATE ===");
+            println!("{}", task_checklist);
+            println!("=============================");
+            println!("Please resume your work.");
+        }
     }
 
+    Ok(())
+}
+
+async fn run_checkpoint(backend: &db::SurrealBackend, _vault_root: &std::path::Path) -> Result<()> {
+    let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let mut project_type = "unknown";
+    let mut check_cmd = vec![];
+    
+    if workspace_root.join("Cargo.toml").exists() {
+        project_type = "rust";
+        check_cmd = vec!["cargo", "check"];
+    } else if workspace_root.join("package.json").exists() {
+        project_type = "typescript";
+        check_cmd = vec!["npx", "tsc", "--noEmit"];
+    } else {
+        let has_py = std::fs::read_dir(&workspace_root)
+            .map(|dir| dir.flatten().any(|entry| entry.path().extension().map_or(false, |ext| ext == "py")))
+            .unwrap_or(false);
+        if has_py {
+            project_type = "python";
+            check_cmd = vec!["python", "-m", "py_compile"];
+        }
+    }
+
+    let check_cmd_clone = check_cmd.clone();
+    let workspace_clone = workspace_root.clone();
+    
+    let compile_result = tokio::task::spawn_blocking(move || {
+        if check_cmd_clone.is_empty() {
+            return (0, String::new());
+        }
+        let output = std::process::Command::new(check_cmd_clone[0])
+            .args(&check_cmd_clone[1..])
+            .current_dir(&workspace_clone)
+            .output();
+        match output {
+            Ok(out) => {
+                let exit_code = out.status.code().unwrap_or(0);
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                (exit_code, stderr)
+            }
+            Err(e) => (-1, e.to_string())
+        }
+    }).await.unwrap_or((-2, "Thread panic".to_string()));
+
+    let git_diff = tokio::task::spawn_blocking(move || {
+        let output = std::process::Command::new("git")
+            .args(&["diff"])
+            .current_dir(&workspace_root)
+            .output();
+        match output {
+            Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+            Err(e) => e.to_string()
+        }
+    }).await.unwrap_or_else(|_| "Thread panic".to_string());
+
+    let checkpoint_id = format!("checkpoint_{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs());
+
+    let sql = "
+        UPSERT type::record('checkpoint_node', $id) CONTENT {
+            project_type: $project_type,
+            exit_code: $exit_code,
+            compiler_errors: $compiler_errors,
+            git_diff: $git_diff,
+            timestamp: time::now()
+        };
+    ";
+    backend.db.query(sql)
+        .bind(("id", checkpoint_id.clone()))
+        .bind(("project_type", project_type))
+        .bind(("exit_code", compile_result.0))
+        .bind(("compiler_errors", compile_result.1))
+        .bind(("git_diff", git_diff))
+        .await?.check()?;
+
+    tracing::info!("Saved CheckpointNode: {}", checkpoint_id);
     Ok(())
 }
 
@@ -1204,7 +1448,7 @@ async fn config_harness_action(
     if let Some(path) = history_path {
         println!("Auto-discovered/provided history source found at: {:?}", path);
         println!("Running bulk ingestion of historical transcripts...");
-        match crate::vault::ingestion::bulk_ingest_vault(
+        match vault::ingestion::bulk_ingest_vault(
             vault_root,
             &path,
             harness,

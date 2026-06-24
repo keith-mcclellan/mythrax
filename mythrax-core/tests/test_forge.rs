@@ -87,9 +87,15 @@ async fn test_ingest_document() -> Result<()> {
     let vault_root = tmp.path().join("vault");
     fs::create_dir_all(&vault_root)?;
 
-    // Set env var to mock LLM calls
+    // Create a temporary project directory to act as the workspace root
+    let proj_dir = tmp.path().join("testscope");
+    fs::create_dir_all(&proj_dir)?;
+    fs::write(proj_dir.join("Cargo.toml"), "")?;
+
+    // Set env var to mock LLM calls and configure active scope
     unsafe {
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+        std::env::set_var("MYTHRAX_WORKSPACE_ROOT", proj_dir.to_string_lossy().to_string());
     }
 
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
@@ -98,8 +104,8 @@ async fn test_ingest_document() -> Result<()> {
 
     let forge = mythrax_core::cognitive::forge::Forge::new(backend.clone(), store.clone());
     
-    // Ingest a document
-    forge.ingest_document("Some document text to analyze.", "test_scope", "test_source").await?;
+    // Ingest a document under normalized "testscope" scope
+    forge.ingest_document("Some document text to analyze.", "testscope", "test_source").await?;
 
     // Verify wisdom rules and wiki nodes are written and saved to db
     // 1. Files on disk
@@ -134,7 +140,9 @@ async fn test_ingest_document() -> Result<()> {
         relative_wiki
     );
 
-
+    unsafe {
+        std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
+    }
 
     Ok(())
 }

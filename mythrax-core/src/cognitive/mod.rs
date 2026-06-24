@@ -6,5 +6,6 @@ pub mod critic;
 pub mod arbor;
 pub mod forge;
 pub mod meta_skill;
+pub mod paging;
 
 pub use arbor::*;
