@@ -71,6 +71,9 @@ pub struct WisdomRule {
     pub generator_name: String,
     pub similarity: Option<f32>,
     pub utility: Option<f32>,
+    pub status: Option<String>,
+    pub superseded_at: Option<String>,
+    pub superseded_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

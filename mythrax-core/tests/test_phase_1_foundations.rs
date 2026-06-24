@@ -169,6 +169,9 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     backend.save_wisdom_rule(&rule_rust).await?;
 
@@ -187,6 +190,9 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     backend.save_wisdom_rule(&rule_lock).await?;
 
@@ -276,6 +282,9 @@ async fn test_executor_decorates_failures() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     backend.save_wisdom_rule(&rule).await?;
 

@@ -106,6 +106,9 @@ impl Forge {
                                     generator_name: "ForgePipeline".to_string(),
                                     similarity: None,
                                     utility: None,
+                                    status: None,
+                                    superseded_at: None,
+                                    superseded_by: None,
                                 };
                                 let _ = crate::cognitive::synthesis::save_wisdom_rule_with_deduplication(&*self.backend, &self.store, &rule_contract).await;
                             }

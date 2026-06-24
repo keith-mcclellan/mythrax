@@ -1510,6 +1510,9 @@ pub async fn run_llm_critic(
         generator_name: "LlmCritic".to_string(),
         similarity: None,
         utility: Some(50.0),
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
 
     let markdown = crate::vault::watcher::format_wisdom_markdown(&rule_save);

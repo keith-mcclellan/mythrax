@@ -84,6 +84,9 @@ Rule body"#;
         generator_name: "test".to_string(),
         similarity: None,
         utility: Some(50.0),
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
 
     // Save wisdom rule (should trigger T1 federated promotion)
@@ -258,12 +261,16 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
     fs::create_dir_all(vault_root.join("episodes"))?;
     fs::create_dir_all(vault_root.join("wiki"))?;
 
+    let workspace_root = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace_root)?;
+
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
     let store = MarkdownStore::new(&vault_root)?;
     let compactor = Compactor::new();
 
     unsafe {
+        std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
 
@@ -393,6 +400,147 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
     assert!(handoff_content.contains("### Citations"));
     assert!(handoff_content.contains("Cited Episode"));
     assert!(handoff_content.contains("episodes/cited.md"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_wisdom_rule_supersession_lifecycle() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("wisdom/dynamic"))?;
+
+    unsafe {
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+    let store = MarkdownStore::new(&vault_root)?;
+
+    // 1. Seed an existing dynamic wisdom rule
+    let old_rule_vault_path = "wisdom/dynamic/old_rule.md";
+    let old_rule_content = r#"---
+target_pattern: "TestPattern"
+action_to_avoid: "Avoiding X"
+causal_explanation: "Causes Y"
+prescribed_remedy: "Use Z"
+tier: "dynamic"
+scope: "general"
+generator_name: "manual"
+---
+Old rule body"#;
+    store.write_file(old_rule_vault_path, old_rule_content)?;
+
+    let old_rule = WisdomRule {
+        id: None,
+        target_pattern: "TestPattern".to_string(),
+        action_to_avoid: "Avoiding X".to_string(),
+        causal_explanation: "Causes Y".to_string(),
+        prescribed_remedy: "Use Z".to_string(),
+        tier: "dynamic".to_string(),
+        scope: "general".to_string(),
+        vault_path: Some(old_rule_vault_path.to_string()),
+        embedding: None,
+        source_episodes: vec!["ep_1".to_string()],
+        generator_name: "manual".to_string(),
+        similarity: None,
+        utility: Some(50.0),
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
+    };
+
+    // Save the old rule in the DB to get its ID
+    let old_rule_id = backend.save_wisdom_rule(&old_rule).await?;
+
+    // Verify it exists and is active
+    let old_rules_check = backend.get_wisdom("TestPattern", None, 10, 0, 0.0).await?;
+    assert_eq!(old_rules_check.results.len(), 1);
+
+    // 2. Create a new similar rule to trigger deduplication and supersession
+    let new_rule_vault_path = "wisdom/dynamic/new_rule.md";
+    let new_rule = WisdomRule {
+        id: None,
+        target_pattern: "TestPattern".to_string(), // identical pattern to ensure high similarity/match
+        action_to_avoid: "Avoiding X but slightly different".to_string(),
+        causal_explanation: "Causes Y".to_string(),
+        prescribed_remedy: "Use Z and also W".to_string(),
+        tier: "dynamic".to_string(),
+        scope: "general".to_string(),
+        vault_path: Some(new_rule_vault_path.to_string()),
+        embedding: None,
+        source_episodes: vec!["ep_2".to_string()],
+        generator_name: "manual".to_string(),
+        similarity: None,
+        utility: Some(50.0),
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
+    };
+
+    // Call save_wisdom_rule_with_deduplication
+    // This should trigger the merge, save a new merged rule, and mark the old rule as superseded!
+    let new_rule_id = mythrax_core::cognitive::synthesis::save_wisdom_rule_with_deduplication(&backend, &store, &new_rule).await?;
+    assert!(new_rule_id.starts_with("wisdom:"));
+
+    // 3. Verify old rule status is updated to "superseded" in SurrealDB
+    let mut resp = backend.db.query("SELECT status, superseded_at FROM type::record('wisdom', $id);")
+        .bind(("id", parse_record_id(&old_rule_id)?))
+        .await?;
+    let status_check: Option<serde_json::Value> = resp.take(0)?;
+    assert!(status_check.is_some());
+    let status_val = status_check.unwrap();
+    assert_eq!(status_val["status"].as_str().unwrap(), "superseded");
+    assert!(!status_val["superseded_at"].is_null());
+
+    // 4. Verify superseded_by edge is correctly written
+    let mut edge_resp = backend.db.query("SELECT * FROM superseded_by;")
+        .await?;
+    let edges: Vec<serde_json::Value> = edge_resp.take(0)?;
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0]["reason"].as_str().unwrap(), "Consolidated during dreaming compaction");
+
+    // 5. Verify the old file is preserved and moved to wisdom/superseded_archive/
+    let old_file_path = vault_root.join(old_rule_vault_path);
+    assert!(!old_file_path.exists());
+    let archived_file_path = vault_root.join("wisdom/superseded_archive/old_rule.md");
+    assert!(archived_file_path.exists());
+
+    // Verify archived rule's file content is updated
+    let archived_content = fs::read_to_string(&archived_file_path)?;
+    assert!(archived_content.contains("status: \"superseded\""));
+    assert!(archived_content.contains(&format!("superseded_by: \"{}\"", new_rule_id)));
+
+    // 6. Verify search and diagnostics ignore the superseded rule and only return the active merged rule
+    let _search_res = backend.get_wisdom("TestPattern", None, 10, 0, 0.0).await?;
+    // The search results should only contain the active rule, not the superseded one!
+    // Since the mock LLM returned target_pattern: "test_pattern" when merging, the newly saved merged rule
+    // actually has pattern "test_pattern" (or "TestPattern" if it was merged). Wait, the mock LLM returns:
+    // `[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]`
+    // So the new rule's target_pattern is "test_pattern".
+    // Let's search for "test_pattern" and verify it's the only active one!
+    let search_res_merged = backend.get_wisdom("test_pattern", None, 10, 0, 0.0).await?;
+    assert_eq!(search_res_merged.results.len(), 1);
+    assert_eq!(search_res_merged.results[0].id.as_ref().unwrap(), &new_rule_id);
+
+    // Let's also check that get_wisdom for the old "TestPattern" does not return the superseded rule
+    let search_res_old = backend.get_wisdom("TestPattern", None, 10, 0, 0.0).await?;
+    for result in search_res_old.results {
+        assert_ne!(result.id.as_ref().unwrap(), &old_rule_id, "Superseded rule should not be returned by search");
+    }
+
+    // Verify diagnose_error_internal ignores the old rule
+    // We can run diagnose_error_internal with a signature matching the old rule, and it should return None
+    // since the old rule is superseded and the query filters it out!
+    let diag_res = backend.diagnose_error_internal("TestPattern", "").await?;
+    assert!(diag_res.is_none());
 
     Ok(())
 }

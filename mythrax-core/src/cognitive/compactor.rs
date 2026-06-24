@@ -77,6 +77,7 @@ impl Compactor {
         store: &MarkdownStore,
         scope: &str,
     ) -> Result<()> {
+        let _ = auto_page_workspace_files(db).await;
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
         let insights = load_insights(&store.vault_root);
@@ -182,6 +183,7 @@ impl Compactor {
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -244,6 +246,7 @@ impl Compactor {
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -298,6 +301,7 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
     ) -> Result<()> {
+        let _ = auto_page_workspace_files(db).await;
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
         let compaction_dir = store.vault_root.join("wiki/compaction");
@@ -333,6 +337,7 @@ impl Compactor {
         let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.";
         let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
         let global_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+        let global_summary = page_markdown_code_blocks(db, &global_summary).await?;
 
         let stm_anchors = get_active_stm_anchors(&store.vault_root);
         let mut all_anchors = extracted_anchors;
@@ -514,4 +519,110 @@ fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
     }
 
     anchors
+}
+
+#[allow(dead_code)]
+fn scan_source_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let path_str = path.to_string_lossy();
+            if path_str.contains("mythrax-core/src")
+                || path_str.contains("mythrax-core/tests")
+                || path_str.contains("mythrax-core/Cargo.toml")
+            {
+                continue;
+            }
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "target"
+                        || name == ".git"
+                        || name == ".venv"
+                        || name == ".agents"
+                        || name == ".mythrax-shared"
+                        || name == "vault"
+                    {
+                        continue;
+                    }
+                }
+                scan_source_files(&path, files);
+            } else if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext == "rs" || ext == "ts" || ext == "py" {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn auto_page_workspace_files(_db: &dyn StorageBackend) -> Result<()> {
+    Ok(())
+}
+
+pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) -> Result<String> {
+    let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() else {
+        return Ok(markdown.to_string());
+    };
+
+    let mut result = String::new();
+    let mut in_code_block = false;
+    let mut current_block = String::new();
+    let mut current_lang = "";
+
+    for line in markdown.lines() {
+        if in_code_block {
+            if line.trim() == "```" {
+                // End of code block. Page the content
+                let paged = if !current_lang.is_empty() {
+                    crate::cognitive::paging::page_code_block(surreal, &current_block, current_lang).await?
+                } else {
+                    current_block.clone()
+                };
+                result.push_str(&paged);
+                if !result.ends_with('\n') {
+                    result.push('\n');
+                }
+                result.push_str("```\n");
+                in_code_block = false;
+                current_block.clear();
+            } else {
+                current_block.push_str(line);
+                current_block.push_str("\n");
+            }
+        } else {
+            if line.starts_with("```") {
+                let lang = line["```".len()..].trim();
+                let matched_lang = match lang {
+                    "rust" | "rs" => Some("rs"),
+                    "typescript" | "ts" => Some("ts"),
+                    "javascript" | "js" => Some("js"),
+                    "python" | "py" => Some("py"),
+                    _ => None,
+                };
+                if let Some(l) = matched_lang {
+                    in_code_block = true;
+                    current_lang = l;
+                    result.push_str(line);
+                    result.push_str("\n");
+                } else {
+                    result.push_str(line);
+                    result.push_str("\n");
+                }
+            } else {
+                result.push_str(line);
+                result.push_str("\n");
+            }
+        }
+    }
+
+    if markdown.ends_with('\n') {
+        Ok(result)
+    } else {
+        if result.ends_with('\n') {
+            result.pop();
+        }
+        Ok(result)
+    }
 }

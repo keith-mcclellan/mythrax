@@ -126,6 +126,7 @@ pub trait StorageBackend: Send + Sync {
     async fn reinforce_episode(&self, id: &str) -> Result<()>;
     async fn journal_state(&self, vault_root: &std::path::Path, session_id: Option<&str>) -> Result<()>;
     async fn get_checkpoints(&self) -> Result<Vec<serde_json::Value>>;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 pub struct SurrealBackend {
@@ -299,6 +300,9 @@ struct WisdomRaw {
     source_episodes: Option<Vec<String>>,
     generator_name: String,
     utility: Option<f32>,
+    status: Option<String>,
+    superseded_at: Option<String>,
+    superseded_by: Option<String>,
 }
 
 impl WisdomRaw {
@@ -318,6 +322,9 @@ impl WisdomRaw {
             generator_name: self.generator_name,
             similarity: None,
             utility: self.utility,
+            status: self.status,
+            superseded_at: self.superseded_at,
+            superseded_by: self.superseded_by,
         }
     }
 }
@@ -476,6 +483,10 @@ fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]
 
 #[async_trait]
 impl StorageBackend for SurrealBackend {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn init(&self) -> Result<()> {
         self.db.query(INIT_SCHEMA).await?
             .check().context("Applying schemas failed")?;
@@ -694,7 +705,10 @@ impl StorageBackend for SurrealBackend {
                         vault_path: $vault_path,
                         source_episodes: $source_episodes,
                         generator_name: $generator_name,
-                        embedding: $embedding
+                        embedding: $embedding,
+                        status: $status,
+                        superseded_at: $superseded_at,
+                        superseded_by: $superseded_by
                     };
                     UPDATE metrics SET utility_score = $utility_score WHERE target_id = $rule;
                     COMMIT TRANSACTION;
@@ -713,7 +727,10 @@ impl StorageBackend for SurrealBackend {
                         vault_path: $vault_path,
                         source_episodes: $source_episodes,
                         generator_name: $generator_name,
-                        embedding: $embedding
+                        embedding: $embedding,
+                        status: $status,
+                        superseded_at: $superseded_at,
+                        superseded_by: $superseded_by
                     };
                     COMMIT TRANSACTION;
                 ".to_string()
@@ -734,7 +751,10 @@ impl StorageBackend for SurrealBackend {
                     vault_path: $vault_path,
                     source_episodes: $source_episodes,
                     generator_name: $generator_name,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    status: $status,
+                    superseded_at: $superseded_at,
+                    superseded_by: $superseded_by
                 };
                 
                 CREATE $met CONTENT {
@@ -782,6 +802,9 @@ impl StorageBackend for SurrealBackend {
             .bind(("generator_name", rule.generator_name.as_str()))
             .bind(("embedding", embedding_val.clone()))
             .bind(("utility_score", utility_val))
+            .bind(("status", rule.status.as_deref().unwrap_or("active")))
+            .bind(("superseded_at", rule.superseded_at.as_deref()))
+            .bind(("superseded_by", rule.superseded_by.as_deref()))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
@@ -942,7 +965,8 @@ impl StorageBackend for SurrealBackend {
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wisdom
-                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                    WHERE status != 'superseded'
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|100, 100|> $query_embedding);
                     ",
                     traversal = traversal,
@@ -961,7 +985,8 @@ impl StorageBackend for SurrealBackend {
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wisdom
-                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                    WHERE status != 'superseded'
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|100, 100|> $query_embedding);
                     ",
                     wiki_node_filter = wiki_node_filter
@@ -1008,7 +1033,8 @@ impl StorageBackend for SurrealBackend {
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wisdom 
-                    WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
+                    WHERE status != 'superseded'
+                      AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                     ",
                     traversal = traversal,
@@ -1027,7 +1053,8 @@ impl StorageBackend for SurrealBackend {
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wisdom 
-                    WHERE (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
+                    WHERE status != 'superseded'
+                      AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                     ",
                     wiki_node_filter = wiki_node_filter
@@ -1354,7 +1381,8 @@ impl StorageBackend for SurrealBackend {
                 SELECT *,
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM wisdom
-                WHERE tier = $tier
+                WHERE status != 'superseded'
+                  AND tier = $tier
                   AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
                   AND (embedding <|100, 100|> $query_embedding);
                 "
@@ -1363,7 +1391,8 @@ impl StorageBackend for SurrealBackend {
                 SELECT *,
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM wisdom
-                WHERE (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
+                WHERE status != 'superseded'
+                  AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
                   AND (embedding <|100, 100|> $query_embedding);
                 "
             };
@@ -1380,7 +1409,8 @@ impl StorageBackend for SurrealBackend {
                 SELECT *,
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM wisdom
-                WHERE tier = $tier
+                WHERE status != 'superseded'
+                  AND tier = $tier
                   AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
                   AND (string::contains(target_pattern, $query) OR string::contains(causal_explanation, $query));
                 "
@@ -1389,7 +1419,8 @@ impl StorageBackend for SurrealBackend {
                 SELECT *,
                        (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                 FROM wisdom
-                WHERE (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
+                WHERE status != 'superseded'
+                  AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
                   AND (string::contains(target_pattern, $query) OR string::contains(causal_explanation, $query));
                 "
             };
@@ -2438,7 +2469,8 @@ impl StorageBackend for SurrealBackend {
         let sql = "
             SELECT *,
                    (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-            FROM wisdom;
+            FROM wisdom
+            WHERE status != 'superseded';
         ";
         let mut response = self.db.query(sql).await?.check().context("Get all wisdom rules query failed")?;
         let raws: Vec<WisdomRaw> = response.take(0)?;
@@ -2487,7 +2519,7 @@ impl StorageBackend for SurrealBackend {
         }
 
         if let Some(sig) = matched_signature {
-            let sql = "SELECT causal_explanation, prescribed_remedy FROM wisdom WHERE string::contains(target_pattern, $sig) LIMIT 1;";
+            let sql = "SELECT causal_explanation, prescribed_remedy FROM wisdom WHERE status != 'superseded' AND string::contains(target_pattern, $sig) LIMIT 1;";
             let res = self.db.query(sql).bind(("sig", sig.as_str())).await?;
             let mut res = res.check()?;
             #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -2510,7 +2542,7 @@ impl StorageBackend for SurrealBackend {
             if let Ok(q_vec) = embedder.embed(embed_text) {
                 let sql = "
                     SELECT causal_explanation, prescribed_remedy, embedding FROM wisdom
-                    WHERE (embedding <|1, 10|> $query_embedding);
+                    WHERE status != 'superseded' AND (embedding <|1, 10|> $query_embedding);
                 ";
                 let res = self.db.query(sql).bind(("query_embedding", q_vec.clone())).await?;
                 let mut res = res.check()?;
@@ -2849,6 +2881,9 @@ mod tests {
             generator_name: "test".to_string(),
             similarity: None,
             utility: None,
+            status: None,
+            superseded_at: None,
+            superseded_by: None,
         };
         let rule_id = backend.save_wisdom_rule(&rule).await.unwrap();
 
@@ -2910,6 +2945,9 @@ mod tests {
             generator_name: "test".to_string(),
             similarity: None,
             utility: None,
+            status: None,
+            superseded_at: None,
+            superseded_by: None,
         };
         let _ = backend.save_wisdom_rule(&rule).await.unwrap();
 
@@ -3044,6 +3082,9 @@ mod tests {
             generator_name: "test".to_string(),
             similarity: None,
             utility: None,
+            status: None,
+            superseded_at: None,
+            superseded_by: None,
         };
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 
@@ -3117,6 +3158,9 @@ mod tests {
             generator_name: "test".to_string(),
             similarity: None,
             utility: None,
+            status: None,
+            superseded_at: None,
+            superseded_by: None,
         };
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 

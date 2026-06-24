@@ -577,6 +577,9 @@ impl DreamCoordinator {
                                 generator_name: "DreamCoordinator".to_string(),
                                 similarity: None,
                                 utility: None,
+                                status: None,
+                                superseded_at: None,
+                                superseded_by: None,
                             };
                             if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
                                 for ep_id in &cluster_ep_ids {
@@ -878,6 +881,41 @@ pub fn safe_delete_file(vault_root: &std::path::Path, relative_path: &str) -> st
     Ok(())
 }
 
+fn update_archived_rule_content(content: &str, new_id: &str) -> String {
+    if content.starts_with("---") {
+        if let Some(second_dash_idx) = content[3..].find("---") {
+            let actual_second_idx = second_dash_idx + 3;
+            let frontmatter = &content[3..actual_second_idx];
+            let rest = &content[actual_second_idx..];
+            
+            let mut new_frontmatter = String::new();
+            let mut status_written = false;
+            let mut superseded_by_written = false;
+            for line in frontmatter.lines() {
+                if line.trim().starts_with("status:") {
+                    new_frontmatter.push_str("status: \"superseded\"\n");
+                    status_written = true;
+                } else if line.trim().starts_with("superseded_by:") {
+                    new_frontmatter.push_str(&format!("superseded_by: \"{}\"\n", new_id));
+                    superseded_by_written = true;
+                } else {
+                    new_frontmatter.push_str(line);
+                    new_frontmatter.push_str("\n");
+                }
+            }
+            if !status_written {
+                new_frontmatter.push_str("status: \"superseded\"\n");
+            }
+            if !superseded_by_written {
+                new_frontmatter.push_str(&format!("superseded_by: \"{}\"\n", new_id));
+            }
+            
+            return format!("---\n{}---{}", new_frontmatter, rest);
+        }
+    }
+    format!("---\nstatus: \"superseded\"\nsuperseded_by: \"{}\"\n---\n\n{}", new_id, content)
+}
+
 pub async fn save_wisdom_rule_with_deduplication(
     db: &dyn StorageBackend,
     store: &MarkdownStore,
@@ -1016,14 +1054,6 @@ pub async fn save_wisdom_rule_with_deduplication(
                             tracing::error!("Failed to write merged rule file: {}", e);
                         }
 
-                        if let Some(ref old_vp) = matched.vault_path {
-                            let _ = safe_delete_file(&store.vault_root, old_vp);
-                        }
-
-                        if let Some(ref old_vp) = matched.vault_path {
-                            let _ = db.delete_by_vault_path(old_vp).await;
-                        }
-
                         let merged_contract = WisdomRule {
                             id: None,
                             target_pattern: fields.target_pattern,
@@ -1038,10 +1068,52 @@ pub async fn save_wisdom_rule_with_deduplication(
                             generator_name: "DreamCoordinator".to_string(),
                             similarity: None,
                             utility: None,
+                            status: None,
+                            superseded_at: None,
+                            superseded_by: None,
                         };
 
                         match db.save_wisdom_rule(&merged_contract).await {
-                            Ok(saved_id) => return Ok(saved_id),
+                            Ok(saved_id) => {
+                                // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
+                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                                    let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
+                                    let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
+                                    
+                                    let sql = "
+                                        LET $old_rec = type::record('wisdom', $old_uuid);
+                                        LET $new_rec = type::record('wisdom', $new_uuid);
+                                        UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
+                                        RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
+                                    ";
+                                    if let Err(e) = surreal_backend.db.query(sql)
+                                        .bind(("old_uuid", old_uuid))
+                                        .bind(("new_uuid", new_uuid))
+                                        .await {
+                                        tracing::error!("Failed to update superseded status or relate nodes: {}", e);
+                                    }
+                                }
+
+                                // 2. Move physical old rule file to superseded_archive
+                                if let Some(ref old_vp) = matched.vault_path {
+                                    let src_path = store.vault_root.join(old_vp);
+                                    if src_path.exists() {
+                                        let archive_dir = store.vault_root.join("wisdom/superseded_archive");
+                                        let _ = std::fs::create_dir_all(&archive_dir);
+                                        if let Some(filename) = src_path.file_name() {
+                                            let dest_path = archive_dir.join(filename);
+                                            if std::fs::rename(&src_path, &dest_path).is_ok() {
+                                                if let Ok(content) = std::fs::read_to_string(&dest_path) {
+                                                    let updated_content = update_archived_rule_content(&content, &saved_id);
+                                                    let _ = std::fs::write(&dest_path, updated_content);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                return Ok(saved_id);
+                            }
                             Err(e) => {
                                 tracing::warn!("Failed to save merged rule to SurrealDB: {}", e);
                             }

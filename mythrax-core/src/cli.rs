@@ -330,6 +330,9 @@ pub async fn handle_merge_vault() -> Result<()> {
                             generator_name: frontmatter.get("generator_name").and_then(|v| v.as_str()).unwrap_or("manual").to_string(),
                             similarity: None,
                             utility: frontmatter.get("utility").and_then(|v| v.as_f64()).map(|u| u as f32),
+                            status: None,
+                            superseded_at: None,
+                            superseded_by: None,
                         };
                         rules_group.entry(rule.target_pattern.clone()).or_default().push((file_path.clone(), rule));
                     }
@@ -392,6 +395,9 @@ pub async fn handle_merge_vault() -> Result<()> {
                 generator_name: "conflict-resolver".to_string(),
                 similarity: None,
                 utility: Some(max_utility),
+                status: None,
+                superseded_at: None,
+                superseded_by: None,
             };
 
             let frontmatter_str = vault::watcher::format_wisdom_markdown(&merged_rule);

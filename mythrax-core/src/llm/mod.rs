@@ -79,6 +79,8 @@ impl LLMClient {
                     }
                 } else if prompt.contains("TOC") || prompt.contains("Table of Contents") {
                     return Ok(r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string());
+                } else if prompt.contains("Insights:") {
+                    return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
                 } else {
                     return Ok(r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string());
                 }

@@ -211,3 +211,106 @@ async fn test_checkpointing_daemon_and_delta_compaction() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_auto_trigger_paging_in_compaction() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() { Ok(guard) => guard, Err(p) => p.into_inner() };
+    let tmp = tempdir()?;
+    
+    let workspace_root = tmp.path().join("workspace");
+    let vault_root = tmp.path().join("vault");
+    std::fs::create_dir_all(&workspace_root)?;
+    std::fs::create_dir_all(&vault_root)?;
+
+    unsafe {
+        std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
+
+    // Write the source file that must NOT be paged
+    let main_rs_path = workspace_root.join("main.rs");
+    let original_content = r#"pub struct TestPaging {
+    val: i32,
+}
+
+pub fn run_test() {}
+"#;
+    std::fs::write(&main_rs_path, original_content)?;
+
+    // Initialize backend
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    // Seed LLM config
+    backend.db.query("UPSERT config:settings CONTENT { active_provider: 'local', model: 'mock', cloud_provider: 'mock' };").await?;
+
+    // Initialize store
+    let store = mythrax_core::store::MarkdownStore::new(&vault_root)?;
+
+    // Create a mock insight to trigger compaction
+    let insight_dir = vault_root.join("wiki/test_scope/insights");
+    std::fs::create_dir_all(&insight_dir)?;
+    let insight_path = insight_dir.join("mock_insight.md");
+    let insight_content = r#"---
+title: Mock Insight
+source_episodes: []
+---
+This is a test insight that references `page_fn_test_fn`.
+"#;
+    std::fs::write(&insight_path, insight_content)?;
+
+    // Run compactor
+    let compactor = Compactor::new();
+    compactor.compact_scope(&backend, &store, "test_scope").await?;
+
+    // Assert that the workspace source file was NOT modified on disk
+    let current_content = std::fs::read_to_string(&main_rs_path)?;
+    assert_eq!(current_content, original_content, "Source file should not be modified by compaction");
+
+    // Find the compaction summary file
+    let compaction_dir = vault_root.join("wiki/compaction");
+    let mut found_compaction_file = None;
+    
+    if let Ok(entries) = std::fs::read_dir(&compaction_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "md") {
+                let content = std::fs::read_to_string(&path)?;
+                if content.contains("[Paged Symbol: Reference page_fn_test_fn]") {
+                    found_compaction_file = Some(path);
+                    break;
+                }
+            }
+        }
+    }
+
+    assert!(found_compaction_file.is_some(), "Compaction summary file containing paged symbol reference not found");
+
+    // Query SurrealDB symbol_archive
+    let mut resp = backend.db.query("SELECT * FROM type::record('symbol_archive', 'page_fn_test_fn');").await?;
+    let sym_opt: Option<serde_json::Value> = resp.take(0)?;
+    assert!(sym_opt.is_some(), "Symbol archive entry for page_fn_test_fn should exist");
+
+    // Retrieve all wiki nodes and restore paged content
+    let nodes = backend.get_all_wiki_nodes().await?;
+    
+    let mut restored_found = false;
+    for node in nodes {
+        if node.content.contains("[Paged Symbol: Reference page_fn_test_fn]") {
+            let restored_content = paging::intercept_and_restore_symbols(&backend, &node.content).await;
+            
+            // Assert that the restored content contains the original function definition
+            assert!(restored_content.contains("pub fn test_fn() {}"), "Restored content should contain the original function");
+            
+            // Assert that the paged placeholder is removed
+            assert!(!restored_content.contains("[Paged Symbol:"), "Restored content should not contain paged placeholders");
+            
+            restored_found = true;
+            break;
+        }
+    }
+
+    assert!(restored_found, "A wiki node with paged symbol reference was not found or restored correctly");
+
+    Ok(())
+}

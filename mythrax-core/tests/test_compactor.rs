@@ -462,6 +462,9 @@ async fn test_wisdom_rule_deduplication_skills_anchor() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     let skills_id = backend.save_wisdom_rule(&existing_skills_rule).await?;
 
@@ -480,6 +483,9 @@ async fn test_wisdom_rule_deduplication_skills_anchor() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     // Write new rule's file to disk
     store.write_file("wisdom/dynamic/new_rule.md", "some content")?;
@@ -543,6 +549,9 @@ async fn test_wisdom_rule_deduplication_dynamic() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     let old_id = backend.save_wisdom_rule(&existing_rule).await?;
     store.write_file("wisdom/dynamic/rule1.md", "old rule content")?;
@@ -562,6 +571,9 @@ async fn test_wisdom_rule_deduplication_dynamic() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     store.write_file("wisdom/dynamic/rule2.md", "new rule content")?;
 
@@ -572,14 +584,22 @@ async fn test_wisdom_rule_deduplication_dynamic() -> Result<()> {
         &new_rule,
     ).await?;
 
-    // The old rule's file should be deleted or moved to trash
+    // The old rule's file should no longer exist at its original path, but the archived rule file SHOULD exist
     let old_file_path = vault_root.join("wisdom/dynamic/rule1.md");
-    assert!(!old_file_path.exists(), "Old rule file should be deleted");
+    assert!(!old_file_path.exists(), "Old rule file should be removed from active directory");
 
-    // The old rule should be deleted from SurrealDB
+    let archived_file_path = vault_root.join("wisdom/superseded_archive/rule1.md");
+    assert!(archived_file_path.exists(), "Archived rule file should exist in superseded_archive");
+
+    // The old rule record in SurrealDB should NOT be deleted, but its status should be updated to "superseded"
     let mut response = backend.db.query("SELECT * FROM wisdom WHERE vault_path = 'wisdom/dynamic/rule1.md';").await?;
     let old_db_rules: Vec<serde_json::Value> = response.take(0)?;
-    assert!(old_db_rules.is_empty(), "Old rule record should be deleted");
+    assert!(!old_db_rules.is_empty(), "Old rule record should still exist in database");
+    
+    if let Some(rule) = old_db_rules.first() {
+        let status = rule.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        assert_eq!(status, "superseded", "Old rule status should be updated to 'superseded'");
+    }
 
     // The new rule file should exist
     let new_file_path = vault_root.join("wisdom/dynamic/rule2.md");

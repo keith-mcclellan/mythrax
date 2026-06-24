@@ -49,6 +49,9 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS source_episodes ON wisdom TYPE array<string>;
     DEFINE FIELD IF NOT EXISTS generator_name ON wisdom TYPE string;
     DEFINE FIELD IF NOT EXISTS embedding ON wisdom TYPE option<array<float>>;
+    DEFINE FIELD IF NOT EXISTS status ON wisdom TYPE string DEFAULT 'active';
+    DEFINE FIELD IF NOT EXISTS superseded_at ON wisdom TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS superseded_by ON wisdom TYPE option<string>;
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
     DEFINE INDEX IF NOT EXISTS wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE;

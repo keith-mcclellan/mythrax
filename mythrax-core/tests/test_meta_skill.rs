@@ -41,6 +41,9 @@ async fn test_meta_skill_synthesis() -> Result<()> {
         generator_name: "test".to_string(),
         similarity: None,
         utility: None,
+        status: None,
+        superseded_at: None,
+        superseded_by: None,
     };
     backend.save_wisdom_rule(&rule).await?;
 

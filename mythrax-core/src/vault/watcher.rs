@@ -142,6 +142,9 @@ struct WisdomFrontmatter {
     source_episodes: Option<Vec<String>>,
     generator_name: Option<String>,
     utility: Option<f32>,
+    status: Option<String>,
+    superseded_at: Option<String>,
+    superseded_by: Option<String>,
 }
 
 pub async fn sync_file_to_db(
@@ -227,6 +230,9 @@ pub async fn sync_file_to_db(
                 generator_name: frontmatter.generator_name.unwrap_or_else(|| "manual".to_string()),
                 similarity: None,
                 utility: frontmatter.utility,
+                status: frontmatter.status,
+                superseded_at: frontmatter.superseded_at,
+                superseded_by: frontmatter.superseded_by,
             };
 
             backend.save_wisdom_rule(&rule).await?;
@@ -392,6 +398,15 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     yaml_val.insert("generator_name".to_string(), serde_json::json!(rule.generator_name));
     if let Some(utility) = rule.utility {
         yaml_val.insert("utility".to_string(), serde_json::json!(utility));
+    }
+    if let Some(status) = &rule.status {
+        yaml_val.insert("status".to_string(), serde_json::json!(status));
+    }
+    if let Some(superseded_at) = &rule.superseded_at {
+        yaml_val.insert("superseded_at".to_string(), serde_json::json!(superseded_at));
+    }
+    if let Some(superseded_by) = &rule.superseded_by {
+        yaml_val.insert("superseded_by".to_string(), serde_json::json!(superseded_by));
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
