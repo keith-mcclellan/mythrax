@@ -4,13 +4,15 @@ use serde_json::{json, Value};
 use anyhow::{Result, Context};
 use crate::api::ApiState;
 use crate::db::{StorageBackend, SurrealBackend, parse_record_id, backend::format_record_id};
+use surrealdb_types::SurrealValue;
 use crate::store::MarkdownStore;
 use crate::contracts::*;
 use crate::cognitive::ArborCoordinator;
 use crate::cognitive::compactor::Compactor;
 use crate::cognitive::synthesis::DreamCoordinator;
 use crate::cognitive::forge::Forge;
-use crate::cognitive::paging::intercept_and_restore_symbols;
+use crate::cognitive::paging::{intercept_and_restore_symbols, page_code_block};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use crate::verify::run_workspace_audit;
 use crate::vault::ingestion::bulk_ingest_vault;
 
@@ -87,7 +89,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["search", "rules", "nodes", "root"] },
+                        "action": { "type": "string", "enum": ["search", "rules", "nodes", "root", "query_symbolic"] },
                         "query": { "type": "string" },
                         "scope": { "type": "string" },
                         "limit": { "type": "integer", "default": 15 },
@@ -99,7 +101,10 @@ pub fn get_mcp_tools_schema() -> Value {
                         "include_artifacts": { "type": "boolean", "default": false },
                         "session_id": { "type": "string" },
                         "tier": { "type": "string" },
-                        "node_ids": { "type": "array", "items": { "type": "string" } }
+                        "node_ids": { "type": "array", "items": { "type": "string" } },
+                        "node_id": { "type": "string" },
+                        "relation": { "type": "string" },
+                        "max_depth": { "type": "integer", "default": 3 }
                     },
                     "required": ["action"]
                 }
@@ -110,7 +115,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["save", "feedback"] },
+                        "action": { "type": "string", "enum": ["save", "feedback", "thought"] },
                         "title": { "type": "string" },
                         "content": { "type": "string" },
                         "entities": { "type": "array" },
@@ -162,13 +167,14 @@ pub fn get_mcp_tools_schema() -> Value {
             },
             {
                 "name": "manage_vault",
-                "description": "Manage vault integrity, organization, reprocessing, and summarization.",
+                "description": "Manage vault integrity, organization, reprocessing, summarization, and compliance auditing.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize"] },
+                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit"] },
                         "fix": { "type": "boolean", "default": false },
-                        "scope": { "type": "string" }
+                        "scope": { "type": "string" },
+                        "workspace_path": { "type": "string", "default": "." }
                     },
                     "required": ["action"]
                 }
@@ -190,16 +196,6 @@ pub fn get_mcp_tools_schema() -> Value {
                 }
             },
             {
-                "name": "compliance_audit",
-                "description": "Run a workspace audit for compliance and integrity checks.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "workspace_path": { "type": "string", "default": "." }
-                    }
-                }
-            },
-            {
                 "name": "ingest_knowledge",
                 "description": "Ingest knowledge from sources via bulk logging or forging documents.",
                 "inputSchema": {
@@ -211,6 +207,40 @@ pub fn get_mcp_tools_schema() -> Value {
                         "scope": { "type": "string" }
                     },
                     "required": ["action", "source"]
+                }
+            },
+            {
+                "name": "manage_file",
+                "description": "Consolidated tool to view, replace, or multi-replace content in files with virtual paging support.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": { "type": "string", "enum": ["view", "replace", "multi_replace"] },
+                        "path": { "type": "string" },
+                        "start_line": { "type": "integer" },
+                        "end_line": { "type": "integer" },
+                        "target_content": { "type": "string" },
+                        "replacement_content": { "type": "string" },
+                        "chunks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "target_content": { "type": "string" },
+                                    "replacement_content": { "type": "string" },
+                                    "start_line": { "type": "integer" },
+                                    "end_line": { "type": "integer" },
+                                    "allow_multiple": { "type": "boolean" }
+                                },
+                                "required": ["target_content", "replacement_content"]
+                            }
+                        },
+                        "allow_multiple": { "type": "boolean" },
+                        "instruction": { "type": "string" },
+                        "description": { "type": "string" },
+                        "is_skill_file": { "type": "boolean" }
+                    },
+                    "required": ["action", "path"]
                 }
             },
             {
@@ -242,11 +272,109 @@ pub async fn call_mcp_tool(
         "manage_stm" => handle_manage_stm(state, args.clone()).await,
         "manage_vault" => handle_manage_vault(state, args.clone()).await,
         "manage_config" => handle_manage_config(state, args.clone()).await,
-        "compliance_audit" => handle_compliance_audit(state, args.clone()).await,
         "ingest_knowledge" => handle_ingest_knowledge(state, args.clone()).await,
         "pre_invocation_hook" => handle_pre_invocation_hook(state, args.clone()).await,
+        "manage_file" => handle_manage_file(state, args.clone()).await,
         _ => anyhow::bail!("Tool not found: {}", name),
     };
+
+    let session_id_opt = args.get("session_id")
+        .or_else(|| args.get("subagent_id"))
+        .or_else(|| args.get("subagent_conversation_id"))
+        .and_then(|v| v.as_str());
+
+    if let Some(session_id) = session_id_opt {
+        if name != "pre_invocation_hook" {
+            if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
+                let tool_name = name.to_string();
+                let score_delta = if result.is_ok() { 0.02f32 } else { -0.05f32 };
+
+                if let Ok(ref val) = result {
+                    let content_str = if let Some(arr) = val.get("content").and_then(|c| c.as_array()) {
+                        let mut s = String::new();
+                        for item in arr {
+                            if let Some(txt) = item.get("text").and_then(|t| t.as_str()) {
+                                s.push_str(txt);
+                                s.push('\n');
+                            }
+                        }
+                        if s.is_empty() { val.to_string() } else { s.trim().to_string() }
+                    } else if let Some(txt) = val.get("text").and_then(|t| t.as_str()) {
+                        txt.to_string()
+                    } else {
+                        val.to_string()
+                    };
+
+                    let insert_sql = "INSERT INTO chat_history { session_id: $session_id, role: 'assistant', content: $content, created_at: time::now() };";
+                    let _ = surreal_backend.db.query(insert_sql)
+                        .bind(("session_id", session_id))
+                        .bind(("content", content_str))
+                        .await;
+                }
+                
+                let belief_res = surreal_backend.db.query("SELECT session_id, tasks_todo, hypotheses_tested, confidence_score, uncertainty_areas, updated_at FROM belief_state WHERE session_id = $session_id;")
+                    .bind(("session_id", session_id))
+                    .await;
+                
+                if let Ok(mut resp) = belief_res {
+                    let belief_states: Vec<BeliefState> = resp.take(0).unwrap_or_default();
+                    if let Some(mut bs) = belief_states.into_iter().next() {
+                        bs.confidence_score = (bs.confidence_score + score_delta).clamp(0.0, 1.0);
+                        if !bs.hypotheses_tested.contains(&tool_name) {
+                            bs.hypotheses_tested.push(tool_name);
+                        }
+                        bs.updated_at = chrono::Utc::now().to_rfc3339();
+                        
+                        let _ = surreal_backend.db.query("
+                            UPDATE type::record('belief_state', $session_id) CONTENT {
+                                session_id: $session_id,
+                                tasks_todo: $tasks_todo,
+                                hypotheses_tested: $hypotheses_tested,
+                                confidence_score: $confidence_score,
+                                uncertainty_areas: $uncertainty_areas,
+                                updated_at: $updated_at
+                            };
+                        ")
+                        .bind(("session_id", bs.session_id))
+                        .bind(("tasks_todo", bs.tasks_todo))
+                        .bind(("hypotheses_tested", bs.hypotheses_tested))
+                        .bind(("confidence_score", bs.confidence_score))
+                        .bind(("uncertainty_areas", bs.uncertainty_areas))
+                        .bind(("updated_at", bs.updated_at))
+                        .await;
+                    } else {
+                        let new_bs = BeliefState {
+                            id: Some(format!("belief_state:{}", session_id)),
+                            session_id: session_id.to_string(),
+                            tasks_todo: vec![],
+                            hypotheses_tested: vec![tool_name],
+                            confidence_score: (0.5f32 + score_delta).clamp(0.0, 1.0),
+                            uncertainty_areas: vec![],
+                            updated_at: chrono::Utc::now().to_rfc3339(),
+                        };
+                        
+                        let _ = surreal_backend.db.query("
+                            UPSERT type::record('belief_state', $session_id) CONTENT {
+                                session_id: $session_id,
+                                tasks_todo: $tasks_todo,
+                                hypotheses_tested: $hypotheses_tested,
+                                confidence_score: $confidence_score,
+                                uncertainty_areas: $uncertainty_areas,
+                                updated_at: $updated_at
+                            };
+                        ")
+                        .bind(("session_id", new_bs.session_id))
+                        .bind(("tasks_todo", new_bs.tasks_todo))
+                        .bind(("hypotheses_tested", new_bs.hypotheses_tested))
+                        .bind(("confidence_score", new_bs.confidence_score))
+                        .bind(("uncertainty_areas", new_bs.uncertainty_areas))
+                        .bind(("updated_at", new_bs.updated_at))
+                        .await;
+                    }
+                }
+            }
+        }
+    }
 
     if result.is_ok() && matches!(name, "record_memory" | "manage_stm" | "manage_htr" | "manage_vault" | "ingest_knowledge") {
         let session_id_opt = args.get("session_id")
@@ -410,6 +538,23 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                 ]
             }))
         }
+        "query_symbolic" => {
+            let node_id = args.get("node_id").and_then(|v| v.as_str()).context("Missing node_id")?;
+            let relation = args.get("relation").and_then(|v| v.as_str());
+            let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).map(|v| v as usize);
+
+            let traversed_ids = state.backend.query_symbolic(node_id, relation, max_depth).await?;
+            let text = serde_json::to_string_pretty(&traversed_ids)?;
+            
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            }))
+        }
         "root" => {
             let vault_path = state.store.vault_root.to_string_lossy().to_string();
             Ok(json!({
@@ -477,6 +622,7 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
                     let backend_clone = Arc::new(SurrealBackend {
                         db: surreal_backend.db.clone(),
                         embedder: surreal_backend.embedder.clone(),
+                        client_port: surreal_backend.client_port,
                     });
                     let store_clone = state.store.clone();
                     let content_clone = content.clone();
@@ -507,6 +653,48 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
                     {
                         "type": "text",
                         "text": "Feedback recorded successfully."
+                    }
+                ]
+            }))
+        }
+        "thought" => {
+            let title = args.get("title").and_then(|v| v.as_str()).context("Missing title")?.to_string();
+            let content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?.to_string();
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+
+            let thought_uuid = uuid::Uuid::new_v4().to_string();
+            let relative_path = format!("wiki/thoughts/thought_{}.md", thought_uuid);
+            
+            let thought = ThoughtNode {
+                id: None,
+                title,
+                content,
+                scope,
+                vault_path: Some(relative_path.clone()),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+
+            // Format OKF frontmatter
+            let mut yaml_val = serde_json::Map::new();
+            yaml_val.insert("title".to_string(), serde_json::json!(thought.title));
+            yaml_val.insert("scope".to_string(), serde_json::json!(thought.scope));
+            yaml_val.insert("created_at".to_string(), serde_json::json!(thought.created_at));
+            let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
+            let markdown = format!("---\n{}---\n{}", yaml_str.trim(), thought.content);
+
+            // Write to disk under wiki/thoughts/
+            state.store.write_file(&relative_path, &markdown)?;
+
+            // Save to SurrealDB
+            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                .context("SurrealBackend required to save thought_node")?;
+            let id = surreal_backend.save_thought_node(&thought).await?;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Thought node saved successfully: {}", id)
                     }
                 ]
             }))
@@ -924,11 +1112,16 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
             let scope = args.get("scope").and_then(|v| v.as_str());
             let compactor = Compactor::new();
             let coordinator = DreamCoordinator::new();
+            let embedder = if let Some(backend) = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                backend.embedder.clone()
+            } else {
+                None
+            };
 
-            coordinator.run_dream(&*state.backend, &state.store, None).await?;
+            coordinator.run_dream(&*state.backend, &state.store, None, embedder.clone()).await?;
 
             let scope_name = scope.unwrap_or("general");
-            compactor.compact_scope(&*state.backend, &state.store, scope_name).await?;
+            compactor.compact_scope(&*state.backend, &state.store, scope_name, embedder).await?;
             compactor.compact_global(&*state.backend, &state.store).await?;
 
             Ok(json!({
@@ -936,6 +1129,26 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                     {
                         "type": "text",
                         "text": format!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name)
+                    }
+                ]
+            }))
+        }
+        "audit" => {
+            let workspace_path_str = args.get("workspace_path").and_then(|v| v.as_str()).unwrap_or(".");
+            let path = std::path::Path::new(workspace_path_str);
+            let audit_results = run_workspace_audit(path).await;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!(
+                            "Audit Results:\n- Tailwind Clean: {}\n- Search History Clean: {}\n- Daemon Health OK: {}\nViolations/Errors details: {:#?}",
+                            audit_results.tailwind_ok,
+                            audit_results.search_history_ok,
+                            audit_results.daemon_ok,
+                            audit_results
+                        )
                     }
                 ]
             }))
@@ -992,26 +1205,6 @@ async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value> {
     }
 }
 
-async fn handle_compliance_audit(state: &ApiState, args: Value) -> Result<Value> {
-    let workspace_path_str = args.get("workspace_path").and_then(|v| v.as_str()).unwrap_or(".");
-    let path = std::path::Path::new(workspace_path_str);
-    let audit_results = run_workspace_audit(path).await;
-
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": format!(
-                    "Audit Results:\n- Tailwind Clean: {}\n- Search History Clean: {}\n- Daemon Health OK: {}\nViolations/Errors details: {:#?}",
-                    audit_results.tailwind_ok,
-                    audit_results.search_history_ok,
-                    audit_results.daemon_ok,
-                    audit_results
-                )
-            }
-        ]
-    }))
-}
 
 async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Value> {
     let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
@@ -1055,6 +1248,7 @@ async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Value>
             let surreal_backend_arc = Arc::new(SurrealBackend {
                 db: surreal_backend.db.clone(),
                 embedder: surreal_backend.embedder.clone(),
+                client_port: surreal_backend.client_port,
             });
 
             let forge = Forge::new(surreal_backend_arc, state.store.clone());
@@ -1117,6 +1311,31 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
 
     let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required for pre_invocation_hook")?;
+
+    // Save user query to chat history
+    if let Some(q) = query {
+        let insert_sql = "INSERT INTO chat_history { session_id: $session_id, role: 'user', content: $content, created_at: time::now() };";
+        let _ = surreal_backend.db.query(insert_sql)
+            .bind(("session_id", session_id))
+            .bind(("content", q.to_string()))
+            .await;
+    }
+
+    // 1.5. Query and retrieve BeliefState
+    let mut belief_part = String::new();
+    let belief_res = surreal_backend.db.query("SELECT session_id, tasks_todo, hypotheses_tested, confidence_score, uncertainty_areas, updated_at FROM belief_state WHERE session_id = $session_id;")
+        .bind(("session_id", session_id))
+        .await;
+    
+    if let Ok(mut resp) = belief_res {
+        let belief_states: Vec<BeliefState> = resp.take(0).unwrap_or_default();
+        if let Some(bs) = belief_states.first() {
+            belief_part = format!(
+                "### 🧠 POMDP Belief State\n- **Session**: `{}`\n- **Confidence**: {:.2}\n- **Tasks Todo**: {:?}\n- **Hypotheses Tested**: {:?}\n- **Uncertainty Areas**: {:?}\n\n",
+                bs.session_id, bs.confidence_score, bs.tasks_todo, bs.hypotheses_tested, bs.uncertainty_areas
+            );
+        }
+    }
 
     // 2. Subagent Path (Handoff Check)
     let mut handoffs_resp = surreal_backend.db.query("SELECT parent_conversation_id, summary, scope FROM handoff WHERE subagent_conversation_id = $subagent AND status = 'PENDING';")
@@ -1207,13 +1426,8 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
 
             parts.push("## Retrieved Semantic Context\n".to_string());
             for res in search_res.results {
-                if res.id.starts_with("wisdom:") {
-                    parts.push(format!("### 💡 Wisdom Rule: {}\n{}\n", res.title, res.content));
-                } else if res.id.starts_with("wiki_node:") {
-                    parts.push(format!("### 📚 Distilled Insight: {}\n{}\n", res.title, res.content));
-                } else if res.id.starts_with("episode:") {
-                    let rendered = format_episode_or_parent(&*state.backend, &surreal_backend.db, &res.id, &res.title, &res.content, None).await?;
-                    parts.push(rendered);
+                if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
+                    parts.push(formatted);
                 }
             }
         }
@@ -1246,18 +1460,11 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
         parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));
         let mut high_confidence_memories_found = false;
         for res in search_res.results {
-            if res.id.starts_with("wisdom:") {
-                if res.similarity >= 0.55 {
-                    parts.push(format!("### 💡 Wisdom Rule: {}\n{}\n", res.title, res.content));
-                }
-            } else if res.id.starts_with("episode:") {
-                if res.similarity >= 0.70 {
-                    high_confidence_memories_found = true;
-                    let rendered = format_episode_or_parent(&*state.backend, &surreal_backend.db, &res.id, &res.title, &res.content, None).await?;
-                    parts.push(rendered);
-                }
-            } else {
-                parts.push(format!("### 📝 Record: {}\n{}\n", res.title, res.content));
+            if res.id.starts_with("episode:") && res.similarity >= 0.80 {
+                high_confidence_memories_found = true;
+            }
+            if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
+                parts.push(formatted);
             }
         }
 
@@ -1300,7 +1507,66 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
         }
     }
 
-    let final_context = parts.join("\n");
+    let joined_context = parts.join("\n");
+    
+    // Count tokens helper
+    let count_tokens = |text: &str| -> usize {
+        if let Some(ref embedder) = surreal_backend.embedder {
+            embedder.count_tokens(text).unwrap_or_else(|_| text.split_whitespace().count())
+        } else {
+            text.split_whitespace().count()
+        }
+    };
+
+    let initial_context = if !belief_part.is_empty() {
+        format!("{}{}", belief_part, joined_context)
+    } else {
+        joined_context
+    };
+    let context_tokens = count_tokens(&initial_context);
+
+    let mut allowed_history = Vec::new();
+    let mut history_tokens = 0;
+
+    let chat_res = surreal_backend.db.query("SELECT role, content, created_at FROM chat_history WHERE session_id = $session_id ORDER BY created_at DESC LIMIT 10;")
+        .bind(("session_id", session_id))
+        .await;
+
+    match chat_res {
+        Ok(mut resp) => {
+            #[derive(serde::Deserialize, Debug, SurrealValue)]
+            struct ChatTurn {
+                role: String,
+                content: String,
+            }
+            if let Ok(turns) = resp.take::<Vec<ChatTurn>>(0) {
+                for turn in turns {
+                    let turn_str = format!("- **{}**: {}\n", if turn.role == "user" { "User" } else { "Assistant" }, turn.content);
+                    let turn_tokens = count_tokens(&turn_str);
+                    if context_tokens + history_tokens + turn_tokens <= 2048 {
+                        history_tokens += turn_tokens;
+                        allowed_history.push(turn_str);
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
+    allowed_history.reverse();
+    let mut history_part = String::new();
+    if !allowed_history.is_empty() {
+        history_part.push_str("### 💬 Conversational Turn History\n");
+        for turn_str in allowed_history {
+            history_part.push_str(&turn_str);
+        }
+        history_part.push('\n');
+    }
+
+    let final_context = format!("{}{}", history_part, initial_context);
+
     Ok(json!({
         "content": [
             {
@@ -1421,4 +1687,297 @@ pub async fn run_llm_critic(
     backend.save_wisdom_rule(&rule_save).await?;
 
     Ok(())
+}
+
+fn get_extension(path: &Path) -> Option<String> {
+    path.extension().and_then(|ext| ext.to_str()).map(|s| s.to_string())
+}
+
+fn slice_content_by_lines(content: &str, start: Option<usize>, end: Option<usize>) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let start_idx = start.map(|s| s.saturating_sub(1)).unwrap_or(0);
+    let end_idx = end.map(|e| e.min(lines.len())).unwrap_or(lines.len());
+    
+    if start_idx >= lines.len() || start_idx > end_idx {
+        return String::new();
+    }
+    
+    lines[start_idx..end_idx].join("\n")
+}
+
+async fn resolve_placeholders(backend: &SurrealBackend, text: &str) -> String {
+    let mut resolved = text.to_string();
+    let re = regex::Regex::new(r"\[Paged Symbol: Reference (page_[a-zA-Z0-9_]+)\]").unwrap();
+    
+    let mut captures = Vec::new();
+    for cap in re.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            captures.push(m.as_str().to_string());
+        }
+    }
+    
+    captures.sort();
+    captures.dedup();
+    
+    for page_id in captures {
+        let sql = "SELECT VALUE content FROM type::record('symbol_archive', $page_id);";
+        if let Ok(mut response) = backend.db.query(sql).bind(("page_id", page_id.clone())).await {
+            if let Ok(Some(symbol_content)) = response.take::<Option<String>>(0) {
+                let placeholder = format!("[Paged Symbol: Reference {}]", page_id);
+                resolved = resolved.replace(&placeholder, &symbol_content);
+            }
+        }
+    }
+    
+    resolved
+}
+
+async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
+    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
+    
+    let path = args.get("path")
+        .or_else(|| args.get("AbsolutePath"))
+        .or_else(|| args.get("TargetFile"))
+        .and_then(|v| v.as_str())
+        .context("Missing path/AbsolutePath/TargetFile")?;
+
+    match action {
+        "view" => {
+            let start_line = args.get("start_line")
+                .or_else(|| args.get("StartLine"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+            let end_line = args.get("end_line")
+                .or_else(|| args.get("EndLine"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+
+            let path_buf = Path::new(path);
+            let content = std::fs::read_to_string(path_buf)?;
+
+            // Slice content by lines
+            let sliced_content = slice_content_by_lines(&content, start_line, end_line);
+
+            // Apply virtual paging if pageable extension
+            let extension = get_extension(path_buf);
+            let pageable_extensions = ["rs", "ts", "tsx", "js", "jsx", "py"];
+            
+            let final_content = if let Some(ref ext) = extension {
+                if pageable_extensions.contains(&ext.as_str()) {
+                    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                        .context("SurrealBackend required")?;
+                    page_code_block(surreal_backend, &sliced_content, ext).await?
+                } else {
+                    sliced_content
+                }
+            } else {
+                sliced_content
+            };
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": final_content
+                    }
+                ]
+            }))
+        }
+        "replace" => {
+            let target_content = args.get("target_content")
+                .or_else(|| args.get("TargetContent"))
+                .and_then(|v| v.as_str())
+                .context("Missing target_content/TargetContent")?;
+            let replacement_content = args.get("replacement_content")
+                .or_else(|| args.get("ReplacementContent"))
+                .and_then(|v| v.as_str())
+                .context("Missing replacement_content/ReplacementContent")?;
+            let start_line = args.get("start_line")
+                .or_else(|| args.get("StartLine"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+            let end_line = args.get("end_line")
+                .or_else(|| args.get("EndLine"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
+            let allow_multiple = args.get("allow_multiple")
+                .or_else(|| args.get("AllowMultiple"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let path_buf = Path::new(path);
+            let file_content = std::fs::read_to_string(path_buf)?;
+
+            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                .context("SurrealBackend required")?;
+
+            // Resolve placeholders
+            let resolved_target = resolve_placeholders(surreal_backend, target_content).await;
+            let resolved_replacement = resolve_placeholders(surreal_backend, replacement_content).await;
+
+            // Slice content if line numbers are provided to find occurrences within that slice
+            let sliced_content = slice_content_by_lines(&file_content, start_line, end_line);
+            
+            let occurrences = sliced_content.matches(&resolved_target).count();
+            if occurrences == 0 {
+                anyhow::bail!("Target content not found in the file.");
+            }
+            if occurrences > 1 && !allow_multiple {
+                anyhow::bail!("Target content found multiple times in the file, but AllowMultiple is false.");
+            }
+
+            // Replace
+            let new_content = if start_line.is_some() || end_line.is_some() {
+                let new_sliced = sliced_content.replace(&resolved_target, &resolved_replacement);
+                
+                let lines: Vec<&str> = file_content.lines().collect();
+                let start_idx = start_line.map(|s| s.saturating_sub(1)).unwrap_or(0);
+                let end_idx = end_line.map(|e| e.min(lines.len())).unwrap_or(lines.len());
+                
+                let mut new_lines: Vec<&str> = lines[..start_idx].to_vec();
+                new_lines.extend(new_sliced.lines());
+                new_lines.extend(lines[end_idx..].iter());
+                
+                new_lines.join("\n")
+            } else {
+                file_content.replace(&resolved_target, &resolved_replacement)
+            };
+
+            std::fs::write(path_buf, new_content)?;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "File updated successfully"
+                    }
+                ]
+            }))
+        }
+        "multi_replace" => {
+            let chunks = args.get("chunks")
+                .or_else(|| args.get("ReplacementChunks"))
+                .and_then(|v| v.as_array())
+                .context("Missing/Invalid chunks/ReplacementChunks")?;
+
+            let path_buf = Path::new(path);
+            let mut file_content = std::fs::read_to_string(path_buf)?;
+
+            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                .context("SurrealBackend required")?;
+
+            for chunk in chunks {
+                let target_content = chunk.get("target_content")
+                    .or_else(|| chunk.get("TargetContent"))
+                    .and_then(|v| v.as_str())
+                    .context("Missing target_content/TargetContent in chunk")?;
+                let replacement_content = chunk.get("replacement_content")
+                    .or_else(|| chunk.get("ReplacementContent"))
+                    .and_then(|v| v.as_str())
+                    .context("Missing replacement_content/ReplacementContent in chunk")?;
+                let start_line = chunk.get("start_line")
+                    .or_else(|| chunk.get("StartLine"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let end_line = chunk.get("end_line")
+                    .or_else(|| chunk.get("EndLine"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let allow_multiple = chunk.get("allow_multiple")
+                    .or_else(|| chunk.get("AllowMultiple"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                // Resolve placeholders
+                let resolved_target = resolve_placeholders(surreal_backend, target_content).await;
+                let resolved_replacement = resolve_placeholders(surreal_backend, replacement_content).await;
+
+                // Slice content if line numbers are provided to find occurrences
+                let sliced_content = slice_content_by_lines(&file_content, start_line, end_line);
+                
+                let occurrences = sliced_content.matches(&resolved_target).count();
+                if occurrences == 0 {
+                    anyhow::bail!("Target content not found in the file.");
+                }
+                if occurrences > 1 && !allow_multiple {
+                    anyhow::bail!("Target content found multiple times in the file, but AllowMultiple is false.");
+                }
+
+                // Perform replacement
+                let new_content = if start_line.is_some() || end_line.is_some() {
+                    let new_sliced = sliced_content.replace(&resolved_target, &resolved_replacement);
+                    
+                    let lines: Vec<&str> = file_content.lines().collect();
+                    let start_idx = start_line.map(|s| s.saturating_sub(1)).unwrap_or(0);
+                    let end_idx = end_line.map(|e| e.min(lines.len())).unwrap_or(lines.len());
+                    
+                    let mut new_lines: Vec<&str> = lines[..start_idx].to_vec();
+                    new_lines.extend(new_sliced.lines());
+                    new_lines.extend(lines[end_idx..].iter());
+                    
+                    new_lines.join("\n")
+                } else {
+                    file_content.replace(&resolved_target, &resolved_replacement)
+                };
+
+                file_content = new_content;
+            }
+
+            std::fs::write(path_buf, file_content)?;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "File updated successfully with multiple changes"
+                    }
+                ]
+            }))
+        }
+        _ => anyhow::bail!("Invalid action for manage_file: {}", action),
+    }
+}
+
+async fn get_node_scope(backend: &SurrealBackend, id: &str) -> String {
+    if let Ok(rec_id) = parse_record_id(id) {
+        let sql = format!("SELECT scope FROM {};", rec_id.table);
+        if let Ok(mut response) = backend.db.query(&sql).bind(("id", rec_id)).await {
+            if let Ok(Some(scope)) = response.take::<Option<String>>(0) {
+                return scope;
+            }
+        }
+    }
+    "general".to_string()
+}
+
+async fn format_search_result_hybrid(
+    backend: &SurrealBackend,
+    res: &crate::contracts::SearchResult,
+    state: &ApiState,
+) -> Result<Option<String>> {
+    if res.similarity >= 0.80 {
+        if res.id.starts_with("wisdom:") {
+            Ok(Some(format!("### 💡 Wisdom Rule: {}\n{}\n", res.title, res.content)))
+        } else if res.id.starts_with("wiki_node:") {
+            Ok(Some(format!("### 📚 Distilled Insight: {}\n{}\n", res.title, res.content)))
+        } else if res.id.starts_with("episode:") {
+            let rendered = format_episode_or_parent(&*state.backend, &backend.db, &res.id, &res.title, &res.content, None).await?;
+            Ok(Some(rendered))
+        } else {
+            Ok(Some(format!("### 📝 Record: {}\n{}\n", res.title, res.content)))
+        }
+    } else if res.similarity >= 0.60 {
+        let scope = get_node_scope(backend, &res.id).await;
+        let summary = res.content.split(&['.', '!', '?'][..])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        Ok(Some(format!(
+            "[Index Row] ID: {} | Title: {} | Scope: {} | Summary: {}",
+            res.id, res.title, scope, summary
+        )))
+    } else {
+        Ok(None)
+    }
 }

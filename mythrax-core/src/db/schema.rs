@@ -23,6 +23,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS source_episode ON episode TYPE option<record<episode>>;
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS utility ON episode TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS importance ON episode TYPE float DEFAULT 5.0;
+    DEFINE FIELD IF NOT EXISTS created_at ON episode TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
 
@@ -33,6 +35,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS scope ON wiki_node TYPE string DEFAULT 'general';
     DEFINE FIELD IF NOT EXISTS vault_path ON wiki_node TYPE string DEFAULT '';
     DEFINE FIELD IF NOT EXISTS embedding ON wiki_node TYPE option<array<float>>;
+    DEFINE FIELD IF NOT EXISTS importance ON wiki_node TYPE float DEFAULT 5.0;
+    DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wiki_node TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS created_at ON wiki_node TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS utility ON wiki_node TYPE option<float>;
     DEFINE INDEX IF NOT EXISTS wiki_node_name ON wiki_node FIELDS name UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
@@ -52,6 +58,9 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS status ON wisdom TYPE string DEFAULT 'active';
     DEFINE FIELD IF NOT EXISTS superseded_at ON wisdom TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS superseded_by ON wisdom TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS importance ON wisdom TYPE float DEFAULT 5.0;
+    DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wisdom TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS created_at ON wisdom TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
     DEFINE INDEX IF NOT EXISTS wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
@@ -93,10 +102,12 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS last_accessed ON metrics TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS metrics_target ON metrics FIELDS target_id UNIQUE;
 
-    DEFINE TABLE IF NOT EXISTS relates_to SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS relates_to SCHEMAFULL TYPE RELATION IN episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state OUT episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state;
+    DEFINE FIELD IF NOT EXISTS relation ON relates_to TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS strength ON relates_to TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS created_at ON relates_to TYPE datetime DEFAULT time::now();
 
-    DEFINE TABLE IF NOT EXISTS mentions SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS mentions SCHEMAFULL TYPE RELATION IN episode OUT entity;
     DEFINE FIELD IF NOT EXISTS created_at ON mentions TYPE datetime DEFAULT time::now();
 
     DEFINE TABLE IF NOT EXISTS short_term_memory SCHEMAFULL;
@@ -117,5 +128,28 @@ pub const INIT_SCHEMA: &str = "
     DEFINE TABLE IF NOT EXISTS session_state SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS checkpoint_node SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS symbol_archive SCHEMALESS;
-";
 
+    DEFINE TABLE IF NOT EXISTS belief_state SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS session_id ON belief_state TYPE string;
+    DEFINE FIELD IF NOT EXISTS tasks_todo ON belief_state TYPE array<string>;
+    DEFINE FIELD IF NOT EXISTS hypotheses_tested ON belief_state TYPE array<string>;
+    DEFINE FIELD IF NOT EXISTS confidence_score ON belief_state TYPE float;
+    DEFINE FIELD IF NOT EXISTS uncertainty_areas ON belief_state TYPE array<string>;
+    DEFINE FIELD IF NOT EXISTS updated_at ON belief_state TYPE string;
+    DEFINE INDEX IF NOT EXISTS belief_state_session ON belief_state FIELDS session_id;
+
+    DEFINE TABLE IF NOT EXISTS thought_node SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS title ON thought_node TYPE string;
+    DEFINE FIELD IF NOT EXISTS content ON thought_node TYPE string;
+    DEFINE FIELD IF NOT EXISTS scope ON thought_node TYPE string DEFAULT 'general';
+    DEFINE FIELD IF NOT EXISTS vault_path ON thought_node TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS created_at ON thought_node TYPE string;
+    DEFINE INDEX IF NOT EXISTS thought_node_scope ON thought_node FIELDS scope;
+
+    DEFINE TABLE IF NOT EXISTS chat_history SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS session_id ON chat_history TYPE string;
+    DEFINE FIELD IF NOT EXISTS role ON chat_history TYPE string; -- 'user' or 'assistant'
+    DEFINE FIELD IF NOT EXISTS content ON chat_history TYPE string;
+    DEFINE FIELD IF NOT EXISTS created_at ON chat_history TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS ch_session ON chat_history FIELDS session_id;
+";

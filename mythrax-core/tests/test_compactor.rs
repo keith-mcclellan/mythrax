@@ -127,7 +127,7 @@ Insight Three content."#;
         .await?.check()?;
 
     // Execute compaction
-    compactor.compact_scope(&backend, &store, "scope1").await?;
+    compactor.compact_scope(&backend, &store, "scope1", backend.embedder.clone()).await?;
 
     // Verify compactions on disk
     let compaction_dir = vault_root.join("wiki/compaction");
@@ -345,7 +345,7 @@ Insight content
 
     // Call DreamCoordinator::run_dream
     mythrax_core::cognitive::synthesis::DreamCoordinator::new()
-        .run_dream(&backend, &store, Some("deep"))
+        .run_dream(&backend, &store, Some("deep"), backend.embedder.clone())
         .await?;
 
     let mut after_nodes_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';").await?;

@@ -3,6 +3,7 @@ use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
 use crate::cognitive::synthesis::load_insights;
 use crate::contracts::WikiNode;
+use surrealdb_types::SurrealValue;
 use std::path::Path;
 use anyhow::Result;
 
@@ -76,10 +77,47 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         scope: &str,
+        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
     ) -> Result<()> {
         let _ = auto_page_workspace_files(db).await;
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
+
+        // Prune chat history exceeding 100 turns per session
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let sessions_res = surreal_backend.db.query("SELECT session_id FROM chat_history GROUP BY session_id;").await;
+            match sessions_res {
+                Ok(mut resp) => {
+                    #[derive(serde::Deserialize, SurrealValue)]
+                    struct SessionRow {
+                        session_id: String,
+                    }
+                    if let Ok(rows) = resp.take::<Vec<SessionRow>>(0) {
+                        for row in rows {
+                            let ids_res = surreal_backend.db.query("SELECT id, created_at FROM chat_history WHERE session_id = $session_id ORDER BY created_at DESC;")
+                                .bind(("session_id", row.session_id.as_str()))
+                                .await;
+                            if let Ok(mut ids_resp) = ids_res {
+                                #[derive(serde::Deserialize, SurrealValue)]
+                                struct IdRow {
+                                    id: surrealdb::types::RecordId,
+                                }
+                                let ids: Vec<IdRow> = ids_resp.take(0).unwrap_or_default();
+                                if ids.len() > 100 {
+                                    let to_delete = &ids[100..];
+                                    for item in to_delete {
+                                        let _ = surreal_backend.db.query("DELETE $id;")
+                                            .bind(("id", item.id.clone()))
+                                            .await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
         let insights = load_insights(&store.vault_root);
         let scope_insights: Vec<_> = insights
             .into_iter()

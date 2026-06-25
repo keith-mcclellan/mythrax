@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
-use crate::contracts::{WisdomRule, WikiNode};
+use crate::contracts::WikiNode;
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
@@ -25,166 +25,185 @@ impl Forge {
         }
     }
 
-    /// Ingest a document, chunk it, and extract wisdom rules and wiki nodes using LLM
-    pub async fn ingest_document(&self, content: &str, scope: &str, _source_name: &str) -> Result<()> {
-        let is_markdown = _source_name.ends_with(".md") || _source_name.ends_with(".markdown");
-        let toc = if is_markdown {
-            parse_markdown_toc(content)
-        } else {
-            match self.extract_toc_via_llm(content).await {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("LLM TOC extraction failed: {}. Falling back to default TOC.", e);
-                    vec![TOCEntry {
-                        title: "Document Root".to_string(),
-                        start_byte: 0,
-                        end_byte: content.len(),
-                    }]
-                }
-            }
-        };
-
-        let sections = split_into_logical_sections(content, &toc);
+    /// Splits text into semantic chunks based on paragraph/line boundaries,
+    /// targeting 1,000–2,000 tokens per chunk.
+    pub fn semantic_chunk_text(&self, content: &str) -> Vec<String> {
+        let mut segments: Vec<String> = Vec::new();
         
-        for (i, section) in sections.iter().enumerate() {
-            tracing::info!("Forging section {}/{} ({})", i + 1, sections.len(), section.title);
-            
-            // Extract Wisdom Rules
-            let wisdom_sys = "You are a systems synthesizer. Analyze the text chunk and extract system-level Wisdom Rules to prevent mistakes. Respond ONLY with a JSON array of rules.";
-            let wisdom_prompt = format!(
-                "Text chunk:\n\n{}\n\nRespond ONLY with a JSON array of rules, each containing exactly:\n- target_pattern (string)\n- action_to_avoid (string)\n- causal_explanation (string)\n- prescribed_remedy (string)",
-                section.content
-            );
-            
-            match self.llm.completion(&*self.backend, Some(wisdom_sys), &wisdom_prompt).await {
-                Ok(wisdom_res) => {
-                    let trimmed = wisdom_res.trim();
-                    let stripped = if trimmed.starts_with("```json") {
-                        trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                    } else if trimmed.starts_with("```") {
-                        trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                    } else {
-                        trimmed
-                    };
-                    
-                    #[derive(Deserialize)]
-                    struct RawWisdom {
-                        target_pattern: String,
-                        action_to_avoid: String,
-                        causal_explanation: String,
-                        prescribed_remedy: String,
-                    }
-                    match serde_json::from_str::<Vec<RawWisdom>>(stripped) {
-                        Ok(rules) => {
-                            for r in rules {
-                                let rule_uuid = uuid::Uuid::new_v4().to_string();
-                                let relative_path = format!(
-                                    "wisdom/forge/{}_{}.md",
-                                    r.target_pattern.replace([' ', '/'], "_"),
-                                    &rule_uuid[..8]
-                                );
-                                
-                                let rule_md = format!(
-                                    "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
-                                    r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
-                                    scope, r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy
-                                );
-                                
-                                self.store.write_file(&relative_path, &rule_md)?;
-                                
-                                let rule_contract = WisdomRule {
-                                    id: None,
-                                    target_pattern: r.target_pattern,
-                                    action_to_avoid: r.action_to_avoid,
-                                    causal_explanation: r.causal_explanation,
-                                    prescribed_remedy: r.prescribed_remedy,
-                                    tier: "dynamic".to_string(),
-                                    scope: scope.to_string(),
-                                    vault_path: Some(relative_path),
-                                    embedding: None,
-                                    source_episodes: vec![],
-                                    generator_name: "ForgePipeline".to_string(),
-                                    similarity: None,
-                                    utility: None,
-                                    status: None,
-                                    superseded_at: None,
-                                    superseded_by: None,
-                                };
-                                let _ = crate::cognitive::synthesis::save_wisdom_rule_with_deduplication(&*self.backend, &self.store, &rule_contract).await;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to parse WisdomRules JSON: {}. Response was: {}", e, stripped);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get WisdomRules completion from LLM: {}", e);
-                }
+        // 1. Split by top-level paragraphs (\n\n)
+        let paragraphs: Vec<&str> = content.split("\n\n").collect();
+
+        for para in paragraphs {
+            let trimmed_para = para.trim();
+            if trimmed_para.is_empty() {
+                continue;
             }
 
-            // Extract Wiki Nodes
-            let wiki_sys = "You are a systems synthesizer. Analyze the text chunk and extract key concepts or architectural definitions for a systems wiki. Respond ONLY with a JSON array of nodes.";
-            let wiki_prompt = format!(
-                "Text chunk:\n\n{}\n\nRespond ONLY with a JSON array of nodes, each containing exactly:\n- name (string concept title)\n- content (string explanation or definition)",
-                section.content
-            );
-            
-            match self.llm.completion(&*self.backend, Some(wiki_sys), &wiki_prompt).await {
-                Ok(wiki_res) => {
-                    let trimmed = wiki_res.trim();
-                    let stripped = if trimmed.starts_with("```json") {
-                        trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                    } else if trimmed.starts_with("```") {
-                        trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            // 2. Check if paragraph exceeds 2,000 tokens
+            if count_tokens(trimmed_para) > 2000 {
+                // Split paragraph by lines (\n)
+                let lines: Vec<&str> = trimmed_para.split('\n').collect();
+                
+                for line in lines {
+                    let trimmed_line = line.trim();
+                    if trimmed_line.is_empty() {
+                        continue;
+                    }
+
+                    // 3. Check if line exceeds 2,000 tokens
+                    if count_tokens(trimmed_line) > 2000 {
+                        // Fallback: Use standard chunking for large lines
+                        let sub_chunks = chunk_text(trimmed_line, 1500, 150);
+                        for sub_chunk in sub_chunks {
+                            segments.push(sub_chunk);
+                        }
                     } else {
-                        trimmed
-                    };
-                    
-                    #[derive(Deserialize)]
-                    struct RawWiki {
-                        name: String,
-                        content: String,
-                    }
-                    match serde_json::from_str::<Vec<RawWiki>>(stripped) {
-                        Ok(nodes) => {
-                            for n in nodes {
-                                let node_uuid = uuid::Uuid::new_v4().to_string();
-                                let relative_path = format!(
-                                    "wiki/forge/{}_{}.md",
-                                    n.name.replace([' ', '/'], "_"),
-                                    &node_uuid[..8]
-                                );
-                                
-                                let wiki_md = format!(
-                                    "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
-                                    n.name, scope, n.name, n.content
-                                );
-                                
-                                self.store.write_file(&relative_path, &wiki_md)?;
-                                
-                                let node_contract = WikiNode {
-                                    id: None,
-                                    name: n.name,
-                                    content: n.content,
-                                    scope: scope.to_string(),
-                                    vault_path: Some(relative_path),
-                                    embedding: None,
-                                };
-                                let _ = self.backend.save_wiki_node(&node_contract).await;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to parse WikiNodes JSON: {}. Response was: {}", e, stripped);
-                        }
+                        // Add line directly to segments
+                        segments.push(trimmed_line.to_string());
                     }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to get WikiNodes completion from LLM: {}", e);
-                }
+            } else {
+                // Add paragraph directly to segments
+                segments.push(trimmed_para.to_string());
             }
         }
-        
+
+        // 4. Group segments into final chunks (1,000–2,000 tokens)
+        let mut chunks: Vec<String> = Vec::new();
+        let mut current_group: Vec<String> = Vec::new();
+        let mut current_tokens: usize = 0;
+
+        for seg in segments {
+            let seg_tokens = count_tokens(&seg);
+
+            // Case A: Adding this segment exceeds 2,000 tokens
+            if current_tokens + seg_tokens > 2000 {
+                if !current_group.is_empty() {
+                    // Flush current group
+                    let joined = current_group.join("\n\n");
+                    chunks.push(joined);
+                    current_group.clear();
+                    current_tokens = 0;
+                }
+
+                // If the segment itself is > 2000 (should be handled by fallback, but safety check)
+                if seg_tokens > 2000 {
+                    chunks.push(seg);
+                } else {
+                    // Start new group with this segment
+                    current_group.push(seg);
+                    current_tokens = seg_tokens;
+                }
+            } 
+            // Case B: Adding this segment brings us into the 1,000–2,000 target range
+            else if current_tokens + seg_tokens >= 1000 && current_tokens + seg_tokens <= 2000 {
+                current_group.push(seg);
+                // Flush immediately as we hit the target range
+                let joined = current_group.join("\n\n");
+                chunks.push(joined);
+                current_group.clear();
+                current_tokens = 0;
+            } 
+            // Case C: Adding this segment is still below 1,000 tokens
+            else {
+                current_group.push(seg);
+                current_tokens += seg_tokens;
+            }
+        }
+
+        // Flush any remaining content
+        if !current_group.is_empty() {
+            let joined = current_group.join("\n\n");
+            chunks.push(joined);
+        }
+
+        chunks
+    }
+
+    /// Ingest a document, chunk it, and extract wisdom rules and wiki nodes using LLM
+    pub async fn ingest_document(&self, content: &str, scope: &str, _source_name: &str) -> Result<()> {
+        let sanitized_source_name = _source_name.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+        let uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
+
+        // 1. Chunk the document content using semantic_chunk_text
+        let chunks = self.semantic_chunk_text(content);
+
+        // 2. Save the parent index node as a WikiNode in SurrealDB and write it to the store
+        let parent_path = format!("wiki/forge/parent_{}_{}.md", sanitized_source_name, uuid_prefix);
+        let parent_md = format!(
+            "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
+            _source_name, scope, _source_name, content
+        );
+        self.store.write_file(&parent_path, &parent_md)?;
+
+        let parent_node = WikiNode {
+            id: None,
+            name: _source_name.to_string(),
+            content: content.to_string(),
+            scope: scope.to_string(),
+            vault_path: Some(parent_path),
+            embedding: None,
+        };
+        let parent_id_str = self.backend.save_wiki_node(&parent_node).await?;
+
+        // 3. Save each chunk node as a WikiNode in SurrealDB and write it to the store
+        let mut chunk_ids = Vec::new();
+        for (idx, chunk_text) in chunks.iter().enumerate() {
+            let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
+            let chunk_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
+            let chunk_path = format!("wiki/forge/chunk_{}_{}.md", sanitized_source_name, chunk_uuid_prefix);
+            let chunk_md = format!(
+                "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
+                chunk_name, scope, chunk_name, chunk_text
+            );
+            self.store.write_file(&chunk_path, &chunk_md)?;
+
+            let chunk_node = WikiNode {
+                id: None,
+                name: chunk_name,
+                content: chunk_text.to_string(),
+                scope: scope.to_string(),
+                vault_path: Some(chunk_path),
+                embedding: None,
+            };
+            let chunk_id_str = self.backend.save_wiki_node(&chunk_node).await?;
+            chunk_ids.push(chunk_id_str);
+        }
+
+        // 4. Relate each chunk to the parent index node using a relates_to edge in SurrealDB
+        for chunk_id_str in &chunk_ids {
+            let chunk_thing = crate::db::parse_record_id(chunk_id_str)?;
+            let parent_thing = crate::db::parse_record_id(&parent_id_str)?;
+            let query = "RELATE $chunk_id -> relates_to -> $parent_id UNIQUE CONTENT { relation: 'parent', created_at: time::now() };";
+            self.backend.db.query(query)
+                .bind(("chunk_id", chunk_thing))
+                .bind(("parent_id", parent_thing))
+                .await?
+                .check().context("Failed to relate chunk to parent")?;
+        }
+
+        // 5. Establish bidirectional sequential links between adjacent chunks
+        for i in 0..chunk_ids.len().saturating_sub(1) {
+            let chunk_n_thing = crate::db::parse_record_id(&chunk_ids[i])?;
+            let chunk_n_plus_1_thing = crate::db::parse_record_id(&chunk_ids[i + 1])?;
+
+            // Chunk N -> Chunk N+1 with relation "next"
+            let query_next = "RELATE $chunk_n -> relates_to -> $chunk_n_plus_1 UNIQUE CONTENT { relation: 'next', created_at: time::now() };";
+            self.backend.db.query(query_next)
+                .bind(("chunk_n", chunk_n_thing.clone()))
+                .bind(("chunk_n_plus_1", chunk_n_plus_1_thing.clone()))
+                .await?
+                .check().context("Failed to relate chunk next")?;
+
+            // Chunk N+1 -> Chunk N with relation "prev"
+            let query_prev = "RELATE $chunk_n_plus_1 -> relates_to -> $chunk_n UNIQUE CONTENT { relation: 'prev', created_at: time::now() };";
+            self.backend.db.query(query_prev)
+                .bind(("chunk_n_plus_1", chunk_n_plus_1_thing))
+                .bind(("chunk_n", chunk_n_thing))
+                .await?
+                .check().context("Failed to relate chunk prev")?;
+        }
+
         Ok(())
     }
 
