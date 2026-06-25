@@ -261,7 +261,7 @@ This is a test insight that references `page_fn_test_fn`.
 
     // Run compactor
     let compactor = Compactor::new();
-    compactor.compact_scope(&backend, &store, "test_scope").await?;
+    compactor.compact_scope(&backend, &store, "test_scope", backend.embedder.clone()).await?;
 
     // Assert that the workspace source file was NOT modified on disk
     let current_content = std::fs::read_to_string(&main_rs_path)?;

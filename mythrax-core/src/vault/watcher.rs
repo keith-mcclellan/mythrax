@@ -1,18 +1,23 @@
 use notify::{Watcher, RecursiveMode, Event, RecommendedWatcher};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, Duration};
 use tokio::sync::mpsc;
 use anyhow::{Result, Context};
 use crate::store::MarkdownStore;
-use crate::db::StorageBackend;
+use crate::db::{StorageBackend, SurrealBackend};
 use crate::contracts::{EpisodeSave, WisdomRule, Entity, WikiNode};
+use surrealdb_types::SurrealValue;
 use crate::vault::markdown::{parse_frontmatter, extract_plain_text};
 use crate::vault::organization::organize_file;
 
 pub struct WatchIgnoreList {
     ignored: Mutex<HashMap<PathBuf, Instant>>,
+    ignored_hashes: Mutex<HashSet<u64>>,
+    pub write_tx: Mutex<Option<mpsc::UnboundedSender<(PathBuf, String, Arc<MarkdownStore>)>>>,
 }
 
 impl Default for WatchIgnoreList {
@@ -25,6 +30,8 @@ impl WatchIgnoreList {
     pub fn new() -> Self {
         Self {
             ignored: Mutex::new(HashMap::new()),
+            ignored_hashes: Mutex::new(HashSet::new()),
+            write_tx: Mutex::new(None),
         }
     }
 
@@ -38,6 +45,37 @@ impl WatchIgnoreList {
         let now = Instant::now();
         map.retain(|_, &mut time| now.duration_since(time) < Duration::from_secs(2));
         map.contains_key(path)
+    }
+
+    pub fn ignore_hash(&self, hash: u64) {
+        let mut hashes = self.ignored_hashes.lock().unwrap();
+        hashes.insert(hash);
+    }
+
+    pub fn is_hash_ignored(&self, hash: &u64) -> bool {
+        let mut hashes = self.ignored_hashes.lock().unwrap();
+        hashes.remove(hash)
+    }
+
+    pub fn queue_write(&self, path: PathBuf, content: &str, store: Arc<MarkdownStore>) {
+        let tx = self.write_tx.lock().unwrap();
+        if let Some(sender) = tx.as_ref() {
+            let _ = sender.send((path, content.to_string(), store));
+        } else {
+            // Fallback: Write immediately
+            let mut hasher = DefaultHasher::new();
+            content.hash(&mut hasher);
+            let hash = hasher.finish();
+            
+            self.ignore_hash(hash);
+            self.ignore(path.clone());
+            
+            let rel_path = path.strip_prefix(&store.vault_root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            let _ = store.write_file(&rel_path, content);
+        }
     }
 }
 
@@ -64,10 +102,81 @@ pub fn start_watching(
         watcher.watch(global_dir, RecursiveMode::Recursive)?;
     }
 
+    // Initialize the coalescing write-behind channel
+    let (write_tx, mut write_rx) = mpsc::unbounded_channel::<(PathBuf, String, Arc<MarkdownStore>)>();
+    {
+        let mut guard = ignore_list.write_tx.lock().unwrap();
+        *guard = Some(write_tx);
+    }
+
+    let delay = if cfg!(test) || std::env::var("CARGO_MANIFEST_DIR").is_ok() {
+        Duration::from_millis(10)
+    } else {
+        Duration::from_secs(5)
+    };
+
+    let ignore_list_clone = ignore_list.clone();
+    tokio::spawn(async move {
+        let mut pending: HashMap<PathBuf, (String, Arc<MarkdownStore>, Instant)> = HashMap::new();
+        loop {
+            let sleep_dur = if let Some(earliest) = pending.values().map(|(_, _, t)| *t).min() {
+                let now = Instant::now();
+                if earliest > now {
+                    earliest.duration_since(now)
+                } else {
+                    Duration::from_millis(0)
+                }
+            } else {
+                Duration::from_millis(100)
+            };
+
+            tokio::select! {
+                res = write_rx.recv() => {
+                    if let Some((path, content, store_ref)) = res {
+                        let flush_time = Instant::now() + delay;
+                        pending.insert(path, (content, store_ref, flush_time));
+                    } else {
+                        break;
+                    }
+                }
+                _ = tokio::time::sleep(sleep_dur) => {}
+            }
+
+            let now = Instant::now();
+            let mut expired = Vec::new();
+            for (path, (_, _, flush_time)) in &pending {
+                if now >= *flush_time {
+                    expired.push(path.clone());
+                }
+            }
+
+            for path in expired {
+                if let Some((content, store_ref, _)) = pending.remove(&path) {
+                    let mut s = DefaultHasher::new();
+                    content.hash(&mut s);
+                    let hash = s.finish();
+
+                    ignore_list_clone.ignore_hash(hash);
+                    ignore_list_clone.ignore(path.clone());
+
+                    let rel_path = path.strip_prefix(&store_ref.vault_root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+
+                    if let Err(e) = store_ref.write_file(&rel_path, &content) {
+                        tracing::error!("Coalescing queue failed to write file {:?}: {:?}", path, e);
+                    }
+                }
+            }
+        }
+    });
+
     // Spawn a tokio task to handle events
     let backend_clone = backend.clone();
     let store_clone = store.clone();
     let dream_tx_clone = dream_tx.clone();
+    let ignore_list_evt = ignore_list.clone();
     tokio::spawn(async move {
         while let Some(res) = rx.recv().await {
             match res {
@@ -77,10 +186,22 @@ pub fn start_watching(
                             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                                 continue;
                             }
-                            if ignore_list.is_ignored(&path) {
+                            if ignore_list_evt.is_ignored(&path) {
                                 tracing::debug!("Watcher ignoring path: {:?}", path);
                                 continue;
                             }
+
+                            // Check hash suppression
+                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                let mut s = DefaultHasher::new();
+                                content.hash(&mut s);
+                                let hash = s.finish();
+                                if ignore_list_evt.is_hash_ignored(&hash) {
+                                    tracing::debug!("Watcher ignoring path due to hash match: {:?}", path);
+                                    continue;
+                                }
+                            }
+
                             if let Err(e) = sync_file_to_db(&path, &backend_clone, &store_clone).await {
                                 tracing::error!("Failed to sync file {:?} to DB: {:?}", path, e);
                             } else {
@@ -125,10 +246,56 @@ struct EpisodeFrontmatter {
     entities: Option<Vec<Entity>>,
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct FrontmatterEdge {
+    pub target: String,
+    pub relation: Option<String>,
+    pub strength: Option<f32>,
+}
+
 #[derive(serde::Deserialize)]
 struct WikiFrontmatter {
     name: Option<String>,
     scope: Option<String>,
+    edges: Option<Vec<FrontmatterEdge>>,
+}
+
+async fn resolve_target_to_id(
+    target: &str,
+    surreal_backend: &crate::db::SurrealBackend,
+) -> Option<surrealdb::types::RecordId> {
+    let cleaned = target.trim_start_matches("[[").trim_end_matches("]]").trim();
+    if cleaned.contains(':') {
+        if let Ok(rec_id) = crate::db::parse_record_id(cleaned) {
+            return Some(rec_id);
+        }
+    }
+    
+    // Query wiki_node
+    let q = "SELECT VALUE id FROM wiki_node WHERE name = $target LIMIT 1;";
+    if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
+        if let Ok(Some(id)) = resp.take::<Option<surrealdb::types::RecordId>>(0) {
+            return Some(id);
+        }
+    }
+    
+    // Fallback to episode
+    let q = "SELECT VALUE id FROM episode WHERE title = $target LIMIT 1;";
+    if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
+        if let Ok(Some(id)) = resp.take::<Option<surrealdb::types::RecordId>>(0) {
+            return Some(id);
+        }
+    }
+    
+    // Fallback to wisdom
+    let q = "SELECT VALUE id FROM wisdom WHERE target_pattern = $target LIMIT 1;";
+    if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
+        if let Ok(Some(id)) = resp.take::<Option<surrealdb::types::RecordId>>(0) {
+            return Some(id);
+        }
+    }
+    
+    None
 }
 
 #[derive(serde::Deserialize)]
@@ -241,7 +408,7 @@ pub async fn sync_file_to_db(
         let frontmatter: WikiFrontmatter = yaml_opt
             .and_then(|y| serde_json::to_value(y).ok())
             .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or(WikiFrontmatter { name: None, scope: None });
+            .unwrap_or(WikiFrontmatter { name: None, scope: None, edges: None });
 
         let name = frontmatter.name.unwrap_or_else(|| {
             path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
@@ -249,14 +416,89 @@ pub async fn sync_file_to_db(
 
         let node = WikiNode {
             id: None,
-            name,
-            content: plain_body,
+            name: name.clone(),
+            content: plain_body.clone(),
             scope: frontmatter.scope.unwrap_or_else(|| "general".to_string()),
             vault_path: Some(rel_path),
             embedding: None,
         };
 
-        backend.save_wiki_node(&node).await?;
+        let db_id = backend.save_wiki_node(&node).await?;
+
+        if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+            let from_id = crate::db::parse_record_id(&db_id)?;
+            
+            // Parse body wikilinks using regex
+            let body_links_regex = regex::Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
+            let mut body_links = Vec::new();
+            for cap in body_links_regex.captures_iter(&body) {
+                let target_str = cap.get(1).unwrap().as_str();
+                let clean_target = target_str.split('|').next().unwrap_or(target_str).trim();
+                body_links.push(clean_target.to_string());
+            }
+
+            // Resolve desired relations
+            let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();
+            if let Some(ref edges) = frontmatter.edges {
+                for edge in edges {
+                    if let Some(target_id) = resolve_target_to_id(&edge.target, surreal_backend).await {
+                        let relation = edge.relation.clone().unwrap_or_else(|| "related".to_string());
+                        desired.push((target_id, relation, edge.strength));
+                    }
+                }
+            }
+            
+            for link in body_links {
+                if let Some(target_id) = resolve_target_to_id(&link, surreal_backend).await {
+                    if !desired.iter().any(|(tid, rel, _)| tid == &target_id && rel == "related") {
+                        desired.push((target_id, "related".to_string(), None));
+                    }
+                }
+            }
+
+            // Query existing relations
+            let mut existing_resp = surreal_backend.db.query("SELECT id, relation, out FROM relates_to WHERE in = $from;")
+                .bind(("from", from_id.clone()))
+                .await?;
+            
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+            struct RelatesToRaw {
+                id: surrealdb::types::RecordId,
+                relation: String,
+                out: surrealdb::types::RecordId,
+            }
+            
+            let existing: Vec<RelatesToRaw> = existing_resp.take(0)?;
+
+            // Delete removed relations
+            for ext in &existing {
+                let is_still_desired = desired.iter().any(|(tid, rel, _)| {
+                    tid == &ext.out && rel == &ext.relation
+                });
+                if !is_still_desired {
+                    let delete_q = "DELETE FROM relates_to WHERE id = $rel_id;";
+                    let _ = surreal_backend.db.query(delete_q)
+                        .bind(("rel_id", ext.id.clone()))
+                        .await;
+                }
+            }
+
+            // Create new relations
+            for (tid, rel, strength_opt) in desired {
+                let already_exists = existing.iter().any(|ext| {
+                    &ext.out == &tid && &ext.relation == &rel
+                });
+                if !already_exists {
+                    let relate_q = "RELATE $from->relates_to->$to CONTENT { relation: $relation, strength: $strength };";
+                    let _ = surreal_backend.db.query(relate_q)
+                        .bind(("from", from_id.clone()))
+                        .bind(("to", tid))
+                        .bind(("relation", rel))
+                        .bind(("strength", strength_opt))
+                        .await;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -316,11 +558,8 @@ pub async fn save_episode_bidirectional(
     let markdown = format_episode_markdown(&episode_to_save);
     let abs_path = store.vault_root.join(&rel_path);
 
-    // Loop prevention: ignore the watcher event for this file
-    ignore_list.ignore(abs_path.clone());
-
-    // Write file using store (which does atomic write and secret scrubbing)
-    store.write_file(&rel_path, &markdown)?;
+    // Queue write operation to coalescing write-behind queue
+    ignore_list.queue_write(abs_path, &markdown, store.clone());
 
     Ok(db_id)
 }
@@ -362,11 +601,8 @@ pub async fn save_wisdom_rule_bidirectional(
     let markdown = format_wisdom_markdown(&rule_to_save);
     let abs_path = store.vault_root.join(&rel_path);
 
-    // Loop prevention: ignore the watcher event for this file
-    ignore_list.ignore(abs_path.clone());
-
-    // Write file using store
-    store.write_file(&rel_path, &markdown)?;
+    // Queue write operation to coalescing write-behind queue
+    ignore_list.queue_write(abs_path, &markdown, store.clone());
 
     Ok(db_id)
 }
@@ -461,6 +697,9 @@ mod tests {
         
         let ep_id = save_episode_bidirectional(&episode, &backend, &store, &ignore_list).await.unwrap();
         assert!(ep_id.contains("episode:"));
+        
+        // Yield to allow the background write-behind queue to flush and update the ignore list
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         
         // Check that file was written to vault
         let expected_rel_path = "episodes/bidirectional_test.md";

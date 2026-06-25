@@ -300,7 +300,7 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
     assert_eq!(active_eps.len(), 1);
 
     // Run compaction/sleep cycle
-    compactor.compact_scope(&backend, &store, "archive-test").await?;
+    compactor.compact_scope(&backend, &store, "archive-test", backend.embedder.clone()).await?;
 
     // 1. Verify active record is deleted from DB
     let active_eps_after = backend.get_all_episodes().await?;

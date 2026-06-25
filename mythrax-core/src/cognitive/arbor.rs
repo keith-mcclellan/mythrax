@@ -40,7 +40,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         test_command: String,
         target_files: Vec<String>,
     ) -> Self {
-        let backend = crate::db::SurrealBackend { db: db.clone(), embedder: None };
+        let backend = crate::db::SurrealBackend { db: db.clone(), embedder: None, client_port: None };
         Self {
             db,
             backend,

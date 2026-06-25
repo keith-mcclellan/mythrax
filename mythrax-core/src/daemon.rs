@@ -153,7 +153,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                             }
 
                             tracing::info!("Daily scheduled deep dreaming starting...");
-                            if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep")).await {
+                            if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep"), backend_daily.embedder.clone()).await {
                                 tracing::error!("Daily deep dreaming failed: {:?}", e);
                             } else {
                                 tracing::info!("Deep dreaming synthesis completed. Running compactions...");
@@ -162,7 +162,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     scopes.push("general".to_string());
                                 }
                                 for scope in scopes {
-                                    let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope).await;
+                                    let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope, backend_daily.embedder.clone()).await;
                                 }
                                 let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
                             }
@@ -188,7 +188,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
                                             && unprocessed.len() > 50 {
                                                 tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
-                                                if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
+                                                if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
                                                     tracing::error!("Threshold dreaming failed: {:?}", e);
                                                 } else {
                                                     let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
@@ -196,7 +196,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                         scopes.push("general".to_string());
                                                     }
                                                     for scope in scopes {
-                                                        let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                        let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope, backend_dream.embedder.clone()).await;
                                                     }
                                                     let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
                                                 }
@@ -217,7 +217,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
                                         && !unprocessed.is_empty() {
                                             tracing::info!("Idle debounced synthesis starting...");
-                                            if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
+                                            if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
                                                 tracing::error!("Debounced incremental dreaming failed: {:?}", e);
                                             } else {
                                                 let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
@@ -225,7 +225,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                     scopes.push("general".to_string());
                                                 }
                                                 for scope in scopes {
-                                                    let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                    let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope, backend_dream.embedder.clone()).await;
                                                 }
                                                 let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
                                             }

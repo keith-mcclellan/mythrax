@@ -15,15 +15,15 @@ All legacy granular tools (32 tools) have been consolidated into 9 high-efficien
 
 | Tool | Action Enum / Parameters | Purpose |
 |------|---------------------------|---------|
-| `query_memory` | **Action**: `search` \| `rules` \| `nodes` \| `root`<br>**Params**: `query?`, `scope?`, `limit?`, `token_budget?`, `allow_downward?`, `node_ids?` | Search memories (`search`), find wisdom rules (`rules`), hydrate node IDs (`nodes`), or get the Obsidian vault root path (`root`). |
-| `record_memory` | **Action**: `save` \| `feedback`<br>**Params**: `title?`, `content?`, `entities?`, `scope?`, `vault_path?`, `episode_id?`, `success?` | Save a new episodic memory (`save`) or record reinforcement feedback (`feedback`) for a specific episode. |
+| `query_memory` | **Action**: `search` \| `rules` \| `nodes` \| `root` \| `query_symbolic`<br>**Params**: `query?`, `scope?`, `limit?`, `token_budget?`, `allow_downward?`, `node_ids?`, `node_id?`, `relation?`, `max_depth?` | Search memories (`search`), find wisdom rules (`rules`), hydrate node IDs (`nodes`), get the vault root path (`root`), or run cycle-proof graph traversals (`query_symbolic`). |
+| `record_memory` | **Action**: `save` \| `feedback` \| `thought`<br>**Params**: `title?`, `content?`, `entities?`, `scope?`, `vault_path?`, `episode_id?`, `success?` | Save a new episodic memory (`save`), record reinforcement feedback (`feedback`), or log a TiM abstract thought node (`thought`) to `wiki/thoughts/`. |
+| `manage_file` | **Action**: `view` \| `replace` \| `multi_replace`<br>**Params**: `path`, `start_line?`, `end_line?`, `target_content?`, `replacement_content?`, `chunks?`, `allow_multiple?`, `instruction?`, `description?`, `is_skill_file?` | View files with virtual in-memory paging (`view`), surgically edit a contiguous block with placeholder resolution (`replace`), or patch multiple non-contiguous blocks (`multi_replace`). |
 | `manage_htr` | **Action**: `init` \| `ideate` \| `execute` \| `backprop` \| `merge` \| `run`<br>**Params**: `scope`, `hypothesis?`, `node_id?`, `files?`, `test_command?`, `max_steps?`, `status?`, `result?`, `insight?` | Initialize, ideate, execute, backpropagate, merge, or run a Cognitive Hypothesis Tree Search (HTR) workflow. |
-| `manage_stm` | **Action**: `put` \| `get` \| `clear` \| `handoff`<br>**Params**: `session_id`, `key?`, `value?`, `parent_id?`, `subagent_id?`, `summary?`, `handoff_path?`, `scope?` | Set a session variable (`put`), read a variable (`get`), clear session storage (`clear`), or save an agent-to-subagent handoff (`handoff`). |
-| `manage_vault` | **Action**: `verify` \| `organize` \| `reprocess` \| `summarize`<br>**Params**: `fix?`, `scope?` | Run DB-to-filesystem self-healing (`verify`), organize/deduplicate vault files (`organize`), reprocess missing embeddings (`reprocess`), or summarize/dream over episodes (`summarize`). |
+| `manage_stm` | **Action**: `put` \| `get` \| `clear` \| `handoff`<br>**Params**: `session_id`, `key?`, `value?`, `parent_id?`, `subagent_id?`, `summary?`, `handoff_path?`, `scope?` | Set a session variable (`put`), read a variable (`get`), clear session storage (`clear`), or save an agent-to-subagent handoff (`handoff`). Uses strict transaction safety. |
+| `manage_vault` | **Action**: `verify` \| `organize` \| `reprocess` \| `summarize` \| `audit`<br>**Params**: `fix?`, `scope?`, `workspace_path?` | Run DB-to-filesystem self-healing (`verify`), organize/deduplicate vault files (`organize`), reprocess missing embeddings (`reprocess`), summarize/dream over episodes (`summarize`), or run compliance audits (`audit`). |
 | `manage_config` | **Action**: `get` \| `set`<br>**Params**: `provider?`, `duration?`, `model?`, `cloud_provider?`, `api_key?` | Retrieve (`get`) or update (`set`) LLM provider/model configurations. |
-| `compliance_audit`| **Params**: `workspace_path?` | Execute compliance audits to verify project alignment. |
 | `ingest_knowledge`| **Action**: `bulk` \| `forge`<br>**Params**: `source`, `harness?`, `scope?` | Bulk ingest transcript logs (`bulk`) or parse and extract WisdomRules/WikiNodes from PDFs/documents via Forge (`forge`). |
-| `pre_invocation_hook` | **Params**: `session_id`, `query?`, `workspace_path?` | Execute the automatic hook to hydrate context nodes, handoff summaries, and stashed session variables. |
+| `pre_invocation_hook` | **Params**: `session_id`, `query?`, `workspace_path?` | Execute the automatic hook to inject active POMDP belief states, stashed variables, and three-tier hybrid hydrated memories. |
 
 ---
 
@@ -32,6 +32,12 @@ All legacy granular tools (32 tools) have been consolidated into 9 high-efficien
 To ensure high-quality execution and prevent duplicate coding effort:
 
 1. **The Pre-Invocation Hook Runs Automatically**: Before your first turn, the system invokes `pre_invocation_hook`. This automatically injects:
+   - **🧠 Active POMDP Belief State**: Injects the session's active belief state (tasks todo, hypotheses tested, confidence, uncertainty) at the top of the hook context to maintain cognitive continuity.
+   - **⚡ Three-Tier Hybrid Hydration (Self-RAG)**:
+     - **Similarity >= 0.80**: High-relevance nodes are fully hydrated (full content injected).
+     - **Similarity in [0.60, 0.80)**: Mid-relevance nodes are indexed in a lightweight summary table (titles, scopes, and 1-sentence summaries) to conserve the token budget.
+     - **Similarity < 0.60**: Low-relevance nodes are discarded.
+   - **Omitted Symbol Restoration**: Automatic symbol restoration is omitted in the hook to keep disk files 100% clean and fully compiling.
    - Active handoff metadata and tasks from parent-to-subagent delegations.
    - Stashed session variables (Short Term Memory).
    - High-confidence memory nodes and HTR negative constraints.
@@ -150,11 +156,12 @@ ingest_knowledge(action="forge", source="/path/to/guide.pdf", scope="coding")
 ```
 
 Forge will:
-1. Extract text (PDF via `pdf-extract`, or raw text for `.md`/`.txt`)
-2. Chunk into 24,000-token windows with 10% (2,400-token) overlap
-3. Call the local LLM to extract `WisdomRule`s and `WikiNode`s per chunk
-4. Write markdown files to `vault/wisdom/forge/` and `vault/wiki/forge/`
-5. Persist to SurrealDB for semantic search
+1. Extract text (PDF via `pdf-extract`, or raw text for `.md`/`.txt`).
+2. **Granular Semantic Chunking (1,000–2,000 tokens)**: Chunk the document into smaller, highly-focused segments of 1,000 to 2,000 tokens using paragraph boundaries, optimizing vector search precision and local model processing speed.
+3. **Structured Bidirectional Relations**: Link all chunks to the parent document node and establish bidirectional sequential relations between adjacent chunks (`Chunk N <-> Chunk N+1` of type `next`/`prev`). This allows high-precision surrounding context retrieval during search.
+4. Call the local LLM to extract `WisdomRule`s and `WikiNode`s per chunk.
+5. Write markdown files to `vault/wisdom/forge/` and `vault/wiki/forge/`.
+6. Persist to SurrealDB for semantic search.
 
 ---
 
@@ -178,3 +185,24 @@ When executing HTR cognitive runs:
 - Hypothesis nodes live at `wiki/<scope>/hypothesis_tree/<node_id>.md`
 - Use `manage_htr(action="run")` for automated end-to-end loops, or `manage_htr` with specific actions (`init`, `ideate`, `execute`, `backprop`, `merge`) for manual control.
 - All test execution outputs and LLM critic reviews must conform to the tree structure.
+
+---
+
+## MemoryOS Paging & Paging-Aware Editing (v1.2)
+
+To stay within LLM context windows and prevent token budget exhaustion while working with large codebases, Mythrax implements **MemoryOS Virtual Paging**:
+
+### 1. Virtual In-Memory Skeletons (`view_file`)
+*   When you read a source code file (like `.rs`, `.py`, `.js`, `.ts`) using `view_file`, the daemon automatically parses and pages out large symbol bodies (functions, structs, impls) to the `symbol_archive` SurrealDB table.
+*   The tool returns a **virtual skeleton** containing lightweight placeholders (e.g. `[Paged Symbol: Reference page_fn_my_func]`) rather than the massive full-text bodies.
+*   **Disk Integrity**: The physical file on disk is **never modified** during reads, keeping the codebase fully compiling.
+
+### 2. Paging-Aware Editing (`replace_file_content`)
+*   Because you only see the virtual skeleton, your target edit blocks will naturally contain placeholders.
+*   The editing tools (`replace_file_content` and `multi_replace_file_content`) are **paging-aware**: they scan your target block for placeholders, query `symbol_archive` to fetch the original bodies, reconstruct the unpaged target block in memory, find and replace it in the physical disk file, and save it.
+*   **How to Edit**: Simply target the placeholders exactly as they appear in the skeleton. The daemon handles the reconstruction surgically.
+
+### 3. LRU Eviction & Context Pinning
+*   The daemon's `PagingManager` maintains an active context queue of memory nodes in RAM.
+*   When capacity is reached, it automatically evicts the Least Recently Used (LRU) memories.
+*   **Context Pinning**: Wisdom rules, high-importance items ($\ge 8.0$), active handoffs, and active STM are pinned in RAM and are **immune** to LRU eviction.

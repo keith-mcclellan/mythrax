@@ -195,6 +195,7 @@ impl DreamCoordinator {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         mode_override: Option<&str>,
+        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
     ) -> Result<()> {
         let settings_path = store.vault_root.join("wiki/dream_settings.md");
         let mut active_mode = "incremental".to_string();
@@ -633,16 +634,39 @@ impl DreamCoordinator {
                     // 3. Prepare embeddings with local fallback
                     let mut episode_embeddings = Vec::new();
                     let mut valid_episodes = Vec::new();
-                    let local_embedder = crate::embeddings::LocalEmbedder::new().ok();
-
+                    
+                    // Separate episodes that need embedding
+                    let mut episodes_needing_embedding = Vec::new();
+                    let mut episodes_with_embedding = Vec::new();
+                    
                     for mut ep in episodes {
                         if ep.embedding.is_none() {
-                            if let Some(ref embedder) = local_embedder {
-                                if let Ok(emb) = embedder.embed(&ep.content) {
-                                    ep.embedding = Some(emb);
+                            episodes_needing_embedding.push(ep.content.clone());
+                            ep.embedding = None;
+                            episodes_with_embedding.push(ep);
+                        } else {
+                            if let Some(emb) = &ep.embedding {
+                                episode_embeddings.push(emb.clone());
+                                valid_episodes.push(ep);
+                            }
+                        }
+                    }
+
+                    // Batch embed missing episodes if embedder is provided
+                    if let Some(ref embedder) = embedder {
+                        if !episodes_needing_embedding.is_empty() {
+                            if let Ok(embeds) = embedder.embed_batch(&episodes_needing_embedding) {
+                                for (i, ep) in episodes_with_embedding.iter_mut().enumerate() {
+                                    if i < embeds.len() {
+                                        ep.embedding = Some(embeds[i].clone());
+                                    }
                                 }
                             }
                         }
+                    }
+                    
+                    // Merge back into final lists
+                    for ep in episodes_with_embedding {
                         if let Some(emb) = &ep.embedding {
                             episode_embeddings.push(emb.clone());
                             valid_episodes.push(ep);
@@ -921,16 +945,19 @@ pub async fn save_wisdom_rule_with_deduplication(
     store: &MarkdownStore,
     rule: &WisdomRule,
 ) -> Result<String> {
-    let text_to_embed = format!(
-        "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-        rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
-    );
-    
-    let new_emb = match db.embed(&text_to_embed).await {
-        Ok(emb) => emb,
-        Err(e) => {
-            tracing::warn!("Failed to generate embedding for deduplication: {}", e);
-            return db.save_wisdom_rule(rule).await;
+    let new_emb = if let Some(ref emb) = rule.embedding {
+        emb.clone()
+    } else {
+        let text_to_embed = format!(
+            "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
+            rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+        );
+        match db.embed(&text_to_embed).await {
+            Ok(emb) => emb,
+            Err(e) => {
+                tracing::warn!("Failed to generate embedding for deduplication: {}", e);
+                return db.save_wisdom_rule(rule).await;
+            }
         }
     };
 

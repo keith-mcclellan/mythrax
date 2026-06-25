@@ -9,7 +9,7 @@ use clap::Parser;
 use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
 use db::{SurrealBackend, StorageBackend};
-use cli::{Cli, Commands, ConfigAction, VaultAction, MemoryAction, HtrAction, StmAction, IngestAction};
+use cli::{Cli, Commands, ConfigAction, VaultAction, MemoryAction, HtrAction, StmAction};
 use mythrax_core::contracts::{WikiNode, WisdomRule};
 
 // Embed Mythrax Documentation
@@ -90,6 +90,8 @@ async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Res
     let mythrax_dir = PathBuf::from(&home).join(".mythrax");
     let log_file = mythrax_dir.join("daemon.log");
     let pid_file = mythrax_dir.join("daemon.pid");
+
+    std::fs::create_dir_all(&mythrax_dir).context("Failed to create .mythrax directory")?;
 
     let mut cmd = std::process::Command::new(&current_exe);
     cmd.arg("daemon").arg("start");
@@ -495,6 +497,24 @@ async fn main() -> Result<()> {
                     superseded_at: None,
                     superseded_by: None,
                 },
+                WisdomRule {
+                    id: None,
+                    target_pattern: "mythrax v1.2 capabilities and tools".to_string(),
+                    action_to_avoid: "Using old granular file tools (view_file, replace_file_content) or old standalone audit tools, or bypassing MemoryOS virtual paging.".to_string(),
+                    causal_explanation: "Old tools are deprecated and removed. Bypassing virtual paging and paging-aware editing leads to token budget exhaustion and context window bloat.".to_string(),
+                    prescribed_remedy: "Always use 'manage_file' (actions: 'view', 'replace', 'multi_replace') for files, and 'manage_vault' (action: 'audit') for compliance. Target virtual placeholders directly during edits as the paging-aware manager resolves them on disk.".to_string(),
+                    tier: "permanent".to_string(),
+                    scope: "general".to_string(),
+                    vault_path: Some("wisdom/permanent/mythrax_v1_2_capabilities.md".to_string()),
+                    embedding: None,
+                    source_episodes: vec![],
+                    generator_name: "PreDreamedWisdom".to_string(),
+                    similarity: None,
+                    utility: Some(100.0),
+                    status: None,
+                    superseded_at: None,
+                    superseded_by: None,
+                },
             ];
 
             for rule in wisdom_rules {
@@ -561,7 +581,7 @@ async fn main() -> Result<()> {
                         "include_artifacts": include_artifacts,
                         "session_id": session_id,
                     });
-                    execute_cli_tool_call("query_memory", args).await?;
+                    execute_cli_tool_call("manage_memory", args).await?;
                 }
                 MemoryAction::Record { title, file, scope } => {
                     let path = Path::new(&file);
@@ -573,7 +593,7 @@ async fn main() -> Result<()> {
                         "content": content,
                         "scope": scope,
                     });
-                    execute_cli_tool_call("record_memory", args).await?;
+                    execute_cli_tool_call("manage_memory", args).await?;
                 }
                 MemoryAction::Feedback { id, success } => {
                     let args = serde_json::json!({
@@ -581,13 +601,13 @@ async fn main() -> Result<()> {
                         "episode_id": id,
                         "success": success,
                     });
-                    execute_cli_tool_call("record_memory", args).await?;
+                    execute_cli_tool_call("manage_memory", args).await?;
                 }
                 MemoryAction::Root => {
                     let args = serde_json::json!({
                         "action": "root",
                     });
-                    execute_cli_tool_call("query_memory", args).await?;
+                    execute_cli_tool_call("manage_memory", args).await?;
                 }
             }
         }
@@ -615,19 +635,6 @@ async fn main() -> Result<()> {
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
             execute_cli_tool_call("manage_stm", payload).await?;
-        }
-        Commands::Ingest { action } => {
-            let (act_str, args) = match action {
-                IngestAction::Bulk { source, harness, scope } => {
-                    ("bulk", serde_json::json!({ "source": source, "harness": harness, "scope": scope }))
-                }
-                IngestAction::Forge { source_path, scope } => {
-                    ("forge", serde_json::json!({ "source_path": source_path, "scope": scope }))
-                }
-            };
-            let mut payload = args;
-            payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("ingest_knowledge", payload).await?;
         }
         Commands::Mcp => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
@@ -660,6 +667,15 @@ async fn main() -> Result<()> {
                 }
                 VaultAction::Summarize { scope } => {
                     ("summarize", serde_json::json!({ "scope": scope }))
+                }
+                VaultAction::IngestBulk { source, harness, scope } => {
+                    ("ingest_bulk", serde_json::json!({ "source": source, "harness": harness, "scope": scope }))
+                }
+                VaultAction::IngestForge { source_path, scope } => {
+                    ("ingest_forge", serde_json::json!({ "source_path": source_path, "scope": scope }))
+                }
+                VaultAction::Audit { workspace } => {
+                    ("audit", serde_json::json!({ "workspace_path": workspace }))
                 }
             };
             let mut payload = args;
@@ -696,12 +712,6 @@ async fn main() -> Result<()> {
         }
         Commands::PreCommit => {
             handle_pre_commit().await?;
-        }
-        Commands::Audit { workspace } => {
-            let args = serde_json::json!({
-                "workspace_path": workspace,
-            });
-            execute_cli_tool_call("compliance_audit", args).await?;
         }
     }
 

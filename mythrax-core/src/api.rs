@@ -192,7 +192,13 @@ async fn dream_handler(
     let scope = payload.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
     let compactor = crate::cognitive::compactor::Compactor::new();
     
-    let res_scope = compactor.compact_scope(&*state.backend, &state.store, scope).await;
+    let embedder = if let Some(backend) = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+        backend.embedder.clone()
+    } else {
+        None
+    };
+    
+    let res_scope = compactor.compact_scope(&*state.backend, &state.store, scope, embedder).await;
     let res_global = compactor.compact_global(&*state.backend, &state.store).await;
 
     match (res_scope, res_global) {
@@ -384,9 +390,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        // Test POST /v1/mcp/call (Authorized, query_memory action root)
+        // Test POST /v1/mcp/call (Authorized, manage_memory action root)
         let call_payload = serde_json::json!({
-            "name": "query_memory",
+            "name": "manage_memory",
             "arguments": {
                 "action": "root"
             }

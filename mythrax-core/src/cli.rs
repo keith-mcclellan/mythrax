@@ -45,7 +45,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: StmAction,
     },
-    /// Vault management and lifecycle operations
+    /// Vault management, lifecycle, ingestion, and auditing
     Vault {
         #[command(subcommand)]
         action: VaultAction,
@@ -54,17 +54,6 @@ pub enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
-    },
-    /// Ingest transcript logs or documents
-    Ingest {
-        #[command(subcommand)]
-        action: IngestAction,
-    },
-    /// Run safety compliance audits on the active directory
-    Audit {
-        /// Workspace directory to audit
-        #[arg(short, long)]
-        workspace: Option<String>,
     },
     /// Install the git pre-commit hook to sanitize secrets
     InstallHook,
@@ -153,30 +142,6 @@ pub enum MemoryAction {
 }
 
 #[derive(Subcommand, Debug, Clone)]
-pub enum IngestAction {
-    /// Bulk ingest logs into the memory store
-    Bulk {
-        /// Path to the log directory or file
-        #[arg(short, long)]
-        source: String,
-        /// Harness type (e.g. 'antigravity', 'claude', 'cursor', etc.)
-        #[arg(short, long)]
-        harness: String,
-        /// Optional scope
-        #[arg(long)]
-        scope: Option<String>,
-    },
-    /// Forge a source document to extract rules and wiki nodes
-    Forge {
-        /// Path to the source file (text, markdown, or PDF)
-        source_path: String,
-        /// Optional scope (defaults to 'general')
-        #[arg(short, long)]
-        scope: Option<String>,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone)]
 pub enum StmAction {
     /// Store a key-value pair in session-based short-term memory
     Put {
@@ -221,6 +186,32 @@ pub enum VaultAction {
         /// Optional scope
         #[arg(short, long)]
         scope: Option<String>,
+    },
+    /// Bulk ingest logs into the memory store
+    IngestBulk {
+        /// Path to the log directory or file
+        #[arg(short, long)]
+        source: String,
+        /// Harness type (e.g. 'antigravity', 'claude', 'cursor', etc.)
+        #[arg(short, long)]
+        harness: String,
+        /// Optional scope
+        #[arg(long)]
+        scope: Option<String>,
+    },
+    /// Forge a source document to extract rules and wiki nodes
+    IngestForge {
+        /// Path to the source file (text, markdown, or PDF)
+        source_path: String,
+        /// Optional scope (defaults to 'general')
+        #[arg(short, long)]
+        scope: Option<String>,
+    },
+    /// Run safety compliance audits on the active directory
+    Audit {
+        /// Workspace directory to audit
+        #[arg(short, long)]
+        workspace: Option<String>,
     },
 }
 
@@ -303,7 +294,5 @@ pub enum HtrAction {
         max_steps: usize,
     },
 }
-
-// --- ORIGINAL HELPERS (DO NOT CHANGE) ---
 
 pub use crate::vault::operations::{handle_merge_vault, run_auditor, stringify_record_id};

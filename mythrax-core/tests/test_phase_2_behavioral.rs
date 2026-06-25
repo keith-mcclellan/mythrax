@@ -160,7 +160,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
     }
 
     let coordinator = DreamCoordinator::new();
-    coordinator.run_dream(&*backend, &store, Some("deep")).await?;
+    coordinator.run_dream(&*backend, &store, Some("deep"), backend.embedder.clone()).await?;
 
     // The mock LLM when prompt contains "Wisdom" will return a procedural rule.
     // Procedural rules should be promoted to Global permanent wisdom and indexed with scope = "general", tier = "permanent".
@@ -240,7 +240,7 @@ This is standard content.
     fs::write(vault_root.join(".handoffs/stm_test_session.json"), serde_json::to_string(&stm_data)?)?;
 
     // 3. Run compaction
-    compactor.compact_scope(&*backend, &store, "scope1").await?;
+    compactor.compact_scope(&*backend, &store, "scope1", backend.embedder.clone()).await?;
 
     // 4. Verify that anchors are carried verbatim in the compaction file and the content is cleaned of markers
     let compaction_dir = vault_root.join("wiki/compaction");

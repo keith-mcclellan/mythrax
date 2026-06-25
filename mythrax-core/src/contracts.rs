@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
 use surrealdb_types::SurrealValue;
 
-
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct ChatMessage {
+    pub id: Option<String>,
+    pub session_id: String,
+    pub role: String, // "user" or "assistant"
+    pub content: String,
+    pub created_at: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
@@ -152,7 +159,6 @@ pub struct WikiNode {
     pub embedding: Option<Vec<f32>>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
@@ -207,6 +213,23 @@ pub struct ForgedSectionBatch {
     pub rules: Vec<ForgedRule>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct BeliefState {
+    pub id: Option<String>,
+    pub session_id: String,
+    pub tasks_todo: Vec<String>,
+    pub hypotheses_tested: Vec<String>,
+    pub confidence_score: f32,
+    pub uncertainty_areas: Vec<String>,
+    pub updated_at: String,
+}
 
-
-
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct ThoughtNode {
+    pub id: Option<String>,
+    pub title: String,
+    pub content: String,
+    pub scope: String,
+    pub vault_path: Option<String>,
+    pub created_at: String,
+}

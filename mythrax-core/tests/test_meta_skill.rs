@@ -36,7 +36,7 @@ async fn test_meta_skill_synthesis() -> Result<()> {
         tier: "dynamic".to_string(),
         scope: "test-scope".to_string(),
         vault_path: None,
-        embedding: Some(vec![0.1; 384]),
+        embedding: Some(vec![0.1; 768]),
         source_episodes: vec![],
         generator_name: "test".to_string(),
         similarity: None,
@@ -53,7 +53,7 @@ async fn test_meta_skill_synthesis() -> Result<()> {
         content: "Detailed design specifications".to_string(),
         scope: "test-scope".to_string(),
         vault_path: None,
-        embedding: Some(vec![0.1; 384]),
+        embedding: Some(vec![0.1; 768]),
     };
     backend.save_wiki_node(&node).await?;
 

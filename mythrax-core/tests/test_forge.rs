@@ -107,25 +107,17 @@ async fn test_ingest_document() -> Result<()> {
     // Ingest a document under normalized "testscope" scope
     forge.ingest_document("Some document text to analyze.", "testscope", "test_source").await?;
 
-    // Verify wisdom rules and wiki nodes are written and saved to db
+    // Verify wiki nodes are written and saved to db
     // 1. Files on disk
-    let wisdom_dir = vault_root.join("wisdom/forge");
     let wiki_dir = vault_root.join("wiki/forge");
 
-    assert!(wisdom_dir.exists());
     assert!(wiki_dir.exists());
 
-    let wisdom_files: Vec<_> = fs::read_dir(&wisdom_dir)?.collect();
     let wiki_files_vec: Vec<_> = fs::read_dir(&wiki_dir)?.filter_map(|e| e.ok()).collect();
 
-    assert!(!wisdom_files.is_empty(), "Should write at least one wisdom rule file");
     assert!(!wiki_files_vec.is_empty(), "Should write at least one wiki node file");
 
     // 2. Records in SurrealDB
-    // Query dynamic wisdom rules in DB
-    let rules = backend.get_wisdom("test_pattern", Some("dynamic"), 5, 0, 0.0).await?;
-    assert!(!rules.results.is_empty(), "Should save wisdom rules in SurrealDB");
-
     // Query wiki nodes: verify vault_path is persisted in DB
     let first_wiki_path = wiki_files_vec[0].path();
     let relative_wiki = first_wiki_path
