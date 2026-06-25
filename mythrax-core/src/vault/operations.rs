@@ -253,7 +253,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
 /// Recursively scans the filesystem vault and indexes all markdown files into SurrealDB.
 pub async fn sync_vault_to_db(
     backend: &std::sync::Arc<dyn StorageBackend>,
-    store: &std::sync::Arc<MarkdownStore>,
+    store: &std::sync::Arc<crate::store::MarkdownStore>,
 ) -> Result<usize> {
     let mut count = 0;
     let mut dirs_to_scan = vec![store.vault_root.clone()];

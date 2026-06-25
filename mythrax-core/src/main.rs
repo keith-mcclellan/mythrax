@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
 use db::{SurrealBackend, StorageBackend};
 use cli::{Cli, Commands, ConfigAction, VaultAction, MemoryAction, HtrAction, StmAction, IngestAction};
+use mythrax_core::contracts::{WikiNode, WisdomRule};
+
+// Embed Mythrax Documentation
+const ARCHITECTURE_DOC: &str = include_str!("../../ARCHITECTURE.md");
+const USER_GUIDE_DOC: &str = include_str!("../../mythrax_user_guide.md");
+const SKILL_DOC: &str = include_str!("../../.agents/skills/mythrax/SKILL.md");
 
 async fn execute_cli_tool_call(tool_name: &str, arguments: serde_json::Value) -> Result<()> {
     let home = std::env::var("HOME").context("HOME env var not set")?;
@@ -127,6 +133,144 @@ async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Res
     Ok(())
 }
 
+struct OnboardingConfig {
+    vault_root: PathBuf,
+    harness: Option<String>,
+    llm_config: Option<mythrax_core::contracts::LlmConfigRequest>,
+}
+
+async fn run_onboarding_interview() -> Result<OnboardingConfig> {
+    use std::io::{self, Write};
+    let home = std::env::var("HOME").context("HOME env var not set")?;
+    let default_vault = PathBuf::from(&home).join("mythrax-vault");
+
+    println!("====================================================");
+    println!("        Welcome to the Mythrax Onboarding Wizard    ");
+    println!("====================================================");
+    println!("This wizard will help you bootstrap your local memory engine.");
+    println!();
+
+    // 1. Vault Root Path
+    print!("Please enter the path to your Mythrax Obsidian vault [default: {}]: ", default_vault.to_string_lossy());
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let trimmed = input.trim();
+    let vault_root = if trimmed.is_empty() {
+        default_vault
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    // 2. AI Agent Harness
+    println!();
+    println!("Supported developer/agent harnesses:");
+    println!("  - antigravity (Google Antigravity SDK - highly recommended)");
+    println!("  - claude (Claude projects/MCP config)");
+    println!("  - cursor (Cursor IDE)");
+    println!("  - codex / opencode / openclaw / hermes / none");
+    print!("Which harness are you using? [default: antigravity]: ");
+    io::stdout().flush()?;
+    input.clear();
+    io::stdin().read_line(&mut input)?;
+    let trimmed = input.trim();
+    let harness = if trimmed.is_empty() {
+        Some("antigravity".to_string())
+    } else if trimmed.to_lowercase() == "none" {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+
+    // 3. LLM Settings
+    println!();
+    print!("Please choose your LLM provider (local/cloud) [default: local]: ");
+    io::stdout().flush()?;
+    input.clear();
+    io::stdin().read_line(&mut input)?;
+    let trimmed = input.trim().to_lowercase();
+    let provider = if trimmed.is_empty() || trimmed == "local" {
+        "local".to_string()
+    } else {
+        "cloud".to_string()
+    };
+
+    let llm_config;
+
+    if provider == "local" {
+        print!("Select local model [default: mlx-community/Qwen3.6-35B-A3B-4bit]: ");
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+        let model = if trimmed.is_empty() {
+            "mlx-community/Qwen3.6-35B-A3B-4bit".to_string()
+        } else {
+            trimmed.to_string()
+        };
+
+        llm_config = Some(mythrax_core::contracts::LlmConfigRequest {
+            provider: "local".to_string(),
+            duration: Some("permanent".to_string()),
+            model: Some(model),
+            cloud_provider: Some("gemini".to_string()),
+            api_key: None,
+        });
+    } else {
+        print!("Select cloud provider (openai/anthropic/gemini) [default: openai]: ");
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim().to_lowercase();
+        let cloud_provider = if trimmed.is_empty() {
+            "openai".to_string()
+        } else {
+            trimmed
+        };
+
+        print!("Enter API Key: ");
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+        let api_key = input.trim().to_string();
+
+        let default_model = match cloud_provider.as_str() {
+            "openai" => "gpt-4o",
+            "anthravity" | "anthropic" => "claude-3-5-sonnet",
+            "gemini" => "gemini-1.5-pro",
+            _ => "gpt-4o",
+        };
+        print!("Enter model ID [default: {}]: ", default_model);
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+        let model = if trimmed.is_empty() {
+            default_model.to_string()
+        } else {
+            trimmed.to_string()
+        };
+
+        llm_config = Some(mythrax_core::contracts::LlmConfigRequest {
+            provider: "cloud".to_string(),
+            duration: Some("permanent".to_string()),
+            model: Some(model),
+            cloud_provider: Some(cloud_provider),
+            api_key: Some(api_key),
+        });
+    }
+
+    println!();
+    println!("Onboarding configuration collected.");
+    println!("----------------------------------------------------");
+
+    Ok(OnboardingConfig {
+        vault_root,
+        harness,
+        llm_config,
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing to stderr with a default filter level (warn for external, info for mythrax)
@@ -140,10 +284,33 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { harness, source } => {
+        Commands::Init { harness, source, non_interactive } => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             
+            // 1. Determine vault_root, harness, and llm_config
+            use std::io::IsTerminal;
+            let (vault_root, harness_to_use, llm_config_opt) = if harness.is_none() && !non_interactive && std::io::stdin().is_terminal() {
+                let onboard = run_onboarding_interview().await?;
+                (onboard.vault_root, onboard.harness, onboard.llm_config)
+            } else {
+                let config_path = mythrax_dir.join("config.json");
+                let resolved_vault_root = if config_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&config_path) {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                            PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+                        } else {
+                            PathBuf::from(&home).join("mythrax-vault")
+                        }
+                    } else {
+                        PathBuf::from(&home).join("mythrax-vault")
+                    }
+                } else {
+                    PathBuf::from(&home).join("mythrax-vault")
+                };
+                (resolved_vault_root, harness, None)
+            };
+
             // Clean up existing database
             let db_dir = mythrax_dir.join("db");
             if db_dir.exists() {
@@ -153,21 +320,6 @@ async fn main() -> Result<()> {
 
             let config_path = mythrax_dir.join("config.json");
             let token_path = mythrax_dir.join("token");
-
-            // Read vault_root if exists, otherwise default
-            let vault_root = if config_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&config_path) {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
-                    } else {
-                        PathBuf::from(&home).join("mythrax-vault")
-                    }
-                } else {
-                    PathBuf::from(&home).join("mythrax-vault")
-                }
-            } else {
-                PathBuf::from(&home).join("mythrax-vault")
-            };
 
             // Back up old folders
             println!("Backing up existing vault directories under {:?}", vault_root);
@@ -193,7 +345,7 @@ async fn main() -> Result<()> {
             std::fs::write(&config_path, serde_json::to_string_pretty(&config_data)?)?;
 
             // Setup Obsidian subdirectories
-            let subfolders = ["episodes", "wiki", "wisdom", "general", "archive"];
+            let subfolders = ["episodes", "wiki", "wisdom", "general", "archive", "wisdom/permanent", "wiki/mythrax"];
             for sub in &subfolders {
                 std::fs::create_dir_all(vault_root.join(sub))?;
             }
@@ -205,16 +357,160 @@ async fn main() -> Result<()> {
                 println!("WARNING: Nomis embedding model files not found under ~/.mythrax/models/. Local embeddings will fallback to None.");
             }
 
+            // Always initialize the database in-process for pre-ingestion
+            let backend = SurrealBackend::new(&format!("rocksdb://{}", db_dir.to_string_lossy())).await?;
+            backend.init().await?;
+
+            // Persist LLM config if provided in onboarding
+            if let Some(ref config) = llm_config_opt {
+                backend.update_llm_config(config).await?;
+                println!("LLM configuration persisted.");
+            }
+
+            // Configure harness if provided
+            if let Some(ref h) = harness_to_use {
+                config_harness_action(h, source, &vault_root, &backend).await?;
+            }
+
+            // Ingest core documentation (WikiNodes)
+            println!("Pre-ingesting core documentation memories...");
+            
+            let arch_body = format!(
+                "---\nname: \"Mythrax Architecture Spec\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
+                ARCHITECTURE_DOC
+            );
+            let arch_rel = "wiki/mythrax/architecture.md";
+            std::fs::write(vault_root.join(arch_rel), &arch_body)?;
+            let arch_node = WikiNode {
+                id: None,
+                name: "Mythrax Architecture Spec".to_string(),
+                content: mythrax_core::vault::markdown::extract_plain_text(ARCHITECTURE_DOC).to_string(),
+                scope: "general".to_string(),
+                vault_path: Some(arch_rel.to_string()),
+                embedding: None,
+            };
+            backend.save_wiki_node(&arch_node).await?;
+
+            let user_guide_body = format!(
+                "---\nname: \"Mythrax User Guide\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
+                USER_GUIDE_DOC
+            );
+            let user_guide_rel = "wiki/mythrax/user_guide.md";
+            std::fs::write(vault_root.join(user_guide_rel), &user_guide_body)?;
+            let user_guide_node = WikiNode {
+                id: None,
+                name: "Mythrax User Guide".to_string(),
+                content: mythrax_core::vault::markdown::extract_plain_text(USER_GUIDE_DOC).to_string(),
+                scope: "general".to_string(),
+                vault_path: Some(user_guide_rel.to_string()),
+                embedding: None,
+            };
+            backend.save_wiki_node(&user_guide_node).await?;
+
+            let skill_rel = "wiki/mythrax/skill_playbook.md";
+            std::fs::write(vault_root.join(skill_rel), SKILL_DOC)?;
+            let (_skill_yaml, skill_body) = mythrax_core::vault::markdown::parse_frontmatter(SKILL_DOC);
+            let skill_node = WikiNode {
+                id: None,
+                name: "mythrax".to_string(),
+                content: mythrax_core::vault::markdown::extract_plain_text(&skill_body).to_string(),
+                scope: "general".to_string(),
+                vault_path: Some(skill_rel.to_string()),
+                embedding: None,
+            };
+            backend.save_wiki_node(&skill_node).await?;
+
+            // Ingest pre-dreamed wisdom rules
+            println!("Pre-dreaming core wisdom rules...");
+            let wisdom_rules = vec![
+                WisdomRule {
+                    id: None,
+                    target_pattern: "rocksdb lock contention or multiple process access".to_string(),
+                    action_to_avoid: "Opening RocksDB database directly from multiple concurrent CLI or client processes.".to_string(),
+                    causal_explanation: "RocksDB is a single-writer database. Multiple processes attempting to acquire the write lock simultaneously will cause panic or crash due to lock contention.".to_string(),
+                    prescribed_remedy: "Always route all queries and operations through the centralized Mythrax background daemon. The daemon exclusively holds the write lock and serves requests over HTTP.".to_string(),
+                    tier: "permanent".to_string(),
+                    scope: "general".to_string(),
+                    vault_path: Some("wisdom/permanent/rocksdb_integrity.md".to_string()),
+                    embedding: None,
+                    source_episodes: vec![],
+                    generator_name: "PreDreamedWisdom".to_string(),
+                    similarity: None,
+                    utility: Some(100.0),
+                    status: None,
+                    superseded_at: None,
+                    superseded_by: None,
+                },
+                WisdomRule {
+                    id: None,
+                    target_pattern: "subagent delegation or sharing context between agents".to_string(),
+                    action_to_avoid: "Pasting full file contents, database dumps, or extensive histories directly into the subagent prompt.".to_string(),
+                    causal_explanation: "Pasting full context wastes token budget, causes context window pollution, and degrades subagent focus.".to_string(),
+                    prescribed_remedy: "Store context node record IDs in Short Term Memory (STM) and write a minimal contract file under `.handoffs/handoff_<task_id>.md`. Spawn the subagent pointing to the handoff file URL and let it hydrate context dynamically.".to_string(),
+                    tier: "permanent".to_string(),
+                    scope: "general".to_string(),
+                    vault_path: Some("wisdom/permanent/smart_handoffs.md".to_string()),
+                    embedding: None,
+                    source_episodes: vec![],
+                    generator_name: "PreDreamedWisdom".to_string(),
+                    similarity: None,
+                    utility: Some(100.0),
+                    status: None,
+                    superseded_at: None,
+                    superseded_by: None,
+                },
+                WisdomRule {
+                    id: None,
+                    target_pattern: "agent boot initialization and compliance check".to_string(),
+                    action_to_avoid: "Proceeding with code modification or tool execution without checking the pre-invocation hook context.".to_string(),
+                    causal_explanation: "Failing to verify pre-invocation hook context leads to duplicate effort, rule violations, and lack of alignment with parent guidelines.".to_string(),
+                    prescribed_remedy: "Output a 1-line compliance check (`Execution Check: ...`) on the very first line of your response, and query Mythrax memory if hook context is empty.".to_string(),
+                    tier: "permanent".to_string(),
+                    scope: "general".to_string(),
+                    vault_path: Some("wisdom/permanent/pre_invocation_compliance.md".to_string()),
+                    embedding: None,
+                    source_episodes: vec![],
+                    generator_name: "PreDreamedWisdom".to_string(),
+                    similarity: None,
+                    utility: Some(100.0),
+                    status: None,
+                    superseded_at: None,
+                    superseded_by: None,
+                },
+                WisdomRule {
+                    id: None,
+                    target_pattern: "file deletion or cleanup".to_string(),
+                    action_to_avoid: "Using `rm` to permanently delete files in the vault or workspace.".to_string(),
+                    causal_explanation: "Permanent deletions are irreversible, making accidental data loss or breaking changes impossible to recover from.".to_string(),
+                    prescribed_remedy: "Always move deleted files to the `.trash/` directory under the vault or workspace root.".to_string(),
+                    tier: "permanent".to_string(),
+                    scope: "general".to_string(),
+                    vault_path: Some("wisdom/permanent/safe_deletions.md".to_string()),
+                    embedding: None,
+                    source_episodes: vec![],
+                    generator_name: "PreDreamedWisdom".to_string(),
+                    similarity: None,
+                    utility: Some(100.0),
+                    status: None,
+                    superseded_at: None,
+                    superseded_by: None,
+                },
+            ];
+
+            for rule in wisdom_rules {
+                let frontmatter = mythrax_core::vault::watcher::format_wisdom_markdown(&rule);
+                let rule_body = format!(
+                    "{}\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                    frontmatter, rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                );
+                let vp = rule.vault_path.as_ref().unwrap();
+                std::fs::write(vault_root.join(vp), &rule_body)?;
+                backend.save_wisdom_rule(&rule).await?;
+            }
+
             println!("Mythrax initialized successfully.");
             println!("Config path: {:?}", config_path);
             println!("Token: {}", token);
-
-            // Initialize DB and configure harness if provided
-            if let Some(ref h) = harness {
-                let backend = SurrealBackend::new(&format!("rocksdb://{}", db_dir.to_string_lossy())).await?;
-                backend.init().await?;
-                config_harness_action(h, source, &vault_root, &backend).await?;
-            }
         }
         Commands::Config { action } => {
             let (act_str, args) = match action {
@@ -619,6 +915,14 @@ async fn config_harness_action(
             merge_json_mcp(&config_dir.join("mcp_config.json"), &exe_path)?;
             merge_antigravity_permissions(&config_dir.join("config.json"))?;
             merge_antigravity_hooks(&config_dir.join("hooks.json"), &exe_path)?;
+            
+            // Install global /mythrax skill playbook
+            let skill_dest = config_dir.join("skills/mythrax/SKILL.md");
+            if let Some(parent) = skill_dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&skill_dest, SKILL_DOC)?;
+            println!("Installed global /mythrax skill playbook at: {:?}", skill_dest);
         }
         "claude" => {
             let path = std::path::PathBuf::from(&home).join(".claude.json");

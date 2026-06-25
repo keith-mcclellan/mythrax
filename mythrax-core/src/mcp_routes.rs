@@ -842,6 +842,11 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
     match action {
         "verify" => {
             let fix = args.get("fix").and_then(|v| v.as_bool()).unwrap_or(false);
+            
+            // 1. Sync vault to DB first
+            let synced_count = crate::vault::operations::sync_vault_to_db(&state.backend, &state.store).await?;
+            
+            // 2. Run existing check of missing files
             let all_eps = state.backend.get_all_episodes().await?;
             let mut missing_count = 0;
             for ep in &all_eps {
@@ -867,11 +872,12 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                 }
             }
             
+            // 3. Return updated response with synced_count
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("Vault integrity verification complete. Checked {} episodes. Missing files: {}. Fixed: {}.", all_eps.len(), missing_count, fix && missing_count > 0)
+                        "text": format!("Vault integrity verification complete. Checked {} episodes. Missing files: {}. Fixed: {}. Synced from vault to DB: {} files.", all_eps.len(), missing_count, fix && missing_count > 0, synced_count)
                     }
                 ]
             }))
