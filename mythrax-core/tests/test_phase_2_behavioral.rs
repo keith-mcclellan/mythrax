@@ -41,7 +41,7 @@ async fn test_zero_touch_correction_and_critic_extraction() -> Result<()> {
     let store = Arc::new(MarkdownStore::new(&vault_root)?);
 
     // Instantiate McpServer to use its call_tool / handle_request
-    let server = McpServer::new(backend.clone(), store.clone());
+    let server = McpServer::new_local(backend.clone(), store.clone());
 
     // 1. Trigger zero-touch correction by saving an episode containing a correction indicator
     let save_args = serde_json::json!({

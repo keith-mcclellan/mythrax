@@ -29,6 +29,8 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/v1/dream", post(dream_handler))
         .route("/v1/nodes", post(get_memory_nodes_handler))
         .route("/v1/forge/save", post(save_forged_assets_handler))
+        .route("/v1/mcp/tools", get(get_mcp_tools_handler))
+        .route("/v1/mcp/call", post(call_mcp_tool_handler))
         .with_state(state)
 }
 
@@ -240,6 +242,45 @@ async fn save_forged_assets_handler(
     }
 }
 
+async fn get_mcp_tools_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(Json(crate::mcp_routes::get_mcp_tools_schema()))
+}
+
+async fn call_mcp_tool_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let name = match payload.get("name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n,
+        _ => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let args = payload
+        .get("arguments")
+        .or_else(|| payload.get("args"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    match crate::mcp_routes::call_mcp_tool(&state, name, args).await {
+        Ok(result) => Ok(Json(result)),
+        Err(e) => {
+            tracing::error!("MCP tool call failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,7 +340,7 @@ mod tests {
         let request_body = serde_json::json!({
             "node_ids": ["episode:test-uuid"]
         });
-        let response = app
+        let response = app.clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -313,5 +354,90 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+
+        // Test GET /v1/mcp/tools (Authorized)
+        let response = app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/mcp/tools")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test GET /v1/mcp/tools (Unauthorized)
+        let response = app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/mcp/tools")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // Test POST /v1/mcp/call (Authorized, query_memory action root)
+        let call_payload = serde_json::json!({
+            "name": "query_memory",
+            "arguments": {
+                "action": "root"
+            }
+        });
+        let response = app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/mcp/call")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&call_payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test POST /v1/mcp/call (Unauthorized)
+        let response = app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/mcp/call")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&call_payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // Test POST /v1/mcp/call (Bad Request - missing name)
+        let bad_payload = serde_json::json!({
+            "arguments": {}
+        });
+        let response = app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/mcp/call")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(serde_json::to_vec(&bad_payload).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

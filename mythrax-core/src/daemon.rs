@@ -1,0 +1,434 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
+use anyhow::{Context, Result};
+use crate::db::{SurrealBackend, StorageBackend};
+use crate::store::MarkdownStore;
+use crate::vault::watcher::WatchIgnoreList;
+use crate::contracts::Episode;
+use crate::cli::{DaemonAction, run_auditor};
+use crate::api;
+use crate::auth;
+use crate::cognitive;
+use crate::vault;
+
+/// Handles background daemon operations (start, run, stop).
+pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
+    match action {
+        DaemonAction::Start { port, vault } | DaemonAction::Run { port, vault } => {
+            let home = std::env::var("HOME").context("HOME env var not set")?;
+            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+            let config_path = mythrax_dir.join("config.json");
+            let token_path = mythrax_dir.join("token");
+
+            let vault_path = if let Some(v) = vault {
+                PathBuf::from(v)
+            } else if config_path.exists() {
+                let config_content = std::fs::read_to_string(&config_path)?;
+                let config_val: serde_json::Value = serde_json::from_str(&config_content)?;
+                PathBuf::from(config_val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+            } else {
+                PathBuf::from(&home).join("mythrax-vault")
+            };
+
+            let auth_token = if token_path.exists() {
+                auth::load_token(&token_path)?
+            } else {
+                "secret-token".to_string()
+            };
+
+            let surreal_url = if config_path.exists() {
+                let content = std::fs::read_to_string(&config_path)?;
+                let val: serde_json::Value = serde_json::from_str(&content)?;
+                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
+            } else {
+                "mem://".to_string()
+            };
+
+            println!("Starting Mythrax Core Daemon...");
+            println!("Vault root: {:?}", vault_path);
+            println!("Port: {}", port);
+            println!("Database URL: {}", surreal_url);
+
+            // Write PID file
+            std::fs::create_dir_all(&mythrax_dir)?;
+            let pid_path = mythrax_dir.join("daemon.pid");
+            let pid = std::process::id();
+            std::fs::write(&pid_path, pid.to_string())?;
+
+            let run_res = async {
+                // Initialize storage backend
+                let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
+                backend.init().await?;
+
+                // Run initial stale memory/handoff pruning on startup
+                if let Err(e) = backend.prune_stale_memories(&vault_path).await {
+                    tracing::error!("Failed to run startup memory pruning: {:?}", e);
+                }
+
+                // Reprocess missing embeddings on startup
+                let backend_startup = backend.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    if backend_startup.embedder.is_some() {
+                        tracing::info!("Checking for episodes with missing embeddings...");
+                        let sql = "SELECT * FROM episode WHERE embedding IS NONE;";
+                        match backend_startup.db.query(sql).await {
+                            Ok(mut response) => {
+                                if let Ok(episodes) = response.take::<Vec<Episode>>(0)
+                                    && !episodes.is_empty() {
+                                        tracing::info!("Found {} episodes with missing embeddings. Regenerating...", episodes.len());
+                                        for ep in episodes {
+                                            if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
+                                                let text_to_embed = format!("{}: {}", ep.title, ep.content);
+                                                  if let Ok(vec) = embedder.embed(&text_to_embed)
+                                                     && let Ok(thing) = crate::db::parse_record_id(id_str) {
+                                                         let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                        let _ = backend_startup.db.query(update_sql)
+                                                            .bind(("id", thing))
+                                                            .bind(("embedding", vec))
+                                                            .await;
+                                                    }
+                                            }
+                                        }
+                                        tracing::info!("Finished regenerating missing embeddings.");
+                                    }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to query missing embeddings on startup: {:?}", e);
+                            }
+                        }
+                    }
+                });
+
+                // Initialize Markdown Store
+                let store = Arc::new(MarkdownStore::new(&vault_path)?);
+
+                // Initialize Watch Ignore List
+                let ignore_list = Arc::new(WatchIgnoreList::new());
+
+                // Setup dreaming channel
+                let (dream_tx, mut dream_rx) = tokio::sync::mpsc::channel::<()>(100);
+
+                // Start File-Watcher
+                let _watcher = vault::watcher::start_watching(
+                    vault_path.clone(),
+                    ignore_list.clone(),
+                    backend.clone(),
+                    store.clone(),
+                    Some(dream_tx.clone()),
+                )?;
+
+                // Spawn background checkpointing daemon
+                let backend_chk = backend.clone();
+                let vault_chk = vault_path.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(600)).await; // 10 minutes
+                        if let Err(e) = run_checkpoint(&*backend_chk, &vault_chk).await {
+                            tracing::error!("Checkpointing daemon error: {:?}", e);
+                        }
+                    }
+                });
+
+                // Spawn the tokio background scheduler loop
+                let backend_dream = backend.clone();
+                let store_dream = store.clone();
+                tokio::spawn(async move {
+                    let dream_coordinator = cognitive::synthesis::DreamCoordinator::new();
+                    let compactor = cognitive::compactor::Compactor::new();
+
+                    // Spawn daily scheduler
+                    let backend_daily = backend_dream.clone();
+                    let store_daily = store_dream.clone();
+                    tokio::spawn(async move {
+                        let dc = cognitive::synthesis::DreamCoordinator::new();
+                        let cmp = cognitive::compactor::Compactor::new();
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
+                            
+                            tracing::info!("Daily scheduled background handoff cleanup starting...");
+                            if let Err(e) = backend_daily.delete_stale_handoffs().await {
+                                tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
+                            }
+
+                            tracing::info!("Daily scheduled deep dreaming starting...");
+                            if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep")).await {
+                                tracing::error!("Daily deep dreaming failed: {:?}", e);
+                            } else {
+                                tracing::info!("Deep dreaming synthesis completed. Running compactions...");
+                                let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
+                                if scopes.is_empty() {
+                                    scopes.push("general".to_string());
+                                }
+                                for scope in scopes {
+                                    let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope).await;
+                                }
+                                let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
+                            }
+                            
+                            tracing::info!("Daily scheduled auditor calibration starting...");
+                            if let Err(e) = run_auditor(&*backend_daily).await {
+                                tracing::error!("Daily auditor calibration failed: {:?}", e);
+                            }
+                        }
+                    });
+
+                    let mut last_activity = Instant::now();
+                    let mut pending_debounce = false;
+
+                    loop {
+                        tokio::select! {
+                            val = dream_rx.recv() => {
+                                match val {
+                                    Some(_) => {
+                                        last_activity = Instant::now();
+
+                                        // Check threshold triggered synthesis (> 50 unprocessed)
+                                        if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
+                                            && unprocessed.len() > 50 {
+                                                tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
+                                                if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
+                                                    tracing::error!("Threshold dreaming failed: {:?}", e);
+                                                } else {
+                                                    let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                    if scopes.is_empty() {
+                                                        scopes.push("general".to_string());
+                                                    }
+                                                    for scope in scopes {
+                                                        let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                    }
+                                                    let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
+                                                }
+                                                pending_debounce = false;
+                                                continue;
+                                            }
+                                        pending_debounce = true;
+                                    }
+                                    None => {
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)), if pending_debounce => {
+                                if last_activity.elapsed() >= tokio::time::Duration::from_secs(30) {
+                                    pending_debounce = false;
+
+                                    if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
+                                        && !unprocessed.is_empty() {
+                                            tracing::info!("Idle debounced synthesis starting...");
+                                            if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
+                                                tracing::error!("Debounced incremental dreaming failed: {:?}", e);
+                                            } else {
+                                                let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                if scopes.is_empty() {
+                                                    scopes.push("general".to_string());
+                                                }
+                                                for scope in scopes {
+                                                    let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
+                                                }
+                                                let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
+                                            }
+                                        }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Create API State
+                let state = Arc::new(api::ApiState {
+                    backend,
+                    auth_token,
+                    store: store.clone(),
+                    ignore_list: ignore_list.clone(),
+                    dream_tx: Some(dream_tx),
+                });
+
+                // Build router and start Axum listener
+                let app = api::create_router(state);
+                let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                
+                let listener = tokio::net::TcpListener::bind(&addr).await?;
+                
+                tokio::select! {
+                    res = axum::serve(listener, app) => {
+                        if let Err(e) = res {
+                            tracing::error!("Daemon server crashed: {:?}", e);
+                        }
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::info!("SIGINT/Ctrl+C received. Cleaning up PID file and shutting down...");
+                    }
+                }
+                Ok::<(), anyhow::Error>(())
+            }.await;
+
+            let _ = std::fs::remove_file(pid_path);
+            run_res?;
+        }
+        DaemonAction::Stop => {
+            stop_daemon()?;
+        }
+    }
+    Ok(())
+}
+
+async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<()> {
+    let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let mut project_type = "unknown";
+    let mut check_cmd = vec![];
+    
+    if workspace_root.join("Cargo.toml").exists() {
+        project_type = "rust";
+        check_cmd = vec!["cargo", "check"];
+    } else if workspace_root.join("package.json").exists() {
+        project_type = "typescript";
+        check_cmd = vec!["npx", "tsc", "--noEmit"];
+    } else {
+        let has_py = std::fs::read_dir(&workspace_root)
+            .map(|dir| dir.flatten().any(|entry| entry.path().extension().map_or(false, |ext| ext == "py")))
+            .unwrap_or(false);
+        if has_py {
+            project_type = "python";
+            check_cmd = vec!["python", "-m", "py_compile"];
+        }
+    }
+
+    let check_cmd_clone = check_cmd.clone();
+    let workspace_clone = workspace_root.clone();
+    
+    let compile_result = tokio::task::spawn_blocking(move || {
+        if check_cmd_clone.is_empty() {
+            return (0, String::new());
+        }
+        let output = std::process::Command::new(check_cmd_clone[0])
+            .args(&check_cmd_clone[1..])
+            .current_dir(&workspace_clone)
+            .output();
+        match output {
+            Ok(out) => {
+                let exit_code = out.status.code().unwrap_or(0);
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                (exit_code, stderr)
+            }
+            Err(e) => (-1, e.to_string())
+        }
+    }).await.unwrap_or((-2, "Thread panic".to_string()));
+
+    let git_diff = tokio::task::spawn_blocking(move || {
+        let output = std::process::Command::new("git")
+            .args(&["diff"])
+            .current_dir(&workspace_root)
+            .output();
+        match output {
+            Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+            Err(e) => e.to_string()
+        }
+    }).await.unwrap_or_else(|_| "Thread panic".to_string());
+
+    let checkpoint_id = format!("checkpoint_{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs());
+
+    let sql = "
+        UPSERT type::record('checkpoint_node', $id) CONTENT {
+            project_type: $project_type,
+            exit_code: $exit_code,
+            compiler_errors: $compiler_errors,
+            git_diff: $git_diff,
+            timestamp: time::now()
+        };
+    ";
+    backend.db.query(sql)
+        .bind(("id", checkpoint_id.clone()))
+        .bind(("project_type", project_type))
+        .bind(("exit_code", compile_result.0))
+        .bind(("compiler_errors", compile_result.1))
+        .bind(("git_diff", git_diff))
+        .await?.check()?;
+
+    tracing::info!("Saved CheckpointNode: {}", checkpoint_id);
+    Ok(())
+}
+
+pub fn stop_daemon() -> Result<()> {
+    let home = std::env::var("HOME").context("HOME env var not set")?;
+    let pid_path = PathBuf::from(&home).join(".mythrax/daemon.pid");
+    if pid_path.exists() {
+        let content = std::fs::read_to_string(&pid_path)?;
+        let pid_str = content.trim();
+        if let Ok(pid) = pid_str.parse::<i32>() {
+            println!("Stopping daemon process with PID: {}", pid);
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("kill")
+                    .arg("-15")
+                    .arg(pid_str)
+                    .status();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = std::process::Command::new("kill")
+                    .arg(pid_str)
+                    .status();
+            }
+        }
+        let _ = std::fs::remove_file(pid_path);
+        println!("Daemon stopped.");
+    } else {
+        println!("No running daemon found (no PID file).");
+    }
+    Ok(())
+}
+
+pub fn backup_vault_folders(vault_root: &Path) -> Result<()> {
+    let folders = ["episodes", "wiki", "wisdom", "general", "archive"];
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let backup_dir = vault_root.join(".trash").join(format!("backup_{}", timestamp));
+    
+    let mut has_files = false;
+    for f in &folders {
+        if vault_root.join(f).exists() {
+            has_files = true;
+            break;
+        }
+    }
+    
+    if has_files {
+        std::fs::create_dir_all(&backup_dir)?;
+        for f in &folders {
+            let src = vault_root.join(f);
+            if src.exists() {
+                let dst = backup_dir.join(f);
+                if std::fs::rename(&src, &dst).is_err() {
+                    copy_dir_all(&src, &dst)?;
+                    let _ = std::fs::remove_dir_all(&src);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}

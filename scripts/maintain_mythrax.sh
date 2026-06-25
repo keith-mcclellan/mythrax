@@ -52,7 +52,7 @@ show_status() {
     fi
     echo ""
     echo "--- CLI Status Check ---"
-    if "$MYTHRAX_BIN" status 2>/dev/null; then
+    if "$MYTHRAX_BIN" memory root >/dev/null 2>&1; then
         echo "✅ CLI connection check passed"
     else
         echo "❌ CLI connection check failed (is daemon running?)"
@@ -85,7 +85,7 @@ run_ingest() {
     HISTORY_SRC="$HOME/.gemini/antigravity/brain"
     if [ -d "$HISTORY_SRC" ]; then
         echo "Ingesting from: $HISTORY_SRC"
-        "$MYTHRAX_BIN" vault ingest --source "$HISTORY_SRC" --harness antigravity --scope history
+        "$MYTHRAX_BIN" ingest bulk --source "$HISTORY_SRC" --harness antigravity --scope general
     else
         echo "Error: Default history source folder not found at $HISTORY_SRC"
         exit 1

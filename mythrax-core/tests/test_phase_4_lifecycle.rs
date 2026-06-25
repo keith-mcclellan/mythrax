@@ -342,7 +342,7 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
     backend.init().await?;
     let store = MarkdownStore::new(&vault_root)?;
     let backend_arc = Arc::new(backend);
-    let mcp = mythrax_core::mcp::McpServer::new(backend_arc.clone(), Arc::new(store));
+    let mcp = mythrax_core::mcp::McpServer::new_local(backend_arc.clone(), Arc::new(store));
 
     // Seed an episode
     let ep = EpisodeSave {

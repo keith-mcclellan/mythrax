@@ -19,7 +19,26 @@ fn cmd(home: &std::path::Path) -> Command {
     let mut c = Command::new(binary());
     c.env("MYTHRAX_MOCK_LLM", "true");
     c.env("HOME", home);
+    c.env("MYTHRAX_DAEMON_PORT", "18092");
     c
+}
+
+/// Helper to clean up a daemon process by sending SIGINT and waiting for exit.
+/// This ensures that PID files are cleaned up and ports are released between tests.
+fn cleanup_daemon(home: &std::path::Path) {
+    let pid_file = home.join(".mythrax/daemon.pid");
+    if pid_file.exists() {
+        if let Ok(pid_content) = fs::read_to_string(&pid_file) {
+            let pid = pid_content.trim();
+            if !pid.is_empty() {
+                let _ = Command::new("kill")
+                    .args(["-2", pid])
+                    .status();
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+        let _ = fs::remove_file(&pid_file);
+    }
 }
 
 #[test]
@@ -35,13 +54,14 @@ fn test_help_exits_zero() {
         "--help should exit 0, stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    cleanup_daemon(tmp.path());
 }
 
 #[test]
 fn test_forge_missing_file_exits_nonzero() {
     let tmp = tempdir().expect("temp dir");
     let out = cmd(tmp.path())
-        .args(["forge", "/tmp/does_not_exist_xyz_mythrax_e2e.md"])
+        .args(["ingest", "forge", "/tmp/does_not_exist_xyz_mythrax_e2e.md"])
         .output()
         .expect("spawn forge");
     assert!(
@@ -49,6 +69,7 @@ fn test_forge_missing_file_exits_nonzero() {
         "forge on a missing file should exit non-zero, stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+    cleanup_daemon(tmp.path());
 }
 
 #[test]
@@ -63,7 +84,7 @@ fn test_forge_text_file_exits_zero() {
     .expect("write doc");
 
     let out = cmd(tmp.path())
-        .args(["forge", source.to_str().unwrap(), "--scope", "e2e_test"])
+        .args(["ingest", "forge", source.to_str().unwrap(), "--scope", "e2e_test"])
         .output()
         .expect("spawn forge");
 
@@ -75,10 +96,11 @@ fn test_forge_text_file_exits_zero() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Forge ingestion complete"),
-        "Expected 'Forge ingestion complete' in stdout, got: {}",
+        stdout.contains("Successfully forged source document") || stdout.contains("Forge ingestion complete"),
+        "Expected 'Successfully forged source document' or 'Forge ingestion complete' in stdout, got: {}",
         stdout
     );
+    cleanup_daemon(tmp.path());
 }
 
 #[test]
@@ -130,7 +152,7 @@ fn test_forge_pdf_exits_zero() {
     fs::write(&pdf_path, buf).expect("write pdf");
 
     let out = cmd(tmp.path())
-        .args(["forge", pdf_path.to_str().unwrap(), "--scope", "e2e_test"])
+        .args(["ingest", "forge", pdf_path.to_str().unwrap(), "--scope", "e2e_test"])
         .output()
         .expect("spawn forge pdf");
 
@@ -140,6 +162,7 @@ fn test_forge_pdf_exits_zero() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    cleanup_daemon(tmp.path());
 }
 
 #[test]
@@ -191,15 +214,16 @@ fn test_cli_daemon_run_and_cleanup() {
 
     // Check if the PID file has been deleted
     assert!(!pid_file.exists(), "PID file should be deleted on clean SIGINT exit");
+    cleanup_daemon(tmp.path());
 }
 
 #[test]
 fn test_cli_search_episodes_flag() {
     let tmp = tempdir().expect("temp dir");
     
-    // Start daemon on port 8090
+    // Start daemon on port 18092
     let mut daemon = cmd(tmp.path())
-        .args(["daemon", "run", "--port", "8090"])
+        .args(["daemon", "run", "--port", "18092"])
         .spawn()
         .expect("spawn daemon");
 
@@ -216,7 +240,7 @@ fn test_cli_search_episodes_flag() {
     assert!(found, "Daemon PID file should be created");
 
     // Wait for the TCP port to be open to ensure Axum is running and signals are handled
-    let addr = "127.0.0.1:8090";
+    let addr = "127.0.0.1:18092";
     let mut port_open = false;
     for _ in 0..100 {
         if std::net::TcpStream::connect(addr).is_ok() {
@@ -237,27 +261,27 @@ fn test_cli_search_episodes_flag() {
 
     // Save episode via CLI
     let save_status = cmd(tmp.path())
-        .args(["save", "--file", doc_file.to_str().unwrap(), "--scope", "e2e_search_test"])
+        .args(["memory", "record", "search_test_doc", "--file", doc_file.to_str().unwrap(), "--scope", "e2e_search_test"])
         .status()
-        .expect("spawn save");
-    assert!(save_status.success(), "save command should succeed");
+        .expect("spawn memory record");
+    assert!(save_status.success(), "memory record command should succeed");
 
     // Perform default search (should exclude episodes)
     let search_default_out = cmd(tmp.path())
-        .args(["search", "SpecialSearchQueryPattern", "--scope", "e2e_search_test"])
+        .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test"])
         .output()
-        .expect("spawn search default");
+        .expect("spawn memory query default");
     assert!(search_default_out.status.success());
     let default_stdout = String::from_utf8_lossy(&search_default_out.stdout);
     assert!(
-        default_stdout.contains("\"results\": []"),
+        default_stdout.contains("[]"),
         "Default search should exclude episode, got stdout: {}",
         default_stdout
     );
 
     // Perform search with --episodes flag
     let search_episodes_out = cmd(tmp.path())
-        .args(["search", "SpecialSearchQueryPattern", "--scope", "e2e_search_test", "--episodes"])
+        .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test", "--include-episodes"])
         .output()
         .expect("spawn search with --episodes");
     assert!(search_episodes_out.status.success());
@@ -275,4 +299,5 @@ fn test_cli_search_episodes_flag() {
         .expect("kill daemon");
     assert!(status.success());
     let _ = daemon.wait();
+    cleanup_daemon(tmp.path());
 }

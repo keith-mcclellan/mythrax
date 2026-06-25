@@ -2,6 +2,8 @@ use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
+use regex::Regex;
 
 fn ingest_cursor(path: &Path) -> Result<String> {
     let conn = rusqlite::Connection::open(path)?;
@@ -277,6 +279,90 @@ fn quarantine_file(file_path: &Path, source_dir: &Path, error_msg: &str) -> Stri
     format!("Failed to parse {}: {}", file_path.display(), error_msg)
 }
 
+pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
+    let components: Vec<&str> = path.components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+
+    // Common generic directory names to skip
+    let skip_names = [
+        "brain", "antigravity", ".gemini", "episodes", "wiki", "wisdom", 
+        "general", "archive", "users", "keith", "documents", "repos", 
+        "workspace", "workspaces", "projects", ".system_generated", 
+        "logs", "messages", "quarantine", "tempmediastorage", "target", 
+        "src", "release", "debug"
+    ];
+
+    // Check from right to left (deepest directory first)
+    for comp_str in components.iter().rev() {
+        // Skip UUIDs
+        if Uuid::parse_str(comp_str).is_ok() {
+            continue;
+        }
+
+        let lower = comp_str.to_lowercase();
+        // Skip generic names, source, or anything containing "session"
+        if skip_names.iter().any(|&s| s == *comp_str || s == lower.as_str())
+            || lower.contains("session")
+            || lower == "source"
+        {
+            continue;
+        }
+
+        // Filter to keep only alphanumeric, '-', '_', '.'
+        let normalized: String = comp_str
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+
+    None
+}
+
+pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(log_path).ok()?;
+    
+    // Regex to match paths like /Documents/<scope>, /repos/<scope>, etc.
+    let re = Regex::new(r#"/(?:Documents|repos|workspace|workspaces|projects)/([^/\s"',\\]+)"#).ok()?;
+    
+    let mut scopes: Vec<String> = Vec::new();
+    
+    for cap in re.captures_iter(&content) {
+        if let Some(scope_match) = cap.get(1) {
+            let scope = scope_match.as_str();
+            // Normalize scope
+            let normalized: String = scope
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            
+            if !normalized.is_empty() {
+                scopes.push(normalized);
+            }
+        }
+    }
+
+    if scopes.is_empty() {
+        return None;
+    }
+
+    // If "mythrax" is the only match, return it.
+    // Otherwise, prefer non-"mythrax" scopes.
+    let non_mythrax: Vec<&String> = scopes.iter().filter(|s| **s != "mythrax").collect();
+    
+    if non_mythrax.is_empty() {
+        scopes.first().map(|s| (*s).clone())
+    } else {
+        non_mythrax.first().map(|s| (*s).clone())
+    }
+}
+
 pub async fn bulk_ingest_vault(
     vault_root: &Path,
     source_dir: &Path,
@@ -355,8 +441,23 @@ pub async fn bulk_ingest_vault(
                     continue;
                 }
 
+                // Dynamically resolve scope for each conversation folder
+                let relative_path = path.strip_prefix(source_dir).unwrap_or(&path);
+                let resolved_scope = resolve_scope_from_path(relative_path)
+                    .unwrap_or_else(|| {
+                        let logs_dir = path.join(".system_generated/logs");
+                        let mut log_path = logs_dir.join("transcript.jsonl");
+                        if !log_path.exists() {
+                            log_path = logs_dir.join("transcript_full.jsonl");
+                        }
+                        if log_path.exists() {
+                            extract_scope_from_log(&log_path).unwrap_or_else(|| scope.to_string())
+                        } else {
+                            scope.to_string()
+                        }
+                    });
+
                 // 1. Pre-scan markdown artifacts in the conversation folder
-                let conv_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 let mut pre_scanned_artifacts = Vec::new();
                 if let Ok(file_entries) = std::fs::read_dir(&path) {
                     for file_entry in file_entries.flatten() {
@@ -387,20 +488,21 @@ pub async fn bulk_ingest_vault(
                     let artifact_chunks = chunk_parsed_content(&raw_artifact_content, 100_000);
                     let total_art_chunks = artifact_chunks.len();
                     for (art_idx, chunk_text) in artifact_chunks.into_iter().enumerate() {
+                        // Use resolved_scope for unique, readable node name and vault paths
                         let node_name = if total_art_chunks > 1 {
-                            format!("{}/{}_part{}", conv_id, file_stem, art_idx + 1)
+                            format!("{}/{}_part{}", resolved_scope, file_stem, art_idx + 1)
                         } else {
-                            format!("{}/{}", conv_id, file_stem)
+                            format!("{}/{}", resolved_scope, file_stem)
                         };
                         let wiki_rel = if total_art_chunks > 1 {
-                            format!("wiki/artifacts/{}/{}_part{}.md", conv_id, file_stem, art_idx + 1)
+                            format!("wiki/{}/{}_part{}.md", resolved_scope, file_stem, art_idx + 1)
                         } else {
-                            format!("wiki/artifacts/{}/{}.md", conv_id, file_stem)
+                            format!("wiki/{}/{}.md", resolved_scope, file_stem)
                         };
                         let wikilink = if total_art_chunks > 1 {
-                            format!("wiki/artifacts/{}/{}_part{}", conv_id, file_stem, art_idx + 1)
+                            format!("wiki/{}/{}_part{}", resolved_scope, file_stem, art_idx + 1)
                         } else {
-                            format!("wiki/artifacts/{}/{}", conv_id, file_stem)
+                            format!("wiki/{}/{}", resolved_scope, file_stem)
                         };
                         resolved_artifacts.push((node_name, wiki_rel, wikilink, chunk_text));
                     }
@@ -455,7 +557,7 @@ pub async fn bulk_ingest_vault(
 
                     let note_content = format!(
                         "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}{}",
-                        part_title, scope, chunk_text, linked_artifacts_section
+                        part_title, resolved_scope, chunk_text, linked_artifacts_section
                     );
 
                     if store.write_file(&relative_path, &note_content).is_ok() {
@@ -463,7 +565,7 @@ pub async fn bulk_ingest_vault(
                             title: part_title.clone(),
                             content: note_content,
                             entities: vec![],
-                            scope: Some(scope.to_string()),
+                            scope: Some(resolved_scope.clone()),
                             vault_path: Some(relative_path.clone()),
                             source_episode: None,
                             session_id: None,
@@ -499,7 +601,7 @@ pub async fn bulk_ingest_vault(
                         id: None,
                         name: node_name,
                         content: artifact_content,
-                        scope: scope.to_string(),
+                        scope: resolved_scope.clone(),
                         vault_path: Some(wiki_rel),
                         embedding: None,
                     };

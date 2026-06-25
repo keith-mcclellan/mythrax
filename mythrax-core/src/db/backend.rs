@@ -265,7 +265,7 @@ impl SurrealBackend {
                     if let Some(name_str) = name_os.to_str() {
                         let normalized: String = name_str
                             .chars()
-                            .filter(|c| c.is_alphanumeric())
+                            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
                             .map(|c| c.to_ascii_lowercase())
                             .collect();
                         if !normalized.is_empty() {

@@ -281,15 +281,15 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     
     // 2. Verify links inside files in Obsidian
     let ep_part1_file = fs::read_to_string(vault_root.join(ep_part1.vault_path.as_ref().unwrap()))?;
-    assert!(ep_part1_file.contains("[[wiki/artifacts/session_linking_123/walkthrough]]"));
-    assert!(ep_part1_file.contains("[[wiki/artifacts/session_linking_123/implementation_plan]]"));
+    assert!(ep_part1_file.contains("[[wiki/testing-linking-scope/walkthrough]]"));
+    assert!(ep_part1_file.contains("[[wiki/testing-linking-scope/implementation_plan]]"));
 
     let ep_part2_file = fs::read_to_string(vault_root.join(ep_part2.vault_path.as_ref().unwrap()))?;
-    assert!(ep_part2_file.contains("[[wiki/artifacts/session_linking_123/walkthrough]]"));
-    assert!(ep_part2_file.contains("[[wiki/artifacts/session_linking_123/implementation_plan]]"));
+    assert!(ep_part2_file.contains("[[wiki/testing-linking-scope/walkthrough]]"));
+    assert!(ep_part2_file.contains("[[wiki/testing-linking-scope/implementation_plan]]"));
 
     // Verify artifact file backlinks
-    let walkthrough_rel_path = "wiki/artifacts/session_linking_123/walkthrough.md";
+    let walkthrough_rel_path = "wiki/testing-linking-scope/walkthrough.md";
     let walkthrough_file = fs::read_to_string(vault_root.join(walkthrough_rel_path))?;
     assert!(walkthrough_file.contains("Source Episodes:"));
     assert!(walkthrough_file.contains(&ep_part1.title));
@@ -365,12 +365,12 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     
     // 2. Verify links inside the episode in Obsidian
     let ep_file = fs::read_to_string(vault_root.join(ep.vault_path.as_ref().unwrap()))?;
-    assert!(ep_file.contains("[[wiki/artifacts/session_chunk_artifact_123/large_plan_part1]]"));
-    assert!(ep_file.contains("[[wiki/artifacts/session_chunk_artifact_123/large_plan_part2]]"));
+    assert!(ep_file.contains("[[wiki/testing-art-chunking-scope/large_plan_part1]]"));
+    assert!(ep_file.contains("[[wiki/testing-art-chunking-scope/large_plan_part2]]"));
 
     // Verify artifact file backlinks
-    let art1_rel_path = "wiki/artifacts/session_chunk_artifact_123/large_plan_part1.md";
-    let art2_rel_path = "wiki/artifacts/session_chunk_artifact_123/large_plan_part2.md";
+    let art1_rel_path = "wiki/testing-art-chunking-scope/large_plan_part1.md";
+    let art2_rel_path = "wiki/testing-art-chunking-scope/large_plan_part2.md";
     
     assert!(vault_root.join(art1_rel_path).exists());
     assert!(vault_root.join(art2_rel_path).exists());

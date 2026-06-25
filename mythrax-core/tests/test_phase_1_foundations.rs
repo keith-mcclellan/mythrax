@@ -22,14 +22,14 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", proj_dir.to_string_lossy().to_string());
     }
     let active_scope = backend.resolve_active_scope();
-    assert_eq!(active_scope, "myawesomeproject");
+    assert_eq!(active_scope, "my-awesome_project");
 
     // Save three episodes with different scopes
     let ep_target = EpisodeSave {
         title: "Target Project Episode".to_string(),
         content: "This content is specific to the active target scope.".to_string(),
         entities: vec![],
-        scope: Some("myawesomeproject".to_string()),
+        scope: Some("my-awesome_project".to_string()),
         vault_path: Some("episodes/target.md".to_string()),
         source_episode: None,
         session_id: None,

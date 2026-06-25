@@ -15,4 +15,6 @@ pub mod verify;
 pub mod llm;
 pub mod cognitive;
 pub mod mcp;
+pub mod mcp_routes;
+pub mod daemon;
 

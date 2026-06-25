@@ -11,59 +11,55 @@ You are equipped with the **Mythrax** MCP server, which exposes tools for semant
 
 ## MCP Tools Reference
 
-Use these native tools directly instead of executing custom scripts in the shell:
+All legacy granular tools (32 tools) have been consolidated into 9 high-efficiency, action-enum-based tools to reduce context schema bloat and prevent token overhead. Use these consolidated tools directly:
 
-| Tool | Signature | Purpose |
-|------|-----------|---------|
-| `search_memories` | `(query, scope?, limit?, token_budget?, allow_downward?)` | Semantic vector search over saved episodes |
-| `search_wisdom` | `(query, tier, limit?)` | Search wisdom rules by tier |
-| `save_episode` | `(title, content, entities, scope?, vault_path?)` | Persist episodic context |
-| `record_feedback` | `(id, success)` | Reinforcement learning utility adjustment |
-| `get_llm_config` | `()` | Fetch active LLM provider configuration |
-| `update_llm_config` | `(provider, duration?, model?, cloud_provider?, api_key?)` | Update model settings |
-| `verify_compliance` | `(workspace_path?)` | Execute workspace compliance audits |
-| `bulk_ingest` | `(source, harness, scope?)` | Bulk ingest transcript logs |
-| `organize_vault` | `()` | Organize vault directories, deduplicate |
-| `summarize_episodes` | `(scope?)` | Run compaction + dreaming cycles |
-| `verify_vault_integrity` | `(fix?)` | DB-to-filesystem self-healing verification |
-| `reprocess_embeddings` | `()` | Compute embeddings for episodes missing vectors |
-| `put_short_term` | `(session_id, key, value)` | Write a key-value pair to STM for the session |
-| `get_short_term` | `(session_id, key)` | Read a key-value pair from STM |
-| `clear_short_term` | `(session_id)` | Clear STM and delete `.handoffs/stm_<session_id>.json` |
-| `save_handoff` | `(parent_conversation_id, subagent_conversation_id, summary, handoff_file_path, scope?)` | Save parent-to-subagent task handoff and link context nodes |
-| `get_memory_nodes` | `(node_ids)` | Hydrate specific database records by record IDs |
-| `get_vault_root` | `()` | Retrieve the active Obsidian vault root directory path |
-| `forge_source` | `(source_path, scope?)` | Ingest a document (PDF/text/markdown) to extract WisdomRules and WikiNodes |
+| Tool | Action Enum / Parameters | Purpose |
+|------|---------------------------|---------|
+| `query_memory` | **Action**: `search` \| `rules` \| `nodes` \| `root`<br>**Params**: `query?`, `scope?`, `limit?`, `token_budget?`, `allow_downward?`, `node_ids?` | Search memories (`search`), find wisdom rules (`rules`), hydrate node IDs (`nodes`), or get the Obsidian vault root path (`root`). |
+| `record_memory` | **Action**: `save` \| `feedback`<br>**Params**: `title?`, `content?`, `entities?`, `scope?`, `vault_path?`, `episode_id?`, `success?` | Save a new episodic memory (`save`) or record reinforcement feedback (`feedback`) for a specific episode. |
+| `manage_htr` | **Action**: `init` \| `ideate` \| `execute` \| `backprop` \| `merge` \| `run`<br>**Params**: `scope`, `hypothesis?`, `node_id?`, `files?`, `test_command?`, `max_steps?`, `status?`, `result?`, `insight?` | Initialize, ideate, execute, backpropagate, merge, or run a Cognitive Hypothesis Tree Search (HTR) workflow. |
+| `manage_stm` | **Action**: `put` \| `get` \| `clear` \| `handoff`<br>**Params**: `session_id`, `key?`, `value?`, `parent_id?`, `subagent_id?`, `summary?`, `handoff_path?`, `scope?` | Set a session variable (`put`), read a variable (`get`), clear session storage (`clear`), or save an agent-to-subagent handoff (`handoff`). |
+| `manage_vault` | **Action**: `verify` \| `organize` \| `reprocess` \| `summarize`<br>**Params**: `fix?`, `scope?` | Run DB-to-filesystem self-healing (`verify`), organize/deduplicate vault files (`organize`), reprocess missing embeddings (`reprocess`), or summarize/dream over episodes (`summarize`). |
+| `manage_config` | **Action**: `get` \| `set`<br>**Params**: `provider?`, `duration?`, `model?`, `cloud_provider?`, `api_key?` | Retrieve (`get`) or update (`set`) LLM provider/model configurations. |
+| `compliance_audit`| **Params**: `workspace_path?` | Execute compliance audits to verify project alignment. |
+| `ingest_knowledge`| **Action**: `bulk` \| `forge`<br>**Params**: `source`, `harness?`, `scope?` | Bulk ingest transcript logs (`bulk`) or parse and extract WisdomRules/WikiNodes from PDFs/documents via Forge (`forge`). |
+| `pre_invocation_hook` | **Params**: `session_id`, `query?`, `workspace_path?` | Execute the automatic hook to hydrate context nodes, handoff summaries, and stashed session variables. |
 
 ---
 
-## Compliance Requirements
+## Compliance & Memory Search Compliance (Pre-Invocation Hook)
 
-1. **Always Search Memories First**: In every prompt turn, query memories at least once via `search_memories`.
-2. **Log Episodic Memory**: After a coding task, call `save_episode` with a summary of decisions.
-3. **Record Feedback**: After `cargo test` or `pytest` passes, call `record_feedback` to reinforce retrieved wisdom.
-4. **Self-Healing Integrity Audits**: Before dreaming or summarization, call `verify_vault_integrity(fix=true)`.
+To ensure high-quality execution and prevent duplicate coding effort:
+
+1. **The Pre-Invocation Hook Runs Automatically**: Before your first turn, the system invokes `pre_invocation_hook`. This automatically injects:
+   - Active handoff metadata and tasks from parent-to-subagent delegations.
+   - Stashed session variables (Short Term Memory).
+   - High-confidence memory nodes and HTR negative constraints.
+2. **Boot Verification Hook**: You **MUST** read and verify the injected hook context on your very first turn and output your compliance check on the very first line of your response, formatted exactly as:
+   `Execution Check: [Karpathy Rules applied? Yes/No] [Local Model verified? Yes/No/Fallback]`
+3. **Enforced Memory Query**: If the pre-invocation hook output indicates no high-confidence memory episodes were found, or the query context is empty, you **MUST** manually invoke `query_memory(action="search", query="...")` with a specific search query related to your task *before* writing any code.
+4. **Log Episodic Memory**: After completing a task, call `record_memory(action="save", title="...", content="...")` to persist your decisions and solutions.
+5. **Record Feedback**: After running tests (e.g. `cargo test`) and verifying they pass, call `record_memory(action="feedback", episode_id="...", success=true)` to reinforce retrieved wisdom.
 
 ---
 
-## Agent Handoff Protocol (Zero-Eager-Prompting) & Smart Handoffs (v0.3.0)
+## Agent Handoff Protocol (Zero-Eager-Prompting) & Smart Handoffs
 
 When delegating work to a subagent, minimize context window usage and establish graph-linked memory associations:
 
 ### Spawning a Subagent
 
-1. **Discover Vault Root**: Call the `get_vault_root` MCP tool to obtain the absolute path of the Obsidian vault (e.g. `/Users/keith/mythrax-vault`).
+1. **Discover Vault Root**: Call `query_memory(action="root")` to obtain the Obsidian vault root path (e.g., `/Users/keith/mythrax-vault`).
 2. **Write the contract** to `<vault_root>/.handoffs/handoff_<task_id>.md`.
 3. **Link context and register handoff**:
-   - Write active context node record IDs (e.g. WikiNodes or WisdomRules) to STM under key `"distilled_context_nodes"` using the `put_short_term` tool.
-   - Call the `save_handoff` MCP tool to create the handoff record and automatically link it to the context nodes via `relates_to` edges in SurrealDB.
+   - Write active context node record IDs to STM under key `"distilled_context_nodes"` using `manage_stm(action="put", session_id="...", key="distilled_context_nodes", value="...")`.
+   - Call `manage_stm(action="handoff", ...)` to register the handoff, which automatically links it to the context nodes via `relates_to` edges in SurrealDB.
 4. **Spawn the subagent** with a minimal prompt pointing to the vault handoff file:
-   > *"Read and execute the handoff at `file:///<vault_root>/.handoffs/handoff_<task_id>.md` and rules at `file:///Users/keith/.gemini/AGENT.md`. Output first: `Execution Check: [Karpathy Rules applied? Yes/No]`"*
-5. **Hydrate context nodes**: The subagent reads the node IDs from STM (via `get_short_term`) and calls the `get_memory_nodes` MCP tool to hydrate the active context nodes in a single call.
+   > *"Read and execute the handoff at `file:///<vault_root>/.handoffs/handoff_<task_id>.md` and rules at `file:///Users/keith/.gemini/AGENT.md`. Output first: `Execution Check: [Karpathy Rules applied? Yes/No] [Local Model verified? Yes/No/Fallback]`"*
+5. **Hydrate context nodes**: The subagent reads the node IDs from STM (via `manage_stm(action="get")`) and calls `query_memory(action="nodes", node_ids=[...])` to hydrate all active context nodes in a single call.
 6. **Lazy context via file URLs**: Reference large files as links (`[file.rs](file:///path#L50-L100)`) — never paste content.
-6. **AST Symbol & Code Structure Targeting**:
-   - **Parent Action**: When identifying code to edit or review, target specific AST symbols (e.g., `struct Config`, `impl SurrealBackend`, `fn save_handoff`) and provide direct line-anchored links (e.g., `[save_handoff](file:///path/to/backend.rs#L1187-L1258)`).
-   - **Subagent Action**: Use line-scoped `view_file` (specifying `StartLine` and `EndLine`) to read only the target AST symbols, preventing context window pollution from unrelated code.
+7. **AST Symbol & Code Structure Targeting**:
+   - Use line-scoped `view_file` to read only the target AST symbols, preventing context window pollution from unrelated code.
 
 ### Handoff Contract Template (`.handoffs/handoff_<task_id>.md`)
 
@@ -103,76 +99,54 @@ When delegating work to a subagent, minimize context window usage and establish 
 ## 4. Context Preservation (edge cases, remaining work)
 ```
 
-### LLM Sub-Call Optimization
-
-When calling `openai_chat` or similar stateless LLM APIs:
-- **Scoped prompts**: Pass only the target function/class signature, not whole files.
-- **Diff-only output**: Instruct the model to return search-and-replace blocks only.
-- **Strip non-functional tokens**: Remove docstrings, dead imports before injection.
-- **No-explanation constraint**: System prompt must say "return only code, zero explanation".
-- **Bound max_tokens**: Set to expected output size to prevent runaway generation.
-
 ---
 
-## Short Term Memory (STM) & Smart Handoffs (v0.3.0)
+## Short Term Memory (STM) & Smart Handoffs
 
 STM is a lightweight key-value store shared between parent and subagent during a session. It persists to SurrealDB, is dual-written to `.handoffs/stm_<session_id>.json`, and is used to dynamically link context nodes during handoffs.
 
 ### 1. Basic Key-Value Sharing
 ```python
 # Parent writes active variables before spawning subagent
-put_short_term(session_id="abc123", key="target_file", value="/path/to/file.rs")
-put_short_term(session_id="abc123", key="error_context", value="SurrealDB id field mismatch")
+manage_stm(action="put", session_id="abc123", key="target_file", value="/path/to/file.rs")
+manage_stm(action="put", session_id="abc123", key="error_context", value="SurrealDB id field mismatch")
 
 # Subagent reads them
-get_short_term(session_id="abc123", key="target_file")
+manage_stm(action="get", session_id="abc123", key="target_file")
 ```
 
 ### 2. Smart Handoffs (Graph-Linked Handoffs)
-During handoff, the parent can store a list of active node record IDs in STM under the key `"distilled_context_nodes"`. When saving the handoff via the `save_handoff` tool, the backend automatically reads this key, creates the handoff record, and links it to those nodes via `relates_to` edges. The subagent can then retrieve the IDs and hydrate all nodes in a single call.
+During handoff, the parent can store a list of active node record IDs in STM under the key `"distilled_context_nodes"`. When saving the handoff via `manage_stm(action="handoff")`, the backend automatically reads this key, creates the handoff record, and links it to those nodes via `relates_to` edges.
 
 ```python
 # 1. Parent writes active node IDs to its STM
-put_short_term(
+manage_stm(
+    action="put",
     session_id="parent_session_id",
     key="distilled_context_nodes",
     value='["wiki_node:insights_123", "wisdom:rule_456"]'
 )
 
 # 2. Parent saves the handoff via MCP (automatically links the handoff to the context nodes via relates_to edges)
-save_handoff(
-    parent_conversation_id="parent_session_id",
-    subagent_conversation_id="subagent_session_id",
+manage_stm(
+    action="handoff",
+    session_id="parent_session_id",
+    parent_id="parent_session_id",
+    subagent_id="subagent_session_id",
     summary="Task brief summary",
-    handoff_file_path=".handoffs/handoff_task_123.md",
+    handoff_path=".handoffs/handoff_task_123.md",
     scope="general"
 )
-
-# 3. Subagent reads key from its STM
-get_short_term(
-    session_id="subagent_session_id",
-    key="distilled_context_nodes"
-)
-
-# 4. Subagent hydrates all context nodes in one call
-get_memory_nodes(
-    node_ids=["wiki_node:insights_123", "wisdom:rule_456"]
-)
 ```
-
-# Parent clears after task completes (also deletes the local .json file)
-clear_short_term(session_id="parent_session_id")
-
-**Security**: STM values are sanitized by `SecretFilter` before writing to disk (API keys and tokens are masked).
 
 ---
 
 ## Forge: Document Ingestion Pipeline
 
-Use `forge_source` to extract structured knowledge from reference documents (PDFs, books, skill guides):
+Use `ingest_knowledge(action="forge")` to extract structured knowledge from reference documents (PDFs, books, skill guides):
 
-```
-forge_source(source_path="/path/to/guide.pdf", scope="coding")
+```python
+ingest_knowledge(action="forge", source="/path/to/guide.pdf", scope="coding")
 ```
 
 Forge will:
@@ -181,13 +155,6 @@ Forge will:
 3. Call the local LLM to extract `WisdomRule`s and `WikiNode`s per chunk
 4. Write markdown files to `vault/wisdom/forge/` and `vault/wiki/forge/`
 5. Persist to SurrealDB for semantic search
-
-### Automated Skill Skeletonization
-
-Verbose `SKILL.md` files should be lean (< 200 tokens of rules). Run Forge to skeletonize:
-- `## Examples` sections → extracted to `examples/examples.md`
-- `## References` sections → extracted to `references/references.md`
-- `SKILL.md` is rewritten with pointers to subdirectory files
 
 ---
 
@@ -203,21 +170,11 @@ When retrieved memories conflict, apply this precedence hierarchy (highest wins)
 
 Within the same tier, the **more recent** record (higher `updated_at`) wins.
 
-**If a conflict is found**: Document it in the implementation plan under "User Review Required" — showing the conflict, the rule applied, and the resolution. If completely unresolvable (equal rank + age), prompt the user directly.
-
----
-
-## Pagination-Aware Search
-
-Search results include a `PAGINATION NOTICE` when more results exist. Follow-up fetching rules:
-- **Skills / wisdom matches**: Follow-up pagination is **required**.
-- **Developer episodes / logs**: Follow-up pagination is **optional** (recommended for complex tasks).
-
 ---
 
 ## Cognitive Hypothesis Tree Search (HTR)
 
 When executing HTR cognitive runs:
 - Hypothesis nodes live at `wiki/<scope>/hypothesis_tree/<node_id>.md`
-- Use `htr_run` for automated end-to-end loops, or `htr_init` → `htr_ideate` → `htr_execute` → `htr_backprop` → `htr_merge` for manual control
-- All test execution outputs and LLM critic reviews must conform to the tree structure
+- Use `manage_htr(action="run")` for automated end-to-end loops, or `manage_htr` with specific actions (`init`, `ideate`, `execute`, `backprop`, `merge`) for manual control.
+- All test execution outputs and LLM critic reviews must conform to the tree structure.

@@ -76,7 +76,7 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
     let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root)?);
-    let mcp_server = mythrax_core::mcp::McpServer::new(backend.clone(), store);
+    let mcp_server = mythrax_core::mcp::McpServer::new_local(backend.clone(), store);
 
     // 1. Put short term memory via MCP
     let params = serde_json::json!({
@@ -498,7 +498,7 @@ async fn test_mcp_forge_tools() -> Result<()> {
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
     let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root)?);
-    let mcp_server = mythrax_core::mcp::McpServer::new(backend.clone(), store);
+    let mcp_server = mythrax_core::mcp::McpServer::new_local(backend.clone(), store);
 
     // 1. Call get_forge_instructions
     let inst_resp = mcp_server.handle_request("tools/call", serde_json::json!({
@@ -737,7 +737,7 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
     let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root)?);
-    let mcp_server = mythrax_core::mcp::McpServer::new(backend.clone(), store);
+    let mcp_server = mythrax_core::mcp::McpServer::new_local(backend.clone(), store);
 
     // 1. Create a handoff
     let handoff = HandoffSave {

@@ -2,19 +2,130 @@
 #![recursion_limit = "512"]
 
 use mythrax_core::{
-    api, auth, cli, cognitive, contracts, db, llm, mcp, store, vault,
-    verify,
+    cli, db, daemon, mcp, vault,
 };
 
 use clap::Parser;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use anyhow::{Result, Context};
 use db::{SurrealBackend, StorageBackend};
-use store::MarkdownStore;
-use vault::watcher::WatchIgnoreList;
-use cli::{Cli, Commands, DaemonAction, ConfigAction, VaultAction};
-use contracts::Episode;
+use cli::{Cli, Commands, ConfigAction, VaultAction, MemoryAction, HtrAction, StmAction, IngestAction};
+
+async fn execute_cli_tool_call(tool_name: &str, arguments: serde_json::Value) -> Result<()> {
+    let home = std::env::var("HOME").context("HOME env var not set")?;
+    let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+    let token_path = mythrax_dir.join("token");
+
+    // Read token
+    let auth_token = if token_path.exists() {
+        std::fs::read_to_string(&token_path)?.trim().to_string()
+    } else {
+        // Fallback to default token for headless, test, or first-time environments
+        "secret-token".to_string()
+    };
+
+    let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+    let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
+    
+    // 1. Ensure daemon is active (auto-spawn if not)
+    ensure_daemon_active_for_cli(&auth_token, &daemon_url).await?;
+
+    // 2. Forward to daemon v1/mcp/call
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/mcp/call", daemon_url);
+    let payload = serde_json::json!({
+        "name": tool_name,
+        "arguments": arguments
+    });
+
+    let resp = client.post(&url)
+        .header("X-Mythrax-Token", &auth_token)
+        .json(&payload)
+        .send()
+        .await
+        .context("Failed to forward CLI command to daemon")?;
+
+    if resp.status() != reqwest::StatusCode::OK {
+        let err_text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon returned error executing command: {}", err_text);
+    }
+
+    let result_json: serde_json::Value = resp.json().await.context("Failed to parse daemon response")?;
+    
+    // Print text content to stdout
+    if let Some(text) = result_json.get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|first| first.get("text"))
+        .and_then(|t| t.as_str()) 
+    {
+        println!("{}", text);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&result_json)?);
+    }
+
+    Ok(())
+}
+
+async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1))
+        .build()?;
+    
+    let ping_url = format!("{}/v1/config/llm", daemon_url);
+    
+    if client.get(&ping_url).header("X-Mythrax-Token", auth_token).send().await.is_ok() {
+        return Ok(());
+    }
+
+    println!("Daemon inactive. Spawning background daemon...");
+    let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mythrax"));
+    let home = std::env::var("HOME").context("HOME env var not set")?;
+    let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+    let log_file = mythrax_dir.join("daemon.log");
+    let pid_file = mythrax_dir.join("daemon.pid");
+
+    let mut cmd = std::process::Command::new(&current_exe);
+    cmd.arg("daemon").arg("start");
+    if let Ok(port_val) = std::env::var("MYTHRAX_DAEMON_PORT") {
+        cmd.arg("--port").arg(port_val);
+    }
+
+    if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_file) {
+        cmd.stdout(file.try_clone().map(std::process::Stdio::from).unwrap_or_else(|_| std::process::Stdio::null()));
+        cmd.stderr(file);
+    } else {
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+    }
+
+    let child = cmd.spawn().context("Failed to spawn background daemon")?;
+    let pid = child.id();
+    let _ = std::fs::write(&pid_file, pid.to_string());
+
+    // Poll daemon
+    let poll_client = reqwest::Client::builder().timeout(std::time::Duration::from_millis(200)).build()?;
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+    let mut healthy = false;
+
+    while start_time.elapsed() < timeout {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        if let Ok(resp) = poll_client.get(&ping_url).header("X-Mythrax-Token", auth_token).send().await {
+            if resp.status() == reqwest::StatusCode::OK {
+                healthy = true;
+                break;
+            }
+        }
+    }
+
+    if !healthy {
+        anyhow::bail!("Timed out waiting for daemon to bind to port 8090.");
+    }
+
+    println!("Daemon spawned successfully (PID: {}).", pid);
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -60,7 +171,7 @@ async fn main() -> Result<()> {
 
             // Back up old folders
             println!("Backing up existing vault directories under {:?}", vault_root);
-            let _ = backup_vault_folders(&vault_root);
+            let _ = daemon::backup_vault_folders(&vault_root);
 
             std::fs::create_dir_all(&mythrax_dir)?;
 
@@ -106,945 +217,183 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Config { action } => {
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let config_path = mythrax_dir.join("config.json");
-
-            let vault_root = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
-            } else {
-                PathBuf::from(&home).join("mythrax-vault")
+            let (act_str, args) = match action {
+                ConfigAction::Get => {
+                    ("get", serde_json::json!({}))
+                }
+                ConfigAction::Set { provider, duration, model, cloud_provider, api_key } => {
+                    ("set", serde_json::json!({
+                        "provider": provider,
+                        "duration": duration,
+                        "model": model,
+                        "cloud_provider": cloud_provider,
+                        "api_key": api_key,
+                    }))
+                }
             };
-
-            let surreal_url = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-            } else {
-                "mem://".to_string()
-            };
-
-            let backend = SurrealBackend::new(&surreal_url).await?;
-            backend.init().await?;
-
-            match action {
-                ConfigAction::Antigravity { source } => {
-                    config_harness_action("antigravity", source, &vault_root, &backend).await?;
-                }
-                ConfigAction::Claude { source } => {
-                    config_harness_action("claude", source, &vault_root, &backend).await?;
-                }
-                ConfigAction::Cursor { source } => {
-                    config_harness_action("cursor", source, &vault_root, &backend).await?;
-                }
-                ConfigAction::Codex { source } => {
-                    config_harness_action("codex", source, &vault_root, &backend).await?;
-                }
-                ConfigAction::Opencode { source } => {
-                    config_harness_action("opencode", source, &vault_root, &backend).await?;
-                }
-                ConfigAction::Openclaw { source } => {
-                    config_harness_action("openclaw", source, &vault_root, &backend).await?;
-                }
-                ConfigAction::Hermes { source } => {
-                    config_harness_action("hermes", source, &vault_root, &backend).await?;
-                }
-                ConfigAction::Llm { provider, duration, model, cloud_provider, api_key } => {
-                    let req = contracts::LlmConfigRequest {
-                        provider,
-                        duration,
-                        model,
-                        cloud_provider,
-                        api_key,
-                    };
-                    backend.update_llm_config(&req).await?;
-                    println!("LLM settings updated successfully.");
-                }
-            }
+            let mut payload = args;
+            payload["action"] = serde_json::Value::String(act_str.to_string());
+            execute_cli_tool_call("manage_config", payload).await?;
         }
         Commands::Daemon { action } => {
+            daemon::handle_daemon(action).await?;
+        }
+        Commands::Memory { action } => {
             match action {
-                DaemonAction::Start { port, vault } | DaemonAction::Run { port, vault } => {
-                    let home = std::env::var("HOME").context("HOME env var not set")?;
-                    let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-                    let config_path = mythrax_dir.join("config.json");
-                    let token_path = mythrax_dir.join("token");
-
-                    let vault_path = if let Some(v) = vault {
-                        PathBuf::from(v)
-                    } else if config_path.exists() {
-                        let config_content = std::fs::read_to_string(&config_path)?;
-                        let config_val: serde_json::Value = serde_json::from_str(&config_content)?;
-                        PathBuf::from(config_val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
-                    } else {
-                        PathBuf::from(&home).join("mythrax-vault")
-                    };
-
-                    let auth_token = if token_path.exists() {
-                        auth::load_token(&token_path)?
-                    } else {
-                        "secret-token".to_string()
-                    };
-
-                    let surreal_url = if config_path.exists() {
-                        let content = std::fs::read_to_string(&config_path)?;
-                        let val: serde_json::Value = serde_json::from_str(&content)?;
-                        val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-                    } else {
-                        "mem://".to_string()
-                    };
-
-                    println!("Starting Mythrax Core Daemon...");
-                    println!("Vault root: {:?}", vault_path);
-                    println!("Port: {}", port);
-                    println!("Database URL: {}", surreal_url);
-
-                    // Write PID file
-                    std::fs::create_dir_all(&mythrax_dir)?;
-                    let pid_path = mythrax_dir.join("daemon.pid");
-                    let pid = std::process::id();
-                    std::fs::write(&pid_path, pid.to_string())?;
-
-                    let run_res = async {
-                        // Initialize storage backend
-                        let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
-                        backend.init().await?;
-
-                        // Run initial stale memory/handoff pruning on startup
-                        if let Err(e) = backend.prune_stale_memories(&vault_path).await {
-                            tracing::error!("Failed to run startup memory pruning: {:?}", e);
-                        }
-
-                        // Reprocess missing embeddings on startup
-                        let backend_startup = backend.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                            if backend_startup.embedder.is_some() {
-                                tracing::info!("Checking for episodes with missing embeddings...");
-                                let sql = "SELECT * FROM episode WHERE embedding IS NONE;";
-                                match backend_startup.db.query(sql).await {
-                                    Ok(mut response) => {
-                                        if let Ok(episodes) = response.take::<Vec<Episode>>(0)
-                                            && !episodes.is_empty() {
-                                                tracing::info!("Found {} episodes with missing embeddings. Regenerating...", episodes.len());
-                                                for ep in episodes {
-                                                    if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
-                                                        let text_to_embed = format!("{}: {}", ep.title, ep.content);
-                                                          if let Ok(vec) = embedder.embed(&text_to_embed)
-                                                             && let Ok(thing) = db::parse_record_id(id_str) {
-                                                                 let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                                let _ = backend_startup.db.query(update_sql)
-                                                                    .bind(("id", thing))
-                                                                    .bind(("embedding", vec))
-                                                                    .await;
-                                                            }
-                                                    }
-                                                }
-                                                tracing::info!("Finished regenerating missing embeddings.");
-                                            }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to query missing embeddings on startup: {:?}", e);
-                                    }
-                                }
-                            }
-                        });
-
-                        // Initialize Markdown Store
-                        let store = Arc::new(MarkdownStore::new(&vault_path)?);
-
-                        // Initialize Watch Ignore List
-                        let ignore_list = Arc::new(WatchIgnoreList::new());
-
-                        // Setup dreaming channel
-                        let (dream_tx, mut dream_rx) = tokio::sync::mpsc::channel::<()>(100);
-
-                        // Start File-Watcher
-                        let _watcher = vault::watcher::start_watching(
-                            vault_path.clone(),
-                            ignore_list.clone(),
-                            backend.clone(),
-                            store.clone(),
-                            Some(dream_tx.clone()),
-                        )?;
-
-                        // Spawn background checkpointing daemon
-                        let backend_chk = backend.clone();
-                        let vault_chk = vault_path.clone();
-                        tokio::spawn(async move {
-                            loop {
-                                tokio::time::sleep(tokio::time::Duration::from_secs(600)).await; // 10 minutes
-                                if let Err(e) = run_checkpoint(&*backend_chk, &vault_chk).await {
-                                    tracing::error!("Checkpointing daemon error: {:?}", e);
-                                }
-                            }
-                        });
-
-                        // Spawn the tokio background scheduler loop
-                        let backend_dream = backend.clone();
-                        let store_dream = store.clone();
-                        tokio::spawn(async move {
-                            let dream_coordinator = cognitive::synthesis::DreamCoordinator::new();
-                            let compactor = cognitive::compactor::Compactor::new();
-
-                            // Spawn daily scheduler
-                            let backend_daily = backend_dream.clone();
-                            let store_daily = store_dream.clone();
-                            tokio::spawn(async move {
-                                let dc = cognitive::synthesis::DreamCoordinator::new();
-                                let cmp = cognitive::compactor::Compactor::new();
-                                loop {
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
-                                    
-                                    tracing::info!("Daily scheduled background handoff cleanup starting...");
-                                    if let Err(e) = backend_daily.delete_stale_handoffs().await {
-                                        tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
-                                    }
-
-                                    tracing::info!("Daily scheduled deep dreaming starting...");
-                                    if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep")).await {
-                                        tracing::error!("Daily deep dreaming failed: {:?}", e);
-                                    } else {
-                                        tracing::info!("Deep dreaming synthesis completed. Running compactions...");
-                                        let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
-                                        if scopes.is_empty() {
-                                            scopes.push("general".to_string());
-                                        }
-                                        for scope in scopes {
-                                            let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope).await;
-                                        }
-                                        let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
-                                    }
-                                    
-                                    tracing::info!("Daily scheduled auditor calibration starting...");
-                                    if let Err(e) = cli::run_auditor(&*backend_daily).await {
-                                        tracing::error!("Daily auditor calibration failed: {:?}", e);
-                                    }
-                                }
-                            });
-
-                            let mut last_activity = std::time::Instant::now();
-                            let mut pending_debounce = false;
-
-                            loop {
-                                tokio::select! {
-                                    val = dream_rx.recv() => {
-                                        match val {
-                                            Some(_) => {
-                                                last_activity = std::time::Instant::now();
-
-                                                // Check threshold triggered synthesis (> 50 unprocessed)
-                                                if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
-                                                    && unprocessed.len() > 50 {
-                                                        tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
-                                                        if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
-                                                            tracing::error!("Threshold dreaming failed: {:?}", e);
-                                                        } else {
-                                                            let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                            if scopes.is_empty() {
-                                                                scopes.push("general".to_string());
-                                                            }
-                                                            for scope in scopes {
-                                                                let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
-                                                            }
-                                                            let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
-                                                        }
-                                                        pending_debounce = false;
-                                                        continue;
-                                                    }
-                                                pending_debounce = true;
-                                            }
-                                            None => {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)), if pending_debounce => {
-                                        if last_activity.elapsed() >= tokio::time::Duration::from_secs(30) {
-                                            pending_debounce = false;
- 
-                                            if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
-                                                && !unprocessed.is_empty() {
-                                                    tracing::info!("Idle debounced synthesis starting...");
-                                                    if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental")).await {
-                                                        tracing::error!("Debounced incremental dreaming failed: {:?}", e);
-                                                    } else {
-                                                        let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                        if scopes.is_empty() {
-                                                            scopes.push("general".to_string());
-                                                        }
-                                                        for scope in scopes {
-                                                            let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope).await;
-                                                        }
-                                                        let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
-                                                    }
-                                                }
-                                        }
-                                    }
-                                }
-                            }
-                        });
-
-                        // Create API State
-                        let state = Arc::new(api::ApiState {
-                            backend,
-                            auth_token,
-                            store: store.clone(),
-                            ignore_list: ignore_list.clone(),
-                            dream_tx: Some(dream_tx),
-                        });
-
-                        // Build router and start Axum listener
-                        let app = api::create_router(state);
-                        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-                        
-                        let listener = tokio::net::TcpListener::bind(&addr).await?;
-                        
-                        tokio::select! {
-                            res = axum::serve(listener, app) => {
-                                if let Err(e) = res {
-                                    tracing::error!("Daemon server crashed: {:?}", e);
-                                }
-                            }
-                            _ = tokio::signal::ctrl_c() => {
-                                tracing::info!("SIGINT/Ctrl+C received. Cleaning up PID file and shutting down...");
-                            }
-                        }
-                        Ok::<(), anyhow::Error>(())
-                    }.await;
-
-                    let _ = std::fs::remove_file(pid_path);
-                    run_res?;
+                MemoryAction::Query {
+                    query,
+                    scope,
+                    limit,
+                    offset,
+                    threshold,
+                    token_budget,
+                    allow_downward,
+                    include_episodes,
+                    include_artifacts,
+                    session_id,
+                } => {
+                    let args = serde_json::json!({
+                        "action": "search",
+                        "query": query,
+                        "scope": scope,
+                        "limit": limit,
+                        "offset": offset,
+                        "threshold": threshold,
+                        "token_budget": token_budget,
+                        "allow_downward": allow_downward,
+                        "include_episodes": include_episodes,
+                        "include_artifacts": include_artifacts,
+                        "session_id": session_id,
+                    });
+                    execute_cli_tool_call("query_memory", args).await?;
                 }
-                DaemonAction::Stop => {
-                    stop_daemon()?;
+                MemoryAction::Record { title, file, scope } => {
+                    let path = Path::new(&file);
+                    let content = std::fs::read_to_string(path)
+                        .with_context(|| format!("Failed to read file at {:?}", path))?;
+                    let args = serde_json::json!({
+                        "action": "save",
+                        "title": title,
+                        "content": content,
+                        "scope": scope,
+                    });
+                    execute_cli_tool_call("record_memory", args).await?;
+                }
+                MemoryAction::Feedback { id, success } => {
+                    let args = serde_json::json!({
+                        "action": "feedback",
+                        "episode_id": id,
+                        "success": success,
+                    });
+                    execute_cli_tool_call("record_memory", args).await?;
+                }
+                MemoryAction::Root => {
+                    let args = serde_json::json!({
+                        "action": "root",
+                    });
+                    execute_cli_tool_call("query_memory", args).await?;
                 }
             }
         }
-        Commands::Status => {
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let config_path = mythrax_dir.join("config.json");
-            
-            if config_path.exists() {
-                let config_content = std::fs::read_to_string(&config_path)?;
-                println!("Mythrax is configured:\n{}", config_content);
-            } else {
-                println!("Mythrax is not initialized. Run 'mythrax init' first.");
-            }
-        }
-        Commands::Save { file, scope } => {
-            // Read config
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let token_path = mythrax_dir.join("token");
-            let auth_token = if token_path.exists() {
-                auth::load_token(&token_path)?
-            } else {
-                "secret-token".to_string()
-            };
-
-            let file_path = PathBuf::from(&file);
-            let content = std::fs::read_to_string(&file_path)?;
-
-            let client = reqwest::Client::new();
-            let payload = serde_json::json!({
-                "title": file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("cli-note"),
-                "content": content,
-                "scope": scope.unwrap_or_else(|| "general".to_string()),
-                "entities": []
-            });
-
-            let res = client.post("http://127.0.0.1:8090/v1/episodes")
-                .header("X-Mythrax-Token", auth_token)
-                .json(&payload)
-                .send()
-                .await?;
-
-            if res.status().is_success() {
-                println!("Episode saved successfully: {:?}", res.text().await?);
-            } else {
-                println!("Failed to save episode: {}", res.status());
-            }
-        }
-        Commands::Search { query, scope, limit, episodes } => {
-            // Read config
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let token_path = mythrax_dir.join("token");
-            let auth_token = if token_path.exists() {
-                auth::load_token(&token_path)?
-            } else {
-                "secret-token".to_string()
-            };
-
-            let client = reqwest::Client::new();
-            let payload = serde_json::json!({
-                "query": query,
-                "scope": scope,
-                "limit": limit,
-                "include_episodes": episodes
-            });
-
-            let res = client.post("http://127.0.0.1:8090/v1/search")
-                .header("X-Mythrax-Token", auth_token)
-                .json(&payload)
-                .send()
-                .await?;
-
-            if res.status().is_success() {
-                println!("Search results:\n{}", serde_json::to_string_pretty(&res.json::<serde_json::Value>().await?)?);
-            } else {
-                println!("Failed to execute search: {}", res.status());
-            }
-        }
-        Commands::Verify { workspace } => {
-            let workspace_path = if let Some(w) = workspace {
-                PathBuf::from(w)
-            } else {
-                std::env::current_dir().context("Failed to get current directory")?
-            };
-
-            println!("Running safety compliance audit on: {:?}", workspace_path);
-            let results = verify::run_workspace_audit(&workspace_path).await;
-
-            println!("Tailwind check: {}", if results.tailwind_ok { "PASSED" } else { "FAILED" });
-            if !results.tailwind_ok {
-                for violation in &results.tailwind_violations {
-                    println!("  Violation: {}", violation);
+        Commands::Stm { action } => {
+            let (act_str, args) = match action {
+                StmAction::Put { session_id, key, value } => {
+                    ("put", serde_json::json!({ "session_id": session_id, "key": key, "value": value }))
                 }
-            }
-
-            println!("Search history check: {}", if results.search_history_ok { "PASSED" } else { "FAILED" });
-            if let Some(err) = &results.search_history_error {
-                println!("  Error: {}", err);
-            }
-
-            println!("Daemon health check: {}", if results.daemon_ok { "PASSED" } else { "FAILED" });
-            if let Some(err) = &results.daemon_error {
-                println!("  Error: {}", err);
-            }
-
-            if results.tailwind_ok && results.search_history_ok && results.daemon_ok {
-                println!("Compliance status: SUCCESS");
-            } else {
-                println!("Compliance status: FAILED");
-                std::process::exit(1);
-            }
+                StmAction::Get { session_id, key } => {
+                    ("get", serde_json::json!({ "session_id": session_id, "key": key }))
+                }
+                StmAction::Clear { session_id } => {
+                    ("clear", serde_json::json!({ "session_id": session_id }))
+                }
+                StmAction::Handoff { parent_conversation_id, subagent_conversation_id, summary, handoff_file_path, scope } => {
+                    ("handoff", serde_json::json!({
+                        "parent_conversation_id": parent_conversation_id,
+                        "subagent_conversation_id": subagent_conversation_id,
+                        "summary": summary,
+                        "handoff_file_path": handoff_file_path,
+                        "scope": scope,
+                    }))
+                }
+            };
+            let mut payload = args;
+            payload["action"] = serde_json::Value::String(act_str.to_string());
+            execute_cli_tool_call("manage_stm", payload).await?;
+        }
+        Commands::Ingest { action } => {
+            let (act_str, args) = match action {
+                IngestAction::Bulk { source, harness, scope } => {
+                    ("bulk", serde_json::json!({ "source": source, "harness": harness, "scope": scope }))
+                }
+                IngestAction::Forge { source_path, scope } => {
+                    ("forge", serde_json::json!({ "source_path": source_path, "scope": scope }))
+                }
+            };
+            let mut payload = args;
+            payload["action"] = serde_json::Value::String(act_str.to_string());
+            execute_cli_tool_call("ingest_knowledge", payload).await?;
         }
         Commands::Mcp => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let config_path = mythrax_dir.join("config.json");
+            let token_path = mythrax_dir.join("token");
 
-            let vault_path = if config_path.exists() {
-                let config_content = std::fs::read_to_string(&config_path)?;
-                let config_val: serde_json::Value = serde_json::from_str(&config_content)?;
-                PathBuf::from(config_val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+            // Read token
+            let auth_token = if token_path.exists() {
+                std::fs::read_to_string(&token_path)?.trim().to_string()
             } else {
-                PathBuf::from(&home).join("mythrax-vault")
+                // Fallback to default token for headless, test, or first-time environments
+                "secret-token".to_string()
             };
-
-            let surreal_url = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-            } else {
-                "mem://".to_string()
-            };
-
-            let backend = Arc::new(db::SurrealBackend::new(&surreal_url).await?);
-            backend.init().await?;
-            let store = Arc::new(store::MarkdownStore::new(&vault_path)?);
-
-            let mcp_server = mcp::McpServer::new(backend, store);
+            
+            let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+            let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
+            let mcp_server = mcp::McpServer::new(auth_token, daemon_url);
             mcp_server.run().await?;
         }
         Commands::Vault { action } => {
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let config_path = mythrax_dir.join("config.json");
-
-            let vault_path = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
-            } else {
-                PathBuf::from(&home).join("mythrax-vault")
-            };
-
-            let surreal_url = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-            } else {
-                "mem://".to_string()
-            };
-
-            let backend = SurrealBackend::new(&surreal_url).await?;
-            backend.init().await?;
-            let store = MarkdownStore::new(&vault_path)?;
-
-            match action {
-                VaultAction::Ingest { source, harness, scope } => {
-                    let (count, errs) = vault::ingestion::bulk_ingest_vault(
-                        &vault_path,
-                        Path::new(&source),
-                        &harness,
-                        scope.as_deref().unwrap_or("general"),
-                        &backend,
-                    ).await?;
-                    println!("Ingested {} episodes successfully. Errors/Warnings: {:?}", count, errs);
-                }
+            let (act_str, args) = match action {
                 VaultAction::Organize => {
-                    println!("Vault organization completed. Collisions resolved successfully.");
-                }
-                VaultAction::Summarize { scope } => {
-                    let scope_name = scope.as_deref().unwrap_or("general");
-
-                    // Check LLM availability before attempting dream/compact cycles
-                    // which require an LLM call. Skip gracefully if unavailable.
-                    let llm_ready = match backend.get_llm_config().await {
-                        Ok(cfg) => {
-                            if cfg.active_provider == "local" {
-                                // Probe local endpoint
-                                let probe = reqwest::Client::builder()
-                                    .timeout(std::time::Duration::from_secs(3))
-                                    .build()
-                                    .ok()
-                                    .and_then(|c| Some(c));
-                                let reachable = if let Some(client) = probe {
-                                    client.get("http://127.0.0.1:8080/v1/models").send().await.is_ok()
-                                } else {
-                                    false
-                                };
-                                if !reachable {
-                                    println!("WARNING: Local LLM endpoint at http://127.0.0.1:8080 is not reachable.");
-                                    println!("Skipping dreaming/compaction. Run 'mythrax vault summarize' after starting the local model.");
-                                }
-                                reachable
-                            } else {
-                                true // cloud providers don't need a local probe
-                            }
-                        }
-                        Err(_) => {
-                            println!("WARNING: No LLM configuration found. Skipping dreaming/compaction.");
-                            println!("Configure an LLM first with: mythrax config llm --provider cloud --cloud-provider gemini");
-                            false
-                        }
-                    };
-
-                    if llm_ready {
-                        let compactor = cognitive::compactor::Compactor::new();
-                        let coordinator = cognitive::synthesis::DreamCoordinator::new();
-                        coordinator.run_dream(&backend, &store, None).await?;
-                        compactor.compact_scope(&backend, &store, scope_name).await?;
-                        compactor.compact_global(&backend, &store).await?;
-                        println!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name);
-                    }
+                    ("organize", serde_json::json!({}))
                 }
                 VaultAction::Verify { fix } => {
-                    let all_eps = backend.get_all_episodes().await?;
-                    let mut missing_count = 0;
-                    for ep in &all_eps {
-                        if let Some(ref vp) = ep.vault_path {
-                            let path = store.vault_root.join(vp);
-                            if !path.exists() {
-                                missing_count += 1;
-                                if fix {
-                                    let save = contracts::EpisodeSave {
-                                        title: ep.title.clone(),
-                                        content: ep.content.clone(),
-                                        entities: vec![],
-                                        scope: ep.scope.clone(),
-                                        vault_path: Some(vp.clone()),
-                                        source_episode: ep.source_episode.clone(),
-                                        session_id: None,
-                                        task_id: None,
-                                    };
-                                    let markdown = vault::watcher::format_episode_markdown(&save);
-                                    store.write_file(vp, &markdown)?;
-                                }
-                            }
-                        }
-                    }
-                    println!("Vault integrity verification complete. Checked {} episodes. Missing files: {}. Fixed: {}.", all_eps.len(), missing_count, fix && missing_count > 0);
+                    ("verify", serde_json::json!({ "fix": fix }))
                 }
                 VaultAction::Reprocess => {
-                    let all_eps = backend.get_all_episodes().await?;
-                    let mut count = 0;
-                    for ep in all_eps {
-                        if ep.embedding.is_none() {
-                            let save = contracts::EpisodeSave {
-                                title: ep.title.clone(),
-                                content: ep.content.clone(),
-                                entities: vec![],
-                                scope: ep.scope.clone(),
-                                vault_path: ep.vault_path.clone(),
-                                source_episode: ep.source_episode.clone(),
-                                session_id: None,
-                                task_id: None,
-                            };
-                            backend.save_episode(&save).await?;
-                            count += 1;
-                        }
-                    }
-                    println!("Reprocessed {} episodes with missing vector embeddings.", count);
+                    ("reprocess", serde_json::json!({}))
                 }
-            }
+                VaultAction::Summarize { scope } => {
+                    ("summarize", serde_json::json!({ "scope": scope }))
+                }
+            };
+            let mut payload = args;
+            payload["action"] = serde_json::Value::String(act_str.to_string());
+            execute_cli_tool_call("manage_vault", payload).await?;
         }
         Commands::Htr { action } => {
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let config_path = mythrax_dir.join("config.json");
-
-            let vault_path = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
-            } else {
-                PathBuf::from(&home).join("mythrax-vault")
-            };
-
-            let surreal_url = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-            } else {
-                "mem://".to_string()
-            };
-
-            let backend = SurrealBackend::new(&surreal_url).await?;
-            backend.init().await?;
-            let _store = MarkdownStore::new(&vault_path)?;
-            let db = backend.db.clone();
-            let current_dir = std::env::current_dir()?;
-
-            match action {
-                cli::HtrAction::Init { scope, hypothesis, files } => {
-                    let llm = llm::LLMClient::new();
-                    let coordinator = cognitive::ArborCoordinator::new(
-                        db,
-                        vault_path,
-                        current_dir,
-                        llm,
-                        scope,
-                        "".to_string(),
-                        files,
-                    ).await;
-                    coordinator.init_root(hypothesis, None).await?;
-                    println!("HTR root node initialized successfully.");
+            let (act_str, args) = match action {
+                HtrAction::Init { scope, hypothesis, files } => {
+                    ("init", serde_json::json!({ "scope": scope, "hypothesis": hypothesis, "files": files }))
                 }
-                cli::HtrAction::Ideate { scope, node } => {
-                    let llm = llm::LLMClient::new();
-                    let coordinator = cognitive::ArborCoordinator::new(
-                        db,
-                        vault_path,
-                        current_dir,
-                        llm,
-                        scope,
-                        "".to_string(),
-                        vec![],
-                    ).await;
-                    coordinator.trigger_ideation(&node).await?;
-                    println!("HTR ideation complete for node: {}", node);
+                HtrAction::Ideate { scope, node } => {
+                    ("ideate", serde_json::json!({ "scope": scope, "node_id": node }))
                 }
-                cli::HtrAction::Execute { scope, node, test_command } => {
-                    let llm = llm::LLMClient::new();
-                    let coordinator = cognitive::ArborCoordinator::new(
-                        db,
-                        vault_path,
-                        current_dir,
-                        llm,
-                        scope,
-                        test_command,
-                        vec![],
-                    ).await;
-                    coordinator.execute_node(&node).await?;
-                    println!("HTR execution complete for node: {}", node);
+                HtrAction::Execute { scope, node, test_command } => {
+                    ("execute", serde_json::json!({ "scope": scope, "node_id": node, "test_command": test_command }))
                 }
-                cli::HtrAction::Backprop { scope, node } => {
-                    let llm = llm::LLMClient::new();
-                    let coordinator = cognitive::ArborCoordinator::new(
-                        db,
-                        vault_path,
-                        current_dir,
-                        llm,
-                        scope,
-                        "".to_string(),
-                        vec![],
-                    ).await;
-                    coordinator.backpropagate_insights(&node).await?;
-                    println!("HTR backpropagation complete for node: {}", node);
+                HtrAction::Backprop { scope, node } => {
+                    ("backprop", serde_json::json!({ "scope": scope, "node_id": node }))
                 }
-                cli::HtrAction::Merge { scope, node } => {
-                    let llm = llm::LLMClient::new();
-                    let coordinator = cognitive::ArborCoordinator::new(
-                        db,
-                        vault_path,
-                        current_dir,
-                        llm,
-                        scope,
-                        "".to_string(),
-                        vec![],
-                    ).await;
-                    coordinator.decide_admission(&node).await?;
-                    println!("HTR merge complete. Refinement applied to codebase.");
+                HtrAction::Merge { scope, node } => {
+                    ("merge", serde_json::json!({ "scope": scope, "node_id": node }))
                 }
-                cli::HtrAction::Run { scope, hypothesis, files, test_command, max_steps } => {
-                    let llm = llm::LLMClient::new();
-                    let coordinator = cognitive::ArborCoordinator::new(
-                        db,
-                        vault_path,
-                        current_dir.clone(),
-                        llm,
-                        scope,
-                        test_command,
-                        files,
-                    ).await;
-                    
-                    println!("Starting end-to-end HTR run loop...");
-                    coordinator.init_root(hypothesis, None).await?;
-                    
-                    let mut step = 0;
-                    let mut current_node = "ROOT".to_string();
-                    
-                    loop {
-                        if step >= max_steps {
-                            println!("Max HTR steps ({}) reached. Ending run.", max_steps);
-                            break;
-                        }
-                        println!("HTR Step {}: Ideating from node {}", step + 1, current_node);
-                        coordinator.trigger_ideation(&current_node).await?;
-                        
-                        let next_batch = coordinator.select_next_batch(1).await?;
-                        if next_batch.is_empty() {
-                            println!("No pending hypotheses found. Ending run.");
-                            break;
-                        }
-                        
-                        let selected_node = &next_batch[0];
-                        println!("HTR Step {}: Selected node {} for execution", step + 1, selected_node);
-                        coordinator.execute_node(selected_node).await?;
-                        
-                        println!("HTR Step {}: Backpropagating node {}", step + 1, selected_node);
-                        coordinator.backpropagate_insights(selected_node).await?;
-                        
-                        // Query the node to check score
-                        let node_val: Option<contracts::HypothesisNode> = backend.db.select(("hypothesis_node", selected_node.as_str())).await?;
-                        if let Some(node_node) = node_val
-                            && let Some(score) = node_node.score {
-                                println!("Node {} evaluated with Score: {}", selected_node, score);
-                                if score >= 95.0 {
-                                    println!("Acceptance threshold met (Score: {} >= 95.0). Merging refinement.", score);
-                                    coordinator.decide_admission(selected_node).await?;
-                                    println!("HTR run loop completed successfully. Code refinement merged.");
-                                    break;
-                                }
-                            }
-                        
-                        current_node = selected_node.clone();
-                        step += 1;
-                    }
-                }
-            }
-        }
-        Commands::Forge { source_path, scope } => {
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let config_path = mythrax_dir.join("config.json");
-
-            let vault_path = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
-            } else {
-                PathBuf::from(&home).join("mythrax-vault")
-            };
-
-            let surreal_url = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-            } else {
-                "mem://".to_string()
-            };
-
-            let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
-            backend.init().await?;
-            let store = Arc::new(MarkdownStore::new(&vault_path)?);
-
-            let source_path_buf = PathBuf::from(&source_path);
-            let content = if source_path_buf.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("pdf")) {
-                cognitive::forge::extract_pdf_text(&source_path_buf)?
-            } else {
-                std::fs::read_to_string(&source_path_buf)?
-            };
-
-            let scope_str = scope.as_deref().unwrap_or("general");
-            let forge = cognitive::forge::Forge::new(backend.clone(), store.clone());
-            forge.ingest_document(&content, scope_str, &source_path).await?;
-            println!("Forge ingestion complete for: {}", source_path);
-        }
-        Commands::Recover { session } => {
-            let home = std::env::var("HOME").context("HOME env var not set")?;
-            let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            let config_path = mythrax_dir.join("config.json");
-
-            let vault_path = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
-            } else {
-                PathBuf::from(&home).join("mythrax-vault")
-            };
-
-            let surreal_url = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-            } else {
-                "mem://".to_string()
-            };
-
-            let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
-                .ok()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-
-            println!("Starting recovery routine for session: {}...", session);
-
-            let mut journal_opt = None;
-            
-            if let Ok(backend) = SurrealBackend::new(&surreal_url).await {
-                if let Ok(_) = backend.init().await {
-                    let sql = "SELECT * FROM type::record('session_state', $session);";
-                    let query_res = tokio::time::timeout(
-                        std::time::Duration::from_secs(2),
-                        backend.db.query(sql).bind(("session", session.clone()))
-                    ).await;
-
-                    if let Ok(Ok(mut resp)) = query_res {
-                        if let Ok(Some(val)) = resp.take::<Option<serde_json::Value>>(0) {
-                            println!("Successfully loaded session state from SurrealDB.");
-                            journal_opt = Some(val);
-                        }
-                    }
-                }
-            }
-
-            let journal = match journal_opt {
-                Some(j) => j,
-                None => {
-                    println!("Database query timed out or failed. Falling back to local backup file...");
-                    let backup_path = vault_path.join(".mythrax/session_journal.json");
-                    if backup_path.exists() {
-                        let content = std::fs::read_to_string(&backup_path)?;
-                        let val: serde_json::Value = serde_json::from_str(&content)?;
-                        println!("Successfully loaded session state from local backup file: {:?}", backup_path);
-                        val
-                    } else {
-                        anyhow::bail!("Recovery failed: No session journal found in database or local backup file.");
-                    }
+                HtrAction::Run { scope, hypothesis, files, test_command, max_steps } => {
+                    ("run", serde_json::json!({ "scope": scope, "hypothesis": hypothesis, "files": files, "test_command": test_command, "max_steps": max_steps }))
                 }
             };
-
-            let task_checklist = journal["task_checklist"].as_str().unwrap_or("");
-            let active_stm = &journal["active_stm"];
-            let git_commit = journal.get("git_commit")
-                .and_then(|v| v.as_str())
-                .unwrap_or("HEAD")
-                .to_string();
-
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let backup_branch = format!("recovery-stash-{}", timestamp);
-            
-            println!("Creating backup branch: {}...", backup_branch);
-            let _ = std::process::Command::new("git")
-                .args(&["checkout", "-b", &backup_branch])
-                .current_dir(&workspace_root)
-                .status();
-
-            println!("Stashing workspace changes...");
-            let _ = std::process::Command::new("git")
-                .args(&["stash", "save", &format!("Recovery stash for session {}", session)])
-                .current_dir(&workspace_root)
-                .status();
-
-            println!("Resetting workspace to commit: {}...", git_commit);
-            let _ = std::process::Command::new("git")
-                .args(&["reset", "--hard", &git_commit])
-                .current_dir(&workspace_root)
-                .status();
-
-            println!("Swapping provider to cloud fallback...");
-            if config_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&config_path) {
-                    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&content) {
-                        val["active_provider"] = serde_json::Value::String("cloud".to_string());
-                        if val.get("cloud_provider").is_none() {
-                            val["cloud_provider"] = serde_json::Value::String("gemini".to_string());
-                        }
-                        if val.get("model").is_none() {
-                            val["model"] = serde_json::Value::String("gemini-1.5-flash".to_string());
-                        }
-                        let _ = std::fs::write(&config_path, serde_json::to_string_pretty(&val)?);
-                    }
-                }
-            }
-
-            if let Ok(backend) = SurrealBackend::new(&surreal_url).await {
-                if let Ok(_) = backend.init().await {
-                    let update_sql = "
-                        UPSERT config:settings CONTENT {
-                            active_provider: 'cloud',
-                            cloud_provider: 'gemini',
-                            model: 'gemini-1.5-flash',
-                            is_override: false
-                        };
-                    ";
-                    let _ = backend.db.query(update_sql).await;
-
-                    println!("Rehydrating active STM keys into database...");
-                    if let Some(obj) = active_stm.as_object() {
-                        for (key, val) in obj {
-                            if let Some(val_str) = val.as_str() {
-                                let stm_sql = "
-                                    UPSERT type::record('short_term_memory', [$session_id, $key]) CONTENT {
-                                        session_id: $session_id,
-                                        key: $key,
-                                        value: $value,
-                                        updated_at: time::now()
-                                    };
-                                ";
-                                let _ = backend.db.query(stm_sql)
-                                    .bind(("session_id", session.clone()))
-                                    .bind(("key", key.clone()))
-                                    .bind(("value", val_str))
-                                    .await;
-                            }
-                        }
-                    }
-                }
-            }
-
-            println!("Rehydrating task checklist in task.md...");
-            let task_md_path = workspace_root.join("task.md");
-            std::fs::write(&task_md_path, task_checklist)?;
-
-            println!("Recovery complete!");
-            println!("=== REHYDRATED TASK STATE ===");
-            println!("{}", task_checklist);
-            println!("=============================");
-            println!("Please resume your work.");
-        }
-        Commands::MergeVault => {
-            cli::handle_merge_vault().await?;
+            let mut payload = args;
+            payload["action"] = serde_json::Value::String(act_str.to_string());
+            execute_cli_tool_call("manage_htr", payload).await?;
         }
         Commands::InstallHook => {
             handle_install_hook().await?;
@@ -1052,172 +401,18 @@ async fn main() -> Result<()> {
         Commands::PreCommit => {
             handle_pre_commit().await?;
         }
-        Commands::Audit => {
-            handle_audit().await?;
+        Commands::Audit { workspace } => {
+            let args = serde_json::json!({
+                "workspace_path": workspace,
+            });
+            execute_cli_tool_call("compliance_audit", args).await?;
         }
     }
 
     Ok(())
 }
 
-async fn run_checkpoint(backend: &db::SurrealBackend, _vault_root: &std::path::Path) -> Result<()> {
-    let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    let mut project_type = "unknown";
-    let mut check_cmd = vec![];
-    
-    if workspace_root.join("Cargo.toml").exists() {
-        project_type = "rust";
-        check_cmd = vec!["cargo", "check"];
-    } else if workspace_root.join("package.json").exists() {
-        project_type = "typescript";
-        check_cmd = vec!["npx", "tsc", "--noEmit"];
-    } else {
-        let has_py = std::fs::read_dir(&workspace_root)
-            .map(|dir| dir.flatten().any(|entry| entry.path().extension().map_or(false, |ext| ext == "py")))
-            .unwrap_or(false);
-        if has_py {
-            project_type = "python";
-            check_cmd = vec!["python", "-m", "py_compile"];
-        }
-    }
-
-    let check_cmd_clone = check_cmd.clone();
-    let workspace_clone = workspace_root.clone();
-    
-    let compile_result = tokio::task::spawn_blocking(move || {
-        if check_cmd_clone.is_empty() {
-            return (0, String::new());
-        }
-        let output = std::process::Command::new(check_cmd_clone[0])
-            .args(&check_cmd_clone[1..])
-            .current_dir(&workspace_clone)
-            .output();
-        match output {
-            Ok(out) => {
-                let exit_code = out.status.code().unwrap_or(0);
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                (exit_code, stderr)
-            }
-            Err(e) => (-1, e.to_string())
-        }
-    }).await.unwrap_or((-2, "Thread panic".to_string()));
-
-    let git_diff = tokio::task::spawn_blocking(move || {
-        let output = std::process::Command::new("git")
-            .args(&["diff"])
-            .current_dir(&workspace_root)
-            .output();
-        match output {
-            Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
-            Err(e) => e.to_string()
-        }
-    }).await.unwrap_or_else(|_| "Thread panic".to_string());
-
-    let checkpoint_id = format!("checkpoint_{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs());
-
-    let sql = "
-        UPSERT type::record('checkpoint_node', $id) CONTENT {
-            project_type: $project_type,
-            exit_code: $exit_code,
-            compiler_errors: $compiler_errors,
-            git_diff: $git_diff,
-            timestamp: time::now()
-        };
-    ";
-    backend.db.query(sql)
-        .bind(("id", checkpoint_id.clone()))
-        .bind(("project_type", project_type))
-        .bind(("exit_code", compile_result.0))
-        .bind(("compiler_errors", compile_result.1))
-        .bind(("git_diff", git_diff))
-        .await?.check()?;
-
-    tracing::info!("Saved CheckpointNode: {}", checkpoint_id);
-    Ok(())
-}
-
-fn stop_daemon() -> Result<()> {
-    let home = std::env::var("HOME").context("HOME env var not set")?;
-    let pid_path = std::path::PathBuf::from(&home).join(".mythrax/daemon.pid");
-    if pid_path.exists() {
-        let content = std::fs::read_to_string(&pid_path)?;
-        let pid_str = content.trim();
-        if let Ok(pid) = pid_str.parse::<i32>() {
-            println!("Stopping daemon process with PID: {}", pid);
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("kill")
-                    .arg("-15")
-                    .arg(pid_str)
-                    .status();
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = std::process::Command::new("kill")
-                    .arg(pid_str)
-                    .status();
-            }
-        }
-        let _ = std::fs::remove_file(pid_path);
-        println!("Daemon stopped.");
-    } else {
-        println!("No running daemon found (no PID file).");
-    }
-    Ok(())
-}
-
-fn backup_vault_folders(vault_root: &std::path::Path) -> Result<()> {
-    let folders = ["episodes", "wiki", "wisdom", "general", "archive"];
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-    let backup_dir = vault_root.join(".trash").join(format!("backup_{}", timestamp));
-    
-    let mut has_files = false;
-    for f in &folders {
-        if vault_root.join(f).exists() {
-            has_files = true;
-            break;
-        }
-    }
-    
-    if has_files {
-        std::fs::create_dir_all(&backup_dir)?;
-        for f in &folders {
-            let src = vault_root.join(f);
-            if src.exists() {
-                let dst = backup_dir.join(f);
-                if std::fs::rename(&src, &dst).is_err() {
-                    copy_dir_all(&src, &dst)?;
-                    let _ = std::fs::remove_dir_all(&src);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
 
 fn merge_json_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -1307,7 +502,7 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
                 {
                     "type": "mcp",
                     "server": "mythrax",
-                    "tool": "verify_compliance"
+                    "tool": "compliance_audit"
                 },
                 {
                     "type": "mcp",
@@ -1475,7 +670,7 @@ async fn config_harness_action(
             vault_root,
             &path,
             harness,
-            "history",
+            "general",
             backend,
         ).await {
             Ok((count, errs)) => {
@@ -1571,22 +766,6 @@ async fn handle_pre_commit() -> Result<()> {
     Ok(())
 }
 
-async fn handle_audit() -> Result<()> {
-    let home = std::env::var("HOME").context("HOME env var not set")?;
-    let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");
-    let config_path = mythrax_dir.join("config.json");
 
-    let surreal_url = if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
-        let val: serde_json::Value = serde_json::from_str(&content)?;
-        val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-    } else {
-        "mem://".to_string()
-    };
-
-    let backend = db::SurrealBackend::new(&surreal_url).await?;
-    backend.init().await?;
-    cli::run_auditor(&backend).await
-}
 
 
