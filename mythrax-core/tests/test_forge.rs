@@ -322,10 +322,12 @@ fn test_second_pass_character_chunking() {
     ];
 
     let sections = split_into_logical_sections(&very_long_text, &toc);
-    assert!(sections.len() >= 2);
+    assert!(sections.len() >= 3);
     assert!(sections[0].title.starts_with("Long Chapter (Part 1)"));
-    assert!(sections[1].title.starts_with("Long Chapter (Part 2)"));
+    assert!(sections[1].title.starts_with("Long Chapter (Part 1)"));
+    assert!(sections[2].title.starts_with("Long Chapter (Part 2)"));
     assert!(sections[0].content.len() <= 100_000);
     assert!(sections[1].content.len() <= 100_000);
+    assert!(sections[2].content.len() <= 100_000);
 }
 

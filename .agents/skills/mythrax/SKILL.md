@@ -151,7 +151,7 @@ ingest_knowledge(action="forge", source="/path/to/guide.pdf", scope="coding")
 
 Forge will:
 1. Extract text (PDF via `pdf-extract`, or raw text for `.md`/`.txt`)
-2. Chunk into 2000-token windows with 10% overlap
+2. Chunk into 24,000-token windows with 10% (2,400-token) overlap
 3. Call the local LLM to extract `WisdomRule`s and `WikiNode`s per chunk
 4. Write markdown files to `vault/wisdom/forge/` and `vault/wiki/forge/`
 5. Persist to SurrealDB for semantic search

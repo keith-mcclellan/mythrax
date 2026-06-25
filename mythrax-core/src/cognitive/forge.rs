@@ -538,7 +538,7 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
         let entry_content = &content[entry.start_byte..entry.end_byte];
         let entry_tokens = count_tokens(entry_content);
         
-        if entry_tokens > 20000 {
+        if entry_tokens > 24000 {
             // Flush current batch
             if !current_batch.is_empty() {
                 sections.push(build_grouped_section(content, &current_batch));
@@ -547,15 +547,15 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
             }
             
             // Split the large entry using chunk_text
-            // 15k size, 1k overlap
-            let chunks = chunk_text(entry_content, 15000, 1000);
+            // 24k size, 2.4k overlap
+            let chunks = chunk_text(entry_content, 24000, 2400);
             for (idx, chunk) in chunks.into_iter().enumerate() {
                 sections.push(LogicalSection {
                     title: format!("{} (Part {})", entry.title, idx + 1),
                     content: chunk,
                 });
             }
-        } else if current_tokens + entry_tokens > 20000 {
+        } else if current_tokens + entry_tokens > 24000 {
             // Flush current batch
             if !current_batch.is_empty() {
                 sections.push(build_grouped_section(content, &current_batch));

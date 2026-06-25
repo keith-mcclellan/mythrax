@@ -91,7 +91,7 @@ During multi-agent delegation, Mythrax enforces a **Zero-Eager-Prompting** model
 
 ### 4.2 Document Forging (`mythrax ingest forge`)
 - Exposes an automated ingestion pipeline for PDFs and raw text manuals.
-- Chunks files into 2,000-token windows with 10% overlap.
+- Chunks files into 24,000-token windows with 10% overlap (2,400 tokens).
 - Extracts structured `WisdomRule`s and `WikiNode`s, writing them to `vault/wisdom/forge/` and `vault/wiki/forge/`.
 - **Automated Skill Skeletonization**: Parses long `SKILL.md` files, extracts verbose examples to `examples/` and references to `references/` subdirectories, and rewrites `SKILL.md` as a lean playbook.
 
