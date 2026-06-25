@@ -267,7 +267,9 @@ impl SurrealBackend {
                             .chars()
                             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
                             .map(|c| c.to_ascii_lowercase())
-                            .collect();
+                            .collect::<String>()
+                            .trim_matches('.')
+                            .to_string();
                         if !normalized.is_empty() {
                             return normalized;
                         }

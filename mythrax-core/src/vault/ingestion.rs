@@ -314,7 +314,9 @@ pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
             .map(|c| c.to_ascii_lowercase())
-            .collect();
+            .collect::<String>()
+            .trim_matches('.')
+            .to_string();
 
         if !normalized.is_empty() {
             return Some(normalized);
@@ -340,7 +342,9 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
                 .chars()
                 .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
                 .map(|c| c.to_ascii_lowercase())
-                .collect();
+                .collect::<String>()
+                .trim_matches('.')
+                .to_string();
             
             if !normalized.is_empty() {
                 scopes.push(normalized);

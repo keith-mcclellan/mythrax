@@ -249,3 +249,51 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
     println!("Auditor calibration complete.");
     Ok(())
 }
+
+/// Recursively scans the filesystem vault and indexes all markdown files into SurrealDB.
+pub async fn sync_vault_to_db(
+    backend: &std::sync::Arc<dyn StorageBackend>,
+    store: &std::sync::Arc<MarkdownStore>,
+) -> Result<usize> {
+    let mut count = 0;
+    let mut dirs_to_scan = vec![store.vault_root.clone()];
+    
+    while let Some(dir) = dirs_to_scan.pop() {
+        if !dir.exists() {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::warn!("Failed to read directory {:?}: {:?}", dir, err);
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    tracing::warn!("Failed to read directory entry: {:?}", err);
+                    continue;
+                }
+            };
+            let path = entry.path();
+            if path.is_dir() {
+                dirs_to_scan.push(path);
+            } else if path.is_file() {
+                if path.extension().map_or(false, |ext| ext == "md") {
+                    match crate::vault::watcher::sync_file_to_db(&path, backend, store).await {
+                        Ok(_) => {
+                            count += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to sync file {:?} to DB: {:?}", path, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(count)
+}

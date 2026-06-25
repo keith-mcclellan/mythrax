@@ -19,6 +19,9 @@ pub enum Commands {
         /// Optional path to historical logs to ingest
         #[arg(short, long)]
         source: Option<String>,
+        /// Run in non-interactive mode
+        #[arg(long)]
+        non_interactive: bool,
     },
     /// Daemon operations
     Daemon {
