@@ -290,11 +290,18 @@ pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
         "general", "archive", "users", "keith", "documents", "repos", 
         "workspace", "workspaces", "projects", ".system_generated", 
         "logs", "messages", "quarantine", "tempmediastorage", "target", 
-        "src", "release", "debug"
+        "src", "release", "debug",
+        "git", "refs", "ref", "github", "lib", "bin", "tests", "test",
+        "deps", "build", "dist", "node_modules", "vendor"
     ];
 
     // Check from right to left (deepest directory first)
     for comp_str in components.iter().rev() {
+        // Skip dotfiles/directories starting with '.'
+        if comp_str.starts_with('.') {
+            continue;
+        }
+
         // Skip UUIDs
         if Uuid::parse_str(comp_str).is_ok() {
             continue;
@@ -410,7 +417,21 @@ pub async fn bulk_ingest_vault(
                 for entry in entries.flatten() {
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                         let path = entry.path();
-                        if path.file_name().map(|n| n == "quarantine").unwrap_or(false) {
+                        let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                        
+                        // Skip if directory starts with '.'
+                        if dir_name.starts_with('.') {
+                            continue;
+                        }
+                        
+                        // Skip case-insensitive matches for: quarantine, tempmediastorage, git, refs, ref
+                        let lower_name = dir_name.to_lowercase();
+                        if lower_name == "quarantine"
+                            || lower_name == "tempmediastorage"
+                            || lower_name == "git"
+                            || lower_name == "refs"
+                            || lower_name == "ref"
+                        {
                             continue;
                         }
                         
@@ -489,7 +510,7 @@ pub async fn bulk_ingest_vault(
                 // Resolve and chunk the artifacts to keep prompts and embeddings bounded
                 let mut resolved_artifacts = Vec::new();
                 for (file_stem, raw_artifact_content) in pre_scanned_artifacts {
-                    let artifact_chunks = chunk_parsed_content(&raw_artifact_content, 100_000);
+                    let artifact_chunks = chunk_parsed_content(&raw_artifact_content, 20_000);
                     let total_art_chunks = artifact_chunks.len();
                     for (art_idx, chunk_text) in artifact_chunks.into_iter().enumerate() {
                         // Use resolved_scope for unique, readable node name and vault paths
@@ -532,10 +553,47 @@ pub async fn bulk_ingest_vault(
                     continue;
                 };
 
+                let uuid_suffix = uuid::Uuid::new_v4().to_string()[..8].to_string();
+
                 // Chunk the parsed log to keep prompt sizes bounded
-                let chunks = chunk_parsed_content(&parsed_content, 100_000);
+                let chunks = chunk_parsed_content(&parsed_content, 20_000);
                 let total_chunks = chunks.len();
                 let mut generated_parts = Vec::new();
+
+                let parent_relative_path = format!("episodes/antigravity_{}_{}.md", dir_name, uuid_suffix);
+                let parent_title = format!("antigravity_{}", dir_name);
+                let mut parent_saved_id = String::new();
+
+                // If multi-part, write the parent index document first and save it
+                if total_chunks > 1 {
+                    let mut parent_parts_list = String::new();
+                    parent_parts_list.push_str("\n\n## Parts\n");
+                    for chunk_idx in 0..total_chunks {
+                        let part_path = format!("episodes/antigravity_{}_part{}_{}", dir_name, chunk_idx + 1, uuid_suffix);
+                        parent_parts_list.push_str(&format!("- [[{}]]\n", part_path));
+                    }
+                    let parent_content = format!(
+                        "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n# {}\n{}",
+                        parent_title, resolved_scope, parent_title, parent_parts_list
+                    );
+                    
+                    if store.write_file(&parent_relative_path, &parent_content).is_ok() {
+                        let parent_ep_save = crate::contracts::EpisodeSave {
+                            title: parent_title.clone(),
+                            content: parent_content,
+                            entities: vec![],
+                            scope: Some(resolved_scope.clone()),
+                            vault_path: Some(parent_relative_path.clone()),
+                            source_episode: None,
+                            session_id: None,
+                            task_id: None,
+                        };
+                        if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
+                            success_count += 1;
+                            parent_saved_id = ep_id;
+                        }
+                    }
+                }
 
                 for (chunk_idx, chunk_text) in chunks.iter().enumerate() {
                     let part_title = if total_chunks > 1 {
@@ -544,11 +602,10 @@ pub async fn bulk_ingest_vault(
                         format!("antigravity_{}", dir_name)
                     };
                     
-                    let uuid = uuid::Uuid::new_v4().to_string();
                     let relative_path = if total_chunks > 1 {
-                        format!("episodes/antigravity_{}_part{}_{}.md", dir_name, chunk_idx + 1, &uuid[..8])
+                        format!("episodes/antigravity_{}_part{}_{}.md", dir_name, chunk_idx + 1, uuid_suffix)
                     } else {
-                        format!("episodes/antigravity_{}_{}.md", dir_name, &uuid[..8])
+                        format!("episodes/antigravity_{}_{}.md", dir_name, uuid_suffix)
                     };
 
                     let mut linked_artifacts_section = String::new();
@@ -559,9 +616,33 @@ pub async fn bulk_ingest_vault(
                         }
                     }
 
+                    // Collapsible navigation callout at the bottom of the chunk
+                    let mut nav_callout = String::new();
+                    if total_chunks > 1 {
+                        nav_callout.push_str("\n\n> [!INFO]- Navigation\n");
+                        let parent_target = parent_relative_path.strip_suffix(".md").unwrap_or(&parent_relative_path);
+                        nav_callout.push_str(&format!("> Parent: [[{}]]\n", parent_target));
+                        
+                        let prev_str = if chunk_idx > 0 {
+                            let prev_path = format!("episodes/antigravity_{}_part{}_{}", dir_name, chunk_idx, uuid_suffix);
+                            format!("[[{}]]", prev_path)
+                        } else {
+                            "None".to_string()
+                        };
+                        
+                        let next_str = if chunk_idx + 1 < total_chunks {
+                            let next_path = format!("episodes/antigravity_{}_part{}_{}", dir_name, chunk_idx + 2, uuid_suffix);
+                            format!("[[{}]]", next_path)
+                        } else {
+                            "None".to_string()
+                        };
+                        
+                        nav_callout.push_str(&format!("> Prev: {} | Next: {}\n", prev_str, next_str));
+                    }
+
                     let note_content = format!(
-                        "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}{}",
-                        part_title, resolved_scope, chunk_text, linked_artifacts_section
+                        "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}{}{}",
+                        part_title, resolved_scope, chunk_text, linked_artifacts_section, nav_callout
                     );
 
                     if store.write_file(&relative_path, &note_content).is_ok() {
@@ -578,6 +659,42 @@ pub async fn bulk_ingest_vault(
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;
                             generated_parts.push((part_title, relative_path, episode_saved_id));
+                        }
+                    }
+                }
+
+                // Downcast and establish SurrealDB relationships
+                if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                    if total_chunks > 1 && !parent_saved_id.is_empty() {
+                        if let Ok(parent_thing) = crate::db::parse_record_id(&parent_saved_id) {
+                            for (_, _, part_saved_id) in &generated_parts {
+                                if let Ok(child_thing) = crate::db::parse_record_id(part_saved_id) {
+                                    let query_parent = "RELATE $child_thing -> relates_to -> $parent_thing UNIQUE CONTENT { relation: 'parent', created_at: time::now() };";
+                                    let _ = surreal.db.query(query_parent)
+                                        .bind(("child_thing", child_thing))
+                                        .bind(("parent_thing", parent_thing.clone()))
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+
+                    for i in 0..generated_parts.len().saturating_sub(1) {
+                        if let (Ok(part_n), Ok(part_n_plus_1)) = (
+                            crate::db::parse_record_id(&generated_parts[i].2),
+                            crate::db::parse_record_id(&generated_parts[i + 1].2),
+                        ) {
+                            let query_next = "RELATE $part_n -> relates_to -> $part_n_plus_1 UNIQUE CONTENT { relation: 'next', created_at: time::now() };";
+                            let _ = surreal.db.query(query_next)
+                                .bind(("part_n", part_n.clone()))
+                                .bind(("part_n_plus_1", part_n_plus_1.clone()))
+                                .await;
+
+                            let query_prev = "RELATE $part_n_plus_1 -> relates_to -> $part_n UNIQUE CONTENT { relation: 'prev', created_at: time::now() };";
+                            let _ = surreal.db.query(query_prev)
+                                .bind(("part_n_plus_1", part_n_plus_1))
+                                .bind(("part_n", part_n))
+                                .await;
                         }
                     }
                 }
@@ -958,121 +1075,232 @@ pub async fn bulk_ingest_vault(
     Ok((success_count, errors))
 }
 
-pub fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
-    if content.len() <= limit {
-        return vec![content.to_string()];
+fn split_by_page_breaks(text: &str) -> Vec<String> {
+    text.split("\n---\n")
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn split_by_sections(text: &str) -> Vec<String> {
+    let mut sections = Vec::new();
+    let mut current_section = String::new();
+
+    for line in text.lines() {
+        if line.starts_with('#') {
+            if !current_section.is_empty() {
+                sections.push(current_section.trim_end().to_string());
+            }
+            current_section = line.to_string();
+        } else {
+            if current_section.is_empty() {
+                current_section = line.to_string();
+            } else {
+                current_section.push('\n');
+                current_section.push_str(line);
+            }
+        }
     }
 
-    let normalized = content.replace("\r\n", "\n");
-    let mut chunks = Vec::new();
-    let mut current_chunk = String::new();
+    if !current_section.is_empty() {
+        sections.push(current_section.trim_end().to_string());
+    }
 
-    for paragraph in normalized.split("\n\n") {
-        if paragraph.is_empty() {
+    sections
+}
+
+fn split_by_paragraphs(text: &str) -> Vec<String> {
+    text.split("\n\n")
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn split_by_lines(text: &str) -> Vec<String> {
+    text.split('\n')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn split_by_words(text: &str) -> Vec<String> {
+    text.split(' ')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn split_by_chars(text: &str, max_chars: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut count = 0;
+    for c in text.chars() {
+        if count >= max_chars {
+            chunks.push(current.clone());
+            current.clear();
+            count = 0;
+        }
+        current.push(c);
+        count += 1;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+fn group_sub_chunks(sub_chunks: Vec<String>, delimiter: &str, max_chars: usize) -> Vec<String> {
+    let mut grouped = Vec::new();
+    let mut current_group = String::new();
+    let mut current_len = 0;
+
+    for chunk in sub_chunks {
+        if chunk.is_empty() {
             continue;
         }
 
-        let needed_len = if current_chunk.is_empty() {
-            paragraph.len()
+        let chunk_len = chunk.chars().count();
+        if chunk_len > max_chars {
+            if !current_group.is_empty() {
+                grouped.push(current_group.clone());
+                current_group.clear();
+                current_len = 0;
+            }
+            grouped.push(chunk);
+            continue;
+        }
+
+        let needed_len = if current_group.is_empty() {
+            chunk_len
         } else {
-            current_chunk.len() + 2 + paragraph.len()
+            current_len + delimiter.chars().count() + chunk_len
         };
 
-        if needed_len <= limit {
-            if !current_chunk.is_empty() {
-                current_chunk.push_str("\n\n");
+        if needed_len <= max_chars {
+            if !current_group.is_empty() {
+                current_group.push_str(delimiter);
             }
-            current_chunk.push_str(paragraph);
+            current_group.push_str(&chunk);
+            current_len = needed_len;
         } else {
-            // It doesn't fit.
-            // If the paragraph itself fits within a single chunk, we keep it intact
-            // by flushing the current chunk and placing it in a new one.
-            if paragraph.len() <= limit {
-                if !current_chunk.is_empty() {
-                    chunks.push(current_chunk.clone());
-                    current_chunk.clear();
-                }
-                current_chunk = paragraph.to_string();
-            } else {
-                // If the paragraph is larger than the limit, we split it by lines.
-                // We do NOT flush the current chunk immediately; we fill it with lines first.
-                let mut is_first_line = true;
-                for line in paragraph.split('\n') {
-                    let join_len = if is_first_line { 2 } else { 1 };
-                    let needed_len = if current_chunk.is_empty() {
-                        line.len()
-                    } else {
-                        current_chunk.len() + join_len + line.len()
-                    };
-
-                    if needed_len <= limit {
-                        if !current_chunk.is_empty() {
-                            if is_first_line {
-                                current_chunk.push_str("\n\n");
-                            } else {
-                                current_chunk.push('\n');
-                            }
-                        }
-                        current_chunk.push_str(line);
-                        is_first_line = false;
-                    } else {
-                        // The line doesn't fit in current_chunk.
-                        // If the line itself fits within a single chunk, we keep it intact
-                        // by flushing the current chunk and starting a new one.
-                        if line.len() <= limit {
-                            if !current_chunk.is_empty() {
-                                chunks.push(current_chunk.clone());
-                                current_chunk.clear();
-                            }
-                            current_chunk = line.to_string();
-                            is_first_line = false;
-                        } else {
-                            // If the line is larger than the limit, we split it by characters.
-                            // We split the line, filling the current_chunk first.
-                            let mut remaining = line;
-                            
-                            // If current_chunk has some space, let's fill it up to the limit
-                            if !current_chunk.is_empty() {
-                                let join_str = if is_first_line { "\n\n" } else { "\n" };
-                                let space_left = limit.saturating_sub(current_chunk.len() + join_str.len());
-                                if space_left > 0 && remaining.len() > space_left {
-                                    let (part, rest) = remaining.split_at(space_left);
-                                    current_chunk.push_str(join_str);
-                                    current_chunk.push_str(part);
-                                    chunks.push(current_chunk.clone());
-                                    current_chunk.clear();
-                                    remaining = rest;
-                                } else if space_left >= remaining.len() {
-                                    current_chunk.push_str(join_str);
-                                    current_chunk.push_str(remaining);
-                                    remaining = "";
-                                } else {
-                                    // Not enough space even for the join delimiter
-                                    chunks.push(current_chunk.clone());
-                                    current_chunk.clear();
-                                }
-                            }
-                            
-                            // Now split the rest of the line
-                            while remaining.len() > limit {
-                                let (part, rest) = remaining.split_at(limit);
-                                chunks.push(part.to_string());
-                                remaining = rest;
-                            }
-                            current_chunk = remaining.to_string();
-                            is_first_line = false;
-                        }
-                    }
-                }
+            if !current_group.is_empty() {
+                grouped.push(current_group.clone());
             }
+            current_group = chunk;
+            current_len = chunk_len;
         }
     }
 
-    if !current_chunk.is_empty() {
-        chunks.push(current_chunk);
+    if !current_group.is_empty() {
+        grouped.push(current_group);
     }
 
-    chunks
+    grouped
+}
+
+fn split_recursive(text: &str, level: usize, max_chars: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![];
+    }
+    if text.chars().count() <= max_chars {
+        return vec![text.to_string()];
+    }
+
+    let (chunks, delimiter) = match level {
+        0 => (split_by_page_breaks(text), "\n---\n"),
+        1 => (split_by_sections(text), "\n"),
+        2 => (split_by_paragraphs(text), "\n\n"),
+        3 => (split_by_lines(text), "\n"),
+        4 => (split_by_words(text), " "),
+        _ => (split_by_chars(text, max_chars), ""),
+    };
+
+    if chunks.len() <= 1 {
+        if level >= 5 {
+            return chunks;
+        }
+        return split_recursive(text, level + 1, max_chars);
+    }
+
+    let mut processed_chunks = Vec::new();
+    for chunk in chunks {
+        if chunk.chars().count() > max_chars {
+            processed_chunks.extend(split_recursive(&chunk, level + 1, max_chars));
+        } else {
+            processed_chunks.push(chunk);
+        }
+    }
+
+    group_sub_chunks(processed_chunks, delimiter, max_chars)
+}
+
+fn extract_frontmatter(text: &str) -> (Option<String>, &str) {
+    if !text.starts_with("---") {
+        return (None, text);
+    }
+    
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() || lines[0].trim() != "---" {
+        return (None, text);
+    }
+    
+    let mut closing_line_idx = None;
+    for (idx, line) in lines.iter().enumerate().skip(1) {
+        if line.trim() == "---" {
+            closing_line_idx = Some(idx);
+            break;
+        }
+    }
+    
+    if let Some(idx) = closing_line_idx {
+        let fm = lines[0..=idx].join("\n") + "\n";
+        
+        let mut byte_offset = 0;
+        for i in 0..=idx {
+            if let Some(line_pos) = text[byte_offset..].find(lines[i]) {
+                byte_offset += line_pos + lines[i].len();
+            }
+        }
+        let mut body = &text[byte_offset..];
+        if body.starts_with('\n') {
+            body = &body[1..];
+        } else if body.starts_with("\r\n") {
+            body = &body[2..];
+        }
+        
+        (Some(fm), body)
+    } else {
+        (None, text)
+    }
+}
+
+pub fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
+    let normalized = content.replace("\r\n", "\n");
+    let (frontmatter, remaining) = extract_frontmatter(&normalized);
+    
+    if remaining.trim().is_empty() {
+        if let Some(fm) = frontmatter {
+            return vec![fm];
+        }
+        return vec![];
+    }
+    
+    let chunks = split_recursive(remaining, 0, limit);
+    
+    let mut final_chunks = Vec::new();
+    for chunk in chunks {
+        let mut final_chunk = String::new();
+        if let Some(ref fm) = frontmatter {
+            final_chunk.push_str(fm);
+            if !fm.ends_with('\n') {
+                final_chunk.push('\n');
+            }
+        }
+        final_chunk.push_str(&chunk);
+        final_chunks.push(final_chunk);
+    }
+    
+    final_chunks
 }
 
 #[cfg(test)]

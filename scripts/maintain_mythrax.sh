@@ -35,10 +35,10 @@ show_status() {
     else
         echo "❌ Daemon is NOT running"
     fi
-    if pgrep -f "mythrax_mcp" > /dev/null; then
-        echo "✅ MCP Server is running (PIDs: $(pgrep -f "mythrax_mcp" | tr '\n' ' '))"
+    if pgrep -f "mythrax mcp" > /dev/null; then
+        echo "✅ MCP Server is running (PIDs: $(pgrep -f "mythrax mcp" | tr '\n' ' '))"
     else
-        echo "ℹ️  No active mythrax_mcp processes"
+        echo "ℹ️  No active mythrax mcp processes"
     fi
     echo ""
     echo "--- Database Lock Status ---"
@@ -62,7 +62,7 @@ show_status() {
 stop_processes() {
     echo "Stopping daemon and any running mythrax processes..."
     pkill -f "mythrax daemon" || true
-    pkill -f "mythrax_mcp" || true
+    pkill -f "mythrax mcp" || true
     pkill -f "target/release/mythrax" || true
     pkill -f "target/debug/mythrax" || true
     sleep 1
@@ -85,7 +85,7 @@ run_ingest() {
     HISTORY_SRC="$HOME/.gemini/antigravity/brain"
     if [ -d "$HISTORY_SRC" ]; then
         echo "Ingesting from: $HISTORY_SRC"
-        "$MYTHRAX_BIN" ingest bulk --source "$HISTORY_SRC" --harness antigravity --scope general
+        "$MYTHRAX_BIN" vault ingest-bulk --source "$HISTORY_SRC" --harness antigravity --scope general
     else
         echo "Error: Default history source folder not found at $HISTORY_SRC"
         exit 1

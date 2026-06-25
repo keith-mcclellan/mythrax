@@ -28,101 +28,22 @@ impl Forge {
     /// Splits text into semantic chunks based on paragraph/line boundaries,
     /// targeting 1,000–2,000 tokens per chunk.
     pub fn semantic_chunk_text(&self, content: &str) -> Vec<String> {
-        let mut segments: Vec<String> = Vec::new();
-        
-        // 1. Split by top-level paragraphs (\n\n)
-        let paragraphs: Vec<&str> = content.split("\n\n").collect();
-
-        for para in paragraphs {
-            let trimmed_para = para.trim();
-            if trimmed_para.is_empty() {
-                continue;
-            }
-
-            // 2. Check if paragraph exceeds 2,000 tokens
-            if count_tokens(trimmed_para) > 2000 {
-                // Split paragraph by lines (\n)
-                let lines: Vec<&str> = trimmed_para.split('\n').collect();
-                
-                for line in lines {
-                    let trimmed_line = line.trim();
-                    if trimmed_line.is_empty() {
-                        continue;
-                    }
-
-                    // 3. Check if line exceeds 2,000 tokens
-                    if count_tokens(trimmed_line) > 2000 {
-                        // Fallback: Use standard chunking for large lines
-                        let sub_chunks = chunk_text(trimmed_line, 1500, 150);
-                        for sub_chunk in sub_chunks {
-                            segments.push(sub_chunk);
-                        }
-                    } else {
-                        // Add line directly to segments
-                        segments.push(trimmed_line.to_string());
-                    }
-                }
-            } else {
-                // Add paragraph directly to segments
-                segments.push(trimmed_para.to_string());
-            }
-        }
-
-        // 4. Group segments into final chunks (1,000–2,000 tokens)
-        let mut chunks: Vec<String> = Vec::new();
-        let mut current_group: Vec<String> = Vec::new();
-        let mut current_tokens: usize = 0;
-
-        for seg in segments {
-            let seg_tokens = count_tokens(&seg);
-
-            // Case A: Adding this segment exceeds 2,000 tokens
-            if current_tokens + seg_tokens > 2000 {
-                if !current_group.is_empty() {
-                    // Flush current group
-                    let joined = current_group.join("\n\n");
-                    chunks.push(joined);
-                    current_group.clear();
-                    current_tokens = 0;
-                }
-
-                // If the segment itself is > 2000 (should be handled by fallback, but safety check)
-                if seg_tokens > 2000 {
-                    chunks.push(seg);
-                } else {
-                    // Start new group with this segment
-                    current_group.push(seg);
-                    current_tokens = seg_tokens;
-                }
-            } 
-            // Case B: Adding this segment brings us into the 1,000–2,000 target range
-            else if current_tokens + seg_tokens >= 1000 && current_tokens + seg_tokens <= 2000 {
-                current_group.push(seg);
-                // Flush immediately as we hit the target range
-                let joined = current_group.join("\n\n");
-                chunks.push(joined);
-                current_group.clear();
-                current_tokens = 0;
-            } 
-            // Case C: Adding this segment is still below 1,000 tokens
-            else {
-                current_group.push(seg);
-                current_tokens += seg_tokens;
-            }
-        }
-
-        // Flush any remaining content
-        if !current_group.is_empty() {
-            let joined = current_group.join("\n\n");
-            chunks.push(joined);
-        }
-
-        chunks
+        crate::vault::ingestion::chunk_parsed_content(content, 20_000)
     }
 
     /// Ingest a document, chunk it, extract wisdom rules and wiki concepts using LLM,
     /// and save/relate all of them with a single parallel batch embedding pass.
     pub async fn ingest_document(&self, content: &str, scope: &str, _source_name: &str) -> Result<()> {
+        let normalized_scope = {
+            let s = scope.trim().to_lowercase();
+            let cleaned: String = s.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            if cleaned.is_empty() {
+                "general".to_string()
+            } else {
+                cleaned
+            }
+        };
+
         let sanitized_source_name = _source_name.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
         let uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
 
@@ -175,11 +96,24 @@ impl Forge {
         // 4. Run parallel batch embedding to eliminate ONNX runtime lock contention
         let embeddings = self.backend.embed_batch(&texts_to_embed).await?;
 
+        let total_chunks = chunks.len();
+        let chunk_uuids: Vec<String> = (0..total_chunks).map(|_| uuid::Uuid::new_v4().to_string()[..8].to_string()).collect();
+
         // 5. Save the parent index node as a WikiNode in SurrealDB and write it to the store
-        let parent_path = format!("wiki/forge/parent_{}_{}.md", sanitized_source_name, uuid_prefix);
+        let parent_path = format!("wiki/{}/parent_{}_{}.md", normalized_scope, sanitized_source_name, uuid_prefix);
+        
+        let mut chunks_index = String::new();
+        chunks_index.push_str("\n\n## Chunks\n");
+        for idx in 0..total_chunks {
+            let chunk_path = format!("wiki/{}/chunk_{}_{}.md", normalized_scope, sanitized_source_name, chunk_uuids[idx]);
+            let chunk_target = chunk_path.strip_suffix(".md").unwrap_or(&chunk_path);
+            let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
+            chunks_index.push_str(&format!("- [[{}|{}]]\n", chunk_target, chunk_name));
+        }
+
         let parent_md = format!(
-            "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
-            _source_name, scope, _source_name, content
+            "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}{}",
+            _source_name, normalized_scope, _source_name, content, chunks_index
         );
         self.store.write_file(&parent_path, &parent_md)?;
 
@@ -187,8 +121,8 @@ impl Forge {
             id: None,
             name: _source_name.to_string(),
             content: content.to_string(),
-            scope: scope.to_string(),
-            vault_path: Some(parent_path),
+            scope: normalized_scope.clone(),
+            vault_path: Some(parent_path.clone()),
             embedding: Some(embeddings[0].clone()),
         };
         let parent_id_str = self.backend.save_wiki_node(&parent_node).await?;
@@ -199,11 +133,35 @@ impl Forge {
 
         for (idx, (chunk_text, concepts, rules)) in chunks_data.into_iter().enumerate() {
             let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
-            let chunk_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
-            let chunk_path = format!("wiki/forge/chunk_{}_{}.md", sanitized_source_name, chunk_uuid_prefix);
+            let chunk_uuid_prefix = &chunk_uuids[idx];
+            let chunk_path = format!("wiki/{}/chunk_{}_{}.md", normalized_scope, sanitized_source_name, chunk_uuid_prefix);
+
+            let mut nav_callout = String::new();
+            nav_callout.push_str("\n\n> [!INFO]- Navigation\n");
+            let parent_target = parent_path.strip_suffix(".md").unwrap_or(&parent_path);
+            nav_callout.push_str(&format!("> Parent: [[{}|{}]]\n", parent_target, _source_name));
+            
+            let prev_str = if idx > 0 {
+                let prev_path = format!("wiki/{}/chunk_{}_{}", normalized_scope, sanitized_source_name, chunk_uuids[idx - 1]);
+                let prev_name = format!("Chunk {}", idx);
+                format!("[[{}|{}]]", prev_path, prev_name)
+            } else {
+                "None".to_string()
+            };
+            
+            let next_str = if idx + 1 < total_chunks {
+                let next_path = format!("wiki/{}/chunk_{}_{}", normalized_scope, sanitized_source_name, chunk_uuids[idx + 1]);
+                let next_name = format!("Chunk {}", idx + 2);
+                format!("[[{}|{}]]", next_path, next_name)
+            } else {
+                "None".to_string()
+            };
+            
+            nav_callout.push_str(&format!("> Prev: {} | Next: {}\n", prev_str, next_str));
+
             let chunk_md = format!(
-                "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
-                chunk_name, scope, chunk_name, chunk_text
+                "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}{}",
+                chunk_name, normalized_scope, chunk_name, chunk_text, nav_callout
             );
             self.store.write_file(&chunk_path, &chunk_md)?;
 
@@ -214,7 +172,7 @@ impl Forge {
                 id: None,
                 name: chunk_name,
                 content: chunk_text.to_string(),
-                scope: scope.to_string(),
+                scope: normalized_scope.clone(),
                 vault_path: Some(chunk_path),
                 embedding: Some(chunk_embedding),
             };
@@ -228,10 +186,10 @@ impl Forge {
             for concept in concepts {
                 let sanitized_concept_name = concept.name.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
                 let concept_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
-                let concept_path = format!("wiki/forge/concept_{}_{}.md", sanitized_concept_name, concept_uuid_prefix);
+                let concept_path = format!("wiki/{}/concept_{}_{}.md", normalized_scope, sanitized_concept_name, concept_uuid_prefix);
                 let concept_md = format!(
                     "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
-                    concept.name.replace('"', "\\\""), scope, concept.name, concept.content
+                    concept.name.replace('"', "\\\""), normalized_scope, concept.name, concept.content
                 );
                 self.store.write_file(&concept_path, &concept_md)?;
 
@@ -242,7 +200,7 @@ impl Forge {
                     id: None,
                     name: concept.name.clone(),
                     content: concept.content.clone(),
-                    scope: scope.to_string(),
+                    scope: normalized_scope.clone(),
                     vault_path: Some(concept_path),
                     embedding: Some(concept_embedding),
                 };
@@ -264,14 +222,14 @@ impl Forge {
             for rule in rules {
                 let sanitized_rule_name = rule.target_pattern.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
                 let rule_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
-                let rule_path = format!("wisdom/forge/rule_{}_{}.md", sanitized_rule_name, rule_uuid_prefix);
+                let rule_path = format!("wisdom/{}/rule_{}_{}.md", normalized_scope, sanitized_rule_name, rule_uuid_prefix);
                 let rule_md = format!(
                     "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"forge\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                     rule.target_pattern.replace('"', "\\\""),
                     rule.action_to_avoid.replace('"', "\\\""),
                     rule.causal_explanation.replace('"', "\\\""),
                     rule.prescribed_remedy.replace('"', "\\\""),
-                    scope,
+                    normalized_scope,
                     rule.target_pattern,
                     rule.action_to_avoid,
                     rule.causal_explanation,
@@ -289,7 +247,7 @@ impl Forge {
                     causal_explanation: rule.causal_explanation.clone(),
                     prescribed_remedy: rule.prescribed_remedy.clone(),
                     tier: "forge".to_string(),
-                    scope: scope.to_string(),
+                    scope: normalized_scope.clone(),
                     vault_path: Some(rule_path),
                     embedding: Some(rule_embedding),
                     source_episodes: vec![chunk_id_str.clone()],
@@ -818,11 +776,11 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
         sections.push(build_grouped_section(content, &current_batch));
     }
     
-    // Second pass: Ensure no section exceeds the character limit (100,000 characters)
+    // Second pass: Ensure no section exceeds the character limit (20,000 characters)
     let mut final_sections = Vec::new();
     for section in sections {
-        if section.content.len() > 100_000 {
-            let chunks = crate::vault::ingestion::chunk_parsed_content(&section.content, 100_000);
+        if section.content.len() > 20_000 {
+            let chunks = crate::vault::ingestion::chunk_parsed_content(&section.content, 20_000);
             for (idx, chunk) in chunks.into_iter().enumerate() {
                 final_sections.push(LogicalSection {
                     title: format!("{} (Part {})", section.title, idx + 1),

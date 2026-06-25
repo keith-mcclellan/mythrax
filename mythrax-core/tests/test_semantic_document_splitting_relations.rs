@@ -7,6 +7,9 @@ use mythrax_core::store::MarkdownStore;
 
 #[tokio::test]
 async fn test_semantic_document_splitting_relations() -> Result<()> {
+    unsafe {
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
     let tmp = tempdir()?;
     let vault_root = tmp.path().join("vault");
     fs::create_dir_all(&vault_root)?;
@@ -18,9 +21,9 @@ async fn test_semantic_document_splitting_relations() -> Result<()> {
     let forge = Forge::new(backend.clone(), store.clone());
 
     // 1. Generate a sample document containing several paragraphs.
-    // One of them must be very large to trigger fallback splitting (> 2,000 tokens).
-    // Let's repeat "word " 2200 times.
-    let large_para = (0..2200).map(|_| "word").collect::<Vec<_>>().join(" ");
+    // One of them must be very large to trigger fallback splitting (> 20,000 characters).
+    // Let's repeat "word " 5500 times.
+    let large_para = (0..5500).map(|_| "word").collect::<Vec<_>>().join(" ");
     let document_content = format!(
         "Paragraph 1 is small.\n\n{}\n\nParagraph 3 is also small.",
         large_para
@@ -82,8 +85,8 @@ async fn test_semantic_document_splitting_relations() -> Result<()> {
     }
 
     // 7. Verify files are written to the store on disk
-    let wiki_dir = vault_root.join("wiki").join("forge");
-    assert!(wiki_dir.exists(), "Wiki forge directory should exist");
+    let wiki_dir = vault_root.join("wiki").join("testscope");
+    assert!(wiki_dir.exists(), "Wiki testscope directory should exist");
 
     // Read directory and check that we have parent and chunk files
     let paths = fs::read_dir(wiki_dir)?;
