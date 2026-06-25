@@ -390,9 +390,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        // Test POST /v1/mcp/call (Authorized, query_memory action root)
+        // Test POST /v1/mcp/call (Authorized, manage_memory action root)
         let call_payload = serde_json::json!({
-            "name": "query_memory",
+            "name": "manage_memory",
             "arguments": {
                 "action": "root"
             }

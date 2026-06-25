@@ -119,6 +119,7 @@ pub trait StorageBackend: Send + Sync {
     async fn get_memory_nodes(&self, node_ids: &[String]) -> Result<GetMemoryNodesResponse>;
     async fn save_forged_section(&self, batch: &ForgedSectionBatch) -> Result<()>;
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
     async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>>;
     async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()>;
@@ -932,7 +933,9 @@ impl StorageBackend for SurrealBackend {
         let metrics_uuid = Uuid::new_v4().to_string();
         let vp_val = rule.vault_path.clone().unwrap_or_default();
 
-        let embedding_val = if let Some(ref embedder) = self.embedder {
+        let embedding_val = if let Some(ref emb) = rule.embedding {
+            Some(emb.clone())
+        } else if let Some(ref embedder) = self.embedder {
             let text_to_embed = format!(
                 "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
                 rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
@@ -2095,7 +2098,9 @@ impl StorageBackend for SurrealBackend {
         };
 
         let vp_val = node.vault_path.clone().unwrap_or_default();
-        let embedding_val = if let Some(ref embedder) = self.embedder {
+        let embedding_val = if let Some(ref emb) = node.embedding {
+            Some(emb.clone())
+        } else if let Some(ref embedder) = self.embedder {
             let text_to_embed = format!("{}: {}", node.name, node.content);
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
@@ -2629,55 +2634,50 @@ impl StorageBackend for SurrealBackend {
             return Err(e);
         }
 
-        // 2. Generate embeddings for all inserted records
+        // 2. Generate embeddings for all inserted records using embed_batch
+        let mut texts_to_embed = Vec::new();
+        
         let ep_text = format!("{}: {}", ep_title, batch.chunk_text);
-        let ep_embedding = if let Some(ref embedder) = self.embedder {
-            match self.embed(&ep_text).await {
-                Ok(vec) => Some(vec),
+        texts_to_embed.push(ep_text);
+        
+        for concept in &batch.concepts {
+            texts_to_embed.push(format!("{}: {}", concept.name, concept.content));
+        }
+        
+        for rule in &batch.rules {
+            texts_to_embed.push(format!(
+                "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
+                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+            ));
+        }
+        
+        let all_embeddings = if self.embedder.is_some() {
+            match self.embed_batch(&texts_to_embed).await {
+                Ok(embs) => embs,
                 Err(e) => {
-                    tracing::warn!("Embedding generation failed for episode in save_forged_section: {}", e);
-                    None
+                    tracing::warn!("Batch embedding generation failed in save_forged_section: {}", e);
+                    vec![vec![]; texts_to_embed.len()]
                 }
             }
         } else {
-            None
+            vec![vec![]; texts_to_embed.len()]
         };
-
+        
+        let ep_embedding = if all_embeddings[0].is_empty() { None } else { Some(all_embeddings[0].clone()) };
+        
         let mut concept_embeddings = Vec::new();
-        for concept in &batch.concepts {
-            let concept_text = format!("{}: {}", concept.name, concept.content);
-            let emb = if let Some(ref embedder) = self.embedder {
-                match self.embed(&concept_text).await {
-                    Ok(vec) => Some(vec),
-                    Err(e) => {
-                        tracing::warn!("Embedding generation failed for concept in save_forged_section: {}", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+        let mut idx = 1;
+        for _ in &batch.concepts {
+            let emb = if all_embeddings[idx].is_empty() { None } else { Some(all_embeddings[idx].clone()) };
             concept_embeddings.push(emb);
+            idx += 1;
         }
-
+        
         let mut rule_embeddings = Vec::new();
-        for rule in &batch.rules {
-            let rule_text = format!(
-                "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
-            );
-            let emb = if let Some(ref embedder) = self.embedder {
-                match self.embed(&rule_text).await {
-                    Ok(vec) => Some(vec),
-                    Err(e) => {
-                        tracing::warn!("Embedding generation failed for rule in save_forged_section: {}", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+        for _ in &batch.rules {
+            let emb = if all_embeddings[idx].is_empty() { None } else { Some(all_embeddings[idx].clone()) };
             rule_embeddings.push(emb);
+            idx += 1;
         }
 
         // 3. Construct SurrealDB transaction query and run it
@@ -2759,7 +2759,7 @@ impl StorageBackend for SurrealBackend {
             }
 
             query.push_str(&format!(
-                "RELATE $concept_{} -> relates_to -> $ep UNIQUE CONTENT {{ created_at: time::now() }};\n",
+                "RELATE $concept_{} -> relates_to -> $ep UNIQUE CONTENT {{ relation: 'extracted_from', created_at: time::now() }};\n",
                 idx
             ));
         }
@@ -2816,6 +2816,10 @@ impl StorageBackend for SurrealBackend {
                     idx, c_idx
                 ));
             }
+            query.push_str(&format!(
+                "RELATE $rule_{} -> relates_to -> $ep UNIQUE CONTENT {{ relation: 'extracted_from', created_at: time::now() }};\n",
+                idx
+            ));
         }
 
         query.push_str("COMMIT TRANSACTION;");
@@ -2857,6 +2861,20 @@ impl StorageBackend for SurrealBackend {
                 emp.embed(&text)
             } else {
                 anyhow::bail!("No embedder configured")
+            }
+        }).await?
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let embedder = self.embedder.clone();
+        let texts = texts.to_vec();
+        tokio::task::spawn_blocking(move || {
+            if let Some(ref emp) = embedder {
+                emp.embed_batch(&texts)
+            } else {
+                // Fallback for non-embedded mode (e.g., test environments without ONNX models).
+                // Returns dummy zero-embeddings of length 768 to allow ingestion pipeline to proceed.
+                Ok(vec![vec![0.0f32; 768]; texts.len()])
             }
         }).await?
     }

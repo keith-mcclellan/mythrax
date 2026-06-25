@@ -945,16 +945,19 @@ pub async fn save_wisdom_rule_with_deduplication(
     store: &MarkdownStore,
     rule: &WisdomRule,
 ) -> Result<String> {
-    let text_to_embed = format!(
-        "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-        rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
-    );
-    
-    let new_emb = match db.embed(&text_to_embed).await {
-        Ok(emb) => emb,
-        Err(e) => {
-            tracing::warn!("Failed to generate embedding for deduplication: {}", e);
-            return db.save_wisdom_rule(rule).await;
+    let new_emb = if let Some(ref emb) = rule.embedding {
+        emb.clone()
+    } else {
+        let text_to_embed = format!(
+            "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
+            rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+        );
+        match db.embed(&text_to_embed).await {
+            Ok(emb) => emb,
+            Err(e) => {
+                tracing::warn!("Failed to generate embedding for deduplication: {}", e);
+                return db.save_wisdom_rule(rule).await;
+            }
         }
     };
 

@@ -5,6 +5,7 @@
 /// and MYTHRAX_MOCK_LLM=true to skip actual LLM calls.
 /// Tests MUST run serially (test-threads=1) since multiple tests write to ~/mythrax-vault.
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
 
@@ -19,7 +20,7 @@ fn cmd(home: &std::path::Path) -> Command {
     let mut c = Command::new(binary());
     c.env("MYTHRAX_MOCK_LLM", "true");
     c.env("HOME", home);
-    c.env("MYTHRAX_DAEMON_PORT", "18092");
+    c.env("MYTHRAX_DAEMON_PORT", "18099");
     c
 }
 
@@ -38,6 +39,23 @@ fn cleanup_daemon(home: &std::path::Path) {
             }
         }
         let _ = fs::remove_file(&pid_file);
+    }
+}
+
+/// Reads and prints the daemon log file from the overridden HOME directory.
+/// This is useful for debugging failures where the daemon might have crashed or errored.
+fn print_daemon_log_on_failure(home: &Path) {
+    let log_path = home.join(".mythrax/daemon.log");
+    if log_path.exists() {
+        if let Ok(log_content) = fs::read_to_string(&log_path) {
+            eprintln!("=== Daemon Log (Last 50 lines) ===");
+            let lines: Vec<&str> = log_content.lines().collect();
+            let start = if lines.len() > 50 { lines.len() - 50 } else { 0 };
+            for line in &lines[start..] {
+                eprintln!("{}", line);
+            }
+            eprintln!("=== End Daemon Log ===");
+        }
     }
 }
 
@@ -61,7 +79,7 @@ fn test_help_exits_zero() {
 fn test_forge_missing_file_exits_nonzero() {
     let tmp = tempdir().expect("temp dir");
     let out = cmd(tmp.path())
-        .args(["ingest", "forge", "/tmp/does_not_exist_xyz_mythrax_e2e.md"])
+        .args(["vault", "ingest-forge", "/tmp/does_not_exist_xyz_mythrax_e2e.md"])
         .output()
         .expect("spawn forge");
     assert!(
@@ -84,10 +102,14 @@ fn test_forge_text_file_exits_zero() {
     .expect("write doc");
 
     let out = cmd(tmp.path())
-        .args(["ingest", "forge", source.to_str().unwrap(), "--scope", "e2e_test"])
+        .args(["vault", "ingest-forge", source.to_str().unwrap(), "--scope", "e2e_test"])
         .output()
         .expect("spawn forge");
 
+    // Print daemon log if the assertion is about to fail
+    if !out.status.success() {
+        print_daemon_log_on_failure(tmp.path());
+    }
     assert!(
         out.status.success(),
         "forge on valid text file should exit 0.\nstdout: {}\nstderr: {}",
@@ -152,10 +174,14 @@ fn test_forge_pdf_exits_zero() {
     fs::write(&pdf_path, buf).expect("write pdf");
 
     let out = cmd(tmp.path())
-        .args(["ingest", "forge", pdf_path.to_str().unwrap(), "--scope", "e2e_test"])
+        .args(["vault", "ingest-forge", pdf_path.to_str().unwrap(), "--scope", "e2e_test"])
         .output()
         .expect("spawn forge pdf");
 
+    // Print daemon log if the assertion is about to fail
+    if !out.status.success() {
+        print_daemon_log_on_failure(tmp.path());
+    }
     assert!(
         out.status.success(),
         "forge on a valid PDF should exit 0.\nstdout: {}\nstderr: {}",
@@ -221,9 +247,10 @@ fn test_cli_daemon_run_and_cleanup() {
 fn test_cli_search_episodes_flag() {
     let tmp = tempdir().expect("temp dir");
     
-    // Start daemon on port 18092
+    // Start daemon on port 18096
     let mut daemon = cmd(tmp.path())
-        .args(["daemon", "run", "--port", "18092"])
+        .env("MYTHRAX_DAEMON_PORT", "18096")
+        .args(["daemon", "run", "--port", "18096"])
         .spawn()
         .expect("spawn daemon");
 
@@ -240,7 +267,7 @@ fn test_cli_search_episodes_flag() {
     assert!(found, "Daemon PID file should be created");
 
     // Wait for the TCP port to be open to ensure Axum is running and signals are handled
-    let addr = "127.0.0.1:18092";
+    let addr = "127.0.0.1:18096";
     let mut port_open = false;
     for _ in 0..100 {
         if std::net::TcpStream::connect(addr).is_ok() {
@@ -249,7 +276,7 @@ fn test_cli_search_episodes_flag() {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    assert!(port_open, "Daemon port 8090 should be listening");
+    assert!(port_open, "Daemon port 18096 should be listening");
 
     // Create a temporary document to save
     let doc_file = tmp.path().join("search_test_doc.md");
@@ -261,6 +288,7 @@ fn test_cli_search_episodes_flag() {
 
     // Save episode via CLI
     let save_status = cmd(tmp.path())
+        .env("MYTHRAX_DAEMON_PORT", "18096")
         .args(["memory", "record", "search_test_doc", "--file", doc_file.to_str().unwrap(), "--scope", "e2e_search_test"])
         .status()
         .expect("spawn memory record");
@@ -268,6 +296,7 @@ fn test_cli_search_episodes_flag() {
 
     // Perform default search (should exclude episodes)
     let search_default_out = cmd(tmp.path())
+        .env("MYTHRAX_DAEMON_PORT", "18096")
         .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test"])
         .output()
         .expect("spawn memory query default");
@@ -281,6 +310,7 @@ fn test_cli_search_episodes_flag() {
 
     // Perform search with --episodes flag
     let search_episodes_out = cmd(tmp.path())
+        .env("MYTHRAX_DAEMON_PORT", "18096")
         .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test", "--include-episodes"])
         .output()
         .expect("spawn search with --episodes");

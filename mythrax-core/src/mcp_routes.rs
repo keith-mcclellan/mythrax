@@ -84,12 +84,12 @@ pub fn get_mcp_tools_schema() -> Value {
     json!({
         "tools": [
             {
-                "name": "query_memory",
-                "description": "Query the memory graph for episodes, rules, nodes, or root context.",
+                "name": "manage_memory",
+                "description": "Consolidated tool to query, search, traverse, and record semantic long-term memory graph nodes.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["search", "rules", "nodes", "root", "query_symbolic"] },
+                        "action": { "type": "string", "enum": ["search", "rules", "nodes", "root", "query_symbolic", "save", "feedback", "thought"] },
                         "query": { "type": "string" },
                         "scope": { "type": "string" },
                         "limit": { "type": "integer", "default": 15 },
@@ -104,24 +104,11 @@ pub fn get_mcp_tools_schema() -> Value {
                         "node_ids": { "type": "array", "items": { "type": "string" } },
                         "node_id": { "type": "string" },
                         "relation": { "type": "string" },
-                        "max_depth": { "type": "integer", "default": 3 }
-                    },
-                    "required": ["action"]
-                }
-            },
-            {
-                "name": "record_memory",
-                "description": "Save new episodes or record feedback on existing ones.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "action": { "type": "string", "enum": ["save", "feedback", "thought"] },
+                        "max_depth": { "type": "integer", "default": 3 },
                         "title": { "type": "string" },
                         "content": { "type": "string" },
                         "entities": { "type": "array" },
-                        "scope": { "type": "string" },
                         "vault_path": { "type": "string" },
-                        "session_id": { "type": "string" },
                         "task_id": { "type": "string" },
                         "episode_id": { "type": "string" },
                         "success": { "type": "boolean" }
@@ -167,14 +154,16 @@ pub fn get_mcp_tools_schema() -> Value {
             },
             {
                 "name": "manage_vault",
-                "description": "Manage vault integrity, organization, reprocessing, summarization, and compliance auditing.",
+                "description": "Manage vault integrity, organization, reprocessing, summarization, compliance auditing, and document ingestion.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit"] },
+                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge"] },
                         "fix": { "type": "boolean", "default": false },
                         "scope": { "type": "string" },
-                        "workspace_path": { "type": "string", "default": "." }
+                        "workspace_path": { "type": "string", "default": "." },
+                        "source": { "type": "string" },
+                        "harness": { "type": "string" }
                     },
                     "required": ["action"]
                 }
@@ -193,20 +182,6 @@ pub fn get_mcp_tools_schema() -> Value {
                         "api_key": { "type": "string" }
                     },
                     "required": ["action"]
-                }
-            },
-            {
-                "name": "ingest_knowledge",
-                "description": "Ingest knowledge from sources via bulk logging or forging documents.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "action": { "type": "string", "enum": ["bulk", "forge"] },
-                        "source": { "type": "string" },
-                        "harness": { "type": "string" },
-                        "scope": { "type": "string" }
-                    },
-                    "required": ["action", "source"]
                 }
             },
             {
@@ -266,13 +241,11 @@ pub async fn call_mcp_tool(
     args: Value,
 ) -> Result<Value> {
     let result = match name {
-        "query_memory" => handle_query_memory(state, args.clone()).await,
-        "record_memory" => handle_record_memory(state, args.clone()).await,
+        "manage_memory" => handle_manage_memory(state, args.clone()).await,
         "manage_htr" => handle_manage_htr(state, args.clone()).await,
         "manage_stm" => handle_manage_stm(state, args.clone()).await,
         "manage_vault" => handle_manage_vault(state, args.clone()).await,
         "manage_config" => handle_manage_config(state, args.clone()).await,
-        "ingest_knowledge" => handle_ingest_knowledge(state, args.clone()).await,
         "pre_invocation_hook" => handle_pre_invocation_hook(state, args.clone()).await,
         "manage_file" => handle_manage_file(state, args.clone()).await,
         _ => anyhow::bail!("Tool not found: {}", name),
@@ -376,7 +349,7 @@ pub async fn call_mcp_tool(
         }
     }
 
-    if result.is_ok() && matches!(name, "record_memory" | "manage_stm" | "manage_htr" | "manage_vault" | "ingest_knowledge") {
+    if result.is_ok() && matches!(name, "manage_memory" | "manage_stm" | "manage_htr" | "manage_vault") {
         let session_id_opt = args.get("session_id")
             .or_else(|| args.get("subagent_id"))
             .or_else(|| args.get("subagent_conversation_id"))
@@ -388,6 +361,19 @@ pub async fn call_mcp_tool(
     }
 
     result
+}
+
+async fn handle_manage_memory(state: &ApiState, args: Value) -> Result<Value> {
+    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter")?;
+    match action {
+        "search" | "rules" | "nodes" | "root" | "query_symbolic" => {
+            handle_query_memory(state, args).await
+        }
+        "save" | "feedback" | "thought" => {
+            handle_record_memory(state, args).await
+        }
+        _ => anyhow::bail!("Invalid action for manage_memory: {}", action),
+    }
 }
 
 async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
@@ -1028,6 +1014,18 @@ async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
 async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
     let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
     match action {
+        "ingest_bulk" | "ingest_forge" | "save_forged_assets" => {
+            let mut modified_args = args.clone();
+            let new_action = match action {
+                "ingest_bulk" => "bulk",
+                "ingest_forge" => "forge",
+                _ => "save_forged_assets",
+            };
+            if let Some(obj) = modified_args.as_object_mut() {
+                obj.insert("action".to_string(), serde_json::Value::String(new_action.to_string()));
+            }
+            handle_ingest_knowledge(state, modified_args).await
+        }
         "verify" => {
             let fix = args.get("fix").and_then(|v| v.as_bool()).unwrap_or(false);
             
@@ -1321,6 +1319,26 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
             .await;
     }
 
+    // 1.25. Retrieve and inject permanent/system-level capabilities wisdom
+    let mut capabilities_wisdom_part = String::new();
+    let capabilities_res = surreal_backend.db.query("SELECT * FROM wisdom WHERE tier = 'permanent';").await;
+    if let Ok(mut resp) = capabilities_res {
+        let rules: Vec<WisdomRule> = resp.take(0).unwrap_or_default();
+        if !rules.is_empty() {
+            let mut rule_strings = Vec::new();
+            for r in rules {
+                rule_strings.push(format!(
+                    "- **Rule on {}**:\n  - **Avoid**: {}\n  - **Remedy**: {}",
+                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
+                ));
+            }
+            capabilities_wisdom_part = format!(
+                "### 🛠️ Mythrax Capabilities & Tool Wisdom\n{}\n\n",
+                rule_strings.join("\n")
+            );
+        }
+    }
+
     // 1.5. Query and retrieve BeliefState
     let mut belief_part = String::new();
     let belief_res = surreal_backend.db.query("SELECT session_id, tasks_todo, hypotheses_tested, confidence_score, uncertainty_areas, updated_at FROM belief_state WHERE session_id = $session_id;")
@@ -1518,10 +1536,16 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
         }
     };
 
-    let initial_context = if !belief_part.is_empty() {
-        format!("{}{}", belief_part, joined_context)
-    } else {
-        joined_context
+    let initial_context = {
+        let mut base = String::new();
+        if !belief_part.is_empty() {
+            base.push_str(&belief_part);
+        }
+        if !capabilities_wisdom_part.is_empty() {
+            base.push_str(&capabilities_wisdom_part);
+        }
+        base.push_str(&joined_context);
+        base
     };
     let context_tokens = count_tokens(&initial_context);
 

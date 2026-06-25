@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
-use crate::contracts::WikiNode;
+use crate::contracts::{WikiNode, WisdomRule, ForgedConcept, ForgedRule};
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
@@ -120,7 +120,8 @@ impl Forge {
         chunks
     }
 
-    /// Ingest a document, chunk it, and extract wisdom rules and wiki nodes using LLM
+    /// Ingest a document, chunk it, extract wisdom rules and wiki concepts using LLM,
+    /// and save/relate all of them with a single parallel batch embedding pass.
     pub async fn ingest_document(&self, content: &str, scope: &str, _source_name: &str) -> Result<()> {
         let sanitized_source_name = _source_name.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
         let uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
@@ -128,7 +129,53 @@ impl Forge {
         // 1. Chunk the document content using semantic_chunk_text
         let chunks = self.semantic_chunk_text(content);
 
-        // 2. Save the parent index node as a WikiNode in SurrealDB and write it to the store
+        // 2. Perform AI-driven extraction of concepts and rules for each chunk
+        let mut chunks_data = Vec::new();
+        for (idx, chunk_text) in chunks.iter().enumerate() {
+            let concepts = match self.extract_concepts(chunk_text).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Concept extraction failed for chunk {}: {:?}", idx + 1, e);
+                    vec![]
+                }
+            };
+            let rules = match self.extract_rules(chunk_text).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Rule extraction failed for chunk {}: {:?}", idx + 1, e);
+                    vec![]
+                }
+            };
+            chunks_data.push((chunk_text, concepts, rules));
+        }
+
+        // 3. Collect all texts that need to be embedded across parent, chunks, concepts, and rules
+        let mut texts_to_embed = Vec::new();
+        
+        // Parent text
+        texts_to_embed.push(format!("{}: {}", _source_name, content));
+        
+        // Chunks, concepts, and rules texts
+        for (idx, (chunk_text, concepts, rules)) in chunks_data.iter().enumerate() {
+            let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
+            texts_to_embed.push(format!("{}: {}", chunk_name, chunk_text));
+            
+            for concept in concepts {
+                texts_to_embed.push(format!("{}: {}", concept.name, concept.content));
+            }
+            
+            for rule in rules {
+                texts_to_embed.push(format!(
+                    "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
+                    rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                ));
+            }
+        }
+
+        // 4. Run parallel batch embedding to eliminate ONNX runtime lock contention
+        let embeddings = self.backend.embed_batch(&texts_to_embed).await?;
+
+        // 5. Save the parent index node as a WikiNode in SurrealDB and write it to the store
         let parent_path = format!("wiki/forge/parent_{}_{}.md", sanitized_source_name, uuid_prefix);
         let parent_md = format!(
             "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
@@ -142,13 +189,15 @@ impl Forge {
             content: content.to_string(),
             scope: scope.to_string(),
             vault_path: Some(parent_path),
-            embedding: None,
+            embedding: Some(embeddings[0].clone()),
         };
         let parent_id_str = self.backend.save_wiki_node(&parent_node).await?;
 
-        // 3. Save each chunk node as a WikiNode in SurrealDB and write it to the store
+        // 6. Save each chunk, its concepts, and rules, and link them bidirectionally
         let mut chunk_ids = Vec::new();
-        for (idx, chunk_text) in chunks.iter().enumerate() {
+        let mut embed_idx = 1;
+
+        for (idx, (chunk_text, concepts, rules)) in chunks_data.into_iter().enumerate() {
             let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
             let chunk_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
             let chunk_path = format!("wiki/forge/chunk_{}_{}.md", sanitized_source_name, chunk_uuid_prefix);
@@ -158,19 +207,124 @@ impl Forge {
             );
             self.store.write_file(&chunk_path, &chunk_md)?;
 
+            let chunk_embedding = embeddings[embed_idx].clone();
+            embed_idx += 1;
+
             let chunk_node = WikiNode {
                 id: None,
                 name: chunk_name,
                 content: chunk_text.to_string(),
                 scope: scope.to_string(),
                 vault_path: Some(chunk_path),
-                embedding: None,
+                embedding: Some(chunk_embedding),
             };
             let chunk_id_str = self.backend.save_wiki_node(&chunk_node).await?;
-            chunk_ids.push(chunk_id_str);
+            chunk_ids.push(chunk_id_str.clone());
+
+            let chunk_thing = crate::db::parse_record_id(&chunk_id_str)?;
+
+            // Save extracted concepts and relate them to the chunk
+            let mut concept_ids = Vec::new();
+            for concept in concepts {
+                let sanitized_concept_name = concept.name.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+                let concept_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
+                let concept_path = format!("wiki/forge/concept_{}_{}.md", sanitized_concept_name, concept_uuid_prefix);
+                let concept_md = format!(
+                    "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
+                    concept.name.replace('"', "\\\""), scope, concept.name, concept.content
+                );
+                self.store.write_file(&concept_path, &concept_md)?;
+
+                let concept_embedding = embeddings[embed_idx].clone();
+                embed_idx += 1;
+
+                let concept_node = WikiNode {
+                    id: None,
+                    name: concept.name.clone(),
+                    content: concept.content.clone(),
+                    scope: scope.to_string(),
+                    vault_path: Some(concept_path),
+                    embedding: Some(concept_embedding),
+                };
+                let concept_id_str = self.backend.save_wiki_node(&concept_node).await?;
+                concept_ids.push(concept_id_str.clone());
+
+                let concept_thing = crate::db::parse_record_id(&concept_id_str)?;
+
+                // Relate Concept -> Chunk (relation: "extracted_from")
+                let query = "RELATE $concept_id -> relates_to -> $chunk_id UNIQUE CONTENT { relation: 'extracted_from', created_at: time::now() };";
+                self.backend.db.query(query)
+                    .bind(("concept_id", concept_thing))
+                    .bind(("chunk_id", chunk_thing.clone()))
+                    .await?
+                    .check().context("Failed to relate concept to chunk")?;
+            }
+
+            // Save extracted rules and relate them to the chunk and concepts
+            for rule in rules {
+                let sanitized_rule_name = rule.target_pattern.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+                let rule_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
+                let rule_path = format!("wisdom/forge/rule_{}_{}.md", sanitized_rule_name, rule_uuid_prefix);
+                let rule_md = format!(
+                    "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"forge\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                    rule.target_pattern.replace('"', "\\\""),
+                    rule.action_to_avoid.replace('"', "\\\""),
+                    rule.causal_explanation.replace('"', "\\\""),
+                    rule.prescribed_remedy.replace('"', "\\\""),
+                    scope,
+                    rule.target_pattern,
+                    rule.action_to_avoid,
+                    rule.causal_explanation,
+                    rule.prescribed_remedy
+                );
+                self.store.write_file(&rule_path, &rule_md)?;
+
+                let rule_embedding = embeddings[embed_idx].clone();
+                embed_idx += 1;
+
+                let rule_node = WisdomRule {
+                    id: None,
+                    target_pattern: rule.target_pattern.clone(),
+                    action_to_avoid: rule.action_to_avoid.clone(),
+                    causal_explanation: rule.causal_explanation.clone(),
+                    prescribed_remedy: rule.prescribed_remedy.clone(),
+                    tier: "forge".to_string(),
+                    scope: scope.to_string(),
+                    vault_path: Some(rule_path),
+                    embedding: Some(rule_embedding),
+                    source_episodes: vec![chunk_id_str.clone()],
+                    generator_name: "ForgePipeline".to_string(),
+                    similarity: None,
+                    utility: Some(5.0),
+                    status: Some("active".to_string()),
+                    superseded_at: None,
+                    superseded_by: None,
+                };
+                let rule_id_str = self.backend.save_wisdom_rule(&rule_node).await?;
+                let rule_thing = crate::db::parse_record_id(&rule_id_str)?;
+
+                // Relate Rule -> Chunk (relation: "extracted_from")
+                let query_rule_chunk = "RELATE $rule_id -> relates_to -> $chunk_id UNIQUE CONTENT { relation: 'extracted_from', created_at: time::now() };";
+                self.backend.db.query(query_rule_chunk)
+                    .bind(("rule_id", rule_thing.clone()))
+                    .bind(("chunk_id", chunk_thing.clone()))
+                    .await?
+                    .check().context("Failed to relate rule to chunk")?;
+
+                // Relate Rule -> Concept in this chunk
+                for concept_id_str in &concept_ids {
+                    let concept_thing = crate::db::parse_record_id(concept_id_str)?;
+                    let query_rule_concept = "RELATE $rule_id -> relates_to -> $concept_id UNIQUE CONTENT { created_at: time::now() };";
+                    self.backend.db.query(query_rule_concept)
+                        .bind(("rule_id", rule_thing.clone()))
+                        .bind(("concept_id", concept_thing))
+                        .await?
+                        .check().context("Failed to relate rule to concept")?;
+                }
+            }
         }
 
-        // 4. Relate each chunk to the parent index node using a relates_to edge in SurrealDB
+        // 7. Relate each chunk to the parent index node using a relates_to edge in SurrealDB
         for chunk_id_str in &chunk_ids {
             let chunk_thing = crate::db::parse_record_id(chunk_id_str)?;
             let parent_thing = crate::db::parse_record_id(&parent_id_str)?;
@@ -182,7 +336,7 @@ impl Forge {
                 .check().context("Failed to relate chunk to parent")?;
         }
 
-        // 5. Establish bidirectional sequential links between adjacent chunks
+        // 8. Establish bidirectional sequential links between adjacent chunks
         for i in 0..chunk_ids.len().saturating_sub(1) {
             let chunk_n_thing = crate::db::parse_record_id(&chunk_ids[i])?;
             let chunk_n_plus_1_thing = crate::db::parse_record_id(&chunk_ids[i + 1])?;
@@ -205,6 +359,77 @@ impl Forge {
         }
 
         Ok(())
+    }
+
+    async fn extract_concepts(&self, chunk_text: &str) -> Result<Vec<ForgedConcept>> {
+        let system_instruction = "You are a concept extraction assistant. Extract Wiki Concepts as a JSON array of objects, with no markdown fences, explanation, or other text.";
+        let prompt = format!(
+            "Identify and extract key concepts from the text below. For each concept, provide:\n\
+             - name: the name of the concept\n\
+             - content: a brief definition or explanation of the concept\n\n\
+             Text:\n\
+             \"\"\"\n\
+             {}\n\
+             \"\"\"\n\n\
+             Respond ONLY with a JSON array, like:\n\
+             [\n\
+               {{\"name\": \"Concept Name\", \"content\": \"Concept explanation.\"}}\n\
+             ]",
+            chunk_text
+        );
+        
+        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+        let trimmed = res.trim();
+        let stripped = if trimmed.starts_with("```json") {
+            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+        } else if trimmed.starts_with("```") {
+            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+        } else {
+            trimmed
+        };
+        
+        let concepts: Vec<ForgedConcept> = serde_json::from_str(stripped)
+            .context("Failed to parse concepts JSON")?;
+        Ok(concepts)
+    }
+
+    async fn extract_rules(&self, chunk_text: &str) -> Result<Vec<ForgedRule>> {
+        let system_instruction = "You are a wisdom extraction assistant. Extract system-level Wisdom Rules as a JSON array of objects, with no markdown fences, explanation, or other text.";
+        let prompt = format!(
+            "Identify and extract Wisdom Rules from the text below. For each rule, provide:\n\
+             - target_pattern: the name or pattern to avoid/address\n\
+             - action_to_avoid: the specific bad action or mistake\n\
+             - causal_explanation: the reason why it is bad\n\
+             - prescribed_remedy: the specific fix or best practice\n\n\
+             Text:\n\
+             \"\"\"\n\
+             {}\n\
+             \"\"\"\n\n\
+             Respond ONLY with a JSON array, like:\n\
+             [\n\
+               {{\n\
+                 \"target_pattern\": \"Avoid Hardcoded API Keys\",\n\
+                 \"action_to_avoid\": \"hardcoding api_key = 'sk-...'\n\",\n\
+                 \"causal_explanation\": \"This leaks credentials to source control.\",\n\
+                 \"prescribed_remedy\": \"Use environment variables or vault references instead.\"\n\
+               }}\n\
+             ]",
+            chunk_text
+        );
+        
+        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+        let trimmed = res.trim();
+        let stripped = if trimmed.starts_with("```json") {
+            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+        } else if trimmed.starts_with("```") {
+            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+        } else {
+            trimmed
+        };
+        
+        let rules: Vec<ForgedRule> = serde_json::from_str(stripped)
+            .context("Failed to parse rules JSON")?;
+        Ok(rules)
     }
 
     /// Extract Table of Contents from document content using LLM pre-pass

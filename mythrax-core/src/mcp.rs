@@ -231,36 +231,38 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
 
         // Map legacy tool names to the new consolidated ones
         let (mapped_name, mapped_args) = match name {
+            // Memory Management Tools -> "manage_memory"
             "save_episode" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("save");
-                ("record_memory", m_args)
+                ("manage_memory", m_args)
             }
             "record_feedback" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("feedback");
-                ("record_memory", m_args)
+                ("manage_memory", m_args)
             }
             "search_memories" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("search");
-                ("query_memory", m_args)
+                ("manage_memory", m_args)
             }
             "search_wisdom" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("rules");
-                ("query_memory", m_args)
+                ("manage_memory", m_args)
             }
             "get_memory_nodes" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("nodes");
-                ("query_memory", m_args)
+                ("manage_memory", m_args)
             }
             "get_vault_root" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("root");
-                ("query_memory", m_args)
+                ("manage_memory", m_args)
             }
+            // Short-Term Memory Tools -> "manage_stm" (unchanged)
             "put_short_term" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("put");
@@ -281,10 +283,11 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 m_args["action"] = json!("handoff");
                 ("manage_stm", m_args)
             }
+            // Vault Management Tools -> "manage_vault"
             "save_forged_assets" => {
                 let mut m_args = args.clone();
                 m_args["action"] = json!("save_forged_assets");
-                ("ingest_knowledge", m_args)
+                ("manage_vault", m_args)
             }
             _ => (name, args)
         };

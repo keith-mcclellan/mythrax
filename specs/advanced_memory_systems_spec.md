@@ -1,15 +1,16 @@
-# Specification: Advanced Agentic Memory Systems Integration
+# Specification: Advanced Agentic Memory Systems Integration (v1.2)
 
 This document defines the formal engineering specification for integrating next-generation agentic memory paradigms into the Mythrax platform. It establishes the technical requirements, structural designs, testing methodologies, and implementation tasks required to build a highly performant, self-regulating, and cognitively consistent memory substrate.
 
 ---
 
-## 1. Clarify
+## 1. Clarify & Objectives
 
 ### Restated Request
-Evolve the Mythrax memory architecture by integrating nine advanced cognitive memory paradigms, maintaining the existing client-server daemon topology, ONNX embedding centralization, and SurrealDB graph engine.
+Evolve the Mythrax memory architecture by integrating advanced cognitive memory paradigms, maintaining the existing client-server daemon topology, ONNX embedding centralization, and SurrealDB graph engine. Consolidate the MCP tools and CLI command namespaces to eliminate interface bloat, restore the Forge AI-driven extraction pipeline, and dynamically inject capabilities wisdom into the agent context.
 
-### Core Paradigms & Self-Corrected Decisions (v3)
+### Core Paradigms & Architecture (v1.2)
+
 1.  **CoALA Integration**: Formalize the agent's decision cycle (Plan $\rightarrow$ Retrieve $\rightarrow$ Decide $\rightarrow$ Act $\rightarrow$ Learn) using a coordinator-executor topology.
 2.  **MemoryOS Paging (Virtual Skeletons & Paging-Aware Editing)**: 
     *   *Disk Integrity*: Physical files on disk are never modified. The daemon generates **virtual skeletons** in memory during file reads (like `view_file`), keeping the codebase fully compiling.
@@ -30,179 +31,120 @@ Evolve the Mythrax memory architecture by integrating nine advanced cognitive me
         *   *Low-Relevance Nodes ($< 0.60$)*: Omitted entirely.
 9.  **OKF Vault Watcher & Content-Hash Sync Suppression**:
     *   *Sync Model*: Auto-syncs markdown files to SurrealDB by parsing wikilinks and YAML edges.
-    *   *Feedback Loop Resolution*: We abandon time-based leases. The daemon registers the `SHA-256` content-hash of files it writes in an in-memory registry. The Watcher computes the hash of file changes; if it matches a registered hash, the watcher ignores the event and removes it from the registry. This is 100% deterministic and race-free.
-    *   *Write-Behind Coalescing Queue*: Decoupled, asynchronous writes are queued and flushed atomically over a sliding $5$-second window.
-
-### Key Assumptions & Boundaries
--   **Client-Server Daemon Routing**: To prevent RocksDB file lock crashes in multi-process subagent environments, `SurrealBackend` operates in **Client Mode** when the daemon port (default 8090) is active, routing all queries via HTTP to the running daemon.
--   **Context Pinning**: Wisdom rules, high-importance nodes ($\ge 8.0$), active handoffs, and active STM are pinned in RAM (immune to LRU eviction).
--   **Decoupled BPE Tokenizer**: Use a dedicated local BPE tokenizer corresponding to the active LLM's vocabulary for $\ge 99\%$ accurate token budget counting.
--   **Transactional STM**: Enforce transaction blocks (`BEGIN TRANSACTION ... COMMIT TRANSACTION;`) in all STM routes to prevent cross-subagent data races.
+    *   *Feedback Loop Resolution*: We abandon time-based leases. The daemon registers the `SHA-256` content-hash of files it writes in an in-memory registry. The Watcher computes the hash of file changes; if it matches a registered hash, the watcher ignores the event and removes it from the registry.
+10. **Forge AI Ingestion Pipeline (Restored & Optimized)**:
+    *   *Paragraph Semantic Chunker*: Splits documents into 1,000–2,000 token semantic segments using paragraph boundaries, with line-based and token-based fallbacks for large segments.
+    *   *Parallel Batch Embedding*: Parent document and all chunks are embedded in a single parallel pass (`embed_batch`) before database insertion, eliminating ONNX runtime lock contention.
+    *   *AI-Driven Extraction*: For each chunk, the LLM is invoked to extract system-level **Wisdom Rules** and **Wiki Concepts**.
+    *   *Hierarchical Graph Linking*: Establishes `relates_to` edges linking Chunks ➔ Parent Document (`relation: "parent"`), sequential adjacent chunks (`relation: "next"`, `relation: "prev"`), and extracted rules/concepts ➔ originating chunk (`relation: "extracted_from"`).
+11. **Pre-Invocation Capabilities Injection**:
+    *   The `pre_invocation_hook` retrieves all permanent/system-level wisdom rules (`SELECT * FROM wisdom WHERE tier = 'permanent';`) and injects them under a dedicated section (`### 🛠️ Mythrax Capabilities & Tool Wisdom`) at the top of the context, ensuring the agent always understands RocksDB locks, subagent handoffs, and virtual paging.
 
 ---
 
-## 2. Requirements
-
-### Desired Outcome
-An intelligent, self-healing, and race-free memory engine that maintains perfect structural alignment between a human-readable Obsidian vault and an AI-traversable SurrealDB graph, operating with >70% token economy, minimal turn latency, and zero technical debt.
+## 2. Requirements & Acceptance Criteria
 
 ### In Scope
--   Extending the database schema to support `belief_state`, `thought_node`, and `symbol_archive`.
--   Implementing OKF parsing for Obsidian wikilinks and YAML edges in the watcher.
--   Refactoring the pre-invocation hook to return a gated, weighted Self-RAG hybrid hydration prompt.
--   Exposing symbolic query and hydration tools in the MCP routes.
--   Building the MemoryOS paging manager with virtual skeleton parsing, paging-aware editing tools, automated LRU page eviction, and context pinning.
--   Implementing the POMDP belief state and TiM thought abstraction loops.
--   Implementing a sigmoid-gated multiplicative generative search formula and background reflection.
--   Implementing client-server auto-routing in `SurrealBackend` to prevent RocksDB lock crashes.
--   Integrating a dedicated BPE tokenizer, a SHA-256 content-hash sync suppression registry, and transactional STM.
-
-### Out of Scope
--   Replacing the RocksDB or SurrealDB storage engines.
--   Modifying the core ONNX embedding model or runtime.
--   Modifying unrelated CLI commands.
+-   Extending the database schema to support `belief_state`, `thought_node`, `chat_history`, and `symbol_archive`.
+-   Implementing the paragraph-boundary semantic token chunker in `forge.rs`.
+-   Pre-computing embeddings for all ingestion nodes using parallel `embed_batch`.
+-   Restoring Wisdom Rule and Wiki Concept extraction on a per-chunk basis in `forge.rs`.
+-   Consolidating the MCP tools to a **7-tool architecture**:
+    1.  `manage_memory` (search, rules, nodes, root, query_symbolic, save, feedback, thought)
+    2.  `manage_file` (view, replace, multi_replace)
+    3.  `manage_htr` (init, ideate, execute, backprop, merge, run)
+    4.  `manage_stm` (put, get, clear, handoff)
+    5.  `manage_vault` (verify, organize, reprocess, summarize, audit, ingest_bulk, ingest_forge)
+    6.  `manage_config` (get, set)
+    7.  `pre_invocation_hook`
+-   Consolidating the `mythrax` CLI subcommands to align 1-to-1 with the MCP tool namespaces, nesting `ingest` and `audit` under `mythrax vault`.
+-   Refactoring the pre-invocation hook to dynamically retrieve and inject permanent capabilities wisdom.
 
 ### Falsifiable Acceptance Criteria
-1.  **Self-RAG Hook**: Pre-invocation hook returned payload must contain the full text of nodes with similarity $\ge 0.80$, and only index rows (with summaries) for nodes in $[0.60, 0.80)$, without automatic symbol restoration.
-2.  **Active Hydration**: Invoking `query_memory(action="hydrate", node_ids=[...])` must return the complete text of the targeted nodes.
-3.  **OKF Watcher Sync**: Creating a markdown file with Obsidian links must differentially sync SurrealDB relations, utilizing SHA-256 hash suppression to prevent sync loops, and preserving existing cognitive metadata.
-4.  **Generative Retrieval**: Querying the database must return a blended score using the sigmoid-gated multiplicative formula, ensuring smooth transitions to $0.0$ below $0.60$.
-5.  **MemoryOS Paging (Virtual & Paging-Aware)**: Large file reads must return virtual skeletons, leaving disk files 100% untouched. Calling `replace_file_content` with a target containing placeholders must successfully fetch the bodies, reconstruct the unpaged block in memory, and edit the physical file on disk.
-6.  **Context Pinning**: Pinned pages (Wisdom, Importance $\ge 8.0$) must remain in the active context when an LRU eviction is triggered.
-7.  **ChatDB Symbolic Query**: Invoking `query_memory(action="query_symbolic", ...)` must execute a structured graph traversal with visited-set cycle tracking and return matching record IDs.
-8.  **POMDP & TiM**: The belief state must update after every tool execution, and thought nodes must be written to `wiki/thoughts/` upon task completion.
-9.  **Client-Server Routing**: Initializing a subagent when the daemon is running must route queries via HTTP without crashing on RocksDB lock acquisition.
+1.  **Forge AI Extraction**: Ingesting a document must successfully generate a parent node, semantic chunk nodes, extracted Wisdom Rules, and extracted Wiki Concepts in SurrealDB and on disk, with correct `relates_to` edges (`parent`, `next`, `prev`, `extracted_from`).
+2.  **Batch Embedding Ingestion**: Ingesting $N$ chunks must execute a single parallel `embed_batch` ONNX inference call instead of $N$ sequential `embed` calls.
+3.  **MCP Memory Consolidation**: Calling the consolidated `manage_memory` tool with actions `search`, `save`, `feedback`, or `thought` must route correctly to their respective read/write handlers.
+4.  **MCP Ingestion Consolidation**: Calling `manage_vault` with actions `ingest_bulk` or `ingest_forge` must trigger the respective ingestion pipelines.
+5.  **CLI Consistency**: Running `mythrax vault ingest-forge <file>` and `mythrax vault audit` must execute the forge and compliance audit tasks cleanly.
+6.  **Capabilities Wisdom Injection**: The pre-invocation hook returned context must contain the formatted text of all permanent wisdom rules (e.g., RocksDB lock, safe deletions, and v1.2 capabilities).
+7.  **Compiling Test Suite**: Running `cargo test` in the `mythrax-core` crate must compile and pass all 68+ tests without regression.
 
 ---
 
-## 3. Design
+## 3. System Architecture & Component Mapping
 
-### 3.1 Data Schemas & Rust Structs
+### 3.1 7-Tool MCP Schema Specification
 
-#### SurrealDB Schema Additions (`src/db/schema.rs`)
-```sql
--- Metadata extensions
-DEFINE FIELD IF NOT EXISTS importance ON episode TYPE option<float> DEFAULT 5.0;
-DEFINE FIELD IF NOT EXISTS importance ON wiki_node TYPE option<float> DEFAULT 5.0;
-DEFINE FIELD IF NOT EXISTS importance ON wisdom TYPE option<float> DEFAULT 5.0;
-DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wiki_node TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wisdom TYPE option<string>;
+#### 1. `manage_memory`
+*   **Purpose**: Unifies all semantic memory search, traversal, and logging.
+*   **Actions**:
+    *   `search`: Semantic vector search on episodes and wiki nodes.
+    *   `rules`: Query active system wisdom rules.
+    *   `nodes`: Hydrate a list of memory nodes by record IDs.
+    *   `root`: Retrieve the active Obsidian vault root directory.
+    *   `query_symbolic`: Perform cycle-proof graph traversals.
+    *   `save`: Save a new episodic memory.
+    *   `feedback`: Record reinforcement feedback for a rule.
+    *   `thought`: Log a raw thought node.
 
--- POMDP Belief State
-DEFINE TABLE IF NOT EXISTS belief_state SCHEMAFULL;
-DEFINE FIELD IF NOT EXISTS session_id ON belief_state TYPE string;
-DEFINE FIELD IF NOT EXISTS tasks_todo ON belief_state TYPE array<string>;
-DEFINE FIELD IF NOT EXISTS hypotheses_tested ON belief_state TYPE array<string>;
-DEFINE FIELD IF NOT EXISTS confidence_score ON belief_state TYPE float DEFAULT 0.5;
-DEFINE FIELD IF NOT EXISTS uncertainty_areas ON belief_state TYPE array<string>;
-DEFINE FIELD IF NOT EXISTS updated_at ON belief_state TYPE datetime DEFAULT time::now();
-DEFINE INDEX IF NOT EXISTS bs_session ON belief_state FIELDS session_id UNIQUE;
+#### 2. `manage_file`
+*   **Purpose**: File I/O, virtual in-memory paging, and paging-aware editing.
+*   **Actions**:
+    *   `view`: Read a file, returning a virtual skeleton with symbol placeholders.
+    *   `replace`: Contiguous paging-aware block replacement.
+    *   `multi_replace`: Multi-block non-contiguous paging-aware patching.
 
--- Thought Nodes (TiM)
-DEFINE TABLE IF NOT EXISTS thought_node SCHEMAFULL;
-DEFINE FIELD IF NOT EXISTS title ON thought_node TYPE string;
-DEFINE FIELD IF NOT EXISTS content ON thought_node TYPE string;
-DEFINE FIELD IF NOT EXISTS scope ON thought_node TYPE string DEFAULT 'general';
-DEFINE FIELD IF NOT EXISTS vault_path ON thought_node TYPE string DEFAULT '';
-DEFINE FIELD IF NOT EXISTS embedding ON thought_node TYPE option<array<float>>;
-DEFINE FIELD IF NOT EXISTS created_at ON thought_node TYPE datetime DEFAULT time::now();
+#### 4. `manage_htr`
+*   **Purpose**: Arbor Hypothesis-Tree Refinement workflows.
 
--- Schemafull Relations (Prevents Graph Pollution)
-DEFINE TABLE relates_to SCHEMAFULL TYPE RELATION 
-    IN (episode, wiki_node, wisdom, entity, thought_node) 
-    OUT (episode, wiki_node, wisdom, entity, thought_node);
-DEFINE FIELD strength ON relates_to TYPE option<float> DEFAULT 1.0;
-DEFINE FIELD relation ON relates_to TYPE string DEFAULT 'related';
-DEFINE FIELD created_at ON relates_to TYPE datetime DEFAULT time::now();
+#### 5. `manage_stm`
+*   **Purpose**: Transactional short-term memory and subagent handoffs.
+
+#### 6. `manage_vault`
+*   **Purpose**: Vault administrative tasks, maintenance, and document ingestion.
+*   **Actions**:
+    *   `verify`: DB-to-filesystem self-healing.
+    *   `organize`: Renaming and duplicate resolution.
+    *   `reprocess`: Reprocessing missing embeddings.
+    *   `summarize`: Periodic dreaming and rule synthesis.
+    *   `audit`: Safety compliance audits.
+    *   `ingest_bulk`: Bulk ingestion of transcript logs.
+    *   `ingest_forge`: Forge document ingestion (semantic splitting + AI extraction + batch embedding).
+
+---
+
+### 3.2 Aligned CLI Subcommand Architecture
+
+```
+mythrax
+├── init [--harness <harness>] [--source <source>] [--non-interactive]
+├── daemon [start | run | stop]
+├── mcp
+├── memory [query | record | feedback | root]
+├── htr [init | ideate | execute | backprop | merge | run]
+├── stm [put | get | clear | handoff]
+├── vault [organize | verify | reprocess | summarize | ingest-bulk | ingest-forge | audit]
+└── config [get | set]
 ```
 
----
-
-## 4. Precise Codebase Reuse & Refactoring Roadmap
-
-To prevent the introduction of redundant modules or duplicate logic, the development team must build directly on the following existing foundations:
-
-### 4.1 Virtual Paging & Paging-Aware Editing
-*   **Target File**: `mythrax-core/src/cognitive/paging.rs`
-    *   *Existing:* Has `extract_symbols`, `page_code_block`, and `intercept_and_restore_symbols`. It saves symbols to the `symbol_archive` table and replaces bodies with placeholders on disk.
-    *   *Refactoring Roadmap:*
-        1.  Refactor the file-reading MCP route `view_file` (in `mcp_routes.rs`) to read physical files, pass them through `page_code_block`, and return virtual skeletons *in memory* (leaving disk clean).
-        2.  Refactor the editing MCP routes (`replace_file_content` and `multi_replace_file_content`) to scan `TargetContent` for placeholders, query `symbol_archive` to reconstruct the unpaged target block, and apply the clean patch to the physical file.
-        3.  Implement the `PagingManager` with LRU eviction and context pinning.
-
-### 4.2 Sigmoid-Gated Search, Cycle-Proof Traversals & Auto-Routing
-*   **Target File**: `mythrax-core/src/db/backend.rs`
-    *   *Existing:* Implements exponential decay on episode utility and calculates `blended_score`. Has `relate_nodes` for creating database relations.
-    *   *Refactoring Roadmap:*
-        1.  Replace the old blended score with the new sigmoid-gated multiplicative scoring formula. Maintain the background tokio spawn pattern to update `last_retrieved_at` and the decayed `utility` in SurrealDB, ensuring these metadata updates are never written back to disk.
-        2.  Implement the cycle-proof graph query (`query_symbolic`) using BFS/DFS with a scoped `visited: HashSet<String>` of record IDs to prevent infinite loops on circular Obsidian links.
-        3.  Refactor `SurrealBackend::new` to check if port 8090 is active, and if so, route all operations via `reqwest` HTTP requests to the running daemon instead of attempting to open direct RocksDB file locks, preventing multi-process crashes.
-
-### 4.3 Memory Consolidation & Thought Compaction
-*   **Target Files**: `mythrax-core/src/cognitive/compactor.rs` & `synthesis.rs`
-    *   *Existing:* `compactor.rs` has `compact_scope` (DBSCAN clustering and LLM compaction). `synthesis.rs` has `DreamCoordinator::run_dream` (offline dreaming to synthesize episodic memories into wisdom rules).
-    *   *Refactoring Roadmap:*
-        1.  Extend `compact_scope` and `run_dream` to inspect the decayed `utility` of episodes and wiki nodes, automatically archiving nodes with `utility < 2.0` (deleting from SurrealDB search and moving to an `archive/` folder).
-        2.  Add a step to load, cluster, and synthesize raw thoughts in `wiki/thoughts/` into permanent rules, deleting the raw thought files.
-
-### 4.4 Hash-Based Sync Suppression & Coalescing Queue
-*   **Target Files**: `mythrax-core/src/vault/watcher.rs` & `markdown.rs`
-    *   *Existing:* `watcher.rs` has notify-based file watching and `WatchIgnoreList` with a 2-second lease. `markdown.rs` has `parse_frontmatter` and `extract_plain_text`.
-    *   *Refactoring Roadmap:*
-        1.  Replace the time-based lease in `WatchIgnoreList` with a cryptographic **SHA-256 Content-Hash Suppressor** registry to prevent self-triggering loops.
-        2.  Implement the **Write-Behind Coalescing Queue** with a sliding 5-second window.
-        3.  Refactor `markdown.rs` to extract Obsidian wikilinks and YAML edges, and refactor `sync_file_to_db` in `watcher.rs` to parse them and create `relates_to` edges in SurrealDB. To prevent split-brain overrides, ensure `sync_file_to_db` uses `UPDATE ... MERGE` when syncing, preserving existing cognitive metadata fields (utility, last_retrieved_at) in SurrealDB.
-
-### 4.5 Hybrid Hydration Hook, POMDP & Transactional STM
-*   **Target File**: `mythrax-core/src/mcp_routes.rs`
-    *   *Existing:* Exposes the `pre_invocation_hook` which syncs state, checks for pending subagent handoffs, and retrieves stashed STM variables.
-    *   *Refactoring Roadmap:*
-        1.  Refactor the hook to implement the three-tier **Self-RAG Hybrid Hydration** strategy.
-        2.  Retrieve the `BeliefState` from SurrealDB and inject it at the top of the hook prompt.
-        3.  Add a post-execution hook to update the belief state after tool executions.
-        4.  Refactor STM routes (`put`, `handoff`) to use SurrealDB transactional blocks (`BEGIN TRANSACTION ... COMMIT TRANSACTION;`) to ensure safe parallel subagent execution.
+*Note: The top-level commands `mythrax ingest` and `mythrax audit` are removed. They are refactored as sub-actions under `mythrax vault` (`ingest-bulk`, `ingest-forge`, `audit`), mirroring the `manage_vault` MCP tool.*
 
 ---
 
-## 5. Test Plan & Implementation Tasks
+## 4. Verification & Test Plan
 
-### Phased Refactoring Checklist
+### Test Design (TDD Roadmap)
 
-#### T1.1: Schema & Struct Updates
--   **Actions**:
-    -   Modify `mythrax-core/src/db/schema.rs` with new schemafull tables, indices, and constraints.
-    -   Add `BeliefState` and `ThoughtNode` structs to `contracts.rs`.
--   **Validation**: Verify daemon compiles and boots without errors.
-
-#### T1.2: Client-Server Auto-Routing
--   **Actions**:
-    -   Implement the client-server auto-routing check in `SurrealBackend::new`. If the daemon port is active, route all database queries via HTTP `reqwest` client to the daemon instead of opening a direct RocksDB connection.
--   **Validation**: Spawn a subagent while the main daemon is running and verify it successfully routes queries without crashing on RocksDB locks.
-
-#### T2.1: Sigmoid-Gated Search & BPE Tokenizer
--   **Actions**:
-    -   Implement the sigmoid-gated multiplicative search formula in `src/db/backend.rs`.
-    -   Integrate a proper local BPE tokenizer (using the `tokenizers` crate in dependencies) in the token budget counter to replace the naive fallback, loading the tokenizer corresponding to the active LLM.
--   **Validation**: Run `test_sigmoid_gated_search` and assert 100% token count accuracy.
-
-#### T3.1: OKF Watcher, SHA-256 Suppression & Coalescing Queue
--   **Actions**:
-    -   Refactor `watcher.rs` and `markdown.rs` to parse Obsidian body links and YAML edges.
-    -   Implement the **Write-Behind Coalescing Queue** and the **SHA-256 hash ignore set** in `watcher.rs`.
-    -   Refactor `sync_file_to_db` in `watcher.rs` to use `UPDATE ... MERGE` when syncing, preserving existing cognitive metadata.
--   **Validation**: Run `test_okf_watcher_sync` and verify graph sync operates without feedback loops.
-
-#### T3.2: Paging-Aware MCP & Virtual Paging
--   **Actions**:
-    -   Implement **virtual in-memory paging** in the file-reading routes (`view_file`), returning skeletal structures to the client while keeping files on disk unmodified.
-    -   Refactor `replace_file_content` and `multi_replace_file_content` in the MCP layer to scan for page placeholders, surgically hydrate them from `symbol_archive` in memory, and apply the clean patch to the physical file.
-    -   Expose the `swap_in` and `swap_out` active paging tools in `mcp_routes.rs`.
-    -   Implement the MemoryOS paging manager with LRU eviction and context pinning.
--   **Validation**: Run `test_virtual_paging_editing_flow` and verify that the agent can successfully edit virtually paged files without disk corruption.
-
-#### T4.1: Cycle-Proof ChatDB Graph API & HTR
--   **Actions**:
-    -   Implement `action="query_symbolic"` in `query_memory` with visited-set cycle tracking.
-    -   Implement POMDP belief state updates and TiM thought abstraction.
-    -   Implement shared STM real-time propagation for parallel HTR runs using transaction blocks.
--   **Validation**: Verify multi-depth graph queries traverse cyclic links safely.
+1.  **`test_forge.rs` (Restored)**:
+    *   Assert that ingesting a document extracts Wisdom Rules and Concepts.
+    *   Assert that the files are written to the store under `wisdom/forge/` and `wiki/forge/`.
+2.  **`test_semantic_document_splitting_relations.rs` (Updated)**:
+    *   Assert that the parent and chunk nodes are linked via `relates_to` (`parent`, `next`, `prev`).
+    *   Assert that the extracted rules/concepts are linked to their originating chunk node (`relation: "extracted_from"`).
+    *   Assert that all nodes are embedded in a single parallel `embed_batch` call.
+3.  **`test_stm.rs` (Pre-invocation Hook Capabilities)**:
+    *   Insert a mock permanent wisdom rule.
+    *   Execute the pre-invocation hook.
+    *   Assert that the returned hook context contains the section `### 🛠️ Mythrax Capabilities & Tool Wisdom` and the formatted text of the mock permanent rule.
+4.  **`test_cli_e2e.rs`**:
+    *   Assert that the consolidated CLI commands (`mythrax memory query`, `mythrax vault ingest-forge`, `mythrax vault audit`) run successfully.

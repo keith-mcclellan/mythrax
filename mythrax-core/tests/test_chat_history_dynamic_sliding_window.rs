@@ -76,7 +76,7 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
     assert_eq!(messages[0].content, "Hello, how do I optimize the pipeline?");
 
     // 2. Verify assistant response logging after tool execution
-    let _tool_res = call_mcp_tool(&state, "query_memory", json!({
+    let _tool_res = call_mcp_tool(&state, "manage_memory", json!({
         "session_id": session_id,
         "action": "root"
     })).await?;
