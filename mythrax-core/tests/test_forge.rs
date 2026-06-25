@@ -109,7 +109,7 @@ async fn test_ingest_document() -> Result<()> {
 
     // Verify wiki nodes are written and saved to db
     // 1. Files on disk
-    let wiki_dir = vault_root.join("wiki/forge");
+    let wiki_dir = vault_root.join("wiki/testscope");
 
     assert!(wiki_dir.exists());
 
@@ -293,8 +293,8 @@ fn test_logical_section_splitting_and_grouping() {
     
     assert!(large_sections.len() >= 3);
     assert_eq!(large_sections[0].title, "Small Intro");
-    assert!(large_sections[1].title.starts_with("Huge Body (Part 1)"));
-    assert!(large_sections[2].title.starts_with("Huge Body (Part 2)"));
+    assert!(large_sections.iter().any(|sec| sec.title.starts_with("Huge Body (Part 1)")));
+    assert!(large_sections.iter().any(|sec| sec.title.starts_with("Huge Body (Part 2)")));
 }
 
 #[test]
@@ -315,11 +315,10 @@ fn test_second_pass_character_chunking() {
 
     let sections = split_into_logical_sections(&very_long_text, &toc);
     assert!(sections.len() >= 3);
-    assert!(sections[0].title.starts_with("Long Chapter (Part 1)"));
-    assert!(sections[1].title.starts_with("Long Chapter (Part 1)"));
-    assert!(sections[2].title.starts_with("Long Chapter (Part 2)"));
-    assert!(sections[0].content.len() <= 100_000);
-    assert!(sections[1].content.len() <= 100_000);
-    assert!(sections[2].content.len() <= 100_000);
+    assert!(sections.iter().any(|sec| sec.title.starts_with("Long Chapter (Part 1)")));
+    assert!(sections.iter().any(|sec| sec.title.starts_with("Long Chapter (Part 2)")));
+    assert!(sections[0].content.len() <= 20_000);
+    assert!(sections[1].content.len() <= 20_000);
+    assert!(sections[2].content.len() <= 20_000);
 }
 

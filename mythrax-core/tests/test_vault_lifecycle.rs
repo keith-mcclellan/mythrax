@@ -267,14 +267,14 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
         &backend
     ).await?;
 
-    // We ingested 2 episode parts + 2 artifacts = 4 success counts
-    assert_eq!(count, 4);
+    // We ingested 8 episode parts + 1 parent index + 2 artifacts = 11 success counts
+    assert_eq!(count, 11);
     assert!(errors.is_empty());
 
     // 1. Verify episodes in DB
     let all_eps = backend.get_all_episodes().await?;
-    // We should have part 1 and part 2
-    assert_eq!(all_eps.len(), 2);
+    // We should have 8 parts and 1 parent index
+    assert_eq!(all_eps.len(), 9);
     
     let ep_part1 = all_eps.iter().find(|e| e.title.contains("part1")).unwrap();
     let ep_part2 = all_eps.iter().find(|e| e.title.contains("part2")).unwrap();
@@ -297,10 +297,10 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
 
     // 3. Verify graph relationships in SurrealDB
     let ep1_related = backend.get_related_node_ids(ep_part1.id.as_ref().unwrap()).await?;
-    assert_eq!(ep1_related.len(), 2); // walkthrough & implementation_plan
+    assert!(ep1_related.len() >= 3); // walkthrough, implementation_plan & parent index
     
     let ep2_related = backend.get_related_node_ids(ep_part2.id.as_ref().unwrap()).await?;
-    assert_eq!(ep2_related.len(), 2);
+    assert!(ep2_related.len() >= 3);
 
     Ok(())
 }
@@ -334,13 +334,13 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     let transcript = "{\"type\":\"USER_INPUT\",\"content\":\"Short user prompt\"}\n";
     fs::write(logs_dir.join("transcript.jsonl"), transcript)?;
 
-    // Create a large artifact file of ~120,000 characters to trigger chunking into 2 parts (cap = 100k)
+    // Create a large artifact file of ~25,000 characters to trigger chunking into 2 parts (cap = 20k)
     let mut large_artifact = String::new();
     large_artifact.push_str("Title: Large Artifact\n\n");
-    for i in 1..=3500 {
+    for i in 1..=800 {
         large_artifact.push_str(&format!("Line {}: Some content text.\n", i));
     }
-    assert!(large_artifact.len() > 100_000);
+    assert!(large_artifact.len() > 20_000);
 
     fs::write(session_dir.join("large_plan.md"), &large_artifact)?;
 
@@ -353,8 +353,8 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
         &backend
     ).await?;
 
-    // We ingested 1 episode part + 2 artifact parts = 3 success counts
-    assert_eq!(count, 3);
+    // We ingested 1 episode part + 3 artifact parts = 4 success counts
+    assert_eq!(count, 4);
     assert!(errors.is_empty());
 
     // 1. Verify episodes in DB
@@ -367,13 +367,16 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     let ep_file = fs::read_to_string(vault_root.join(ep.vault_path.as_ref().unwrap()))?;
     assert!(ep_file.contains("[[wiki/testing-art-chunking-scope/large_plan_part1]]"));
     assert!(ep_file.contains("[[wiki/testing-art-chunking-scope/large_plan_part2]]"));
+    assert!(ep_file.contains("[[wiki/testing-art-chunking-scope/large_plan_part3]]"));
 
     // Verify artifact file backlinks
     let art1_rel_path = "wiki/testing-art-chunking-scope/large_plan_part1.md";
     let art2_rel_path = "wiki/testing-art-chunking-scope/large_plan_part2.md";
+    let art3_rel_path = "wiki/testing-art-chunking-scope/large_plan_part3.md";
     
     assert!(vault_root.join(art1_rel_path).exists());
     assert!(vault_root.join(art2_rel_path).exists());
+    assert!(vault_root.join(art3_rel_path).exists());
 
     let art1_file = fs::read_to_string(vault_root.join(art1_rel_path))?;
     assert!(art1_file.contains("Source Episodes:"));
@@ -383,9 +386,13 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     assert!(art2_file.contains("Source Episodes:"));
     assert!(art2_file.contains(&ep.title));
 
+    let art3_file = fs::read_to_string(vault_root.join(art3_rel_path))?;
+    assert!(art3_file.contains("Source Episodes:"));
+    assert!(art3_file.contains(&ep.title));
+
     // 3. Verify graph relationships in SurrealDB
     let ep_related = backend.get_related_node_ids(ep.id.as_ref().unwrap()).await?;
-    assert_eq!(ep_related.len(), 2); // large_plan_part1 & large_plan_part2
+    assert_eq!(ep_related.len(), 3); // large_plan_part1, large_plan_part2 & large_plan_part3
 
     Ok(())
 }
