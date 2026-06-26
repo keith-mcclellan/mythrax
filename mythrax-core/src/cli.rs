@@ -1,7 +1,4 @@
 use clap::{Parser, Subcommand};
-use anyhow::Result;
-use crate::db::backend::StorageBackend;
-use crate::{contracts, vault, llm};
 
 #[derive(Parser, Debug)]
 #[command(name = "mythrax", version = "1.0.0", about = "Mythrax Local Memory and Cognitive Daemon CLI")]

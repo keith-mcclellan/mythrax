@@ -1,4 +1,4 @@
-use mythrax_core::daemon::monitor::{check_disk_space, check_memory_pressure, check_swap_pressure};
+use mythrax_core::daemon::monitor::{check_disk_space, check_swap_pressure};
 use mythrax_core::llm::ModelTier;
 use tempfile::tempdir;
 

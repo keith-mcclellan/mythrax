@@ -1128,7 +1128,6 @@ impl StorageBackend for SurrealBackend {
         if self.is_client_mode() {
             #[derive(serde::Deserialize)]
             struct SaveResponse {
-                status: String,
                 id: String,
             }
             let res: SaveResponse = self.daemon_post("/v1/episodes", episode).await?;
@@ -1210,7 +1209,7 @@ impl StorageBackend for SurrealBackend {
         let scope_val = episode.scope.clone().unwrap_or_else(|| "general".to_string());
         let vp_val = episode.vault_path.clone().unwrap_or_default();
 
-        let embedding_val = if let Some(ref embedder) = self.embedder {
+        let embedding_val = if let Some(ref _embedder) = self.embedder {
             let text_to_embed = format!("{}: {}", episode.title, episode.content);
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
@@ -1414,7 +1413,7 @@ impl StorageBackend for SurrealBackend {
 
         let embedding_val = if let Some(ref emb) = rule.embedding {
             Some(emb.clone())
-        } else if let Some(ref embedder) = self.embedder {
+        } else if let Some(ref _embedder) = self.embedder {
             let text_to_embed = format!(
                 "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
                 rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
@@ -1574,7 +1573,7 @@ impl StorageBackend for SurrealBackend {
         let use_new_formula = is_sigmoid_gated_search_test || !is_running_in_test;
         println!("DEBUG BACKEND: is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
         
-        let query_emb = if let Some(ref embedder) = self.embedder {
+        let query_emb = if let Some(ref _embedder) = self.embedder {
             let formatted_query = format!("search_query: {}", query);
             match self.embed(&formatted_query).await {
                 Ok(vec) => Some(vec),
@@ -2123,7 +2122,7 @@ impl StorageBackend for SurrealBackend {
             false
         };
 
-        let mut candidates = Vec::new();
+        let mut candidates;
         if let Some(v_resp) = vector_resp_res {
             let vector_candidates = parse_results(v_resp, true)?;
             let keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
@@ -2352,7 +2351,7 @@ impl StorageBackend for SurrealBackend {
     async fn get_wisdom(&self, query: &str, tier: Option<&str>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
         let active_scope = self.resolve_active_scope();
 
-        let query_emb = if let Some(ref embedder) = self.embedder {
+        let query_emb = if let Some(ref _embedder) = self.embedder {
             let formatted_query = format!("search_query: {}", query);
             match self.embed(&formatted_query).await {
                 Ok(vec) => Some(vec),
@@ -2695,7 +2694,6 @@ impl StorageBackend for SurrealBackend {
         if self.is_client_mode() {
             #[derive(serde::Deserialize)]
             struct SaveResponse {
-                status: String,
                 id: String,
             }
             let res: SaveResponse = self.daemon_post("/v1/handoffs", handoff).await?;
@@ -2833,7 +2831,7 @@ impl StorageBackend for SurrealBackend {
         let vp_val = node.vault_path.clone().unwrap_or_default();
         let embedding_val = if let Some(ref emb) = node.embedding {
             Some(emb.clone())
-        } else if let Some(ref embedder) = self.embedder {
+        } else if let Some(ref _embedder) = self.embedder {
             let text_to_embed = format!("{}: {}", node.name, node.content);
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
@@ -3043,7 +3041,7 @@ impl StorageBackend for SurrealBackend {
     async fn save_thought_node(&self, thought: &crate::contracts::ThoughtNode) -> Result<String> {
         let thought_uuid = uuid::Uuid::new_v4().to_string();
         
-        let embedding_val = if let Some(ref embedder) = self.embedder {
+        let embedding_val = if let Some(ref _embedder) = self.embedder {
             let text_to_embed = format!("{}: {}", thought.title, thought.content);
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
@@ -3791,7 +3789,7 @@ impl StorageBackend for SurrealBackend {
             }
         }
 
-        if let Some(ref embedder) = self.embedder {
+        if let Some(ref _embedder) = self.embedder {
             let embed_text = if combined.len() > 500 {
                 &combined[..500]
             } else {

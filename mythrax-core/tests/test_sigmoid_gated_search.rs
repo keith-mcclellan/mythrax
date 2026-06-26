@@ -20,6 +20,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let id_a = backend.save_episode(&ep_a).await?;
     let uuid_a = id_a.split(':').nth(1).unwrap();
@@ -39,6 +40,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let id_b = backend.save_episode(&ep_b).await?;
     let uuid_b = id_b.split(':').nth(1).unwrap();

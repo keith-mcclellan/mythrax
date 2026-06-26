@@ -510,7 +510,7 @@ pub struct DynamicModelBroker {
 
 impl DynamicModelBroker {
     /// Creates a new DynamicModelBroker.
-    pub async fn new(model_dir: PathBuf) -> Result<Self> {
+    pub async fn new(_model_dir: PathBuf) -> Result<Self> {
         Ok(Self {
             models: Arc::new(Mutex::new(HashMap::new())),
             embedding_model_loaded: AtomicBool::new(false),
@@ -522,7 +522,7 @@ impl DynamicModelBroker {
     }
 
     /// Preloads the embedding model.
-    pub async fn preload_embedding_model(&self, model_name: &str) -> Result<()> {
+    pub async fn preload_embedding_model(&self, _model_name: &str) -> Result<()> {
         self.embedding_model_loaded.store(true, Ordering::SeqCst);
         Ok(())
     }

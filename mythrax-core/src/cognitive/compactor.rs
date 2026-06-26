@@ -77,7 +77,7 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         scope: &str,
-        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        _embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
     ) -> Result<()> {
         let _ = auto_page_workspace_files(db).await;
         let _ = db.prune_stale_memories(&store.vault_root).await;
@@ -525,7 +525,7 @@ impl Compactor {
                             vault_path: $new_vp
                         };";
 
-                        let mut resp = surreal_backend.db.query(query_sql)
+                        let resp = surreal_backend.db.query(query_sql)
                             .bind(("id", ep_id.split(':').nth(1).unwrap_or(ep_id).to_string()))
                             .bind(("new_vp", new_vp))
                             .await?;

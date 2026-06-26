@@ -239,6 +239,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let id1 = backend.save_episode(&episode1).await?;
 
@@ -251,6 +252,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let id2 = backend.save_episode(&episode2).await?;
 
@@ -263,6 +265,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let id3 = backend.save_episode(&episode3).await?;
 
@@ -275,6 +278,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let id4 = backend.save_episode(&episode4).await?;
 

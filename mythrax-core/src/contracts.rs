@@ -10,7 +10,7 @@ pub struct ChatMessage {
     pub created_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Entity {
     pub name: String,
     pub entity_type: String, // "class" | "concept" | "technology" | "file" | "pattern"
@@ -21,7 +21,7 @@ pub struct Entity {
     pub embedding: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct Episode {
     pub id: Option<String>,
     pub title: String,
@@ -42,7 +42,7 @@ pub struct Episode {
     pub files_modified: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EpisodeSave {
     pub title: String,
     pub content: String,

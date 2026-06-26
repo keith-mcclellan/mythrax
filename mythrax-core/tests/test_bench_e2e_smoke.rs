@@ -18,6 +18,7 @@ async fn test_bench_e2e_smoke() -> anyhow::Result<()> {
         source_episode: None,
         session_id: Some("session-123".to_string()),
         task_id: Some("task-456".to_string()),
+        ..Default::default()
     };
     let ep2 = EpisodeSave {
         title: "Okapi BM25 Lexical Scoring".to_string(),
@@ -28,6 +29,7 @@ async fn test_bench_e2e_smoke() -> anyhow::Result<()> {
         source_episode: None,
         session_id: Some("session-123".to_string()),
         task_id: Some("task-456".to_string()),
+        ..Default::default()
     };
     let ep3 = EpisodeSave {
         title: "Bitemporal Knowledge Graphs".to_string(),
@@ -38,10 +40,11 @@ async fn test_bench_e2e_smoke() -> anyhow::Result<()> {
         source_episode: None,
         session_id: Some("session-123".to_string()),
         task_id: Some("task-456".to_string()),
+        ..Default::default()
     };
 
     let id1 = backend.save_episode(&ep1).await?;
-    let id2 = backend.save_episode(&ep2).await?;
+    let _id2 = backend.save_episode(&ep2).await?;
     let id3 = backend.save_episode(&ep3).await?;
 
     // 3. Perform a search

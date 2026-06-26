@@ -178,7 +178,7 @@ impl LocalEmbedder {
         let encodings = self.tokenizer.encode_batch(formatted_texts, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
-        let mut max_len = encodings.iter()
+        let max_len = encodings.iter()
             .map(|enc| enc.get_ids().len())
             .max()
             .unwrap_or(0)

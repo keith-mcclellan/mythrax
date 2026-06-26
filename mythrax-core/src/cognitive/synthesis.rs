@@ -262,12 +262,6 @@ impl DreamCoordinator {
             active_mode = mo.to_string();
         }
 
-        let (default_eps, default_min_samples) = match active_mode.as_str() {
-            "deep" => (0.15, 2),
-            "bulk" => (0.12, 4),
-            _ => (0.08, 2), // incremental
-        };
-
         let all_episodes = db.get_all_episodes().await?;
         let unprocessed = db.get_unprocessed_episodes().await?;
 
@@ -275,7 +269,7 @@ impl DreamCoordinator {
             return Ok(());
         }
 
-        let (default_eps, default_min_samples) = match active_mode.as_str() {
+        let (_default_eps, default_min_samples) = match active_mode.as_str() {
             "deep" => (0.15, 2),
             "bulk" => (0.12, 4),
             _ => (0.08, 2), // incremental

@@ -461,16 +461,9 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 }
 
 pub mod monitor {
-    use std::path::Path;
-    use anyhow::Result;
-
-    #[cfg(target_os = "macos")]
-    use libc::statfs;
     #[cfg(target_os = "macos")]
     use std::ffi::CString;
 
-    #[cfg(target_os = "linux")]
-    use libc::statfs;
     #[cfg(target_os = "linux")]
     use std::ffi::CString;
 

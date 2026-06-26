@@ -50,7 +50,7 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
     // Query: "rusty basement pipes"
     // With hybrid OFF, the vector search is performed.
     backend.save_profile_key("retrieval.hybrid", "false").await?;
-    let res_off = backend.search("rusty basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
+    let _res_off = backend.search("rusty basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
     
     // 2. Search with hybrid ON
     backend.save_profile_key("retrieval.hybrid", "true").await?;

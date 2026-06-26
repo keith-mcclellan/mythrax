@@ -5,12 +5,11 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg};
+use mythrax_core::bench::metrics::evaluate_retrieval;
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 
@@ -35,6 +34,7 @@ struct QuestionEntry {
     question_id: String,
     question_type: String,
     question: String,
+    #[allow(dead_code)]
     answer: String,
     haystack_session_ids: Vec<String>,
     haystack_sessions: Vec<Vec<TurnEntry>>,
@@ -342,10 +342,43 @@ files_modified: None,
 }
 
 async fn download_file(url: &str, dest: &Path) -> Result<()> {
+    use futures_util::StreamExt;
     let response = reqwest::get(url).await?.error_for_status()?;
-    let content = response.bytes().await?;
+    let total_size = response.content_length().unwrap_or(0);
+    
     let mut file = File::create(dest)?;
-    file.write_all(&content)?;
+    let mut stream = response.bytes_stream();
+    let mut downloaded = 0u64;
+    let mut last_reported = 0u64;
+
+    while let Some(item) = stream.next().await {
+        let chunk = item.context("Error while downloading chunk")?;
+        file.write_all(&chunk)?;
+        downloaded += chunk.len() as u64;
+        
+        // Report progress every 10 MB
+        if downloaded - last_reported >= 10 * 1024 * 1024 {
+            if total_size > 0 {
+                let percent = (downloaded as f64 / total_size as f64) * 100.0;
+                println!(
+                    "Downloading... {:.2}% ({:.2} MB / {:.2} MB)",
+                    percent,
+                    downloaded as f64 / (1024.0 * 1024.0),
+                    total_size as f64 / (1024.0 * 1024.0)
+                );
+            } else {
+                println!("Downloading... {:.2} MB", downloaded as f64 / (1024.0 * 1024.0));
+            }
+            last_reported = downloaded;
+        }
+    }
+    
+    if total_size > 0 {
+        println!("Finished downloading 100% ({:.2} MB)", total_size as f64 / (1024.0 * 1024.0));
+    } else {
+        println!("Finished downloading ({:.2} MB)", downloaded as f64 / (1024.0 * 1024.0));
+    }
+    
     Ok(())
 }
 

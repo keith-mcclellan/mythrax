@@ -8,7 +8,7 @@ use std::time::{Instant, Duration};
 use tokio::sync::mpsc;
 use anyhow::{Result, Context};
 use crate::store::MarkdownStore;
-use crate::db::{StorageBackend, SurrealBackend};
+use crate::db::StorageBackend;
 use crate::contracts::{EpisodeSave, WisdomRule, Entity, WikiNode};
 use surrealdb_types::SurrealValue;
 use crate::vault::markdown::{parse_frontmatter, extract_plain_text};

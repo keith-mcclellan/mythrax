@@ -1,4 +1,5 @@
-use mythrax_core::llm::{DynamicModelBroker, ModelTier, ModelConfig};
+
+use mythrax_core::llm::{DynamicModelBroker, ModelTier};
 use tempfile::tempdir;
 
 #[tokio::test]

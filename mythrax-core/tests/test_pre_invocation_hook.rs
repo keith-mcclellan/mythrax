@@ -24,6 +24,7 @@ async fn test_soft_thresholding_and_hook_injection() {
         source_episode: None,
         session_id: Some("test_session".to_string()),
         task_id: None,
+        ..Default::default()
     };
     backend.save_episode(&episode).await.unwrap();
 

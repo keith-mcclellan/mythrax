@@ -25,6 +25,7 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let ep_id = backend.save_episode(&ep).await?;
     assert!(ep_id.contains("episode:"));
@@ -103,6 +104,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let stub_id = backend.save_episode(&save_stub).await?;
     
@@ -132,6 +134,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
                 source_episode: ep.source_episode.clone(),
                 session_id: None,
                 task_id: None,
+                ..Default::default()
             };
             backend.save_episode(&s).await?;
             reprocess_count += 1;

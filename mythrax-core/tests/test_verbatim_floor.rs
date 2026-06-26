@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use tempfile::tempdir;
 
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
@@ -59,12 +58,12 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
     let uuid_low = id_low.split(':').nth(1).unwrap();
 
     // 3. Mutate database to set utility (hi = 80.0, low = 1.0 to trigger decay compaction)
-    let mut response_hi = backend.db.query("UPDATE type::record('episode',$id) MERGE { utility: 80.0 }")
+    let response_hi = backend.db.query("UPDATE type::record('episode',$id) MERGE { utility: 80.0 }")
         .bind(("id", uuid_hi.to_string()))
         .await?;
     response_hi.check()?;
 
-    let mut response_low = backend.db.query("UPDATE type::record('episode',$id) MERGE { utility: 1.0 }")
+    let response_low = backend.db.query("UPDATE type::record('episode',$id) MERGE { utility: 1.0 }")
         .bind(("id", uuid_low.to_string()))
         .await?;
     response_low.check()?;

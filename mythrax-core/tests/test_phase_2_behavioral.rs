@@ -112,6 +112,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         source_episode: None,
         last_retrieved_at: None,
         utility: None,
+        ..Default::default()
     };
     let ep2 = mythrax_core::contracts::Episode {
         id: None,
@@ -125,6 +126,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         source_episode: None,
         last_retrieved_at: None,
         utility: None,
+        ..Default::default()
     };
 
     backend.save_episode(&EpisodeSave {
@@ -136,6 +138,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     }).await?;
 
     backend.save_episode(&EpisodeSave {
@@ -147,6 +150,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     }).await?;
 
     // Seed embeddings in DB (since save_episode might not generate mock ones)

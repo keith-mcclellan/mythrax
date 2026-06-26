@@ -207,6 +207,7 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
 
     let ep_id = backend.save_episode(&ep).await?;
@@ -288,6 +289,7 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let ep_id = backend.save_episode(&ep).await?;
 
@@ -302,9 +304,10 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
     // Run compaction/sleep cycle
     compactor.compact_scope(&backend, &store, "archive-test", backend.embedder.clone()).await?;
 
-    // 1. Verify active record is deleted from DB
+    // 1. Verify active record is marked archived in DB
     let active_eps_after = backend.get_all_episodes().await?;
-    assert_eq!(active_eps_after.len(), 0);
+    assert_eq!(active_eps_after.len(), 1);
+    assert!(active_eps_after[0].archived.unwrap_or(false));
 
     // 2. Verify physical file is moved to vault/archive/
     let old_file = vault_root.join(ep_vault_path);
@@ -354,6 +357,7 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let ep_id = mcp.call_tool("save_episode", serde_json::to_value(&ep)?).await?;
     

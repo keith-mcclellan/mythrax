@@ -1,18 +1,16 @@
 use std::sync::Arc;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use serde_json::{json, Value};
 use anyhow::{Result, Context};
 use crate::api::ApiState;
 use crate::db::{StorageBackend, SurrealBackend, parse_record_id, backend::format_record_id};
 use surrealdb_types::SurrealValue;
-use crate::store::MarkdownStore;
 use crate::contracts::*;
 use crate::cognitive::ArborCoordinator;
 use crate::cognitive::compactor::Compactor;
 use crate::cognitive::synthesis::DreamCoordinator;
 use crate::cognitive::forge::Forge;
 use crate::cognitive::paging::{intercept_and_restore_symbols, page_code_block};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use crate::verify::run_workspace_audit;
 use crate::vault::ingestion::bulk_ingest_vault;
 
@@ -424,7 +422,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                 }
             }
 
-            let mut stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
+            let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                 r.embedding = None;
                 let mut v = serde_json::to_value(&r).unwrap();
                 strip_nulls(&mut v);
@@ -677,7 +675,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
 
             let search_res = state.backend.get_wisdom(query, tier, limit, offset, threshold).await?;
-            let mut stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
+            let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                 r.embedding = None;
                 let mut v = serde_json::to_value(&r).unwrap();
                 strip_nulls(&mut v);

@@ -11,7 +11,6 @@ use crate::store::MarkdownStore;
 use crate::vault::watcher::WatchIgnoreList;
 use serde_json::{json, Value};
 use futures_util::stream::Stream;
-use futures_util::StreamExt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use bytes::Bytes;
