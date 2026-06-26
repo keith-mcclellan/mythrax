@@ -1,84 +1,87 @@
-# Mythrax 1.0 Architecture
+# Mythrax 2.0 Architecture Reference
 
-This document outlines the technical architecture, data flow, and security models of Mythrax 1.0. The system is designed as a high-performance, secure, and memory-efficient semantic search and retrieval platform, leveraging a centralized daemon architecture to optimize resource utilization and ensure data integrity.
+This document outlines the technical architecture, data flows, concurrency boundaries, and safety safeguards of **Mythrax 2.0**. The system is designed as a high-performance, secure, and self-healing sidecar intelligence daemon that acts as a unified memory, cognitive, and model routing server for autonomous AI agents.
 
-## 1. Client-Server Architecture
+```
+                  +-------------------------------------------------+
+                  |                  Agent/Client                   |
+                  +-------------------------------------------------+
+                                     |             |
+                         REST / MCP  |             |  OpenAI API
+                        (Port 8090)  |             |  (Port 8080/8090)
+                                     v             v
+                  +-------------------------------------------------+
+                  |            Single-Port API Gateway              |
+                  +-------------------------------------------------+
+                                           |
+                                           v
+                  +-------------------------------------------------+
+                  |             Mythrax 2.0 Core Daemon             |
+                  +-------------------------------------------------+
+                    |          |            |          |         |
+                    v          v            v          v         v
+             +----------+ +----------+ +--------+ +--------+ +-------+
+             | Surreal  | |  Model   | |   FS   | | Thread | | Size  |
+             |   KV /   | |  Broker  | | Watch  | |  Safe  | | Roll  |
+             | RocksDB  | | (MLX/ORT)| | (500ms)| |  WAL   | | Logger|
+             +----------+ +----------+ +--------+ +--------+ +-------+
+```
 
-Mythrax employs a lightweight, stateless client-server topology. The CLI and any external MCP (Model Context Protocol) servers act as thin HTTP clients, while the heavy lifting is offloaded to a persistent, central daemon process.
+---
 
-### Communication Protocol
-All interactions between clients and the backend are handled via standard HTTP/HTTPS requests. The default communication port is **8090**, which can be overridden via the environment variable `MYTHRAX_DAEMON_PORT`.
+## 1. Single-Port API Gateway & Routing
 
-### Auto-Spawn Sequence
-To ensure a seamless user experience, the client implements an intelligent auto-spawn mechanism. When a client command is executed, the following sequence occurs:
+Mythrax 2.0 consolidates all administrative, memory, Model Context Protocol (MCP), and transparent completions proxy endpoints onto a unified, single-port gateway (**default port: 8090**).
 
-1.  **Daemon Check**: The client checks for the existence of a running daemon process by attempting to connect to the configured port (default 8090).
-2.  **Background Spawn**: If the daemon is not responding, the client automatically triggers `mythrax daemon start` in the background.
-3.  **PID Management**: The client writes the Process ID (PID) of the newly spawned daemon to `~/.mythrax/daemon.pid` to facilitate lifecycle management.
-4.  **Port Polling**: The client enters a polling loop, checking the daemon port for up to **5 seconds**.
-5.  **Request Forwarding**: Once the daemon is confirmed to be listening, the client forwards the original request to the daemon.
+- **Unified Router**: Hosts the Axum REST API, JSON-RPC 2.0 MCP server, and OpenAI-compliant completions proxy.
+- **Port 8080 Completions Proxy**: The daemon also binds to port `8080` (customizable) to act as a transparent completions proxy. It intercepts SSE (Server-Sent Events) chunks to inject compliant `Execution Check:` status blocks on the fly without affecting downstream JSON compliance.
+- **Auto-Spawn Sequence**: Clients automatically detect if the daemon is running. If not, they spawn the background daemon process detached, verify its readiness via port polling for up to 5 seconds, and write the Process ID to `~/.mythrax/daemon.pid`.
 
-This design ensures that users never need to manually manage the daemon process, while preventing race conditions where a client sends a request before the server is ready to accept it.
+---
 
-## 2. RocksDB Single-Writer Integrity
+## 2. Dual-Engine Storage & Persistent Lock Resiliency
 
-Data integrity and concurrency are managed through a strict single-writer architecture enforced by RocksDB's file locking mechanisms.
+To guarantee database integrity and solve concurrent process contention, Mythrax 2.0 implements a robust dual-engine storage model and connection retry mechanism.
 
-### The Locking Problem
-RocksDB requires an exclusive file lock on the database directory to prevent data corruption. In a multi-process environment, this typically leads to "lock contention" errors, where multiple processes attempt to open the same database simultaneously, causing crashes or failures.
+- **SurrealKV & RocksDB Engines**: Supports both `surrealkv://` and `rocksdb://` local storage prefixes, ensuring all agent memories, handoffs, and cognitive graphs are fully persisted to disk.
+- **Persistent Lock Retry Loop**: RocksDB and SurrealKV require exclusive file locks. In multi-process test runs or rapid daemon restarts, this often triggers lock contention errors. Mythrax 2.0 solves this by wrapping the database connection in a **retry loop with exponential backoff** (up to 10 attempts, 500ms sleep, 5s total limit) to gracefully wait for pending locks to release.
+- **Startup Pruning**: On startup, the daemon automatically runs background pruning loops to sweep stale handoffs, orphaned context links, and transient session files, keeping the database footprint compact.
 
-### The Mythrax Solution
-Mythrax resolves this by designating the **Daemon Process** as the sole writer and reader of the RocksDB instance.
+---
 
-*   **Exclusive Access**: The daemon holds the exclusive file lock on the RocksDB data directory.
-*   **Client Read-Only**: Clients do not attempt to open the database directly. Instead, they send HTTP requests to the daemon, which performs the database operations.
-*   **Crash Prevention**: By centralizing the lock, we eliminate the possibility of concurrent process crashes due to lock contention. This topology allows for robust, concurrent client access without compromising the integrity of the underlying storage engine.
+## 3. Three-Tiered Model Broker & VRAM Safeguards
 
-## 3. Token-Based Security
+The cognitive and inference capabilities in Mythrax 2.0 are managed by a highly optimized, hardware-aware Model Broker.
 
-Security is enforced at the HTTP layer using a custom header-based authentication mechanism.
+- **Three-Tiered Engine**: Dynamic routing supports:
+  1. **MLX (Local Apple Silicon)**: Exploits metal GPU acceleration for ultra-fast local inference and embeddings.
+  2. **ORT (ONNX Runtime)**: Run-anywhere CPU/GPU ONNX model execution.
+  3. **Mock Mode**: Light, in-memory simulations for lightning-fast testing and offline compilation.
+- **Split GPU Semaphores**: To prevent deadlocks under heavy parallel workloads (e.g., when a background dreaming compaction runs while an agent is actively querying memory), the broker separates the pipelines into independent semaphores:
+  - `METAL_INFERENCE_SEMAPHORE`: Coordinates model text generation.
+  - `METAL_EMBEDDING_SEMAPHORE`: Coordinates vector embedding calculations.
+- **VRAM Eviction & Sequential Swapping**: To run large models on consumer-grade hardware without Out-Of-Memory (OOM) crashes, the broker executes a sequential eviction loop. Before loading a new model into VRAM, it evicts unused models, flushes caches, and waits for memory release.
 
-### Authentication Flow
-Every incoming HTTP request must include the `X-Mythrax-Token` header. The daemon validates this token using a constant-time comparison function to prevent timing attacks.
+---
 
-1.  **Token Retrieval**: The daemon reads the expected token from `~/.mythrax/token`.
-2.  **Verification**: The function `crate::auth::verify_token_constant_time` compares the provided header value against the stored token.
-3.  **Fallback Mode**: In headless or test environments, if no token file exists, the system falls back to a default hardcoded value: `"secret-token"`.
+## 4. Cognitive Scheduling & Thread-Safe WAL
 
-### Security Properties
-*   **Constant-Time Verification**: The use of constant-time comparison ensures that the execution time of the verification does not depend on the number of matching characters, mitigating timing side-channel attacks.
-*   **Stateless Validation**: The daemon does not maintain session state, allowing for horizontal scaling of client connections without complex session management.
+Mythrax 2.0 introduces advanced scheduling loops and transaction logging to guarantee durability and consistency.
 
-## 4. ONNX Embedding Centrization
+- **500ms File Watcher Coalescing**: The Obsidian vault watcher utilizes the `notify` crate to detect file edits. To prevent high-frequency write cascades and ingestion races, events are coalesced over a **500ms sliding window** before being committed to the database.
+- **Thread-Safe Write-Ahead Log (WAL)**: All database transactions and memory updates are journaled through a thread-safe WAL actor. In the event of an abrupt power loss or crash, the daemon replays transactions from the WAL using sequential replay markers to rebuild state.
+- **DBSCAN Epsilon-Calibrated Compaction**: During the daily "dreaming" cycle, the compactor runs DBSCAN clustering on episodic memories. Epsilon parameters are dynamically calibrated to group related memories, which are then summarized via hierarchical RAPTOR trees into permanent `wiki_node` structures.
 
-A key performance optimization in Mythrax 1.0 is the centralization of the ONNX embedding runtime.
+---
 
-### Resource Optimization
-The embedding model (`nomic-embed-text-v1.5.onnx`) is loaded and managed exclusively within the daemon process.
+## 5. Thread-Safe Size-Rolling Logs & Graceful Shutdown
 
-*   **Memory Footprint**: By centralizing the model, clients do not need to load the embedding model into their own memory space. This reduces the active memory footprint of each client process by approximately **50%**.
-*   **Performance**: The daemon can maintain the model in memory, avoiding the latency of reloading the model for every client request. This is particularly beneficial for high-concurrency scenarios where multiple clients may be querying the system simultaneously.
+For production-grade operations, Mythrax 2.0 implements robust logging and clean lifecycle termination.
 
-### Architecture Benefit
-This separation of concerns allows clients to be extremely lightweight, focusing solely on request serialization and response handling, while the daemon handles the computationally expensive embedding generation.
-
-## 5. SurrealDB Schema & Graph Relations
-
-Mythrax utilizes SurrealDB as its primary data store, leveraging its native graph capabilities to manage complex relationships between entities.
-
-### Core Schemas
-The system defines four primary node types:
-
-1.  **`episode`**: Represents a discrete unit of content or interaction.
-2.  **`wiki_node`**: Represents structured knowledge entries or facts.
-3.  **`wisdom_rule`**: Encapsulates logical rules or heuristics for decision-making.
-4.  **`handoff`**: Represents a transfer of context or responsibility between agents or processes.
-
-### Graph Relations
-Entities are linked via directed graph edges, enabling complex traversal and query capabilities.
-
-*   **`relates_to`**: This is the primary edge type, connecting nodes to establish semantic and logical relationships. For example, an `episode` may `relates_to` a specific `wiki_node` for context, or a `wisdom_rule` may `relates_to` an `episode` to define its handling logic.
-*   **Bidirectional Semantic Search Citations**: The system supports bidirectional linking for citations. When a semantic search query retrieves a result, the system creates a link back to the source, ensuring that citations are not just one-way references but part of a navigable graph. This allows for reverse lookups, where users can trace back which queries or episodes referenced a specific piece of knowledge.
-
-### Data Integrity
-The graph structure ensures that relationships are first-class citizens in the database, allowing for efficient traversal of complex dependency trees without the need for expensive join operations typical in relational databases.
+- **Thread-Safe SizeRollingFileWriter**: A custom thread-safe rolling writer writes logs to `~/.mythrax/daemon.log`. It automatically rolls the log file upon reaching **50MB** and maintains up to **3 historical backups** (`daemon.log.1`, `daemon.log.2`, `daemon.log.3`). Tracing is integrated via non-blocking guards to ensure no logs are lost on exit.
+- **5-Second Graceful Shutdown Sequence**: Upon receiving a SIGINT (Ctrl+C) or SIGTERM signal, the daemon triggers a graceful shutdown sequence wrapped in a **5-second timeout**:
+  1. Sleep for 500ms to allow active file-watcher events and database writes to finish.
+  2. Evict all loaded models from VRAM via `broker.evict_unused_models()`.
+  3. Clear Metal FFI caches and log the event.
+  4. Flush and close the database connection.
+  5. Delete the `daemon.pid` file and exit cleanly.

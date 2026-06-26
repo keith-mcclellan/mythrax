@@ -1,7 +1,8 @@
-# ⚔️ Project Mythrax: Self-Improvement & Memory Engine
+# ⚔️ Project Mythrax: Sidecar Intelligence & Memory Engine
 
-Project Mythrax is a 100% native Rust local memory and cognitive self-improvement engine designed for autonomous AI agents. The engine is unified under a single high-performance library and binary:
-- **Mythrax Core**: A low-latency local memory daemon, Axum REST API, native SurrealDB/ONNX embedding retriever, DBSCAN epoch-based dreaming scheduler, and hierarchical RAPTOR summarization compaction.
+Project Mythrax is a 100% native Rust local memory, model routing, and cognitive self-improvement engine designed for autonomous AI agents. The system is unified under a high-performance library and central daemon:
+
+- **Mythrax Core**: A low-latency sidecar intelligence daemon, single-port API gateway (port `8090`), transparent completions proxy (port `8080`), native SurrealKV/RocksDB persistent database engine, split GPU semaphore model broker, and epoch-based DBSCAN/RAPTOR memory compaction scheduler.
 
 ---
 
@@ -9,18 +10,18 @@ Project Mythrax is a 100% native Rust local memory and cognitive self-improvemen
 
 For in-depth guides, architectural references, and developer playbooks, see the following documentation:
 
-- **[User Guide](file:///Users/keith/Documents/self-improvement-engine/mythrax_user_guide.md)**: A complete reference manual covering core memory entities, the Smart Handoff protocol, the ingestion pipeline, and a comprehensive CLI/MCP tool reference.
-- **[Architecture Reference](file:///Users/keith/Documents/self-improvement-engine/ARCHITECTURE.md)**: Detailed specifications of the client-server topology, RocksDB single-writer integrity, token security, and SurrealDB graph schemas.
-- **[Developer Guide](file:///Users/keith/Documents/self-improvement-engine/DEVELOPMENT.md)**: A step-by-step guide for developers on how to add or extend tools under the new action-enum-based architecture.
-- **[Agent Skill Playbook](file:///Users/keith/Documents/self-improvement-engine/.agents/skills/mythrax/SKILL.md)**: Guidelines and rules for AI agents utilizing the Mythrax MCP server, including the pre-invocation hook boot check compliance.
+- **[User Guide](file:///Users/keith/Documents/mythrax/mythrax_user_guide.md)**: A complete reference manual covering core memory entities, the Smart Handoff protocol, the ingestion pipeline, and a comprehensive CLI/MCP tool reference.
+- **[Architecture Reference](file:///Users/keith/Documents/mythrax/ARCHITECTURE.md)**: Detailed specifications of the single-port gateway, dual-engine database persistence, VRAM safeguards, WAL concurrency, and graceful shutdown lifecycles.
+- **[Developer Guide](file:///Users/keith/Documents/mythrax/DEVELOPMENT.md)**: A step-by-step guide for developers on how to add or extend tools under the action-enum-based architecture.
+- **[Agent Skill Playbook](file:///Users/keith/Documents/mythrax/.agents/skills/mythrax/SKILL.md)**: Guidelines and rules for AI agents utilizing the Mythrax MCP server, including the pre-invocation hook boot check compliance.
 
 ---
 
 ## 🏗️ Architectural Overview & Data Flow
 
-Mythrax 1.0 employs a lightweight, stateless client-server topology. The CLI and the MCP server act as thin HTTP clients, while the heavy lifting is offloaded to a persistent, central daemon process. This guarantees that RocksDB is only ever opened by the daemon, entirely eliminating process lock contention.
+Mythrax 2.0 employs a lightweight sidecar intelligence topology. The CLI and external MCP integrations act as thin HTTP/RPC clients, while heavy operations are offloaded to a persistent, central daemon process. This guarantees database locks are held exclusively by the daemon, eliminating process write contention.
 
-**Zero-CLI Autonomy**: For users interacting with Mythrax solely through the MCP server (such as via Cursor or VS Code), the MCP server automatically pings and spawns the background daemon on startup. This detached daemon activates all background scheduling loops—including the Obsidian file watcher, the daily deep dreaming cycle, and the inactivity-debounced compaction loop—without requiring any CLI interaction.
+**Zero-CLI Autonomy**: For agents interacting through the MCP server (e.g. in Cursor, VS Code, or Antigravity), the MCP server automatically pings and spawns the background daemon on startup. This detached daemon runs all background scheduling loops—including the Obsidian file watcher, the daily deep dreaming cycle, the inactivity-debounced compaction loop, and WAL flushing—without requiring any manual CLI interaction.
 
 ```mermaid
 graph TB
@@ -29,21 +30,23 @@ graph TB
         MCP[mythrax mcp<br/>MCP Thin Proxy Gateway]
     end
 
-    subgraph "Mythrax Core (Rust Daemon - Port 8090)"
-        REST[Axum REST API<br/>127.0.0.1 with Token Auth]
+    subgraph "Mythrax 2.0 Core Daemon (Port 8090 / 8080)"
+        REST[Axum REST API / MCP / Proxy<br/>127.0.0.1 with Token Auth]
         Store[Markdown Store<br/>Atomic Writes + safe YAML]
-        Watcher[notify File-Watcher<br/>Obsidian vault sync]
-        DB[(SurrealDB Server<br/>Persistent RocksDB + HNSW vectors)]
-        ONNX[ORT Crate<br/>nomic-embed-text local ONNX]
+        Watcher[notify File-Watcher<br/>500ms Coalesced Vault sync]
+        DB[(SurrealDB Server<br/>Persistent RocksDB/SurrealKV)]
+        Broker[Model Broker<br/>Local MLX GPU / ORT CPU / Mock]
+        WAL[WAL Concurrency Actor<br/>Transaction Journaling]
         SCHED[Tokio background scheduler<br/>Dreaming + Compaction loops]
     end
 
-    CLI -->|HTTP REST with Token| REST
-    MCP -->|HTTP REST with Token| REST
+    CLI -->|HTTP REST / Token| REST
+    MCP -->|HTTP REST / Token| REST
     REST --> Store
     REST --> DB
-    REST --> ONNX
-    Watcher -->|FS Event| DB
+    REST --> Broker
+    REST --> WAL
+    Watcher -->|Coalesced FS Event| DB
     Store -->|writes| DB
     SCHED --> DB
     SCHED --> Store
@@ -60,9 +63,9 @@ Atomic save and index of a new episodic context.
 - **Request:**
   ```json
   {
-    "title": "Fixing cache invalidation",
-    "content": "Observed cache mismatch in redis client. Resolved by...",
-    "entities": [{"name": "RedisClient", "type": "class", "summary": "Handles connections"}],
+    "title": "Fixing VRAM database locks",
+    "content": "Resolved database lock contention in test runs by adding a 10-attempt retry loop...",
+    "entities": [{"name": "SurrealBackend", "type": "struct", "summary": "Manages connection"}],
     "scope": "mythrax-project"
   }
   ```
@@ -75,11 +78,11 @@ Atomic save and index of a new episodic context.
   ```
 
 ### 2. Search Memories (`POST /v1/search`)
-Combined vector and graph similarity retrieval.
+Combined vector and graph similarity retrieval utilizing Hybrid Reciprocal Rank Fusion (RRF).
 - **Request:**
   ```json
   {
-    "query": "caching mismatch",
+    "query": "VRAM lock retry",
     "scope": "mythrax-project",
     "limit": 3
   }
@@ -90,9 +93,9 @@ Combined vector and graph similarity retrieval.
     "results": [
       {
         "id": "episode:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3d207b",
-        "title": "Fixing cache invalidation",
-        "content": "Observed cache mismatch in redis...",
-        "similarity": 0.84,
+        "title": "Fixing VRAM database locks",
+        "content": "Resolved database lock contention in...",
+        "similarity": 0.89,
         "utility": 1.0,
         "tier": "dynamic"
       }
@@ -104,7 +107,7 @@ Combined vector and graph similarity retrieval.
 Applies Exponential Moving Average (EMA) reinforcement to dynamic rules: `utility = 0.3 * success + 0.7 * previous_utility`.
 
 ### 4. Fetch/Update LLM Configuration (`GET/POST /v1/config/llm`)
-Permits dynamic switching between cloud (Gemini/Claude) and local (mlx/ollama) providers.
+Permits dynamic switching between cloud (Gemini) and local (Qwen via local OpenAI-compatible endpoints) providers.
 
 ---
 
@@ -112,9 +115,9 @@ Permits dynamic switching between cloud (Gemini/Claude) and local (mlx/ollama) p
 
 All client commands automatically forward requests to the background daemon over HTTP. If the daemon is not running, the CLI automatically spawns the daemon in the background and waits for it to bind.
 
--   `mythrax init [harness] [--source <path>]` — Set up fresh RocksDB cache, SurrealDB schemas, and creates Obsidian subfolders.
--   `mythrax daemon start [--port <port>]` — Starts the REST API daemon on the specified port in the background.
--   `mythrax daemon stop` — Safely stops the running daemon using the tracked PID.
+-   `mythrax init [harness] [--source <path>]` — Set up fresh database caches, SurrealDB schemas, and creates Obsidian subfolders.
+-   `mythrax daemon start [--port <port>]` — Starts the REST API daemon on the specified port (default `8090`) in the background.
+-   `mythrax daemon stop` — Safely stops the running daemon using the tracked PID and triggers the graceful shutdown sequence.
 -   `mythrax daemon run [--port <port>]` — Runs the daemon in the foreground (useful for local testing and logs).
 -   `mythrax memory query <query> [--scope <scope>] [--limit <limit>]` — Queries long-term memory using vector search (with text substring fallback if embeddings are missing).
 -   `mythrax memory record --file <path>` — Saves a markdown file as an episodic memory in the vault.
@@ -122,7 +125,7 @@ All client commands automatically forward requests to the background daemon over
 -   `mythrax memory root` — Retrieves the active Obsidian vault root directory path.
 -   `mythrax htr <action> [args]` — Manages Hypothesis-Tree Refinement (Arbor) loops (`init`, `ideate`, `execute`, `backprop`, `merge`, `run`).
 -   `mythrax stm <action> [args]` — Manages short-term memory keys and handoffs (`put`, `get`, `clear`, `handoff`).
--   `mythrax vault <action> [args]` — Manages vault lifecycle operations (`organize`, `verify`, `reprocess`, `summarize`).
+-   `mythrax vault <action> [args]` — Manages vault lifecycle operations (`organize`, `verify`, `reprocess`, `summarize`, `audit`).
 -   `mythrax config <action> [args]` — Gets or sets LLM provider configurations.
 -   `mythrax ingest bulk --source <dir>` — Bulk ingests logs and transcripts from target harnesses.
 -   `mythrax ingest forge <source_path>` — Chunks and parses manuals or documents into rules/wiki nodes.
@@ -133,20 +136,10 @@ All client commands automatically forward requests to the background daemon over
 
 ## 🛡️ Programmatic Compliance Enforcement
 
-To enforce compliance, a pre-invocation hook automatically executes `verify_compliance` and `pre_invocation_hook` before every model turn, checking tailwind compliance, search history cleanup, and daemon health.
-
----
-
-## 💡 Inspirations & References
-
-Project Mythrax builds upon several pioneering concepts in modern AI engineering, database design, and cognitive architectures:
-
-1. **The LLM OS & Software 2.0 (Andrej Karpathy)**: Guided by the vision of a lean, highly observable, and thin-client orchestration layer surrounding the LLM, prioritizing surgical code changes, rigorous testing, and direct execution over complex framework abstractions.
-2. **Model Context Protocol (MCP - Anthropic)**: Standardizes how local memory engines expose context, tools, and resources to frontier language models.
-3. **Human-Readable Vaults (Obsidian)**: Adopts plain-text markdown files as the ultimate source of truth, ensuring that the agent's memory graph remains fully inspectable, navigable, and editable by human developers.
-4. **Multi-Model Graph Databases (SurrealDB)**: Harmonizes document storage, graph relations, and vector indexes into a single cohesive engine, enabling bidirectional semantic citations and deep graph traversal.
-5. **RAPTOR (Recursive Abstractive Processing for Tree-Organized Retrieval)**: Guides the hierarchical summarization and compaction layers to build tree-structured memory networks that retain long-term context.
-6. **HTR (Hypothesis-Tree Refinement / Arbor)**: Adapts tree-of-thought exploration and execution feedback loops for autonomous software engineering and self-improvement tasks.
+To enforce compliance, a pre-invocation hook automatically executes `verify_compliance` and `pre_invocation_hook` before every model turn, checking code styles, search history cleanups, and daemon health, and injecting status blocks under:
+```markdown
+### 🤖 Local Inference & Model Broker Status
+```
 
 ---
 
@@ -155,10 +148,10 @@ Project Mythrax builds upon several pioneering concepts in modern AI engineering
 ### 1. Bootstrapping
 Build the project, initialize the database directories, and configure your target harness:
 ```bash
-# Build binary
+# Build optimized release binary
 cargo build --release
 
-# Initialize for antigravity harness
+# Initialize for antigravity harness (bootstraps folders and database)
 ./mythrax-core/target/release/mythrax init antigravity
 ```
 
