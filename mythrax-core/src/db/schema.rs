@@ -152,4 +152,35 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS content ON chat_history TYPE string;
     DEFINE FIELD IF NOT EXISTS created_at ON chat_history TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS ch_session ON chat_history FIELDS session_id;
+
+    DEFINE TABLE IF NOT EXISTS wiki_node_history SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS node_id ON wiki_node_history TYPE record<wiki_node>;
+    DEFINE FIELD IF NOT EXISTS name ON wiki_node_history TYPE string;
+    DEFINE FIELD IF NOT EXISTS content ON wiki_node_history TYPE string;
+    DEFINE FIELD IF NOT EXISTS scope ON wiki_node_history TYPE string DEFAULT 'general';
+    DEFINE FIELD IF NOT EXISTS vault_path ON wiki_node_history TYPE string DEFAULT '';
+    DEFINE FIELD IF NOT EXISTS embedding ON wiki_node_history TYPE option<array<float>>;
+    DEFINE FIELD IF NOT EXISTS importance ON wiki_node_history TYPE float DEFAULT 5.0;
+    DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wiki_node_history TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS created_at ON wiki_node_history TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS utility ON wiki_node_history TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS changed_at ON wiki_node_history TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS wiki_node_history_node ON wiki_node_history FIELDS node_id;
+    DEFINE INDEX IF NOT EXISTS wiki_node_history_scope ON wiki_node_history FIELDS scope;
+
+    DEFINE EVENT IF NOT EXISTS wiki_node_update_history ON TABLE wiki_node WHEN $event = 'UPDATE' THEN (
+        CREATE wiki_node_history CONTENT {
+            node_id: $value.id,
+            name: $value.name,
+            content: $value.content,
+            scope: $value.scope,
+            vault_path: $value.vault_path,
+            embedding: $value.embedding,
+            importance: $value.importance,
+            last_retrieved_at: $value.last_retrieved_at,
+            created_at: $value.created_at,
+            utility: $value.utility,
+            changed_at: time::now()
+        }
+    );
 ";

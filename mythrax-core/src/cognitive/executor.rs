@@ -78,11 +78,16 @@ impl ArborExecutor {
         }
 
         // Spawns a subprocess to execute the test suite in the temp directory
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(test_command)
-            .current_dir(&worktree_path)
-            .output()?;
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(test_command);
+        cmd.current_dir(&worktree_path);
+
+        // T6: Set unique CARGO_TARGET_DIR and offline env vars
+        let target_dir = format!("/tmp/cargo-target-node-{}", node_id);
+        cmd.env("CARGO_TARGET_DIR", &target_dir);
+        cmd.env("CARGO_NET_OFFLINE", "true");
+
+        let output = cmd.output()?;
 
         let success = output.status.success();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -124,6 +129,13 @@ impl ArborExecutor {
         let path = Path::new(&worktree_dir);
         if path.exists() {
             let _ = std::fs::remove_dir_all(path);
+        }
+
+        // Clean up cargo target directory if exists
+        let target_dir = format!("/tmp/cargo-target-node-{}", node_id);
+        let target_path = Path::new(&target_dir);
+        if target_path.exists() {
+            let _ = std::fs::remove_dir_all(target_path);
         }
 
         Ok(())

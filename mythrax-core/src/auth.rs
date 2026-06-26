@@ -43,3 +43,41 @@ pub fn verify_token_constant_time(provided: &str, expected: &str) -> bool {
         provided_bytes.ct_eq(expected_bytes).unwrap_u8() == 1
     }
 }
+
+/// Retrieve the token from file, or generate a new one with strict 0600 permissions if missing or invalid.
+pub fn get_or_create_token<P: AsRef<Path>>(path: P) -> Result<String> {
+    let path = path.as_ref();
+    if path.exists() {
+        if let Ok(token) = load_token(path) {
+            if !token.is_empty() {
+                return Ok(token);
+            }
+        }
+    }
+    
+    // Generate new token
+    let new_token = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    
+    // Write with 0600 permissions on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(new_token.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, &new_token)?;
+    }
+    
+    Ok(new_token)
+}

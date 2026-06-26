@@ -273,13 +273,202 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
     })
 }
 
+pub static SUSPEND_BACKGROUND_TASKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+fn is_process_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_process_alive(_pid: i32) -> bool {
+    false
+}
+
+fn get_process_name(pid: i32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(&["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let comm = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if comm.is_empty() {
+            return None;
+        }
+        let path = std::path::PathBuf::from(&comm);
+        path.file_name().and_then(|name| name.to_str()).map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+fn recover_stale_locks() {
+    if let Ok(home) = std::env::var("HOME") {
+        let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");
+        let pid_path = mythrax_dir.join("daemon.pid");
+        let lock_path = mythrax_dir.join("daemon.lock");
+
+        if pid_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&pid_path) {
+                if let Ok(pid) = content.trim().parse::<i32>() {
+                    let alive = is_process_alive(pid);
+                    let mut is_stale = !alive;
+                    if alive {
+                        if let Some(name) = get_process_name(pid) {
+                            if name != "mythrax" && name != "mythrax-core" {
+                                is_stale = true;
+                            }
+                        } else {
+                            is_stale = true;
+                        }
+                    }
+                    if is_stale {
+                        eprintln!("[SAFEGUARD] Stale lock detected for PID {}. Purging locks.", pid);
+                        let _ = std::fs::remove_file(&pid_path);
+                        let _ = std::fs::remove_file(&lock_path);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn get_swap_used_bytes() -> Option<u64> {
+    let output = std::process::Command::new("sysctl")
+        .args(&["-n", "vm.swapusage"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout);
+    let used_idx = s.find("used =")?;
+    let sub = &s[used_idx + 6..];
+    let val_str = sub.split_whitespace().next()?;
+    
+    let numeric_str: String = val_str.chars().take_while(|c| c.is_digit(10) || *c == '.').collect();
+    let val: f64 = numeric_str.parse().ok()?;
+    
+    if val_str.contains('G') || val_str.contains('g') {
+        Some((val * 1024.0 * 1024.0 * 1024.0) as u64)
+    } else if val_str.contains('M') || val_str.contains('m') {
+        Some((val * 1024.0 * 1024.0) as u64)
+    } else if val_str.contains('K') || val_str.contains('k') {
+        Some((val * 1024.0) as u64)
+    } else {
+        Some(val as u64)
+    }
+}
+
+pub fn spawn_swap_monitor_thread() {
+    tokio::spawn(async move {
+        // Wait until the backend is initialized
+        let backend = loop {
+            if let Some(backend) = db::GLOBAL_BACKEND.get() {
+                break backend.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        };
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+            // 1. Query disable_swap_monitor from database config:settings
+            let config_sql = "SELECT VALUE disable_swap_monitor FROM config:settings LIMIT 1;";
+            let disable_monitor = match backend.db.query(config_sql).await {
+                Ok(mut res) => res.take::<Option<bool>>(0).unwrap_or(None).unwrap_or(false),
+                Err(_) => false,
+            };
+            if disable_monitor {
+                SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
+                continue;
+            }
+
+            // 2. Query sysctl vm.swapusage
+            if let Some(swap_used) = get_swap_used_bytes() {
+                // 3. Get thresholds
+                let t1_sql = "SELECT VALUE swap_threshold_tier1_gb FROM config:settings LIMIT 1;";
+                let tier1_gb = match backend.db.query(t1_sql).await {
+                    Ok(mut res) => res.take::<Option<f64>>(0).unwrap_or(None).unwrap_or(2.0),
+                    Err(_) => 2.0,
+                };
+                let t2_sql = "SELECT VALUE swap_threshold_tier2_gb FROM config:settings LIMIT 1;";
+                let tier2_gb = match backend.db.query(t2_sql).await {
+                    Ok(mut res) => res.take::<Option<f64>>(0).unwrap_or(None).unwrap_or(3.0),
+                    Err(_) => 3.0,
+                };
+                let t3_sql = "SELECT VALUE swap_threshold_tier3_gb FROM config:settings LIMIT 1;";
+                let tier3_gb = match backend.db.query(t3_sql).await {
+                    Ok(mut res) => res.take::<Option<f64>>(0).unwrap_or(None).unwrap_or(6.0),
+                    Err(_) => 6.0,
+                };
+
+                let swap_used_gb = swap_used as f64 / (1024.0 * 1024.0 * 1024.0);
+
+                // 4. Enforce model-aware thresholds
+                let active_tier = if let Some(broker) = mythrax_core::llm::DYNAMIC_MODEL_BROKER.get() {
+                    broker.active_tier()
+                } else {
+                    None
+                };
+
+                if let Some(tier) = active_tier {
+                    let threshold_gb = match tier {
+                        mythrax_core::llm::ModelTier::Tier1 => tier1_gb,
+                        mythrax_core::llm::ModelTier::Tier2 => tier2_gb,
+                        mythrax_core::llm::ModelTier::Tier3 => tier3_gb,
+                    };
+
+                    if swap_used_gb >= threshold_gb {
+                        tracing::warn!(
+                            "[SWAP MONITOR] Swap usage {:.2}GB exceeds active tier threshold ({:?} - {}GB). Suspending background tasks and evicting models.",
+                            swap_used_gb,
+                            tier,
+                            threshold_gb
+                        );
+                        // Trigger suspension
+                        SUSPEND_BACKGROUND_TASKS.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                        // Evict unused models from VRAM
+                        if let Some(broker) = mythrax_core::llm::DYNAMIC_MODEL_BROKER.get() {
+                            broker.evict_unused_models().await;
+                        }
+                    } else {
+                        SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                } else {
+                    SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing to stderr with a default filter level (warn for external, info for mythrax)
+    // Boost soft file descriptor limits to maximum hard limit on boot
+    if let Ok((_soft, hard)) = rlimit::Resource::NOFILE.get() {
+        let _ = rlimit::Resource::NOFILE.set(hard, hard);
+    }
+
+    // Run stale lock recovery check
+    recover_stale_locks();
+
+    // Spawn background active swap monitor thread
+    spawn_swap_monitor_thread();
+
+    // Initialize tracing with non-blocking writer and size-rolling file backend
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,mythrax=info,mythrax_core=info"));
+    
+    let home_dir = std::env::var("HOME").context("HOME env var not set")?;
+    let log_path = PathBuf::from(home_dir).join(".mythrax").join("daemon.log");
+    
+    let file_writer = SizeRollingFileWriter::new(log_path)?;
+    let (non_blocking_writer, _log_guard) = tracing_appender::non_blocking(file_writer);
+    
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(non_blocking_writer)
         .with_env_filter(filter)
         .init();
 
@@ -330,13 +519,7 @@ async fn main() -> Result<()> {
             std::fs::create_dir_all(&mythrax_dir)?;
 
             // Generate token if not exists
-            let token = if token_path.exists() {
-                std::fs::read_to_string(&token_path)?
-            } else {
-                let new_token = uuid::Uuid::new_v4().to_string();
-                std::fs::write(&token_path, &new_token)?;
-                new_token
-            };
+            let token = mythrax_core::auth::get_or_create_token(&token_path)?;
 
             // Write config pointing to RocksDB
             let config_data = serde_json::json!({
@@ -713,6 +896,9 @@ async fn main() -> Result<()> {
         Commands::PreCommit => {
             handle_pre_commit().await?;
         }
+        Commands::Exec { command_name, args } => {
+            handle_exec(&command_name, &args).await?;
+        }
     }
 
     Ok(())
@@ -1078,6 +1264,150 @@ async fn handle_pre_commit() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn handle_exec(command_name: &str, args: &[String]) -> Result<()> {
+    let home = std::env::var("HOME").context("HOME env var not set")?;
+    let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+    let token_path = mythrax_dir.join("token");
+
+    let auth_token = mythrax_core::auth::get_or_create_token(&token_path)?;
+    let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+    
+    let mut cmd = std::process::Command::new(command_name);
+    cmd.args(args);
+    
+    cmd.env("MYTHRAX_DAEMON_PORT", &daemon_port);
+    cmd.env("MYTHRAX_DAEMON_TOKEN", &auth_token);
+    
+    let mut child = cmd.spawn().context(format!("Failed to spawn command {}", command_name))?;
+    let status = child.wait().context("Failed to wait for child process")?;
+    
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+// =============================================================================
+// SizeRollingFileWriter Implementation
+// =============================================================================
+
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::sync::Mutex;
+
+pub struct SizeRollingFileWriter {
+    inner: Mutex<SizeRollingFileWriterInner>,
+}
+
+struct SizeRollingFileWriterInner {
+    file: Option<File>,
+    log_path: PathBuf,
+}
+
+impl SizeRollingFileWriter {
+    pub fn new(log_path: PathBuf) -> io::Result<Self> {
+        if let Some(parent) = log_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(&log_path)?;
+        Ok(Self {
+            inner: Mutex::new(SizeRollingFileWriterInner {
+                file: Some(file),
+                log_path,
+            }),
+        })
+    }
+
+    fn write_all_and_roll(&self, buf: &[u8]) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        
+        // 1. Check current file size
+        let mut needs_roll = false;
+        if let Some(ref file) = inner.file {
+            if let Ok(metadata) = file.metadata() {
+                // Roll if current size + new data >= 50MB
+                if metadata.len() + buf.len() as u64 >= 50 * 1024 * 1024 {
+                    needs_roll = true;
+                }
+            }
+        }
+
+        // 2. Roll if needed
+        if needs_roll {
+            // Drop the file handle to close it before renaming
+            inner.file = None;
+
+            let base_path = &inner.log_path;
+            let path3 = base_path.with_extension("log.3");
+            let path2 = base_path.with_extension("log.2");
+            let path1 = base_path.with_extension("log.1");
+
+            // Delete oldest backup
+            if path3.exists() {
+                let _ = fs::remove_file(&path3);
+            }
+            // Shift backups: .2 -> .3, .1 -> .2, current -> .1
+            if path2.exists() {
+                let _ = fs::rename(&path2, &path3);
+            }
+            if path1.exists() {
+                let _ = fs::rename(&path1, &path2);
+            }
+            if base_path.exists() {
+                let _ = fs::rename(base_path, &path1);
+            }
+
+            // Re-open new current file
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(base_path)?;
+            inner.file = Some(file);
+        }
+
+        // 3. Write data
+        if let Some(ref mut file) = inner.file {
+            file.write_all(buf)?;
+        }
+        Ok(())
+    }
+}
+
+impl Write for SizeRollingFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.write_all_and_roll(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(ref mut file) = inner.file {
+            file.flush()?;
+        }
+        Ok(())
+    }
+}
+
+impl Write for &SizeRollingFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.write_all_and_roll(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(ref mut file) = inner.file {
+            file.flush()?;
+        }
+        Ok(())
+    }
 }
 
 

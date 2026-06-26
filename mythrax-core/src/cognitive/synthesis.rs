@@ -56,6 +56,45 @@ pub fn dbscan(
     labels
 }
 
+pub fn find_elbow_point(k_distances: &[f32]) -> f32 {
+    if k_distances.is_empty() {
+        return 0.55;
+    }
+    if k_distances.len() < 3 {
+        return k_distances[0];
+    }
+    let n = k_distances.len();
+    let y0 = k_distances[0];
+    let yn = k_distances[n - 1];
+    let x0 = 0.0f32;
+    let xn = (n - 1) as f32;
+
+    let mut max_dist = -1.0;
+    let mut elbow_idx = 0;
+
+    for i in 0..n {
+        let x = i as f32;
+        let y = k_distances[i];
+        let num = ((yn - y0) * x - (xn - x0) * y + xn * y0).abs();
+        if num > max_dist {
+            max_dist = num;
+            elbow_idx = i;
+        }
+    }
+    k_distances[elbow_idx]
+}
+
+pub fn calibrate_epsilon_fallback(model_name: &str, user_override: Option<f32>) -> f32 {
+    if let Some(val) = user_override {
+        return val;
+    }
+    if model_name.contains("nomic") {
+        0.55
+    } else {
+        0.55
+    }
+}
+
 fn find_neighbors(i: usize, embeddings: &[&[f32]], eps: f32) -> Vec<usize> {
     let mut neighbors = Vec::new();
     let target = embeddings[i];
@@ -229,15 +268,65 @@ impl DreamCoordinator {
             _ => (0.08, 2), // incremental
         };
 
-        let eps = file_eps.unwrap_or(default_eps);
-        let min_samples = file_min_samples.unwrap_or(default_min_samples);
-
         let all_episodes = db.get_all_episodes().await?;
         let unprocessed = db.get_unprocessed_episodes().await?;
 
         if unprocessed.is_empty() {
             return Ok(());
         }
+
+        let (default_eps, default_min_samples) = match active_mode.as_str() {
+            "deep" => (0.15, 2),
+            "bulk" => (0.12, 4),
+            _ => (0.08, 2), // incremental
+        };
+
+        let min_samples = file_min_samples.unwrap_or(default_min_samples);
+        let final_eps = if let Some(f_eps) = file_eps {
+            f_eps
+        } else {
+            // Dynamic epsilon calibration using k-distance elbow method
+            let all_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
+            let mut embeddings = Vec::new();
+            for ep in &all_episodes {
+                if let Some(ref emb) = ep.embedding {
+                    embeddings.push(emb.clone());
+                }
+            }
+            for node in &all_nodes {
+                if let Some(ref emb) = node.embedding {
+                    embeddings.push(emb.clone());
+                }
+            }
+
+            if embeddings.len() >= 100 {
+                let sample = &embeddings[0..100];
+                let mut k_distances = Vec::new();
+                for i in 0..sample.len() {
+                    let mut dists = Vec::new();
+                    for j in 0..sample.len() {
+                        let d = cosine_distance(&sample[i], &sample[j]);
+                        dists.push(d);
+                    }
+                    dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    if dists.len() > 4 {
+                        k_distances.push(dists[4]);
+                    }
+                }
+                k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                find_elbow_point(&k_distances)
+            } else {
+                let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
+                    _ => None,
+                };
+                let model_name = match db.get_llm_config().await {
+                    Ok(cfg) => cfg.model,
+                    _ => "nomic-embed-text-v1.5-mlx".to_string(),
+                };
+                calibrate_epsilon_fallback(&model_name, user_override_val)
+            }
+        };
 
         let mut scope_groups: HashMap<String, Vec<Episode>> = HashMap::new();
         for ep in unprocessed {
@@ -312,7 +401,8 @@ impl DreamCoordinator {
                         
                         let content_len = display_content.len();
                         let display_content = if content_len > 100_000 {
-                            format!("{}... [Truncated {} characters of content due to size]", &display_content[..100_000], content_len - 100_000)
+                            let truncated = truncate_to_boundary(&display_content, 100_000);
+                            format!("{}... [Truncated {} characters of content due to size]", truncated, content_len - 100_000)
                         } else {
                             display_content
                         };
@@ -402,7 +492,7 @@ impl DreamCoordinator {
                 continue;
             }
 
-            let labels = dbscan(&candidate_embs, eps, min_samples);
+            let labels = dbscan(&candidate_embs, final_eps, min_samples);
 
             let mut clusters: HashMap<usize, Vec<&Episode>> = HashMap::new();
             for (idx, &label) in labels.iter().enumerate() {
@@ -438,7 +528,8 @@ impl DreamCoordinator {
                     
                     let content_len = ep_display_content.len();
                     let ep_display_content = if content_len > 100_000 {
-                        format!("{}... [Truncated {} characters of content due to size]", &ep_display_content[..100_000], content_len - 100_000)
+                        let truncated = truncate_to_boundary(&ep_display_content, 100_000);
+                        format!("{}... [Truncated {} characters of content due to size]", truncated, content_len - 100_000)
                     } else {
                         ep_display_content
                     };
@@ -783,7 +874,8 @@ impl DreamCoordinator {
                                 
                                 let content_len = ep_display_content.len();
                                 let ep_display_content = if content_len > 100_000 {
-                                    format!("{}... [Truncated {} characters of content due to size]", &ep_display_content[..100_000], content_len - 100_000)
+                                    let truncated = truncate_to_boundary(&ep_display_content, 100_000);
+                                    format!("{}... [Truncated {} characters of content due to size]", truncated, content_len - 100_000)
                                 } else {
                                     ep_display_content
                                 };
@@ -1157,6 +1249,48 @@ pub async fn save_wisdom_rule_with_deduplication(
     }
 
     db.save_wisdom_rule(rule).await
+}
+
+/// Truncates a string to a maximum character count, respecting boundary
+/// awareness (paragraphs, lines, words) to avoid cutting mid-sentence.
+fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
+    // Check if the string is within limits
+    if s.chars().count() <= max_chars {
+        return s;
+    }
+    
+    // Find the byte index at the character limit
+    let limit_byte_idx = match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => idx,
+        None => return s,
+    };
+    
+    let candidate = &s[..limit_byte_idx];
+    
+    // Scan backward to find a clean boundary
+    // 1. Try paragraph boundary (\n\n) within the last 5000 characters
+    if let Some(para_idx) = candidate.rfind("\n\n") {
+        if limit_byte_idx - para_idx < 5000 {
+            return &candidate[..para_idx];
+        }
+    }
+    
+    // 2. Try line boundary (\n) within the last 2000 characters
+    if let Some(line_idx) = candidate.rfind('\n') {
+        if limit_byte_idx - line_idx < 2000 {
+            return &candidate[..line_idx];
+        }
+    }
+    
+    // 3. Try word boundary (space) within the last 500 characters
+    if let Some(space_idx) = candidate.rfind(' ') {
+        if limit_byte_idx - space_idx < 500 {
+            return &candidate[..space_idx];
+        }
+    }
+    
+    // Fallback to exact character boundary truncation
+    candidate
 }
 
 #[cfg(test)]

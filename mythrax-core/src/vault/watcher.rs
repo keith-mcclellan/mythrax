@@ -79,6 +79,28 @@ impl WatchIgnoreList {
     }
 }
 
+fn count_files_recursive(path: &Path, depth: usize) -> usize {
+    if depth > 10 {
+        return 0;
+    }
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if name == ".trash" || name == "target" || name == ".git" || name == ".mythrax" {
+            return 0;
+        }
+    }
+    if path.is_dir() {
+        let mut count = 0;
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                count += count_files_recursive(&entry.path(), depth + 1);
+            }
+        }
+        count
+    } else {
+        1
+    }
+}
+
 pub fn start_watching(
     vault_root: PathBuf,
     ignore_list: Arc<WatchIgnoreList>,
@@ -86,6 +108,19 @@ pub fn start_watching(
     store: Arc<MarkdownStore>,
     dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> Result<RecommendedWatcher> {
+    let vault_root = std::fs::canonicalize(&vault_root)
+        .unwrap_or(vault_root);
+    // Hard monitor limits: max recursion depth 10, max watch limit 50,000 files
+    let mut total_files = count_files_recursive(&vault_root, 0);
+    let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
+    if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
+        total_files += count_files_recursive(global_dir, 0);
+    }
+    if total_files > 50000 {
+        return Err(anyhow::anyhow!("Vault exceeds hard limit of 50,000 files (found {})", total_files));
+    }
+
+    // 1. Setup Raw Event Channel
     let (tx, mut rx) = mpsc::channel::<notify::Result<Event>>(100);
 
     let mut watcher = RecommendedWatcher::new(
@@ -95,25 +130,24 @@ pub fn start_watching(
         notify::Config::default(),
     )?;
 
+    // Watch the main vault
     watcher.watch(&vault_root, RecursiveMode::Recursive)?;
 
+    // Watch global directory if it exists and is outside the vault
     let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
     if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
         watcher.watch(global_dir, RecursiveMode::Recursive)?;
     }
 
-    // Initialize the coalescing write-behind channel
+    // 2. Setup Write-Behind Coalescing Queue (500ms delay)
     let (write_tx, mut write_rx) = mpsc::unbounded_channel::<(PathBuf, String, Arc<MarkdownStore>)>();
     {
         let mut guard = ignore_list.write_tx.lock().unwrap();
         *guard = Some(write_tx);
     }
 
-    let delay = if cfg!(test) || std::env::var("CARGO_MANIFEST_DIR").is_ok() {
-        Duration::from_millis(10)
-    } else {
-        Duration::from_secs(5)
-    };
+    // Fixed 500ms delay for coalescing writes
+    let delay = Duration::from_millis(500);
 
     let ignore_list_clone = ignore_list.clone();
     tokio::spawn(async move {
@@ -172,20 +206,120 @@ pub fn start_watching(
         }
     });
 
-    // Spawn a tokio task to handle events
-    let backend_clone = backend.clone();
-    let store_clone = store.clone();
-    let dream_tx_clone = dream_tx.clone();
+    // 3. Setup Inbound Debouncing Queue (500ms delay)
+    let (debounce_tx, mut debounce_rx) = mpsc::unbounded_channel::<(PathBuf, bool, Instant)>();
+
+    // 4. Setup Worker Pool with Dynamic Concurrency Limit
+    let (worker_tx, mut worker_rx) = mpsc::channel::<(PathBuf, bool)>(100);
+
+    // Worker Pool Handler
+    let backend_worker = backend.clone();
+    let store_worker = store.clone();
+    let dream_tx_worker = dream_tx.clone();
+
+    tokio::spawn(async move {
+        let max_concurrent_tasks = backend_worker.get_max_concurrent_tasks().await;
+        let sem = Arc::new(tokio::sync::Semaphore::new(max_concurrent_tasks));
+
+        while let Some((path, is_remove)) = worker_rx.recv().await {
+            let sem_c = sem.clone();
+            let b_c = backend_worker.clone();
+            let s_c = store_worker.clone();
+            let d_c = dream_tx_worker.clone();
+
+            tokio::spawn(async move {
+                let _permit = sem_c.acquire().await.unwrap();
+
+                if is_remove {
+                    let canonical_root = std::fs::canonicalize(&s_c.vault_root).unwrap_or_else(|_| s_c.vault_root.clone());
+                    let rel_path_str = if let Ok(rel_path) = path.strip_prefix(&canonical_root) {
+                        rel_path.to_string_lossy().to_string()
+                    } else if let Ok(rel_path) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+                        rel_path.to_string_lossy().to_string()
+                    } else {
+                        path.to_string_lossy().to_string()
+                    };
+                    tracing::info!("File removed from vault, deleting from DB: {}", rel_path_str);
+                    if let Err(e) = b_c.delete_by_vault_path(&rel_path_str).await {
+                        tracing::error!("Failed to delete file {} from DB: {:?}", rel_path_str, e);
+                    }
+                } else {
+                    if let Err(e) = sync_file_to_db(&path, &b_c, &s_c).await {
+                        tracing::error!("Failed to sync file {:?} to DB: {:?}", path, e);
+                    } else {
+                        if let Some(ref tx) = d_c {
+                            let _ = tx.send(()).await;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    // 5. Main Event Loop with Filtering and Debouncing
+    let vault_root_clone = vault_root.clone();
     let ignore_list_evt = ignore_list.clone();
+
     tokio::spawn(async move {
         while let Some(res) = rx.recv().await {
             match res {
-                Ok(event) => {
+                Ok(mut event) => {
+                    // Filter events inside the callback
+                    event.paths.retain(|path| {
+                        // Discard symbolic links
+                        let is_sym = std::fs::symlink_metadata(path)
+                            .map(|m| m.file_type().is_symlink())
+                            .unwrap_or(false);
+                        if is_sym {
+                            return false;
+                        }
+
+                        // Check ignored directories
+                        let has_ignored_comp = path.components().any(|comp| {
+                            let comp_str = comp.as_os_str().to_string_lossy();
+                            comp_str == ".trash"
+                                || comp_str == "target"
+                                || comp_str == ".git"
+                                || comp_str == ".mythrax"
+                        });
+                        if has_ignored_comp {
+                            return false;
+                        }
+
+                        // Check depth <= 10 relative to root
+                        let root_to_use = if path.starts_with(&vault_root_clone) {
+                            Some(vault_root_clone.as_path())
+                        } else {
+                            let global_path = std::path::Path::new("/Users/keith/mythrax-vault/global");
+                            if path.starts_with(global_path) {
+                                Some(global_path)
+                            } else {
+                                None
+                            }
+                        };
+
+                        if let Some(r) = root_to_use {
+                            if let Ok(rel) = path.strip_prefix(r) {
+                                rel.components().count() <= 10
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    });
+
+                    if event.paths.is_empty() {
+                        continue;
+                    }
+
+                    // Only process modify/create/remove events for .md files
                     if event.kind.is_modify() || event.kind.is_create() {
                         for path in event.paths {
                             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                                 continue;
                             }
+
                             if ignore_list_evt.is_ignored(&path) {
                                 tracing::debug!("Watcher ignoring path: {:?}", path);
                                 continue;
@@ -202,35 +336,63 @@ pub fn start_watching(
                                 }
                             }
 
-                            if let Err(e) = sync_file_to_db(&path, &backend_clone, &store_clone).await {
-                                tracing::error!("Failed to sync file {:?} to DB: {:?}", path, e);
-                            } else {
-                                if let Some(ref tx) = dream_tx_clone {
-                                    let _ = tx.send(()).await;
-                                }
-                            }
+                            let flush_time = Instant::now() + Duration::from_millis(500);
+                            let _ = debounce_tx.send((path, false, flush_time));
                         }
                     } else if event.kind.is_remove() {
                         for path in event.paths {
                             if path.extension().and_then(|s| s.to_str()) != Some("md") {
                                 continue;
                             }
-                            let rel_path_str = if let Ok(rel_path) = path.strip_prefix(&vault_root) {
-                                rel_path.to_string_lossy().to_string()
-                            } else if let Ok(rel_path) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
-                                rel_path.to_string_lossy().to_string()
-                            } else {
-                                path.to_string_lossy().to_string()
-                            };
-                            tracing::info!("File removed from vault, deleting from DB: {}", rel_path_str);
-                            if let Err(e) = backend_clone.delete_by_vault_path(&rel_path_str).await {
-                                tracing::error!("Failed to delete file {} from DB: {:?}", rel_path_str, e);
-                            }
+                            let flush_time = Instant::now() + Duration::from_millis(500);
+                            let _ = debounce_tx.send((path, true, flush_time));
                         }
                     }
                 }
                 Err(e) => {
                     tracing::error!("Watcher error: {:?}", e);
+                }
+            }
+        }
+    });
+
+    // 6. Debounce Handler: Collects events, waits for timeout, then sends to Worker Pool
+    tokio::spawn(async move {
+        let mut pending: HashMap<PathBuf, (bool, Instant)> = HashMap::new();
+        loop {
+            let sleep_dur = if let Some((_, earliest)) = pending.values().min_by_key(|(_, t)| t) {
+                let now = Instant::now();
+                if earliest > &now {
+                    earliest.duration_since(now)
+                } else {
+                    Duration::from_millis(0)
+                }
+            } else {
+                Duration::from_millis(100)
+            };
+
+            tokio::select! {
+                res = debounce_rx.recv() => {
+                    if let Some((path, is_remove, flush_time)) = res {
+                        pending.insert(path, (is_remove, flush_time));
+                    } else {
+                        break;
+                    }
+                }
+                _ = tokio::time::sleep(sleep_dur) => {}
+            }
+
+            let now = Instant::now();
+            let mut expired = Vec::new();
+            for (path, (_, flush_time)) in &pending {
+                if now >= *flush_time {
+                    expired.push(path.clone());
+                }
+            }
+
+            for path in expired {
+                if let Some((is_remove, _)) = pending.remove(&path) {
+                    let _ = worker_tx.send((path, is_remove)).await;
                 }
             }
         }
@@ -328,12 +490,14 @@ pub async fn sync_file_to_db(
     let plain_body = extract_plain_text(&body);
 
     // Compute relative path
-    let rel_path = if let Ok(rel) = path.strip_prefix(&store.vault_root) {
+    let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canonical_root = std::fs::canonicalize(&store.vault_root).unwrap_or_else(|_| store.vault_root.clone());
+    let rel_path = if let Ok(rel) = canonical_path.strip_prefix(&canonical_root) {
         rel.to_string_lossy().to_string()
-    } else if let Ok(rel) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+    } else if let Ok(rel) = canonical_path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
         rel.to_string_lossy().to_string()
     } else {
-        path.to_string_lossy().to_string()
+        canonical_path.to_string_lossy().to_string()
     };
 
     if rel_path.contains("episodes/") {
@@ -404,7 +568,7 @@ pub async fn sync_file_to_db(
 
             backend.save_wisdom_rule(&rule).await?;
         }
-    } else if rel_path.contains("wiki/") {
+    } else {
         let frontmatter: WikiFrontmatter = yaml_opt
             .and_then(|y| serde_json::to_value(y).ok())
             .and_then(|v| serde_json::from_value(v).ok())
