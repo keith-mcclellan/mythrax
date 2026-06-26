@@ -605,11 +605,7 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
 
             if has_correction {
                 if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
-                    let backend_clone = Arc::new(SurrealBackend {
-                        db: surreal_backend.db.clone(),
-                        embedder: surreal_backend.embedder.clone(),
-                        client_port: surreal_backend.client_port,
-                    });
+                    let backend_clone = Arc::new(surreal_backend.clone());
                     let store_clone = state.store.clone();
                     let content_clone = content.clone();
                     let scope_clone = scope.clone();
@@ -1243,11 +1239,7 @@ async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Value>
             let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required for forge")?;
 
-            let surreal_backend_arc = Arc::new(SurrealBackend {
-                db: surreal_backend.db.clone(),
-                embedder: surreal_backend.embedder.clone(),
-                client_port: surreal_backend.client_port,
-            });
+            let surreal_backend_arc = Arc::new(surreal_backend.clone());
 
             let forge = Forge::new(surreal_backend_arc, state.store.clone());
             forge.ingest_document(&content, scope, source_path).await?;
@@ -1278,7 +1270,7 @@ async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Value>
     }
 }
 
-async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
+pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
     let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
     let query = args.get("query").and_then(|v| v.as_str());
     let workspace_path = args.get("workspace_path").and_then(|v| v.as_str());
@@ -1363,6 +1355,27 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
 
     let stm_map = state.backend.get_stm(session_id, None).await?;
     let mut parts = Vec::new();
+
+    // Query DYNAMIC_MODEL_BROKER for active model state and embedding status
+    let mut broker_status = "### 🤖 Local Inference & Model Broker Status\n- **Broker State**: Offline or uninitialized\n\n".to_string();
+    if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+        let active_tier_str = match broker.active_tier() {
+            Some(tier) => format!("{:?}", tier),
+            None => "None (Idle)".to_string(),
+        };
+        let emb_loaded = if broker.is_embedding_model_loaded() { "Loaded" } else { "Not Loaded" };
+        let weak_ref = broker.get_weak_llm_reference();
+        let (model_name, execution_mode) = if let Some(engine) = weak_ref.upgrade() {
+            (engine.name(), engine.execution_mode())
+        } else {
+            ("None".to_string(), "cpu".to_string())
+        };
+        broker_status = format!(
+            "### 🤖 Local Inference & Model Broker Status\n- **Active Tier**: `{}`\n- **Active Model Name**: `{}`\n- **Execution Mode**: `{}`\n- **Embedding Model**: `{}`\n\n",
+            active_tier_str, model_name, execution_mode, emb_loaded
+        );
+    }
+    parts.push(broker_status);
 
     if !handoffs.is_empty() {
         let active_handoff = &handoffs[0];
@@ -1472,7 +1485,7 @@ async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Val
             None,
             false,
             true,
-            false
+            false,
         ).await?;
 
         parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));

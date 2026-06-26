@@ -16,11 +16,11 @@ fn binary() -> std::path::PathBuf {
 
 /// Build a Command with MYTHRAX_MOCK_LLM set so forge doesn't hang on real LLM calls,
 /// and override HOME to a temp directory so it uses mem:// instead of the system's locked RocksDB.
-fn cmd(home: &std::path::Path) -> Command {
+fn cmd(home: &std::path::Path, port: &str) -> Command {
     let mut c = Command::new(binary());
     c.env("MYTHRAX_MOCK_LLM", "true");
     c.env("HOME", home);
-    c.env("MYTHRAX_DAEMON_PORT", "18099");
+    c.env("MYTHRAX_DAEMON_PORT", port);
     c
 }
 
@@ -78,7 +78,7 @@ fn test_help_exits_zero() {
 #[test]
 fn test_forge_missing_file_exits_nonzero() {
     let tmp = tempdir().expect("temp dir");
-    let out = cmd(tmp.path())
+    let out = cmd(tmp.path(), "18092")
         .args(["vault", "ingest-forge", "/tmp/does_not_exist_xyz_mythrax_e2e.md"])
         .output()
         .expect("spawn forge");
@@ -101,7 +101,7 @@ fn test_forge_text_file_exits_zero() {
     )
     .expect("write doc");
 
-    let out = cmd(tmp.path())
+    let out = cmd(tmp.path(), "18093")
         .args(["vault", "ingest-forge", source.to_str().unwrap(), "--scope", "e2e_test"])
         .output()
         .expect("spawn forge");
@@ -173,7 +173,7 @@ fn test_forge_pdf_exits_zero() {
     doc.save_to(&mut buf).expect("save pdf");
     fs::write(&pdf_path, buf).expect("write pdf");
 
-    let out = cmd(tmp.path())
+    let out = cmd(tmp.path(), "18094")
         .args(["vault", "ingest-forge", pdf_path.to_str().unwrap(), "--scope", "e2e_test"])
         .output()
         .expect("spawn forge pdf");
@@ -194,7 +194,7 @@ fn test_forge_pdf_exits_zero() {
 #[test]
 fn test_cli_daemon_run_and_cleanup() {
     let tmp = tempdir().expect("temp dir");
-    let mut child = cmd(tmp.path())
+    let mut child = cmd(tmp.path(), "18091")
         .args(["daemon", "run", "--port", "18091"])
         .spawn()
         .expect("spawn daemon run");
@@ -248,8 +248,7 @@ fn test_cli_search_episodes_flag() {
     let tmp = tempdir().expect("temp dir");
     
     // Start daemon on port 18096
-    let mut daemon = cmd(tmp.path())
-        .env("MYTHRAX_DAEMON_PORT", "18096")
+    let mut daemon = cmd(tmp.path(), "18096")
         .args(["daemon", "run", "--port", "18096"])
         .spawn()
         .expect("spawn daemon");
@@ -287,16 +286,14 @@ fn test_cli_search_episodes_flag() {
     .expect("write doc");
 
     // Save episode via CLI
-    let save_status = cmd(tmp.path())
-        .env("MYTHRAX_DAEMON_PORT", "18096")
+    let save_status = cmd(tmp.path(), "18096")
         .args(["memory", "record", "search_test_doc", "--file", doc_file.to_str().unwrap(), "--scope", "e2e_search_test"])
         .status()
         .expect("spawn memory record");
     assert!(save_status.success(), "memory record command should succeed");
 
     // Perform default search (should exclude episodes)
-    let search_default_out = cmd(tmp.path())
-        .env("MYTHRAX_DAEMON_PORT", "18096")
+    let search_default_out = cmd(tmp.path(), "18096")
         .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test"])
         .output()
         .expect("spawn memory query default");
@@ -309,8 +306,7 @@ fn test_cli_search_episodes_flag() {
     );
 
     // Perform search with --episodes flag
-    let search_episodes_out = cmd(tmp.path())
-        .env("MYTHRAX_DAEMON_PORT", "18096")
+    let search_episodes_out = cmd(tmp.path(), "18096")
         .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test", "--include-episodes"])
         .output()
         .expect("spawn search with --episodes");

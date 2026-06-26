@@ -45,9 +45,14 @@ else
 fi
 
 # 4. Wipe active RocksDB database and stale locks
-echo "Wiping RocksDB database cache and stale lock files..."
-rm -rf ~/.mythrax/db
-rm -f ~/.mythrax/daemon.pid
+echo "Moving RocksDB database cache and stale lock files to .trash..."
+mkdir -p ~/.mythrax/.trash
+if [ -d ~/.mythrax/db ]; then
+    mv ~/.mythrax/db ~/.mythrax/.trash/db_$(date +%s)
+fi
+if [ -f ~/.mythrax/daemon.pid ]; then
+    mv ~/.mythrax/daemon.pid ~/.mythrax/.trash/daemon_pid_$(date +%s)
+fi
 
 # 5. Verify compiled binary is present
 echo "Verifying compiled mythrax binary exists..."

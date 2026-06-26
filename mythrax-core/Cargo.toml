@@ -1,21 +1,24 @@
 [package]
 name = "mythrax-core"
-version = "1.2.1"
+version = "2.0.0"
 edition = "2024"
 
 [dependencies]
 axum = "0.7"
 tokio = { version = "1.35", features = ["full"] }
-surrealdb = { version = "3.1.5", features = ["kv-rocksdb", "kv-mem"] }
+surrealdb = { version = "3.1.5", features = ["kv-surrealkv", "kv-mem"] }
 surrealdb-types = "3.1.5"
-ort = { version = "2.0.0-rc.4" }
+ort = { version = "2.0.0-rc.9", features = ["download-binaries"] }
 notify = "6.1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-reqwest = { version = "0.11", features = ["json"] }
+tracing-appender = "0.2"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+bytes = "1.5"
+futures-util = { version = "0.3", features = ["alloc"] }
 url = "2.5"
 uuid = { version = "1.6", features = ["v4"] }
 clap = { version = "4.4", features = ["derive"] }
@@ -28,7 +31,8 @@ subtle = "2.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 pdf-extract = "0.10.0"
 chrono = { version = "0.4", features = ["serde"] }
-
+rlimit = "0.10"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.8"
@@ -37,3 +41,6 @@ lopdf = "0.38.0"
 [[bin]]
 name = "mythrax"
 path = "src/main.rs"
+
+[features]
+mlx = []

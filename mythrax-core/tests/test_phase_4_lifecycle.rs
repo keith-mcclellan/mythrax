@@ -5,7 +5,7 @@ use anyhow::Result;
 use tempfile::tempdir;
 
 use mythrax_core::db::{SurrealBackend, StorageBackend, parse_record_id};
-use mythrax_core::contracts::{EpisodeSave, WisdomRule};
+use mythrax_core::contracts::{EpisodeSave, WisdomRule, WikiNode};
 use mythrax_core::cognitive::compactor::Compactor;
 use mythrax_core::store::MarkdownStore;
 
@@ -541,6 +541,68 @@ Old rule body"#;
     // since the old rule is superseded and the query filters it out!
     let diag_res = backend.diagnose_error_internal("TestPattern", "").await?;
     assert!(diag_res.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_history_pruning_lifecycle() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    let store = MarkdownStore::new(&vault_root)?;
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+    let compactor = Compactor::new();
+
+    let _ = backend.db.query("INSERT INTO profile { key: 'compaction.history_pruning_days', value: '5' };").await?;
+
+    let node1 = WikiNode {
+        id: None,
+        name: "Node 1".to_string(),
+        content: "Initial content 1".to_string(),
+        scope: "general".to_string(),
+        vault_path: Some("wiki/node1.md".to_string()),
+        embedding: None,
+    };
+    let node_id1 = backend.save_wiki_node(&node1).await?;
+
+    let mut updated_node1 = node1.clone();
+    updated_node1.id = Some(node_id1.clone());
+    updated_node1.content = "Updated content 1".to_string();
+    backend.save_wiki_node(&updated_node1).await?;
+
+    let _ = backend.db.query("UPDATE wiki_node_history SET changed_at = time::now() - 10d;").await?;
+
+    let node2 = WikiNode {
+        id: None,
+        name: "Node 2".to_string(),
+        content: "Initial content 2".to_string(),
+        scope: "general".to_string(),
+        vault_path: Some("wiki/node2.md".to_string()),
+        embedding: None,
+    };
+    let node_id2 = backend.save_wiki_node(&node2).await?;
+    let mut updated_node2 = node2.clone();
+    updated_node2.id = Some(node_id2.clone());
+    updated_node2.content = "Updated content 2".to_string();
+    backend.save_wiki_node(&updated_node2).await?;
+
+    let mut resp = backend.db.query("SELECT * FROM wiki_node_history;").await?;
+    let history: Vec<serde_json::Value> = resp.take(0)?;
+    assert_eq!(history.len(), 2);
+
+    compactor.compact_global(&backend, &store).await?;
+
+    let mut resp2 = backend.db.query("SELECT * FROM wiki_node_history;").await?;
+    let history_after: Vec<serde_json::Value> = resp2.take(0)?;
+    assert_eq!(history_after.len(), 1);
 
     Ok(())
 }

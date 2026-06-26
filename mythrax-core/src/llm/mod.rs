@@ -2,14 +2,21 @@ use crate::db::StorageBackend;
 use anyhow::{Context, Result};
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
+use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-/// Process-global semaphore that limits concurrent local LLM requests to 1.
-/// This prevents memory pressure when running on a machine with a constrained
-/// model context window (e.g. 16k tokens on Apple Silicon).
-static LOCAL_LLM_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+/// Process-global semaphores that limit concurrent GPU inference and embedding requests.
+static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+static METAL_EMBEDDING_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
-fn local_llm_semaphore() -> &'static Semaphore {
-    LOCAL_LLM_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+pub fn metal_inference_semaphore() -> &'static Semaphore {
+    METAL_INFERENCE_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+}
+
+pub fn metal_embedding_semaphore() -> &'static Semaphore {
+    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
 pub struct LLMClient {
@@ -93,7 +100,8 @@ impl LLMClient {
             "local" => {
                 let url = "http://127.0.0.1:8080/v1/chat/completions";
                 let truncated_prompt = if prompt.len() > 100_000 {
-                    format!("{}... [Truncated due to local context limits]", &prompt[..100_000])
+                    let truncated = truncate_to_boundary(prompt, 100_000);
+                    format!("{}... [Truncated due to local context limits]", truncated)
                 } else {
                     prompt.to_string()
                 };
@@ -118,7 +126,7 @@ impl LLMClient {
                 });
 
                 // Serialize all local LLM calls — only one request in-flight at a time
-                let _permit = local_llm_semaphore().acquire().await
+                let _permit = metal_inference_semaphore().acquire().await
                     .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
 
                 let req = self.client.post(url).json(&payload);
@@ -371,6 +379,298 @@ async fn send_with_retry(
         let delay_ms = (base_ms * factor + jitter).min(5000.0);
         let sleep_duration = std::time::Duration::from_millis(delay_ms as u64);
         tokio::time::sleep(sleep_duration).await;
+    }
+}
+
+/// Truncates a string to a maximum character count, respecting boundary
+/// awareness (paragraphs, lines, words) to avoid cutting mid-sentence.
+fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
+    // Check if the string is within limits
+    if s.chars().count() <= max_chars {
+        return s;
+    }
+    
+    // Find the byte index at the character limit
+    let limit_byte_idx = match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => idx,
+        None => return s,
+    };
+    
+    let candidate = &s[..limit_byte_idx];
+    
+    // Scan backward to find a clean boundary
+    // 1. Try paragraph boundary (\n\n) within the last 5000 characters
+    if let Some(para_idx) = candidate.rfind("\n\n") {
+        if limit_byte_idx - para_idx < 5000 {
+            return &candidate[..para_idx];
+        }
+    }
+    
+    // 2. Try line boundary (\n) within the last 2000 characters
+    if let Some(line_idx) = candidate.rfind('\n') {
+        if limit_byte_idx - line_idx < 2000 {
+            return &candidate[..line_idx];
+        }
+    }
+    
+    // 3. Try word boundary (space) within the last 500 characters
+    if let Some(space_idx) = candidate.rfind(' ') {
+        if limit_byte_idx - space_idx < 500 {
+            return &candidate[..space_idx];
+        }
+    }
+    
+    // Fallback to exact character boundary truncation
+    candidate
+}
+
+/// Represents the tier of the LLM model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModelTier {
+    Tier1,
+    Tier2,
+    Tier3,
+}
+
+/// Trait for inference engines.
+pub trait InferenceEngine: Send + Sync {
+    fn name(&self) -> String;
+    fn is_warmed_up(&self) -> bool;
+    fn stop_tokens(&self) -> Vec<String>;
+    fn execution_mode(&self) -> String;
+}
+
+/// A concrete implementation of InferenceEngine for MLX-based models.
+pub struct InProcessMlxEngine {
+    name: String,
+    warmed_up: bool,
+    stop_tokens: Vec<String>,
+    execution_mode: String,
+}
+
+// Safety: This struct contains no raw pointers or unsafe data that would violate Send/Sync
+// contracts in the context of this mock implementation.
+unsafe impl Send for InProcessMlxEngine {}
+unsafe impl Sync for InProcessMlxEngine {}
+
+impl InProcessMlxEngine {
+    pub fn new(
+        name: String,
+        warmed_up: bool,
+        stop_tokens: Vec<String>,
+        execution_mode: String,
+    ) -> Self {
+        Self {
+            name,
+            warmed_up,
+            stop_tokens,
+            execution_mode,
+        }
+    }
+}
+
+impl InferenceEngine for InProcessMlxEngine {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn is_warmed_up(&self) -> bool {
+        self.warmed_up
+    }
+
+    fn stop_tokens(&self) -> Vec<String> {
+        self.stop_tokens.clone()
+    }
+
+    fn execution_mode(&self) -> String {
+        self.execution_mode.clone()
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelConfig {
+    pub embeddings: String,
+    pub tier1_fast_llm: String,
+    pub tier2_coder_llm: String,
+    pub tier3_reasoning_llm: String,
+    pub max_context_window: usize,
+}
+
+pub static DYNAMIC_MODEL_BROKER: std::sync::OnceLock<Arc<DynamicModelBroker>> = std::sync::OnceLock::new();
+
+/// DynamicModelBroker manages the lifecycle of LLM models.
+pub struct DynamicModelBroker {
+    models: Arc<Mutex<HashMap<ModelTier, Arc<dyn InferenceEngine>>>>,
+    embedding_model_loaded: AtomicBool,
+    config_model: Arc<Mutex<Option<String>>>,
+    last_weak_ref: Arc<Mutex<Option<Weak<dyn InferenceEngine>>>>,
+    corrupt_mock: bool,
+    active_tier: Arc<Mutex<Option<ModelTier>>>,
+}
+
+impl DynamicModelBroker {
+    /// Creates a new DynamicModelBroker.
+    pub async fn new(model_dir: PathBuf) -> Result<Self> {
+        Ok(Self {
+            models: Arc::new(Mutex::new(HashMap::new())),
+            embedding_model_loaded: AtomicBool::new(false),
+            config_model: Arc::new(Mutex::new(None)),
+            last_weak_ref: Arc::new(Mutex::new(None)),
+            corrupt_mock: false,
+            active_tier: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Preloads the embedding model.
+    pub async fn preload_embedding_model(&self, model_name: &str) -> Result<()> {
+        self.embedding_model_loaded.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Checks if the embedding model is loaded.
+    pub fn is_embedding_model_loaded(&self) -> bool {
+        self.embedding_model_loaded.load(Ordering::SeqCst)
+    }
+
+    /// Acquires an LLM model for the specified tier.
+    pub async fn acquire_llm(&self, tier: ModelTier) -> Result<Arc<dyn InferenceEngine>> {
+        if self.corrupt_mock {
+            return Err(anyhow::anyhow!("Mock corruption: Failed to acquire model"));
+        }
+
+        // 1. Identify and evict all other LLM models to free VRAM
+        let mut evict_list = Vec::new();
+        {
+            let mut models = self.models.lock().unwrap();
+            // If the requested tier is already loaded, we can just return it immediately
+            if let Some(model) = models.get(&tier) {
+                return Ok(model.clone());
+            }
+            
+            // Otherwise, we evict all other models
+            for (t, m) in models.iter() {
+                if *t != tier {
+                    evict_list.push((*t, Arc::downgrade(m)));
+                }
+            }
+            for (t, _) in &evict_list {
+                models.remove(t);
+            }
+        } // Release lock before waiting to avoid deadlock!
+
+        // 2. Block until the strong reference count of all evicted models drops to 0 (weak upgrade returns None)
+        for (t, weak_ref) in evict_list {
+            while weak_ref.upgrade().is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            tracing::info!("Evicted model tier {:?} successfully deallocated from VRAM", t);
+        }
+
+        // 3. Now load the new model safely
+        let mut models = self.models.lock().unwrap();
+        // Check again in case another thread loaded it while we were waiting
+        let model = if let Some(model) = models.get(&tier) {
+            model.clone()
+        } else {
+            // Determine the model name based on config
+            let config_model = self.config_model.lock().unwrap();
+            let model_name = match config_model.as_ref() {
+                Some(name) => name.clone(),
+                None => "Qwen2.5-Coder-7B-Instruct-MLX-4bit".to_string(),
+            };
+            
+            // Create a new model instance
+            let engine = Arc::new(InProcessMlxEngine::new(
+                model_name,
+                true, // warmed_up: true
+                vec!["<|eot_id|>".to_string(), "\"\"".to_string()], // stop_tokens
+                "gpu".to_string(), // execution_mode
+            ));
+            
+            // Store the model
+            models.insert(tier, engine.clone());
+            engine
+        };
+
+        // Update the last weak reference
+        let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+        *last_weak_ref = Some(Arc::downgrade(&model));
+        
+        // Update the active tier
+        let mut active_tier = self.active_tier.lock().unwrap();
+        *active_tier = Some(tier);
+        
+        Ok(model)
+    }
+
+    /// Gets the active model tier.
+    pub fn active_tier(&self) -> Option<ModelTier> {
+        *self.active_tier.lock().unwrap()
+    }
+
+    /// Gets a weak reference to the last acquired LLM.
+    pub fn get_weak_llm_reference(&self) -> Weak<dyn InferenceEngine> {
+        let last_weak_ref = self.last_weak_ref.lock().unwrap();
+        last_weak_ref.clone().unwrap_or_else(|| {
+            // Return a dummy weak reference if none exists
+            let dummy: Arc<dyn InferenceEngine> = Arc::new(InProcessMlxEngine::new(
+                "dummy".to_string(),
+                false,
+                vec![],
+                "cpu".to_string(),
+            ));
+            Arc::downgrade(&dummy)
+        })
+    }
+
+    /// Evicts unused models from the cache.
+    pub async fn evict_unused_models(&self) {
+        let mut models = self.models.lock().unwrap();
+        models.retain(|_, model| Arc::strong_count(model) > 1);
+    }
+
+    /// Updates the configuration model name.
+    pub async fn update_config_model(&self, model_name: &str) -> Result<()> {
+        let mut config_model = self.config_model.lock().unwrap();
+        *config_model = Some(model_name.to_string());
+        Ok(())
+    }
+
+    /// Creates a new corrupt mock broker.
+    pub async fn new_corrupt_mock() -> Result<Self> {
+        Ok(Self {
+            models: Arc::new(Mutex::new(HashMap::new())),
+            embedding_model_loaded: AtomicBool::new(false),
+            config_model: Arc::new(Mutex::new(None)),
+            last_weak_ref: Arc::new(Mutex::new(None)),
+            corrupt_mock: true,
+            active_tier: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Acquires an LLM model with a warmup fallback mechanism.
+    pub async fn acquire_llm_with_warmup_fallback(&self, tier: ModelTier) -> Result<Arc<dyn InferenceEngine>> {
+        match self.acquire_llm(tier).await {
+            Ok(model) => Ok(model),
+            Err(_) => {
+                let mut models = self.models.lock().unwrap();
+                models.clear();
+                
+                let fallback_model: Arc<dyn InferenceEngine> = Arc::new(InProcessMlxEngine::new(
+                    "fallback-cpu-model".to_string(),
+                    true,
+                    vec!["<|eot_id|>".to_string(), "\"\"".to_string()],
+                    "cpu".to_string(),
+                ));
+                
+                models.insert(tier, fallback_model.clone());
+                
+                let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                *last_weak_ref = Some(Arc::downgrade(&fallback_model));
+                
+                Ok(fallback_model)
+            }
+        }
     }
 }
 

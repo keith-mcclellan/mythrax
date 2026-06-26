@@ -342,6 +342,26 @@ impl Compactor {
         let _ = auto_page_workspace_files(db).await;
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
+
+        // Perform history pruning using SurrealDB backend if available
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let mut pruning_days: i64 = 30; // default 30 days
+            let query_res = surreal_backend.db.query("SELECT VALUE value FROM profile WHERE key = 'compaction.history_pruning_days' LIMIT 1;").await;
+            if let Ok(mut resp) = query_res {
+                if let Ok(values) = resp.take::<Vec<String>>(0) {
+                    if let Some(val_str) = values.first() {
+                        if let Ok(days) = val_str.parse::<i64>() {
+                            pruning_days = days;
+                        }
+                    }
+                }
+            }
+            
+            let threshold = chrono::Utc::now() - chrono::Duration::days(pruning_days);
+            let _ = surreal_backend.db.query("DELETE wiki_node_history WHERE changed_at < type::datetime($threshold);")
+                .bind(("threshold", threshold.to_rfc3339()))
+                .await;
+        }
         let compaction_dir = store.vault_root.join("wiki/compaction");
         if !compaction_dir.exists() {
             return Ok(());
@@ -424,10 +444,35 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
     ) -> Result<()> {
+        // Retrieve compaction.decay_threshold (default 0.15) from 'profile' table
+        let mut decay_threshold = 0.15f32;
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let query_sql = "SELECT VALUE value FROM profile WHERE key = 'compaction.decay_threshold' LIMIT 1;";
+            if let Ok(mut resp) = surreal_backend.db.query(query_sql).await {
+                if let Ok(Some(val_str)) = resp.take::<Option<String>>(0) {
+                    if let Ok(parsed) = val_str.parse::<f32>() {
+                        decay_threshold = parsed;
+                    }
+                }
+            }
+        }
+
         let episodes = db.get_all_episodes().await?;
+        let now = std::time::SystemTime::now();
         for ep in episodes {
+            let last_ret = if let Some(ref lr_str) = ep.last_retrieved_at {
+                chrono::DateTime::parse_from_rfc3339(lr_str)
+                    .map(|dt| std::time::SystemTime::from(dt))
+                    .unwrap_or(now)
+            } else {
+                now
+            };
+            
+            let decay_factor = calculate_decay_factor(now, last_ret);
             let utility = ep.utility.unwrap_or(50.0);
-            if utility < 5.0 {
+            let decayed_utility = utility * decay_factor;
+
+            if decayed_utility < decay_threshold * 50.0 {
                 // 1. Move physical file to vault/archive/
                 if let Some(ref vp) = ep.vault_path {
                     let src_file = store.vault_root.join(vp);
@@ -472,6 +517,22 @@ impl Compactor {
         }
         Ok(())
     }
+}
+
+pub fn calculate_decay_factor(now: std::time::SystemTime, last_retrieved_at: std::time::SystemTime) -> f32 {
+    let t_secs = now.duration_since(last_retrieved_at)
+        .unwrap_or_default()
+        .as_secs_f32();
+    let t_days = t_secs / 86400.0f32;
+    let lambda = 2.0f32.ln() / 30.0f32;
+    (-lambda * t_days).exp()
+}
+
+pub fn should_prune_history(now: std::time::SystemTime, record_time: std::time::SystemTime) -> bool {
+    let t_secs = now.duration_since(record_time)
+        .unwrap_or_default()
+        .as_secs();
+    t_secs > 30 * 86400
 }
 
 pub fn extract_attention_anchors(text: &str) -> (String, Vec<String>) {

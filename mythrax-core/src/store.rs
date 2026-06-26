@@ -147,6 +147,85 @@ pub fn delete_stm_file(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn read_config_json() -> serde_json::Value {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        let config_path = PathBuf::from(&home).join(".mythrax").join("config.json");
+        if config_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if let Ok(config_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    return config_val;
+                }
+            }
+        }
+    }
+    serde_json::Value::Null
+}
+
+pub fn get_config_val_str(key1: &str, key2: &str, default: &str) -> String {
+    let config = read_config_json();
+    if let Some(val) = config.get(key1).and_then(|v| v.get(key2)) {
+        if let Some(s) = val.as_str() {
+            return s.to_string();
+        }
+    }
+    let flat_key = format!("{}.{}", key1, key2);
+    if let Some(val) = config.get(&flat_key) {
+        if let Some(s) = val.as_str() {
+            return s.to_string();
+        }
+    }
+    default.to_string()
+}
+
+pub fn get_config_val_int(key1: &str, key2: &str, default: i64) -> i64 {
+    let config = read_config_json();
+    if let Some(val) = config.get(key1).and_then(|v| v.get(key2)) {
+        if let Some(i) = val.as_i64() {
+            return i;
+        }
+    }
+    let flat_key = format!("{}.{}", key1, key2);
+    if let Some(val) = config.get(&flat_key) {
+        if let Some(i) = val.as_i64() {
+            return i;
+        }
+    }
+    default
+}
+
+pub fn get_config_val_float(key1: &str, key2: &str, default: f64) -> f64 {
+    let config = read_config_json();
+    if let Some(val) = config.get(key1).and_then(|v| v.get(key2)) {
+        if let Some(f) = val.as_f64() {
+            return f;
+        }
+    }
+    let flat_key = format!("{}.{}", key1, key2);
+    if let Some(val) = config.get(&flat_key) {
+        if let Some(f) = val.as_f64() {
+            return f;
+        }
+    }
+    default
+}
+
+pub fn get_config_val_bool(key1: &str, key2: &str, default: bool) -> bool {
+    let config = read_config_json();
+    if let Some(val) = config.get(key1).and_then(|v| v.get(key2)) {
+        if let Some(b) = val.as_bool() {
+            return b;
+        }
+    }
+    let flat_key = format!("{}.{}", key1, key2);
+    if let Some(val) = config.get(&flat_key) {
+        if let Some(b) = val.as_bool() {
+            return b;
+        }
+    }
+    default
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

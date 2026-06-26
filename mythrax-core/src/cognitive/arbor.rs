@@ -40,7 +40,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         test_command: String,
         target_files: Vec<String>,
     ) -> Self {
-        let backend = crate::db::SurrealBackend { db: db.clone(), embedder: None, client_port: None };
+        let backend = crate::db::SurrealBackend::new_with_db(db.clone());
         Self {
             db,
             backend,
@@ -211,7 +211,60 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         let commit_sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         let executor = crate::cognitive::executor::ArborExecutor::new(self.repo_path.clone());
-        let (_success, logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes, &self.backend).await?;
+        let (mut success, mut logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes, &self.backend).await?;
+
+        // T6: Stateful TDD Loop
+        let max_attempts = crate::store::get_config_val_int("htr", "tdd_max_attempts", 5) as usize;
+        let mut attempt = 1;
+        
+        while !success && attempt < max_attempts {
+            tracing::warn!("HTR TDD Loop: Attempt {}/{} failed. Attempting self-healing...", attempt, max_attempts);
+            
+            // Construct debugging prompt
+            let prompt = format!(
+                "The previous code changes failed to compile or pass tests.\n\
+                 Hypothesis: {}\n\
+                 Failure logs:\n{}\n\n\
+                 Based on this error, please provide the corrected files.\n\
+                 Return a JSON object containing the field 'code_changes' which maps file paths to their complete corrected content.\n\n\
+                 JSON Response:",
+                node.hypothesis, logs
+            );
+            
+            // Query the LLM
+            match self.llm_client.evaluate_run(&self.backend, &prompt).await {
+                Ok(resp) => {
+                    let cleaned = crate::llm::strip_code_fences(&resp);
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+                        if let Some(changes_obj) = val.get("code_changes").and_then(|c| c.as_object()) {
+                            let mut new_changes = std::collections::HashMap::new();
+                            for (k, v) in changes_obj {
+                                if let Some(content_str) = v.as_str() {
+                                    new_changes.insert(k.clone(), content_str.to_string());
+                                }
+                            }
+                            node.code_changes = Some(new_changes);
+                            
+                            // Re-execute tests
+                            let (new_success, new_logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes, &self.backend).await?;
+                            success = new_success;
+                            logs = new_logs;
+                        } else {
+                            tracing::warn!("LLM did not return code_changes in the expected JSON format");
+                            break;
+                        }
+                    } else {
+                        tracing::warn!("Failed to parse LLM response as JSON: {}", cleaned);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to query LLM for TDD fix: {:?}", e);
+                    break;
+                }
+            }
+            attempt += 1;
+        }
 
         node.result = Some(logs);
         

@@ -59,6 +59,13 @@ pub enum Commands {
     InstallHook,
     /// Run secret filtering on staged files (internal pre-commit hook)
     PreCommit,
+    /// Execute a command safely in the Mythrax environment
+    Exec {
+        /// The command to run
+        command_name: String,
+        /// Arguments to pass to the command
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

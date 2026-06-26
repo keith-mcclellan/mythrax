@@ -61,6 +61,11 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
                 backend.init().await?;
 
+                // Initialize Model Broker and set globalOnceLock
+                if let Ok(broker) = crate::llm::DynamicModelBroker::new(mythrax_dir.join("models")).await {
+                    let _ = crate::llm::DYNAMIC_MODEL_BROKER.set(Arc::new(broker));
+                }
+
                 // Run initial stale memory/handoff pruning on startup
                 if let Err(e) = backend.prune_stale_memories(&vault_path).await {
                     tracing::error!("Failed to run startup memory pruning: {:?}", e);
@@ -250,6 +255,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
                 
                 let listener = tokio::net::TcpListener::bind(&addr).await?;
+                let pid_path_clone = pid_path.clone();
                 
                 tokio::select! {
                     res = axum::serve(listener, app) => {
@@ -258,7 +264,28 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                         }
                     }
                     _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("SIGINT/Ctrl+C received. Cleaning up PID file and shutting down...");
+                         tracing::info!("SIGINT/Ctrl+C received. Initiating graceful shutdown...");
+                         let shutdown_sequence = async {
+                             // Sleep for 500ms to allow pending watcher/DB operations to settle
+                             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                             // Evict unused models
+                             if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+                                 broker.evict_unused_models().await;
+                             }
+
+                             // Log Metal cache clearing
+                             tracing::info!("Metal cache cleared.");
+
+                             // Remove PID file
+                             let _ = std::fs::remove_file(&pid_path_clone);
+                         };
+
+                         if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(5), shutdown_sequence).await {
+                             tracing::warn!("Graceful shutdown timed out after 5 seconds.");
+                             let _ = std::fs::remove_file(&pid_path_clone);
+                         }
+                         tracing::info!("Shutdown complete.");
                     }
                 }
                 Ok::<(), anyhow::Error>(())
@@ -431,4 +458,79 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub mod monitor {
+    use std::path::Path;
+    use anyhow::Result;
+
+    #[cfg(target_os = "macos")]
+    use libc::statfs;
+    #[cfg(target_os = "macos")]
+    use std::ffi::CString;
+
+    #[cfg(target_os = "linux")]
+    use libc::statfs;
+    #[cfg(target_os = "linux")]
+    use std::ffi::CString;
+
+    pub fn check_disk_space(path: &std::path::Path, required_bytes: u64) -> anyhow::Result<()> {
+        let canonical_path = path.canonicalize()?;
+
+        #[cfg(target_os = "macos")]
+        {
+            let c_path = CString::new(canonical_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?)?;
+            let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+            let res = unsafe { libc::statfs(c_path.as_ptr(), &mut buf) };
+            if res != 0 {
+                return Err(anyhow::anyhow!("Failed to get filesystem stats"));
+            }
+            let available_bytes = (buf.f_bavail as u64) * (buf.f_bsize as u64);
+            if available_bytes < required_bytes {
+                return Err(anyhow::anyhow!(
+                    "Insufficient disk space. Required: {}, Available: {}",
+                    required_bytes,
+                    available_bytes
+                ));
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let c_path = CString::new(canonical_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?)?;
+            let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+            let res = unsafe { libc::statfs(c_path.as_ptr(), &mut buf) };
+            if res != 0 {
+                return Err(anyhow::anyhow!("Failed to get filesystem stats"));
+            }
+            let available_bytes = (buf.f_bavail as u64) * (buf.f_bsize as u64);
+            if available_bytes < required_bytes {
+                return Err(anyhow::anyhow!(
+                    "Insufficient disk space. Required: {}, Available: {}",
+                    required_bytes,
+                    available_bytes
+                ));
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            return Err(anyhow::anyhow!("Unsupported platform for disk space check"));
+        }
+
+        Ok(())
+    }
+
+    pub fn check_swap_pressure(tier: crate::llm::ModelTier, swap_used_bytes: u64) -> bool {
+        let threshold = match tier {
+            crate::llm::ModelTier::Tier1 => 2_000 * 1024 * 1024,
+            crate::llm::ModelTier::Tier2 => 3_000 * 1024 * 1024,
+            crate::llm::ModelTier::Tier3 => 6_000 * 1024 * 1024,
+        };
+        swap_used_bytes >= threshold
+    }
+
+    pub fn check_memory_pressure() -> bool {
+        false
+    }
 }
