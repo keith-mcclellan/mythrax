@@ -34,6 +34,12 @@ pub struct Episode {
     pub source_episode: Option<String>,
     pub last_retrieved_at: Option<String>,
     pub utility: Option<f32>,
+    pub archived: Option<bool>,
+    pub discovery_tokens: Option<u32>,
+    pub facts: Option<Vec<String>>,
+    pub concepts: Option<Vec<String>>,
+    pub files_read: Option<Vec<String>>,
+    pub files_modified: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +52,13 @@ pub struct EpisodeSave {
     pub source_episode: Option<String>,
     pub session_id: Option<String>,
     pub task_id: Option<String>,
+    pub discovery_tokens: Option<u32>,
+    pub facts: Option<Vec<String>>,
+    pub concepts: Option<Vec<String>>,
+    pub files_read: Option<Vec<String>>,
+    pub files_modified: Option<Vec<String>>,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -59,6 +71,7 @@ pub struct SearchResult {
     pub embedding: Option<Vec<f32>>,
     pub vault_path: Option<String>,
     pub source_episode: Option<String>,
+    pub discovery_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_nodes: Option<Vec<SearchResult>>,
 }
@@ -233,3 +246,30 @@ pub struct ThoughtNode {
     pub vault_path: Option<String>,
     pub created_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexRow {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub similarity: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NormalizedHookInput {
+    pub session_id: String,
+    pub transcript_path: Option<String>,
+    pub query: Option<String>,
+    pub workspace_path: Option<String>,
+    pub stop_hook_active: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookResult {
+    #[serde(rename = "continue")]
+    pub continue_: bool,
+    pub suppress_output: bool,
+    pub exit_code: i32,
+    pub injected: Option<String>,
+}
+

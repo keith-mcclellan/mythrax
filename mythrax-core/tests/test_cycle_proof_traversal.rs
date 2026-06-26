@@ -7,8 +7,8 @@ async fn test_cycle_proof_traversal_circular() -> Result<()> {
     backend.init().await?;
 
     // Create a circular relation: A -> relates_to -> B -> relates_to -> A
-    backend.relate_nodes("wiki_node:node_a", "wiki_node:node_b").await?;
-    backend.relate_nodes("wiki_node:node_b", "wiki_node:node_a").await?;
+    backend.relate_nodes("wiki_node:node_a", "wiki_node:node_b", None, None, None).await?;
+    backend.relate_nodes("wiki_node:node_b", "wiki_node:node_a", None, None, None).await?;
 
     // Perform query_symbolic
     let results = backend.query_symbolic("wiki_node:node_a", None, Some(5)).await?;

@@ -587,7 +587,12 @@ pub async fn bulk_ingest_vault(
                             source_episode: None,
                             session_id: None,
                             task_id: None,
-                        };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                         if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
                             success_count += 1;
                             parent_saved_id = ep_id;
@@ -655,7 +660,12 @@ pub async fn bulk_ingest_vault(
                             source_episode: None,
                             session_id: None,
                             task_id: None,
-                        };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;
                             generated_parts.push((part_title, relative_path, episode_saved_id));
@@ -730,7 +740,7 @@ pub async fn bulk_ingest_vault(
                     if let Ok(wiki_node_id) = db.save_wiki_node(&node).await {
                         success_count += 1;
                         for (_, _, ep_saved_id) in &generated_parts {
-                            let _ = db.relate_nodes(ep_saved_id, &wiki_node_id).await;
+                            let _ = db.relate_nodes(ep_saved_id, &wiki_node_id, None, None, None).await;
                         }
                     }
                 }
@@ -768,7 +778,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -807,7 +822,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -851,7 +871,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -893,7 +918,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -935,7 +965,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -974,7 +1009,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1018,7 +1058,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1056,7 +1101,12 @@ pub async fn bulk_ingest_vault(
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }

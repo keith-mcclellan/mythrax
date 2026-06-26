@@ -263,7 +263,7 @@ impl Compactor {
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in member_insights {
                     if !insight_id.is_empty() {
-                        let _ = db.relate_nodes(insight_id, &compaction_id).await;
+                        let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
                     }
                 }
             }
@@ -323,7 +323,7 @@ impl Compactor {
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in &outlier_insights {
                     if !insight_id.is_empty() {
-                        let _ = db.relate_nodes(insight_id, &compaction_id).await;
+                        let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
                     }
                 }
             }
@@ -431,7 +431,7 @@ impl Compactor {
         if let Ok(global_compaction_id) = db.save_wiki_node(&node_contract).await {
             for comp_path in compaction_paths {
                 if let Ok(Some(comp_id)) = db.get_wiki_node_id_by_vault_path(&comp_path).await {
-                    let _ = db.relate_nodes(&comp_id, &global_compaction_id).await;
+                    let _ = db.relate_nodes(&comp_id, &global_compaction_id, None, None, None).await;
                 }
             }
         }
@@ -510,8 +510,29 @@ impl Compactor {
                         let _ = db.save_wiki_node(&node_contract).await;
                     }
 
-                    // 4. Delete the active record from database
-                    db.delete_by_vault_path(vp).await?;
+                    // 4. Demote the record in the database instead of deleting it (Epic 3)
+                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                        let ep_id = ep.id.as_ref().ok_or_else(|| anyhow::anyhow!("Episode ID missing"))?;
+                        let filename = std::path::Path::new(vp)
+                            .file_name()
+                            .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
+                        let new_vp = format!("vault/archive/{}", filename.to_string_lossy());
+
+                        let query_sql = "UPDATE type::record('episode', $id) MERGE {
+                            archived: true,
+                            utility: 1.0,
+                            importance: 1.0,
+                            vault_path: $new_vp
+                        };";
+
+                        let mut resp = surreal_backend.db.query(query_sql)
+                            .bind(("id", ep_id.split(':').nth(1).unwrap_or(ep_id).to_string()))
+                            .bind(("new_vp", new_vp))
+                            .await?;
+                        resp.check()?;
+                    } else {
+                        db.delete_by_vault_path(vp).await?;
+                    }
                 }
             }
         }

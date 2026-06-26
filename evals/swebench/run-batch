@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+import json
+import argparse
+import sys
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate predictions for SWE-bench Verified.")
+    parser.add_argument("--mock", action="store_true", help="Run in dry-run/mock mode.")
+    parser.add_argument("--dataset", default="princeton-nlp/SWE-bench_Verified", help="Dataset name.")
+    parser.add_argument("--output", default="predictions.jsonl", help="Output file path.")
+    args = parser.parse_args()
+
+    if args.mock:
+        print("Running in mock prediction mode...")
+        mock_predictions = [
+            {
+                "instance_id": "django__django-11111",
+                "model_name_or_path": "mock-mythrax-model",
+                "model_patch": "diff --git a/django/db/models/query.py b/django/db/models/query.py\nindex a1b2c3d..e5f6g7h 100\n--- a/django/db/models/query.py\n+++ b/django/db/models/query.py\n@@ -99,3 +99,4 @@\n+        # Mock patch applied"
+            }
+        ]
+        with open(args.output, 'w') as f:
+            for pred in mock_predictions:
+                f.write(json.dumps(pred) + "\n")
+        print(f"Mock predictions written to {args.output}")
+    else:
+        # In a real run, this would load the dataset and query the LLM daemon
+        print("Real prediction execution requires configured daemon access.", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

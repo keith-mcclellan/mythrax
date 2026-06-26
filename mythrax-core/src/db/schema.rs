@@ -25,8 +25,16 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS utility ON episode TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS importance ON episode TYPE float DEFAULT 5.0;
     DEFINE FIELD IF NOT EXISTS created_at ON episode TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS archived ON episode TYPE bool DEFAULT false;
+    DEFINE FIELD IF NOT EXISTS discovery_tokens ON episode TYPE option<int>;
+    DEFINE FIELD IF NOT EXISTS facts ON episode TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS concepts ON episode TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS files_read ON episode TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS files_modified ON episode TYPE option<array<string>>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
+    DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+
 
 
     DEFINE TABLE IF NOT EXISTS wiki_node SCHEMAFULL;
@@ -106,6 +114,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS relation ON relates_to TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS strength ON relates_to TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS created_at ON relates_to TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS valid_from ON relates_to TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS valid_to   ON relates_to TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS confidence ON relates_to TYPE float DEFAULT 1.0;
+    DEFINE INDEX IF NOT EXISTS idx_relates_valid ON relates_to FIELDS valid_from, valid_to;
 
     DEFINE TABLE IF NOT EXISTS mentions SCHEMAFULL TYPE RELATION IN episode OUT entity;
     DEFINE FIELD IF NOT EXISTS created_at ON mentions TYPE datetime DEFAULT time::now();

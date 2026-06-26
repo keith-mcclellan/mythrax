@@ -91,7 +91,7 @@ async fn test_schema_upgrades_exist() -> Result<()> {
     let wiki_id = backend.save_wiki_node(&wiki_save).await?;
 
     // Relate them using the existing relates_to interface
-    backend.relate_nodes(&ep_id, &wiki_id).await?;
+    backend.relate_nodes(&ep_id, &wiki_id, None, None, None).await?;
 
     // Verify relations and fields
     let mut rel_select = backend.db.query("SELECT * FROM relates_to;")

@@ -2981,7 +2981,7 @@ dependencies = [
 
 [[package]]
 name = "mythrax-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -2989,6 +2989,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "hex",
  "libc",
  "lopdf",
  "notify",
@@ -3002,6 +3003,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "subtle",
  "surrealdb",
  "surrealdb-types",
