@@ -1,0 +1,141 @@
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::sync::Arc;
+use anyhow::{Context, Result};
+use serde::Deserialize;
+
+use crate::contracts::EpisodeSave;
+use crate::db::backend::StorageBackend;
+use crate::store::MarkdownStore;
+use crate::vault::watcher::{save_episode_bidirectional, WatchIgnoreList};
+
+#[derive(Deserialize)]
+struct SimpleMessage {
+    role: Option<String>,
+    // content may be a flat string OR an array of content blocks (tool_result / text).
+    content: Option<serde_json::Value>,
+    message: Option<NestedMessage>,
+}
+
+#[derive(Deserialize)]
+struct NestedMessage {
+    role: Option<String>,
+    content: Option<serde_json::Value>,
+}
+
+/// Extract verbatim text from a transcript message `content` field that may be EITHER
+/// a flat string OR an array of content blocks (the array form used by real Claude/Codex
+/// transcripts for `tool_result` and multi-block assistant/user turns). For block arrays
+/// we concatenate the text of each block, including the raw payload of `tool_result`
+/// blocks (recursing into nested string/array content), so tool output is captured
+/// verbatim rather than silently dropped.
+fn extract_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(blocks) => {
+            let mut parts: Vec<String> = Vec::new();
+            for block in blocks {
+                // Plain string element.
+                if let serde_json::Value::String(s) = block {
+                    parts.push(s.clone());
+                    continue;
+                }
+                // text block: { "type": "text", "text": "..." }
+                if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                    parts.push(t.to_string());
+                }
+                // tool_result block: { "type": "tool_result", "content": <string|array> }
+                if let Some(inner) = block.get("content") {
+                    let inner_text = extract_text(inner);
+                    if !inner_text.is_empty() {
+                        parts.push(inner_text);
+                    }
+                }
+                // tool_use / generic blocks carrying an "input"/"output" string payload.
+                for key in ["output", "input"] {
+                    if let Some(s) = block.get(key).and_then(|v| v.as_str()) {
+                        parts.push(s.to_string());
+                    }
+                }
+            }
+            parts.join("\n")
+        }
+        serde_json::Value::Object(_) => {
+            // A single content block object (not wrapped in an array).
+            extract_text(&serde_json::Value::Array(vec![value.clone()]))
+        }
+        _ => String::new(),
+    }
+}
+
+pub async fn mine_transcript(
+    session: &str,
+    transcript_path: &str,
+    backend: &Arc<dyn StorageBackend>,
+    store: &Arc<MarkdownStore>,
+    ignore: &WatchIgnoreList,
+) -> Result<usize> {
+    let file = File::open(transcript_path)
+        .context(format!("Failed to open transcript file at {}", transcript_path))?;
+    let reader = BufReader::new(file);
+    let mut saved_count = 0;
+
+    for line in reader.lines() {
+        let line_str = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        if let Ok(msg) = serde_json::from_str::<SimpleMessage>(&line_str) {
+            let role = msg.role.clone().or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
+            let content = msg.content.clone().or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
+
+            if let (Some(r), Some(c)) = (role, content) {
+                // We mine user turns, tool outputs, computer outputs, and tool_results
+                let normalized_role = r.to_lowercase();
+                if normalized_role == "user"
+                    || normalized_role == "tool"
+                    || normalized_role == "tool_result"
+                    || normalized_role == "computer"
+                {
+                    // content may be a flat string OR an array of content blocks
+                    // (tool_result/text). Flatten to verbatim text so tool output is
+                    // captured rather than serialized as a JSON blob or dropped.
+                    let extracted = extract_text(&c);
+                    if extracted.trim().is_empty() {
+                        continue;
+                    }
+                    let title = format!("Verbatim {} Turn ({})", r, session);
+                    let ep = EpisodeSave {
+                        title,
+                        content: extracted,
+                        entities: vec![],
+                        scope: Some("general".to_string()),
+                        vault_path: None,
+                        source_episode: None,
+                        session_id: Some(session.to_string()),
+                        task_id: None,
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
+
+                    save_episode_bidirectional(&ep, backend, store, ignore)
+                        .await
+                        .context("Failed to save episode bidirectionally during transcript mining")?;
+                    
+                    saved_count += 1;
+                }
+            }
+        }
+    }
+
+    // 2.0 dual-durability journaling
+    backend.journal_state(&store.vault_root, Some(session))
+        .await
+        .context("Failed to journal state after transcript mining")?;
+
+    Ok(saved_count)
+}

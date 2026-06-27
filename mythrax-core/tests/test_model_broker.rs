@@ -1,4 +1,7 @@
-use mythrax_core::llm::{DynamicModelBroker, ModelTier, ModelConfig};
+
+#[cfg(feature = "mlx")]
+use mythrax_core::llm::{DynamicModelBroker, ModelTier};
+#[cfg(feature = "mlx")]
 use tempfile::tempdir;
 
 #[tokio::test]

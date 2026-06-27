@@ -1,9 +1,8 @@
 use anyhow::Result;
 use tempfile::tempdir;
 use std::fs;
-use std::sync::Arc;
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::cognitive::paging::{page_code_block, intercept_and_restore_symbols};
+use mythrax_core::cognitive::paging::page_code_block;
 
 #[tokio::test]
 async fn test_virtual_skeleton_paging_and_editing_flow() -> Result<()> {

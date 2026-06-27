@@ -72,7 +72,7 @@ pub fn display_val(val: i32) {
     assert_eq!(disk_content, initial_content);
 
     // 2. Test "replace" (Paging-Aware Contiguous Edit)
-    let replace_res = call_mcp_tool(&state, "manage_file", json!({
+    let _replace_res = call_mcp_tool(&state, "manage_file", json!({
         "action": "replace",
         "path": file_path.to_str().unwrap(),
         "target_content": "[Paged Symbol: Reference page_fn_run_calc]",

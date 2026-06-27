@@ -17,4 +17,11 @@ pub mod cognitive;
 pub mod mcp;
 pub mod mcp_routes;
 pub mod daemon;
+pub mod hooks;
+pub mod retrieval;
+
+#[cfg(any(test, feature = "bench"))]
+pub mod bench;
+
+
 

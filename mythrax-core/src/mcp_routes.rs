@@ -1,18 +1,16 @@
 use std::sync::Arc;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use serde_json::{json, Value};
 use anyhow::{Result, Context};
 use crate::api::ApiState;
 use crate::db::{StorageBackend, SurrealBackend, parse_record_id, backend::format_record_id};
 use surrealdb_types::SurrealValue;
-use crate::store::MarkdownStore;
 use crate::contracts::*;
 use crate::cognitive::ArborCoordinator;
 use crate::cognitive::compactor::Compactor;
 use crate::cognitive::synthesis::DreamCoordinator;
 use crate::cognitive::forge::Forge;
 use crate::cognitive::paging::{intercept_and_restore_symbols, page_code_block};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use crate::verify::run_workspace_audit;
 use crate::vault::ingestion::bulk_ingest_vault;
 
@@ -89,7 +87,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["search", "rules", "nodes", "root", "query_symbolic", "save", "feedback", "thought"] },
+                        "action": { "type": "string", "enum": ["search", "rules", "nodes", "root", "query_symbolic", "save", "feedback", "thought", "search_index", "timeline", "get_full"] },
                         "query": { "type": "string" },
                         "scope": { "type": "string" },
                         "limit": { "type": "integer", "default": 15 },
@@ -102,6 +100,10 @@ pub fn get_mcp_tools_schema() -> Value {
                         "session_id": { "type": "string" },
                         "tier": { "type": "string" },
                         "node_ids": { "type": "array", "items": { "type": "string" } },
+                        "ids": { "type": "array", "items": { "type": "string" } },
+                        "depth_before": { "type": "integer", "default": 3 },
+                        "depth_after": { "type": "integer", "default": 3 },
+                        "anchor_id": { "type": "string" },
                         "node_id": { "type": "string" },
                         "relation": { "type": "string" },
                         "max_depth": { "type": "integer", "default": 3 },
@@ -366,7 +368,7 @@ pub async fn call_mcp_tool(
 async fn handle_manage_memory(state: &ApiState, args: Value) -> Result<Value> {
     let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter")?;
     match action {
-        "search" | "rules" | "nodes" | "root" | "query_symbolic" => {
+        "search" | "rules" | "nodes" | "root" | "query_symbolic" | "search_index" | "timeline" | "get_full" => {
             handle_query_memory(state, args).await
         }
         "save" | "feedback" | "thought" => {
@@ -420,7 +422,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                 }
             }
 
-            let mut stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
+            let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                 r.embedding = None;
                 let mut v = serde_json::to_value(&r).unwrap();
                 strip_nulls(&mut v);
@@ -456,6 +458,244 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                 ]
             }))
         }
+        "search_index" => {
+            let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
+            let scope = args.get("scope").and_then(|v| v.as_str());
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
+            let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
+            let token_budget = args.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
+            let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let search_res = state.backend.search(
+                query,
+                scope,
+                false,
+                limit,
+                offset,
+                threshold,
+                token_budget,
+                allow_downward,
+                true, // include_episodes
+                false // include_artifacts
+            ).await?;
+
+            // Broad Cheap Projection (BCP): we deliberately filter and only project
+            // nodes where tier == "episode" to provide a lightweight, cheap overview index.
+            // Wisdom rules, wiki nodes, and insight nodes are deliberately excluded here
+            // to minimize token costs and focus purely on raw episode sequence indexing.
+            let mut index_rows = Vec::new();
+            for r in search_res.results {
+                if r.tier == "episode" {
+                    let subtitle = make_subtitle(&r.content);
+                    index_rows.push(crate::contracts::IndexRow {
+                        id: r.id,
+                        title: r.title,
+                        subtitle,
+                        similarity: r.similarity,
+                    });
+                }
+            }
+
+            let text = serde_json::to_string_pretty(&index_rows)?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            }))
+        }
+        "timeline" => {
+            let anchor_id = args.get("anchor_id").and_then(|v| v.as_str());
+            let query = args.get("query").and_then(|v| v.as_str());
+            let depth_before = args.get("depth_before").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+            let depth_after = args.get("depth_after").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+
+            let resolved_anchor_id = if let Some(id) = anchor_id {
+                id.to_string()
+            } else if let Some(q) = query {
+                let search_res = state.backend.search(
+                    q,
+                    None,
+                    false,
+                    1,
+                    0,
+                    0.0,
+                    None,
+                    false,
+                    true,
+                    false
+                ).await?;
+                let best = search_res.results.first().context("No matching anchor episode found for query")?;
+                best.id.clone()
+            } else {
+                anyhow::bail!("Either anchor_id or query must be provided for timeline");
+            };
+
+            let anchor_record = crate::db::backend::parse_record_id(&resolved_anchor_id)?;
+            
+            #[derive(serde::Deserialize, Debug, surrealdb_types::SurrealValue)]
+            struct AnchorRow {
+                created_at: chrono::DateTime<chrono::Utc>,
+            }
+
+            let mut response = surreal_backend.db.query("SELECT created_at FROM $id;")
+                .bind(("id", anchor_record))
+                .await?;
+            let anchor_rows: Vec<AnchorRow> = response.take(0)?;
+            let anchor_row = anchor_rows.into_iter().next().context("Anchor episode not found in database")?;
+            let anchor_time = anchor_row.created_at;
+
+            #[derive(serde::Deserialize, Debug, surrealdb_types::SurrealValue)]
+            struct EpisodeQueryResult {
+                id: surrealdb::types::RecordId,
+                title: String,
+                content: String,
+                created_at: chrono::DateTime<chrono::Utc>,
+            }
+
+            let mut response_before = surreal_backend.db.query("SELECT id, title, content, created_at FROM episode WHERE created_at < $created_at ORDER BY created_at DESC LIMIT $limit;")
+                .bind(("created_at", anchor_time))
+                .bind(("limit", depth_before))
+                .await?;
+            let mut before_rows: Vec<EpisodeQueryResult> = response_before.take(0)?;
+            before_rows.reverse();
+
+            let mut response_after = surreal_backend.db.query("SELECT id, title, content, created_at FROM episode WHERE created_at > $created_at ORDER BY created_at ASC LIMIT $limit;")
+                .bind(("created_at", anchor_time))
+                .bind(("limit", depth_after))
+                .await?;
+            let after_rows: Vec<EpisodeQueryResult> = response_after.take(0)?;
+
+            let mut index_rows = Vec::new();
+            for r in before_rows {
+                let subtitle = make_subtitle(&r.content);
+                index_rows.push(crate::contracts::IndexRow {
+                    id: crate::db::backend::format_record_id(&r.id),
+                    title: r.title,
+                    subtitle,
+                    similarity: 0.0,
+                });
+            }
+            for r in after_rows {
+                let subtitle = make_subtitle(&r.content);
+                index_rows.push(crate::contracts::IndexRow {
+                    id: crate::db::backend::format_record_id(&r.id),
+                    title: r.title,
+                    subtitle,
+                    similarity: 0.0,
+                });
+            }
+
+            let text = serde_json::to_string_pretty(&index_rows)?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            }))
+        }
+        "get_full" => {
+            let ids = if let Some(ids_val) = args.get("ids").and_then(|v| v.as_array()) {
+                ids_val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<String>>()
+            } else if let Some(node_ids_val) = args.get("node_ids").and_then(|v| v.as_array()) {
+                node_ids_val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<String>>()
+            } else {
+                anyhow::bail!("Missing ids or node_ids array parameter");
+            };
+
+            let hydrated = state.backend.get_memory_nodes(&ids).await?;
+            
+            let mut results = Vec::new();
+            const MAX_HYDRATION_CHARS: usize = 10000;
+            for ep in hydrated.episodes {
+                let content = if ep.content.chars().count() > MAX_HYDRATION_CHARS {
+                    let truncated_len = ep.content.chars().count() - MAX_HYDRATION_CHARS;
+                    let truncated: String = ep.content.chars().take(MAX_HYDRATION_CHARS).collect();
+                    format!("{}... [truncated {} chars]", truncated, truncated_len)
+                } else {
+                    ep.content.clone()
+                };
+                results.push(crate::contracts::SearchResult {
+                    id: ep.id.clone().unwrap_or_default(),
+                    title: ep.title.clone(),
+                    content,
+                    similarity: 1.0,
+                    utility: ep.utility.unwrap_or(0.0),
+                    tier: "episode".to_string(),
+                    embedding: None,
+                    vault_path: ep.vault_path.clone(),
+                    source_episode: ep.source_episode.clone(),
+                    discovery_tokens: ep.discovery_tokens,
+                    related_nodes: None,
+                    ..Default::default()
+                });
+            }
+            for wiki in hydrated.wiki_nodes {
+                let content = if wiki.content.chars().count() > MAX_HYDRATION_CHARS {
+                    let truncated_len = wiki.content.chars().count() - MAX_HYDRATION_CHARS;
+                    let truncated: String = wiki.content.chars().take(MAX_HYDRATION_CHARS).collect();
+                    format!("{}... [truncated {} chars]", truncated, truncated_len)
+                } else {
+                    wiki.content.clone()
+                };
+                results.push(crate::contracts::SearchResult {
+                    id: wiki.id.clone().unwrap_or_default(),
+                    title: wiki.name.clone(),
+                    content,
+                    similarity: 1.0,
+                    utility: 0.0,
+                    tier: "wiki".to_string(),
+                    embedding: None,
+                    vault_path: wiki.vault_path.clone(),
+                    source_episode: None,
+                    discovery_tokens: None,
+                    related_nodes: None,
+                    ..Default::default()
+                });
+            }
+            for rule in hydrated.wisdom_rules {
+                let raw_content = format!(
+                    "Avoid: {}\nCausal: {}\nRemedy: {}",
+                    rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                );
+                let content = if raw_content.chars().count() > MAX_HYDRATION_CHARS {
+                    let truncated_len = raw_content.chars().count() - MAX_HYDRATION_CHARS;
+                    let truncated: String = raw_content.chars().take(MAX_HYDRATION_CHARS).collect();
+                    format!("{}... [truncated {} chars]", truncated, truncated_len)
+                } else {
+                    raw_content
+                };
+                results.push(crate::contracts::SearchResult {
+                    id: rule.id.clone().unwrap_or_default(),
+                    title: rule.target_pattern.clone(),
+                    content,
+                    similarity: rule.similarity.unwrap_or(1.0),
+                    utility: rule.utility.unwrap_or(0.0) as f32,
+                    tier: "wisdom".to_string(),
+                    embedding: None,
+                    vault_path: rule.vault_path.clone(),
+                    source_episode: None,
+                    discovery_tokens: None,
+                    related_nodes: None,
+                    ..Default::default()
+                });
+            }
+
+            let text = serde_json::to_string_pretty(&results)?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            }))
+        }
         "rules" => {
             let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
             let tier = args.get("tier").and_then(|v| v.as_str());
@@ -464,7 +704,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
 
             let search_res = state.backend.get_wisdom(query, tier, limit, offset, threshold).await?;
-            let mut stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
+            let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
                 r.embedding = None;
                 let mut v = serde_json::to_value(&r).unwrap();
                 strip_nulls(&mut v);
@@ -584,7 +824,12 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
                 source_episode: None,
                 session_id,
                 task_id,
-            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
 
             let id = crate::vault::watcher::save_episode_bidirectional(&episode, &state.backend, &state.store, &state.ignore_list).await?;
 
@@ -1046,7 +1291,12 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                                 source_episode: ep.source_episode.clone(),
                                 session_id: None,
                                 task_id: None,
-                            };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                             let markdown = crate::vault::watcher::format_episode_markdown(&save);
                             state.store.write_file(vp, &markdown)?;
                         }
@@ -1088,7 +1338,12 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                         source_episode: ep.source_episode.clone(),
                         session_id: None,
                         task_id: None,
-                    };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                     state.backend.save_episode(&save).await?;
                     count += 1;
                 }
@@ -1270,8 +1525,26 @@ async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Value>
     }
 }
 
+pub const CHARS_PER_TOKEN: usize = 4;
+
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
     let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+    
+    let mut total_discovery = 0u32;
+    let mut total_read = 0u32;
+    let mut has_discovery = false;
+
+    let calc_tokens = |title: &str, content: &str, facts: Option<&[String]>| -> u32 {
+        let mut len = title.len() + content.len();
+        if let Some(f) = facts {
+            if !f.is_empty() {
+                if let Ok(json_str) = serde_json::to_string(f) {
+                    len += json_str.len();
+                }
+            }
+        }
+        ((len + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN) as u32
+    };
     let query = args.get("query").and_then(|v| v.as_str());
     let workspace_path = args.get("workspace_path").and_then(|v| v.as_str());
 
@@ -1292,7 +1565,12 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     source_episode: ep.source_episode.clone(),
                     session_id: None,
                     task_id: None,
-                };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
                 let markdown = crate::vault::watcher::format_episode_markdown(&save);
                 state.store.write_file(vp, &markdown)?;
             }
@@ -1426,15 +1704,25 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             let hydrated = state.backend.get_memory_nodes(&node_ids).await?;
             parts.push("## Hydrated Context Nodes\n".to_string());
             for wiki in hydrated.wiki_nodes {
+                total_read += calc_tokens(&wiki.name, &wiki.content, None);
                 parts.push(format!("### 📚 Distilled Insight: {}\nScope: {}\n{}\n", wiki.name, wiki.scope, wiki.content));
             }
             for wisdom in hydrated.wisdom_rules {
+                let rule_content = format!("Avoid: {}\nCausal: {}\nRemedy: {}", wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy);
+                total_read += calc_tokens(&wisdom.target_pattern, &rule_content, None);
                 parts.push(format!(
                     "### 💡 Wisdom Rule: {}\n- **Avoid**: {}\n- **Causal**: {}\n- **Remedy**: {}\n",
                     wisdom.target_pattern, wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy
                 ));
             }
             for ep in hydrated.episodes {
+                if ep.discovery_tokens.is_some() {
+                    has_discovery = true;
+                }
+                if let Some(dt) = ep.discovery_tokens {
+                    total_discovery += dt;
+                }
+                total_read += calc_tokens(&ep.title, &ep.content, ep.facts.as_deref());
                 if let Some(ref ep_id) = ep.id {
                     let rendered = format_episode_or_parent(&*state.backend, &surreal_backend.db, ep_id, &ep.title, &ep.content, ep.scope.as_deref()).await?;
                     parts.push(rendered);
@@ -1457,6 +1745,13 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
             parts.push("## Retrieved Semantic Context\n".to_string());
             for res in search_res.results {
+                if res.discovery_tokens.is_some() {
+                    has_discovery = true;
+                }
+                if let Some(dt) = res.discovery_tokens {
+                    total_discovery += dt;
+                }
+                total_read += calc_tokens(&res.title, &res.content, None);
                 if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
                     parts.push(formatted);
                 }
@@ -1494,6 +1789,13 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             if res.id.starts_with("episode:") && res.similarity >= 0.80 {
                 high_confidence_memories_found = true;
             }
+            if res.discovery_tokens.is_some() {
+                has_discovery = true;
+            }
+            if let Some(dt) = res.discovery_tokens {
+                total_discovery += dt;
+            }
+            total_read += calc_tokens(&res.title, &res.content, None);
             if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
                 parts.push(formatted);
             }
@@ -1604,14 +1906,34 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
     let final_context = format!("{}{}", history_part, initial_context);
 
-    Ok(json!({
+    let mut response_obj = json!({
         "content": [
             {
                 "type": "text",
                 "text": final_context
             }
         ]
-    }))
+    });
+
+    if has_discovery {
+        let savings = (total_discovery as i32) - (total_read as i32);
+        let savings_percent = if total_discovery > 0 {
+            ((savings as f64 / total_discovery as f64) * 100.0).round() as u32
+        } else {
+            0
+        };
+        response_obj.as_object_mut().unwrap().insert(
+            "token_economics".to_string(),
+            json!({
+                "total_read": total_read,
+                "total_discovery": total_discovery,
+                "savings": savings,
+                "savings_percent": savings_percent
+            })
+        );
+    }
+
+    Ok(response_obj)
 }
 
 pub async fn run_llm_critic(
@@ -2018,3 +2340,14 @@ async fn format_search_result_hybrid(
         Ok(None)
     }
 }
+
+fn make_subtitle(content: &str) -> String {
+    let char_count = content.chars().count();
+    if char_count <= 120 {
+        content.to_string()
+    } else {
+        let truncated: String = content.chars().take(120).collect();
+        format!("{}...", truncated)
+    }
+}
+

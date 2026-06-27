@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{BeliefState, ThoughtNode, EpisodeSave, WikiNode};
+use mythrax_core::contracts::{EpisodeSave, WikiNode};
 
 /// Finds a free unused TCP port on localhost.
 fn find_free_port() -> u16 {
@@ -77,6 +77,7 @@ async fn test_schema_upgrades_exist() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let ep_id = backend.save_episode(&ep_save).await?;
 
@@ -91,7 +92,7 @@ async fn test_schema_upgrades_exist() -> Result<()> {
     let wiki_id = backend.save_wiki_node(&wiki_save).await?;
 
     // Relate them using the existing relates_to interface
-    backend.relate_nodes(&ep_id, &wiki_id).await?;
+    backend.relate_nodes(&ep_id, &wiki_id, None, None, None).await?;
 
     // Verify relations and fields
     let mut rel_select = backend.db.query("SELECT * FROM relates_to;")
@@ -109,6 +110,7 @@ async fn test_schema_upgrades_exist() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let ep_imp_id = backend.save_episode(&ep_imp).await?;
     

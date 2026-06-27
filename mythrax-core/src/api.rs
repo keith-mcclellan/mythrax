@@ -11,7 +11,6 @@ use crate::store::MarkdownStore;
 use crate::vault::watcher::WatchIgnoreList;
 use serde_json::{json, Value};
 use futures_util::stream::Stream;
-use futures_util::StreamExt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use bytes::Bytes;
@@ -39,6 +38,8 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/v1/mcp/call", post(call_mcp_tool_handler))
         .route("/v1/chat/completions", post(completions_proxy_handler))
         .route("/api/*path", post(ollama_proxy_handler).get(ollama_proxy_handler))
+        .route("/v1/hooks/precompact", post(precompact_handler))
+        .route("/v1/hooks/stop", post(stop_handler))
         .with_state(state)
 }
 
@@ -687,5 +688,83 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct HookQuery {
+    host: Option<String>,
+}
+
+async fn precompact_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<HookQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let host = query.host.unwrap_or_else(|| "gemini".to_string());
+    let (sanitized_session, _, normalized_path) = match crate::hooks::adapters::adapt_payload(body, &host) {
+        Ok(tup) => tup,
+        Err(e) => {
+            tracing::error!("Failed to adapt precompact payload for host '{}': {:?}", host, e);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    match crate::hooks::precompact::mine_transcript(
+        &sanitized_session,
+        &normalized_path,
+        &state.backend,
+        &state.store,
+        &state.ignore_list,
+    ).await {
+        Ok(count) => Ok(Json(json!({ "status": "success", "episodes_saved": count }))),
+        Err(e) => {
+            tracing::error!("Precompact hook failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn stop_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<HookQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let host = query.host.unwrap_or_else(|| "gemini".to_string());
+    let (sanitized_session, stop_hook_active, normalized_path) = match crate::hooks::adapters::adapt_payload(body, &host) {
+        Ok(tup) => tup,
+        Err(e) => {
+            tracing::error!("Failed to adapt stop payload for host '{}': {:?}", host, e);
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    match crate::hooks::stop::mine_if_due(
+        &sanitized_session,
+        &normalized_path,
+        stop_hook_active,
+        &state.backend,
+        &state.store,
+        &state.ignore_list,
+    ).await {
+        Ok(count_opt) => Ok(Json(json!({
+            "status": "success",
+            "episodes_saved": count_opt,
+            "block": count_opt.is_some()
+        }))),
+        Err(e) => {
+            tracing::error!("Stop hook failed: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }

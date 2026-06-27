@@ -34,6 +34,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     backend.save_episode(&ep_target).await?;
 
@@ -46,6 +47,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     backend.save_episode(&ep_general).await?;
 
@@ -58,6 +60,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     backend.save_episode(&ep_other).await?;
 
@@ -104,6 +107,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
         source_episode: None,
         session_id: Some(session_id.clone()),
         task_id: Some(task_id.clone()),
+        ..Default::default()
     };
     let ep1_id = backend.save_episode(&ep1).await?;
 
@@ -116,6 +120,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
         source_episode: None,
         session_id: Some(session_id.clone()),
         task_id: Some(task_id.clone()),
+        ..Default::default()
     };
     let ep2_id = backend.save_episode(&ep2).await?;
 
@@ -128,6 +133,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
         source_episode: None,
         session_id: Some(session_id.clone()),
         task_id: Some(task_id.clone()),
+        ..Default::default()
     };
     let ep3_id = backend.save_episode(&ep3).await?;
 

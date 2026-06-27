@@ -1,7 +1,6 @@
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{EpisodeSave, SearchResult};
+use mythrax_core::contracts::EpisodeSave;
 use tempfile::tempdir;
-use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::test]
@@ -32,6 +31,7 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
                 source_episode: None,
                 session_id: Some("test_session".to_string()),
                 task_id: None,
+                ..Default::default()
             };
             backend_clone.save_episode_with_wal_actor(&episode, &wal_clone).await.unwrap();
         });
@@ -59,6 +59,7 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
         source_episode: None,
         session_id: Some("test_session".to_string()),
         task_id: None,
+        ..Default::default()
     };
     backend.save_episode_with_wal_actor(&duplicate_episode, &wal_path).await.unwrap();
 

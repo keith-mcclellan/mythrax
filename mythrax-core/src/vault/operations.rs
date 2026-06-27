@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::Result;
 use crate::contracts;
 use crate::db::backend::StorageBackend;
 use crate::vault;

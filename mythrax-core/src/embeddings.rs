@@ -3,6 +3,10 @@ use tokenizers::Tokenizer;
 use std::path::Path;
 use std::env;
 use std::sync::Mutex;
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
 pub struct LocalEmbedder {
     session: Mutex<ort::session::Session>,
@@ -10,6 +14,16 @@ pub struct LocalEmbedder {
 }
 
 impl LocalEmbedder {
+    pub fn get_global() -> Result<Arc<Self>> {
+        let res = GLOBAL_EMBEDDER.get_or_init(|| {
+            Self::new().map(Arc::new).map_err(|e| e.to_string())
+        });
+        match res {
+            Ok(emb) => Ok(emb.clone()),
+            Err(err) => Err(anyhow::anyhow!("Failed to initialize global embedder: {}", err)),
+        }
+    }
+
     pub fn new() -> Result<Self> {
         let home = env::var("HOME").context("HOME env var not set")?;
         let base_path = Path::new(&home).join(".mythrax/models");
@@ -164,7 +178,7 @@ impl LocalEmbedder {
         let encodings = self.tokenizer.encode_batch(formatted_texts, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
-        let mut max_len = encodings.iter()
+        let max_len = encodings.iter()
             .map(|enc| enc.get_ids().len())
             .max()
             .unwrap_or(0)

@@ -262,12 +262,6 @@ impl DreamCoordinator {
             active_mode = mo.to_string();
         }
 
-        let (default_eps, default_min_samples) = match active_mode.as_str() {
-            "deep" => (0.15, 2),
-            "bulk" => (0.12, 4),
-            _ => (0.08, 2), // incremental
-        };
-
         let all_episodes = db.get_all_episodes().await?;
         let unprocessed = db.get_unprocessed_episodes().await?;
 
@@ -275,7 +269,7 @@ impl DreamCoordinator {
             return Ok(());
         }
 
-        let (default_eps, default_min_samples) = match active_mode.as_str() {
+        let (_default_eps, default_min_samples) = match active_mode.as_str() {
             "deep" => (0.15, 2),
             "bulk" => (0.12, 4),
             _ => (0.08, 2), // incremental
@@ -458,7 +452,7 @@ impl DreamCoordinator {
                         };
                         if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await
                             && let Some(ref ep_id) = ep.id {
-                                let _ = db.relate_nodes(ep_id, &wiki_node_id).await;
+                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                             }
 
                         tracing::info!(
@@ -584,7 +578,7 @@ impl DreamCoordinator {
                 };
                 if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
                     for ep_id in &cluster_ep_ids {
-                        let _ = db.relate_nodes(ep_id, &wiki_node_id).await;
+                        let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                     }
                 }
 
@@ -675,7 +669,7 @@ impl DreamCoordinator {
                             };
                             if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
                                 for ep_id in &cluster_ep_ids {
-                                    let _ = db.relate_nodes(ep_id, &wisdom_id).await;
+                                    let _ = db.relate_nodes(ep_id, &wisdom_id, None, None, None).await;
                                 }
                             }
                         }
@@ -952,7 +946,7 @@ impl DreamCoordinator {
                                     if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
                                         for ep in &group {
                                             if let Some(ref ep_id) = ep.id {
-                                                let _ = db.relate_nodes(ep_id, &wiki_node_id).await;
+                                                let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                                             }
                                         }
                                     }
@@ -1100,7 +1094,7 @@ pub async fn save_wisdom_rule_with_deduplication(
             }
             if let Some(ref skills_id) = matched.id {
                 for ep in &rule.source_episodes {
-                    let _ = db.relate_nodes(ep, skills_id).await;
+                    let _ = db.relate_nodes(ep, skills_id, None, None, None).await;
                 }
                 return Ok(skills_id.clone());
             }

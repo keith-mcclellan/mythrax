@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
+use mythrax_core::db::SurrealBackend;
 use std::net::TcpListener;
 
 #[tokio::test]

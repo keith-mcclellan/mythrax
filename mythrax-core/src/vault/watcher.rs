@@ -8,7 +8,7 @@ use std::time::{Instant, Duration};
 use tokio::sync::mpsc;
 use anyhow::{Result, Context};
 use crate::store::MarkdownStore;
-use crate::db::{StorageBackend, SurrealBackend};
+use crate::db::StorageBackend;
 use crate::contracts::{EpisodeSave, WisdomRule, Entity, WikiNode};
 use surrealdb_types::SurrealValue;
 use crate::vault::markdown::{parse_frontmatter, extract_plain_text};
@@ -519,7 +519,12 @@ pub async fn sync_file_to_db(
             source_episode: None,
             session_id: None,
             task_id: None,
-        };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
 
         backend.save_episode(&episode).await?;
     } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
@@ -857,7 +862,12 @@ mod tests {
             source_episode: None,
             session_id: None,
             task_id: None,
-        };
+discovery_tokens: None,
+facts: None,
+concepts: None,
+files_read: None,
+files_modified: None,
+};
         
         let ep_id = save_episode_bidirectional(&episode, &backend, &store, &ignore_list).await.unwrap();
         assert!(ep_id.contains("episode:"));

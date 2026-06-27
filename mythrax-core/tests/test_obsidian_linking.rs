@@ -30,6 +30,7 @@ async fn test_obsidian_compatibility_linking() -> Result<()> {
         source_episode: None,
         session_id: None,
         task_id: None,
+        ..Default::default()
     };
     let ep_id = backend.save_episode(&ep_save).await?;
     // Write physical file to disk
