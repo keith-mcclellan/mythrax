@@ -272,7 +272,7 @@ fn test_logical_section_splitting_and_grouping() {
     assert_eq!(sections[0].title, "Sec 1 - Sec 3");
     assert_eq!(sections[0].content.trim(), content.trim());
     
-    let many_words: Vec<String> = (0..22000).map(|i| format!("w{}", i)).collect();
+    let many_words: Vec<String> = (0..26000).map(|i| format!("w{}", i)).collect();
     let large_text = many_words.join(" ");
     let large_content = format!("Small intro. {}", large_text);
     

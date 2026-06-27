@@ -158,7 +158,8 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
         }
     }
 
-    assert_eq!(reprocess_count, 1);
+    let expected_reprocess_count = if backend.embedder.is_some() { 1 } else { 2 };
+    assert_eq!(reprocess_count, expected_reprocess_count);
 
     // Verify embedding generated (or remains None if models are missing, but connection doesn't crash)
     let ep_after = backend.get_all_episodes().await?

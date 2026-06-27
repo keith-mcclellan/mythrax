@@ -426,6 +426,12 @@ async fn test_wisdom_rule_supersession_lifecycle() -> Result<()> {
 
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
+
+    if backend.embed("test").await.is_err() {
+        println!("Skipping test_wisdom_rule_supersession_lifecycle: model files not present in ~/.mythrax/models/");
+        return Ok(());
+    }
+
     let store = MarkdownStore::new(&vault_root)?;
 
     // 1. Seed an existing dynamic wisdom rule
