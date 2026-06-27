@@ -370,6 +370,14 @@ To prevent tests from attempting to download multi-gigabyte Hugging Face `.gguf`
 MYTHRAX_TEST_MOCK=1 cargo t --features mlx
 ```
 
+### Build & Compilation (Metal / GPU Acceleration)
+When building `mythrax` with the `mlx` feature enabled, the build script compiles the Metal FFI kernels using the Apple Metal compiler tools (`metal`). These tools are only present in the full Xcode App developer directory (typically under `/Applications/Xcode.app`), not in the standalone macOS command line tools (`/Library/Developer/CommandLineTools`).
+
+If cargo build fails with `xcrun: error: unable to find utility "metal"`, specify the `DEVELOPER_DIR` environment variable pointing to the full Xcode installation:
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer cargo build --release --features mlx
+```
+
 ---
 
 ## Summary

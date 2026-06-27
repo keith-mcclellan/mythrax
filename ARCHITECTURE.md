@@ -66,6 +66,9 @@ The cognitive and inference capabilities in Mythrax 2.0 are managed by a highly 
   1. **MLX (Local Apple Silicon)**: Exploits metal GPU acceleration for ultra-fast local inference and embeddings.
   2. **ORT (ONNX Runtime)**: Run-anywhere CPU/GPU ONNX model execution.
   3. **Mock Mode**: Light, in-memory simulations for lightning-fast testing and offline compilation.
+- **Hybrid In-Process vs External Routing**:
+  - **In-Process Engine**: Lightweight dense models (e.g., Nomics embeddings and the Qwen2.5-0.5B/1.5B/7B family) are loaded natively into the Rust process memory and run in-process using the Metal GPU backend.
+  - **External Model Delegation**: Large hybrid models (such as `mlx-community/Qwen3.6-35B-A3B-4bit`) bypass the in-process engine and route directly to the local `mlx-lm` HTTP completions server on port 8080 to prevent VRAM exhaustion and execute complex custom kernels.
 - **Split GPU Semaphores**: To prevent deadlocks under heavy parallel workloads (e.g., when a background dreaming compaction runs while an agent is actively querying memory), the broker separates the pipelines into independent semaphores:
   - `METAL_INFERENCE_SEMAPHORE`: Coordinates model text generation.
   - `METAL_EMBEDDING_SEMAPHORE`: Coordinates vector embedding calculations.
@@ -108,3 +111,48 @@ For production-grade operations, Mythrax 2.0 implements robust logging and clean
   3. Clear Metal FFI caches and log the event.
   4. Flush and close the database connection.
   5. Delete the `daemon.pid` file and exit cleanly.
+
+---
+
+## 6. End-to-End Cognitive Memory Data Flow
+
+The following data flow trace summarizes the path of session telemetry and local LLM execution:
+
+```
+[Agent Action / Chat Turn]
+           │
+           ▼
+[Pre-Invocation Hook] ──► Extracts text & tool output verbatim (JSONL array)
+           │
+           ▼
+[SurrealDB Episode Ingestion] (Indexed as raw episodic memory)
+           │
+           ├──► [Obsidian Vault Watcher] ──► 500ms coalescing writes to disk
+           │
+           ▼ (Idle Session > 10m Sweep)
+[Compactor Sweep Service]
+           │
+           ├──► [Model Router]
+           │         │
+           │         ├──► Small Dense (0.5B) ──► Loads In-Process (Metal GPU)
+           │         │
+           │         └──► MoE Hybrid (35B)  ──► Delegates to external HTTP (:8080)
+           │
+           ▼ (Summary Generation)
+[Sigmoid Gated Search Indexer]
+           │
+           ├──► [Daily dreaming compactor]
+           │         │
+           │         ├──► Runs DBSCAN to cluster related memories
+           │         │
+           │         └──► Executes Arbor HTR loop in git worktree branches
+           │
+           ▼
+[Knowledge WikiNode / Wisdom Rule Synthesis] (Vault and DB updated)
+```
+
+1. **Ingestion Flow (Flow 6)**: Documents or session turns are parsed, token-counted, and indexed. Documents parsed by Forge are split into table-of-contents structural guides and concept rules natively via in-process models.
+2. **Retrieval Flow (Flow 4)**: Blended search matches semantic vectors (via `nomic-embed` in-process) and applies Sigmoid-gated filtering. Past memories that decayed in utility are demoted by `0.4` to clear top-tier attention paths while preserving baseline context.
+3. **Compaction Flow (Flow 7/8)**: The background scheduling sweeps detect abandoned session files. Trailing turns are mined, summarized through hybrid model routing, and clustered. High-cohesion memory clusters run through the Arbor HTR (Hypothesis-Tree-Refinement) Git branch loop to verify code synthesis, merging successful rules into permanent WikiNodes.
+4. **Eviction Flow (Flow 9)**: Dynamic model loading runs VRAM checks and evicted model wait loops to safeguard local system memory from GPU overflows.
+

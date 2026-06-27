@@ -6,12 +6,12 @@ This guide serves as the definitive reference manual for **Project Mythrax**, a 
 
 ## 1. System Overview & Architecture
 
-Mythrax 1.0 implements a client-server architecture to optimize resource utilization and ensure database integrity:
+Mythrax 2.2.0 implements a client-server architecture to optimize resource utilization and ensure database integrity:
 
 1. **Obsidian Vault (Filesystem Source of Truth)**: All episodes, insights, and wisdom rules are stored as clean markdown files under standardized folders. This allows users to read, edit, and navigate the entire memory graph using standard markdown links and tools like Obsidian.
-2. **SurrealDB (Vector & Graph Query Engine)**: The database layer caches vault files, stores vector embeddings (using a centralized `nomic-embed-text-v1.5` ONNX model), and maintains directed relationship edges (`relates_to` and `parent_of`) for graph traversal and semantic search.
+2. **SurrealDB (Vector & Graph Query Engine)**: The database layer caches vault files, stores vector embeddings (using local hardware-accelerated `nomic-embed-text-v1.5` in-process MLX/ONNX models), and maintains directed relationship edges (`relates_to` and `parent_of`) for graph traversal and semantic search.
 3. **Lightweight Thin Clients (MCP & CLI)**: The command line interface and the Model Context Protocol (MCP) server run as thin HTTP clients forwarding all requests to a persistent background daemon.
-4. **Daemon Centrization**: The background daemon exclusively holds the RocksDB file write lock and the ONNX embedding model. This design resolves RocksDB lock contention, lowers individual client memory footprints by 50%, and makes query execution instantaneous.
+4. **Daemon Centrization**: The background daemon exclusively holds the RocksDB file write lock and coordinates the local in-process MLX model engines (embeddings and text completions). This design resolves RocksDB lock contention, lowers individual client memory footprints by 50%, and makes query execution instantaneous.
 
 ```
                   ┌───────────────────────────────┐
@@ -36,7 +36,7 @@ Mythrax 1.0 implements a client-server architecture to optimize resource utiliza
 Users who interact with Mythrax exclusively via the MCP server (e.g. through Cursor, VS Code, or other agent IDEs) do not need to run the CLI or manage daemon processes manually:
 - **Automatic Daemon Boot**: On initialization of the MCP server, it automatically pings localhost port 8090. If the daemon is inactive, the MCP server automatically spawns the daemon in the background as a detached process.
 - **Automatic Background Scheduling**: When the daemon boots, it automatically spawns the background scheduler tasks. This includes the Obsidian file watcher, the daily deep dreaming compaction, and the inactivity-debounced incremental synthesis loop.
-- **Resource Cleanup**: When the host IDE shuts down and terminates the MCP server process, the daemon continues running in the background to serve subsequent client requests, maintaining its warm ONNX embedding cache and RocksDB single-writer integrity.
+- **Resource Cleanup**: When the host IDE shuts down and terminates the MCP server process, the daemon continues running in the background to serve subsequent client requests, maintaining its warm local model (MLX/ORT) caches and RocksDB single-writer integrity.
 
 ---
 
@@ -47,7 +47,7 @@ The database and vault manage three main entities:
 ### 2.1 Episode
 - **Description**: Raw historical transcripts, conversation logs, and actions.
 - **Storage Location**: `vault/episodes/antigravity_<session_id>_part<N>_<hash>.md`
-- **Token Optimization**: Long logs are chunked at a maximum of `100,000` characters to prevent prompt bloat and ONNX attention failures.
+- **Token Optimization**: Long logs are chunked at a maximum of `100,000` characters to prevent prompt bloat and local attention window failures.
 
 ### 2.2 WikiNode (Artifact / Insight)
 - **Description**: Distilled design documents, walkthroughs, chapter text, or synthesized insights.
