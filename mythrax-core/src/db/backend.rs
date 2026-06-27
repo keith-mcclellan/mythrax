@@ -2161,6 +2161,9 @@ impl StorageBackend for SurrealBackend {
             candidates = parse_results(keyword_resp_res.unwrap(), false)?;
         }
 
+        candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.truncate(limit * 3);
+
         // Apply Epic 4 distance-reduction boosts if enabled
         if is_boost_name_enabled || is_boost_quote_enabled || is_boost_temporal_enabled || is_boost_overlap_enabled {
             fn detect_person_name(query: &str, candidate_text: &str) -> bool {
