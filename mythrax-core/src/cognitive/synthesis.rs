@@ -262,6 +262,59 @@ impl DreamCoordinator {
             active_mode = mo.to_string();
         }
 
+        // Background Transcript Sweep & Idle Session Recovery
+        if let Ok(transcripts) = db.get_all_registered_transcripts().await {
+            let idle_threshold = chrono::Duration::minutes(10);
+            let now = chrono::Utc::now();
+            for (session_id, path) in transcripts {
+                // Check last activity timestamp for this session
+                if let Ok(Some(last_activity)) = db.get_session_last_activity(&session_id).await {
+                    if now - last_activity > idle_threshold {
+                        // Retrieve the _last_swept_at key for this session
+                        let stm_map = db.get_stm(&session_id, Some("_last_swept_at")).await.unwrap_or_default();
+                        let last_swept_at_str = stm_map.get("_last_swept_at");
+                        
+                        let needs_mine = match last_swept_at_str {
+                            Some(swept_str) => {
+                                if let Ok(swept_time) = chrono::DateTime::parse_from_rfc3339(swept_str) {
+                                    let swept_utc = swept_time.with_timezone(&chrono::Utc);
+                                    // Check modification time of file
+                                    if let Ok(metadata) = std::fs::metadata(&path) {
+                                        if let Ok(modified_time) = metadata.modified() {
+                                            let modified_utc: chrono::DateTime<chrono::Utc> = modified_time.into();
+                                            modified_utc > swept_utc
+                                        } else {
+                                            true
+                                        }
+                                    } else {
+                                        // Path invalid or file missing. Clear from STM to prevent loop
+                                        let _ = db.clear_stm(&session_id).await;
+                                        false
+                                    }
+                                } else {
+                                    true
+                                }
+                            }
+                            None => true,
+                        };
+
+                        if needs_mine {
+                            // Check file exists before mining
+                            if std::path::Path::new(&path).exists() {
+                                let ignore_list = crate::vault::watcher::WatchIgnoreList::default();
+                                if let Ok(_) = crate::hooks::precompact::mine_transcript(&session_id, &path, db, store, &ignore_list).await {
+                                    let _ = db.save_stm(&session_id, "_last_swept_at", &now.to_rfc3339()).await;
+                                }
+                            } else {
+                                // Clear STM path registry if file is missing/deleted
+                                let _ = db.clear_stm(&session_id).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let all_episodes = db.get_all_episodes().await?;
         let unprocessed = db.get_unprocessed_episodes().await?;
 

@@ -71,8 +71,8 @@ fn extract_text(value: &serde_json::Value) -> String {
 pub async fn mine_transcript(
     session: &str,
     transcript_path: &str,
-    backend: &Arc<dyn StorageBackend>,
-    store: &Arc<MarkdownStore>,
+    backend: &dyn StorageBackend,
+    store: &MarkdownStore,
     ignore: &WatchIgnoreList,
 ) -> Result<usize> {
     let file = File::open(transcript_path)
@@ -122,7 +122,10 @@ files_read: None,
 files_modified: None,
 };
 
-                    save_episode_bidirectional(&ep, backend, store, ignore)
+                    let store_arc = Arc::new(crate::store::MarkdownStore {
+                        vault_root: store.vault_root.clone(),
+                    });
+                    save_episode_bidirectional(&ep, backend, &store_arc, ignore)
                         .await
                         .context("Failed to save episode bidirectionally during transcript mining")?;
                     

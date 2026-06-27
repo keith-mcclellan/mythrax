@@ -94,8 +94,22 @@ async fn test_ingest_document() -> Result<()> {
 
     // Set env var to mock LLM calls and configure active scope
     unsafe {
-        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+            std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+        } else {
+            std::env::set_var("MYTHRAX_MOCK_LLM", "false");
+        }
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", proj_dir.to_string_lossy().to_string());
+    }
+
+    #[cfg(feature = "mlx")]
+    {
+        if std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+            let home = std::env::var("HOME").unwrap();
+            let models_dir = std::path::PathBuf::from(home).join(".mythrax/models");
+            let broker = mythrax_core::llm::DynamicModelBroker::new(models_dir).await.unwrap();
+            let _ = mythrax_core::llm::DYNAMIC_MODEL_BROKER.set(std::sync::Arc::new(broker));
+        }
     }
 
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
@@ -272,7 +286,7 @@ fn test_logical_section_splitting_and_grouping() {
     assert_eq!(sections[0].title, "Sec 1 - Sec 3");
     assert_eq!(sections[0].content.trim(), content.trim());
     
-    let many_words: Vec<String> = (0..22000).map(|i| format!("w{}", i)).collect();
+    let many_words: Vec<String> = (0..26000).map(|i| format!("w{}", i)).collect();
     let large_text = many_words.join(" ");
     let large_content = format!("Small intro. {}", large_text);
     

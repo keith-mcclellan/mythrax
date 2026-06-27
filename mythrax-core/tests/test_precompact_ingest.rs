@@ -45,7 +45,7 @@ async fn precompact_persists_raw_tool_output() -> anyhow::Result<()> {
     let count = mythrax_core::hooks::precompact::mine_transcript(
         "sess1",
         &path_str,
-        &backend,
+        backend.as_ref(),
         &store,
         &ignore,
     ).await?;
@@ -109,8 +109,8 @@ async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<(
     let count = mythrax_core::hooks::precompact::mine_transcript(
         "sess-blocks",
         &path_str,
-        &backend,
-        &store,
+        backend.as_ref(),
+        store.as_ref(),
         &ignore,
     ).await?;
     assert!(count >= 2, "expected both array-form turns mined, got {}", count);

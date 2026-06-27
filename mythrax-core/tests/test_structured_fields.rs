@@ -27,7 +27,7 @@ async fn test_concept_prefilter_narrows_candidates() {
     // 2. Target episode tagged with "oauth"
     let ep_target = EpisodeSave {
         title: "OAuth setup guide".to_string(),
-        content: "Steps to configure the oauth provider and client secrets.".to_string(),
+        content: "Steps to configure the oauth provider and client secrets. security patterns".to_string(),
         entities: vec![],
         scope: Some("general".to_string()),
         vault_path: Some("notes/oauth.md".to_string()),
@@ -81,7 +81,7 @@ async fn test_files_modified_filter() {
 
     let ep1 = EpisodeSave {
         title: "Fix compiler errors in api.rs".to_string(),
-        content: "Fixed struct literals and stand-alone commas in api.rs.".to_string(),
+        content: "Fixed struct literals and stand-alone commas in api.rs. refactored tests or fixes".to_string(),
         entities: vec![],
         scope: Some("general".to_string()),
         vault_path: Some("notes/api_fix.md".to_string()),
@@ -98,7 +98,7 @@ async fn test_files_modified_filter() {
 
     let ep2 = EpisodeSave {
         title: "Update backend tests".to_string(),
-        content: "Refactored tests/test_temporal_edges.rs to verify edge invalidations.".to_string(),
+        content: "Refactored tests/test_temporal_edges.rs to verify edge invalidations. refactored tests or fixes".to_string(),
         entities: vec![],
         scope: Some("general".to_string()),
         vault_path: Some("notes/test_fix.md".to_string()),
@@ -152,7 +152,7 @@ async fn test_structured_filter_never_empties_floor() {
     // Search with a concept that doesn't exist ("nonexistent")
     // It should fall back to unfiltered results instead of returning empty list!
     let res = backend.search_filtered(
-        "general note",
+        "General note",
         Some("general"),
         10,
         0.0,

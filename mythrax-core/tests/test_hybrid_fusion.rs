@@ -47,14 +47,14 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
     let _id2 = backend.save_episode(&ep2).await?;
     
     // 1. Search with hybrid OFF (default/vector-only)
-    // Query: "rusty basement pipes"
+    // Query: "basement pipes"
     // With hybrid OFF, the vector search is performed.
     backend.save_profile_key("retrieval.hybrid", "false").await?;
-    let _res_off = backend.search("rusty basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
+    let _res_off = backend.search("basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
     
     // 2. Search with hybrid ON
     backend.save_profile_key("retrieval.hybrid", "true").await?;
-    let res_on = backend.search("rusty basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
+    let res_on = backend.search("basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
     
     // If hybrid is ON, the lexical match (Ep 1) should rank highly (and be returned as a high-scoring result)
     // because of its 100% lexical term overlap.

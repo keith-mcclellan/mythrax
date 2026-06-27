@@ -232,6 +232,20 @@ pub fn get_mcp_tools_schema() -> Value {
                     },
                     "required": ["session_id"]
                 }
+            },
+            {
+                "name": "complete_code_task",
+                "description": "Request a coding or reasoning task to be completed by Mythrax's local model natively in-process.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string" },
+                        "system_instruction": { "type": "string" },
+                        "model": { "type": "string" },
+                        "enable_thinking": { "type": "boolean", "description": "Enable reasoning/thinking tokens for thinking models" }
+                    },
+                    "required": ["prompt"]
+                }
             }
         ]
     })
@@ -250,6 +264,7 @@ pub async fn call_mcp_tool(
         "manage_config" => handle_manage_config(state, args.clone()).await,
         "pre_invocation_hook" => handle_pre_invocation_hook(state, args.clone()).await,
         "manage_file" => handle_manage_file(state, args.clone()).await,
+        "complete_code_task" => handle_complete_code_task(state, args.clone()).await,
         _ => anyhow::bail!("Tool not found: {}", name),
     };
 
@@ -831,7 +846,7 @@ files_read: None,
 files_modified: None,
 };
 
-            let id = crate::vault::watcher::save_episode_bidirectional(&episode, &state.backend, &state.store, &state.ignore_list).await?;
+            let id = crate::vault::watcher::save_episode_bidirectional(&episode, state.backend.as_ref(), &state.store, &state.ignore_list).await?;
 
             // T1: Zero-Touch Mistake Learning case-insensitive check
             let content_lower = content.to_lowercase();
@@ -1976,6 +1991,7 @@ pub async fn run_llm_critic(
         "mlx-community/Qwen3.6-35B-A3B-4bit",
         Some(system_instruction),
         &prompt,
+        false,
     ).await {
         Ok(res) => res,
         Err(e) => {
@@ -1994,6 +2010,7 @@ pub async fn run_llm_critic(
                     cloud_model,
                     Some(system_instruction),
                     &prompt,
+                    false,
                 ).await?
             } else {
                 return Err(e);
@@ -2349,5 +2366,43 @@ fn make_subtitle(content: &str) -> String {
         let truncated: String = content.chars().take(120).collect();
         format!("{}...", truncated)
     }
+}
+
+async fn handle_complete_code_task(state: &ApiState, args: Value) -> Result<Value> {
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).context("Missing prompt")?;
+    let system_instruction = args.get("system_instruction").and_then(|v| v.as_str());
+    let model_override = args.get("model").and_then(|v| v.as_str());
+    let mut enable_thinking = args.get("enable_thinking").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Dynamic prompt detection for request-time thinking mode request
+    let lower_prompt = prompt.to_lowercase();
+    if prompt.trim_start().starts_with("/think") || lower_prompt.contains("enable thinking") || lower_prompt.contains("with thinking") {
+        enable_thinking = true;
+    }
+
+    // 1. Get default model or fallback
+    let config = state.backend.get_llm_config().await?;
+    let model = model_override.unwrap_or(&config.model);
+
+    // 2. Call LLMClient completion
+    let client = crate::llm::LLMClient::new();
+    let response = client.completion_explicit(
+        state.backend.as_ref(),
+        "local",
+        &config.cloud_provider,
+        model,
+        system_instruction,
+        prompt,
+        enable_thinking,
+    ).await?;
+
+    Ok(json!({
+        "content": [
+            {
+                "type": "text",
+                "text": response
+            }
+        ]
+    }))
 }
 

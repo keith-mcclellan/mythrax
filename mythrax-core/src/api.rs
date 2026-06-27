@@ -74,7 +74,7 @@ async fn save_episode_handler(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    match crate::vault::watcher::save_episode_bidirectional(&payload, &state.backend, &state.store, &state.ignore_list).await {
+    match crate::vault::watcher::save_episode_bidirectional(&payload, state.backend.as_ref(), &state.store, &state.ignore_list).await {
         Ok(id) => {
             if let Some(ref tx) = state.dream_tx {
                 let _ = tx.send(()).await;
@@ -718,8 +718,8 @@ async fn precompact_handler(
     match crate::hooks::precompact::mine_transcript(
         &sanitized_session,
         &normalized_path,
-        &state.backend,
-        &state.store,
+        state.backend.as_ref(),
+        state.store.as_ref(),
         &state.ignore_list,
     ).await {
         Ok(count) => Ok(Json(json!({ "status": "success", "episodes_saved": count }))),

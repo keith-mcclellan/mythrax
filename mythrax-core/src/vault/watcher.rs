@@ -694,7 +694,7 @@ pub fn slugify(text: &str) -> String {
 /// Save an episode both to the database and back to the vault, with loop prevention
 pub async fn save_episode_bidirectional(
     episode: &EpisodeSave,
-    backend: &Arc<dyn StorageBackend>,
+    backend: &dyn StorageBackend,
     store: &Arc<MarkdownStore>,
     ignore_list: &WatchIgnoreList,
 ) -> Result<String> {
@@ -869,7 +869,7 @@ files_read: None,
 files_modified: None,
 };
         
-        let ep_id = save_episode_bidirectional(&episode, &backend, &store, &ignore_list).await.unwrap();
+        let ep_id = save_episode_bidirectional(&episode, backend.as_ref(), &store, &ignore_list).await.unwrap();
         assert!(ep_id.contains("episode:"));
         
         // Yield to allow the background write-behind queue to flush and update the ignore list

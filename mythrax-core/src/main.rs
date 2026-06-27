@@ -114,7 +114,7 @@ async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Res
     // Poll daemon
     let poll_client = reqwest::Client::builder().timeout(std::time::Duration::from_millis(200)).build()?;
     let start_time = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(5);
+    let timeout = std::time::Duration::from_secs(15);
     let mut healthy = false;
 
     while start_time.elapsed() < timeout {

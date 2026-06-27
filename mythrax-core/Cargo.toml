@@ -1,6 +1,6 @@
 [package]
 name = "mythrax-core"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2024"
 
 [dependencies]
@@ -35,6 +35,8 @@ rlimit = "0.10"
 libc = "0.2"
 sha2 = "0.10"
 hex = "0.4"
+mlx-rs = { version = "0.25.3", optional = true }
+safetensors = { version = "0.4.3", optional = true }
 
 
 [dev-dependencies]
@@ -46,7 +48,7 @@ name = "mythrax"
 path = "src/main.rs"
 
 [features]
-mlx = []
+mlx = ["dep:mlx-rs", "dep:safetensors"]
 bench = []
 
 [[bin]]

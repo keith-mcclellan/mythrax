@@ -185,6 +185,8 @@ pub trait StorageBackend: Send + Sync {
         concepts: &[String],
         files: &[String],
     ) -> Result<SearchResponse>;
+    async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>>;
+    async fn get_session_last_activity(&self, session_id: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>>;
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
@@ -1100,6 +1102,26 @@ struct KnnRow {
 impl StorageBackend for SurrealBackend {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>> {
+        let sql = "SELECT session_id, value FROM short_term_memory WHERE key = '_transcript_path';";
+        let mut response = self.db.query(sql).await?.check()?;
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+        struct StmRecord {
+            session_id: String,
+            value: String,
+        }
+        let records: Vec<StmRecord> = response.take(0)?;
+        let res = records.into_iter().map(|r| (r.session_id, r.value)).collect();
+        Ok(res)
+    }
+
+    async fn get_session_last_activity(&self, session_id: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let sql = "SELECT VALUE updated_at FROM short_term_memory WHERE session_id = $session_id ORDER BY updated_at DESC LIMIT 1;";
+        let mut response = self.db.query(sql).bind(("session_id", session_id)).await?.check()?;
+        let last_activity: Option<chrono::DateTime<chrono::Utc>> = response.take(0)?;
+        Ok(last_activity)
     }
 
     async fn search_filtered(
@@ -3757,7 +3779,7 @@ impl StorageBackend for SurrealBackend {
                  scope: $scope,\n\
                  vault_path: $ep_vault_path,\n\
                  processed_in_dream: false,\n\
-                 embedding: $ep_embedding\n\
+                 embedding: $ep_embedding ?? none\n\
              }};\n\
              LET $ep_metrics = type::record('metrics', '{}');\n\
              CREATE $ep_metrics CONTENT {{\n\
@@ -3794,7 +3816,7 @@ impl StorageBackend for SurrealBackend {
                          content: ${},\n\
                          scope: $scope,\n\
                          vault_path: ${},\n\
-                         embedding: ${}\n\
+                         embedding: ${} ?? none\n\
                      }};\n",
                     idx, name_var, content_var, path_var, emb_var
                 ));
@@ -3805,7 +3827,7 @@ impl StorageBackend for SurrealBackend {
                          content: ${},\n\
                          scope: $scope,\n\
                          vault_path: ${},\n\
-                         embedding: ${}\n\
+                         embedding: ${} ?? none\n\
                      }};\n",
                     idx, name_var, content_var, path_var, emb_var
                 ));
@@ -3849,7 +3871,7 @@ impl StorageBackend for SurrealBackend {
                      vault_path: ${},\n\
                      source_episodes: ${},\n\
                      generator_name: 'ForgePipeline',\n\
-                     embedding: ${}\n\
+                     embedding: ${} ?? none\n\
                  }};\n\
                  LET $rule_metrics_{} = type::record('metrics', '{}');\n\
                  CREATE $rule_metrics_{} CONTENT {{\n\
@@ -3885,8 +3907,27 @@ impl StorageBackend for SurrealBackend {
         let db_res = q.await;
 
         match db_res {
-            Ok(resp) => {
-                if let Err(e) = resp.check() {
+            Ok(mut resp) => {
+                let mut first_err = None;
+                for i in 0..18 {
+                    let res: Result<Option<serde_json::Value>, _> = resp.take(i);
+                    match res {
+                        Ok(_) => {}
+                        Err(err) => {
+                            let err_str = err.to_string();
+                            if !err_str.contains("out of bounds") && !err_str.contains("no query at index") {
+                                if first_err.is_none() {
+                                    first_err = Some(err.clone());
+                                } else if let Some(ref current_err) = first_err {
+                                    if current_err.to_string().contains("failed transaction") {
+                                        first_err = Some(err.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(e) = first_err {
                     // Rollback files on database transaction error
                     for path in &written_files {
                         let _ = std::fs::remove_file(path);

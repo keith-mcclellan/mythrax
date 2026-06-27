@@ -352,6 +352,26 @@ To list sessions within a specific session with a search query:
 
 ---
 
+## 3. Testing Guidelines
+
+### Running Tests in Parallel
+To prevent database lock contentions and leverage multi-threaded execution, always run the test suite using **nextest**:
+```bash
+# Run all tests in parallel
+cargo nextest run --features mlx
+
+# Or use the workspace alias
+cargo t --features mlx
+```
+
+### Mocking Large Model Downloads in Test Environments
+To prevent tests from attempting to download multi-gigabyte Hugging Face `.gguf` weights or allocating GPU VRAM during unit/integration testing, use the `MYTHRAX_TEST_MOCK=1` environment variable:
+```bash
+MYTHRAX_TEST_MOCK=1 cargo t --features mlx
+```
+
+---
+
 ## Summary
 
 By following these steps, you have:

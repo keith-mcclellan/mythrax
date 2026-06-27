@@ -88,6 +88,11 @@ async fn test_detect_skill_merges() -> Result<()> {
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
 
+    if backend.embed("test").await.is_err() {
+        println!("Skipping test_detect_skill_merges: model files not present in ~/.mythrax/models/");
+        return Ok(());
+    }
+
     // Set HOME to tmp so scan_all_skills looks there for global config if not found
     let original_home = env::var("HOME").ok();
     unsafe { env::set_var("HOME", tmp.path()); }

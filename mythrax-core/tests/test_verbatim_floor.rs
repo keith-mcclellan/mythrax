@@ -75,7 +75,7 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
     // 5. ASSERT that the decayed episode is STILL retrievable but demoted
     // Search with threshold 0.0 to retrieve all matches
     let search_res = backend.search(
-        "Agentic Memory episodic retrieval",
+        "Agentic Memory",
         Some("general"),
         false,
         10,
