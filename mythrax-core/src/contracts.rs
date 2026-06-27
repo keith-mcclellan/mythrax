@@ -60,7 +60,7 @@ pub struct EpisodeSave {
 }
 
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResult {
     pub id: String,
     pub title: String,
@@ -74,6 +74,14 @@ pub struct SearchResult {
     pub discovery_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_nodes: Option<Vec<SearchResult>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_vector_sim: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_gate: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factor_multiplier: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
@@ -271,5 +279,12 @@ pub struct HookResult {
     pub suppress_output: bool,
     pub exit_code: i32,
     pub injected: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SymbolicHit {
+    pub node_id: String,
+    pub path_confidence: f32,
+    pub hops: usize,
 }
 

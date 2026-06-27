@@ -7,14 +7,48 @@ pub const SAVE_INTERVAL: usize = 15;
 #[derive(Deserialize)]
 struct SimpleMessage {
     role: Option<String>,
-    content: Option<String>,
+    content: Option<serde_json::Value>,
     message: Option<NestedMessage>,
 }
 
 #[derive(Deserialize)]
 struct NestedMessage {
     role: Option<String>,
-    content: Option<String>,
+    content: Option<serde_json::Value>,
+}
+
+fn extract_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(blocks) => {
+            let mut parts: Vec<String> = Vec::new();
+            for block in blocks {
+                if let serde_json::Value::String(s) = block {
+                    parts.push(s.clone());
+                    continue;
+                }
+                if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                    parts.push(t.to_string());
+                }
+                if let Some(inner) = block.get("content") {
+                    let inner_text = extract_text(inner);
+                    if !inner_text.is_empty() {
+                        parts.push(inner_text);
+                    }
+                }
+                for key in ["output", "input"] {
+                    if let Some(s) = block.get(key).and_then(|v| v.as_str()) {
+                        parts.push(s.to_string());
+                    }
+                }
+            }
+            parts.join("\n")
+        }
+        serde_json::Value::Object(_) => {
+            extract_text(&serde_json::Value::Array(vec![value.clone()]))
+        }
+        _ => String::new(),
+    }
 }
 
 pub fn sanitize_session_id(id: &str) -> String {
@@ -51,7 +85,8 @@ pub fn count_human_messages(path: &str) -> usize {
                 let content = msg.content.clone().or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
                 
                 if let (Some(r), Some(c)) = (role, content) {
-                    if r == "user" && !c.contains("<command-message>") {
+                    let text = extract_text(&c);
+                    if r == "user" && !text.contains("<command-message>") {
                         count += 1;
                     }
                 }

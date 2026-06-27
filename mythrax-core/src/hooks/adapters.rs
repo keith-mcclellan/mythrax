@@ -4,9 +4,9 @@ use crate::hooks::shell::{sanitize_session_id, normalize_transcript_path};
 
 #[derive(Deserialize, Debug)]
 pub struct ClaudeCodePayload {
-    pub session: String,
-    pub transcript: String,
-    pub active: Option<bool>,
+    pub session_id: String,
+    pub transcript_path: String,
+    pub stop_hook_active: Option<bool>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -33,34 +33,26 @@ pub struct GeminiPayload {
 pub fn adapt_claude_code(val: serde_json::Value) -> Result<(String, bool, String)> {
     let payload: ClaudeCodePayload = serde_json::from_value(val)
         .context("Failed to deserialize Claude Code payload")?;
-    let session_id = sanitize_session_id(&payload.session);
-    let stop_hook_active = payload.active.unwrap_or(true);
-    let transcript_path = normalize_transcript_path(&payload.transcript);
+    let session_id = sanitize_session_id(&payload.session_id);
+    // default: active unless host explicitly disables (Epic 6 cadence)
+    let stop_hook_active = payload.stop_hook_active.unwrap_or(true);
+    let transcript_path = normalize_transcript_path(&payload.transcript_path);
     Ok((session_id, stop_hook_active, transcript_path))
 }
 
-pub fn adapt_codex(val: serde_json::Value) -> Result<(String, bool, String)> {
-    let payload: CodexPayload = serde_json::from_value(val)
-        .context("Failed to deserialize Codex payload")?;
-    let session_id = sanitize_session_id(&payload.conversation_id);
-    let stop_hook_active = payload.enabled.unwrap_or(true);
-    let transcript_path = normalize_transcript_path(&payload.log_path);
-    Ok((session_id, stop_hook_active, transcript_path))
+pub fn adapt_codex(_val: serde_json::Value) -> Result<(String, bool, String)> {
+    anyhow::bail!("SPEC-GAP: Codex host payload keys are unknown (do not invent host keys)")
 }
 
-pub fn adapt_cursor(val: serde_json::Value) -> Result<(String, bool, String)> {
-    let payload: CursorPayload = serde_json::from_value(val)
-        .context("Failed to deserialize Cursor payload")?;
-    let session_id = sanitize_session_id(&payload.cursor_session_id);
-    let stop_hook_active = payload.hook_active.unwrap_or(true);
-    let transcript_path = normalize_transcript_path(&payload.chat_history_path);
-    Ok((session_id, stop_hook_active, transcript_path))
+pub fn adapt_cursor(_val: serde_json::Value) -> Result<(String, bool, String)> {
+    anyhow::bail!("SPEC-GAP: Cursor host payload keys are unknown (do not invent host keys)")
 }
 
 pub fn adapt_gemini(val: serde_json::Value) -> Result<(String, bool, String)> {
     let payload: GeminiPayload = serde_json::from_value(val)
         .context("Failed to deserialize Gemini payload")?;
     let session_id = sanitize_session_id(&payload.session_id);
+    // default: active unless host explicitly disables (Epic 6 cadence)
     let stop_hook_active = payload.stop_hook_active.unwrap_or(true);
     let transcript_path = normalize_transcript_path(&payload.transcript_path);
     Ok((session_id, stop_hook_active, transcript_path))

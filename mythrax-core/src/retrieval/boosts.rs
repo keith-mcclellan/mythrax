@@ -4,6 +4,7 @@ pub struct BoostSignals {
     pub exact_quote: bool,
     pub temporal_proximity: f32,
     pub keyword_overlap: f32,
+    pub symbolic_hit: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -12,6 +13,7 @@ pub struct BoostWeights {
     pub exact_quote: f32,
     pub temporal_proximity: f32,
     pub keyword_overlap: f32,
+    pub symbolic_hit: f32,
 }
 
 impl Default for BoostWeights {
@@ -21,6 +23,7 @@ impl Default for BoostWeights {
             exact_quote: 0.60,
             temporal_proximity: 0.20,
             keyword_overlap: 0.30,
+            symbolic_hit: 0.50,
         }
     }
 }
@@ -35,6 +38,7 @@ pub fn apply_boosts(base_dist: f32, sig: &BoostSignals, w: &BoostWeights) -> f32
     }
     total_boost += sig.temporal_proximity * w.temporal_proximity;
     total_boost += sig.keyword_overlap * w.keyword_overlap;
+    total_boost += sig.symbolic_hit * w.symbolic_hit * base_dist;
     
     (base_dist - total_boost).clamp(0.0, 2.0)
 }

@@ -460,6 +460,9 @@ impl Compactor {
         let episodes = db.get_all_episodes().await?;
         let now = std::time::SystemTime::now();
         for ep in episodes {
+            if ep.archived.unwrap_or(false) {
+                continue;
+            }
             let last_ret = if let Some(ref lr_str) = ep.last_retrieved_at {
                 chrono::DateTime::parse_from_rfc3339(lr_str)
                     .map(|dt| std::time::SystemTime::from(dt))
@@ -473,7 +476,40 @@ impl Compactor {
             let decayed_utility = utility * decay_factor;
 
             if decayed_utility < decay_threshold * 50.0 {
-                // 1. Move physical file to vault/archive/
+                let mut is_referenced = false;
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    if let Some(ref ep_id) = ep.id {
+                        if let Ok(ep_rec) = crate::db::backend::parse_record_id(ep_id) {
+                            let check_ref_sql = "SELECT VALUE id FROM relates_to WHERE in = $ep OR out = $ep LIMIT 1;";
+                            if let Ok(mut resp) = surreal_backend.db.query(check_ref_sql).bind(("ep", ep_rec)).await {
+                                if let Ok(rows) = resp.take::<Vec<surrealdb::types::RecordId>>(0) {
+                                    if !rows.is_empty() {
+                                        is_referenced = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if is_referenced {
+                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                        if let Some(ref ep_id) = ep.id {
+                            let query_sql = "UPDATE type::record('episode', $id) MERGE {
+                                archived: true,
+                                utility: 1.0,
+                                importance: 1.0
+                            };";
+                            let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
+                            let _ = surreal_backend.db.query(query_sql)
+                                .bind(("id", id_raw))
+                                .await;
+                        }
+                    }
+                    continue;
+                }
+
+                // Move physical file to vault/archive/
                 if let Some(ref vp) = ep.vault_path {
                     let src_file = store.vault_root.join(vp);
                     if src_file.exists() {

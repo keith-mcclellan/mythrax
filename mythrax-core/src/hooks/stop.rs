@@ -10,8 +10,8 @@ pub fn should_save(prev: usize, new: usize) -> bool {
     if new == 0 {
         return false;
     }
-    let prev_intervals = prev / 15;
-    let new_intervals = new / 15;
+    let prev_intervals = prev / crate::hooks::shell::SAVE_INTERVAL;
+    let new_intervals = new / crate::hooks::shell::SAVE_INTERVAL;
     new_intervals > prev_intervals
 }
 

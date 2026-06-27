@@ -480,6 +480,10 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                 false // include_artifacts
             ).await?;
 
+            // Broad Cheap Projection (BCP): we deliberately filter and only project
+            // nodes where tier == "episode" to provide a lightweight, cheap overview index.
+            // Wisdom rules, wiki nodes, and insight nodes are deliberately excluded here
+            // to minimize token costs and focus purely on raw episode sequence indexing.
             let mut index_rows = Vec::new();
             for r in search_res.results {
                 if r.tier == "episode" {
@@ -607,11 +611,19 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let hydrated = state.backend.get_memory_nodes(&ids).await?;
             
             let mut results = Vec::new();
+            const MAX_HYDRATION_CHARS: usize = 10000;
             for ep in hydrated.episodes {
+                let content = if ep.content.chars().count() > MAX_HYDRATION_CHARS {
+                    let truncated_len = ep.content.chars().count() - MAX_HYDRATION_CHARS;
+                    let truncated: String = ep.content.chars().take(MAX_HYDRATION_CHARS).collect();
+                    format!("{}... [truncated {} chars]", truncated, truncated_len)
+                } else {
+                    ep.content.clone()
+                };
                 results.push(crate::contracts::SearchResult {
                     id: ep.id.clone().unwrap_or_default(),
                     title: ep.title.clone(),
-                    content: ep.content.clone(),
+                    content,
                     similarity: 1.0,
                     utility: ep.utility.unwrap_or(0.0),
                     tier: "episode".to_string(),
@@ -620,13 +632,21 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                     source_episode: ep.source_episode.clone(),
                     discovery_tokens: ep.discovery_tokens,
                     related_nodes: None,
+                    ..Default::default()
                 });
             }
             for wiki in hydrated.wiki_nodes {
+                let content = if wiki.content.chars().count() > MAX_HYDRATION_CHARS {
+                    let truncated_len = wiki.content.chars().count() - MAX_HYDRATION_CHARS;
+                    let truncated: String = wiki.content.chars().take(MAX_HYDRATION_CHARS).collect();
+                    format!("{}... [truncated {} chars]", truncated, truncated_len)
+                } else {
+                    wiki.content.clone()
+                };
                 results.push(crate::contracts::SearchResult {
                     id: wiki.id.clone().unwrap_or_default(),
                     title: wiki.name.clone(),
-                    content: wiki.content.clone(),
+                    content,
                     similarity: 1.0,
                     utility: 0.0,
                     tier: "wiki".to_string(),
@@ -635,13 +655,21 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                     source_episode: None,
                     discovery_tokens: None,
                     related_nodes: None,
+                    ..Default::default()
                 });
             }
             for rule in hydrated.wisdom_rules {
-                let content = format!(
+                let raw_content = format!(
                     "Avoid: {}\nCausal: {}\nRemedy: {}",
                     rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
                 );
+                let content = if raw_content.chars().count() > MAX_HYDRATION_CHARS {
+                    let truncated_len = raw_content.chars().count() - MAX_HYDRATION_CHARS;
+                    let truncated: String = raw_content.chars().take(MAX_HYDRATION_CHARS).collect();
+                    format!("{}... [truncated {} chars]", truncated, truncated_len)
+                } else {
+                    raw_content
+                };
                 results.push(crate::contracts::SearchResult {
                     id: rule.id.clone().unwrap_or_default(),
                     title: rule.target_pattern.clone(),
@@ -654,6 +682,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                     source_episode: None,
                     discovery_tokens: None,
                     related_nodes: None,
+                    ..Default::default()
                 });
             }
 

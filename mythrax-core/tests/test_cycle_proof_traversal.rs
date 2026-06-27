@@ -13,9 +13,108 @@ async fn test_cycle_proof_traversal_circular() -> Result<()> {
     // Perform query_symbolic
     let results = backend.query_symbolic("wiki_node:node_a", None, Some(5)).await?;
 
-    // Verify it doesn't loop infinitely and contains node_b
+// Verify it doesn't loop infinitely and contains node_b
     assert!(results.contains(&"wiki_node:node_b".to_string()));
     assert_eq!(results.len(), 1); // Only node_b is visited and returned (excluding start node)
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_query_symbolic_scored_confidences() -> Result<()> {
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    // Create wiki nodes first so they exist:
+    let node_contract = mythrax_core::contracts::WikiNode {
+        id: Some("wiki_node:node_a".to_string()),
+        name: "Node A".to_string(),
+        content: "Content A".to_string(),
+        scope: "general".to_string(),
+        vault_path: None,
+        embedding: None,
+    };
+    backend.save_wiki_node(&node_contract).await?;
+    let node_contract = mythrax_core::contracts::WikiNode {
+        id: Some("wiki_node:node_b".to_string()),
+        name: "Node B".to_string(),
+        content: "Content B".to_string(),
+        scope: "general".to_string(),
+        vault_path: None,
+        embedding: None,
+    };
+    backend.save_wiki_node(&node_contract).await?;
+    let node_contract = mythrax_core::contracts::WikiNode {
+        id: Some("wiki_node:node_c".to_string()),
+        name: "Node C".to_string(),
+        content: "Content C".to_string(),
+        scope: "general".to_string(),
+        vault_path: None,
+        embedding: None,
+    };
+    backend.save_wiki_node(&node_contract).await?;
+
+    // Chain path:
+    backend.relate_nodes("wiki_node:node_a", "wiki_node:node_b", None, None, Some(0.8)).await?;
+    backend.relate_nodes("wiki_node:node_b", "wiki_node:node_c", None, None, Some(0.5)).await?;
+    
+    // Shortcut path (initially weaker but wait, shortcut is direct):
+    backend.relate_nodes("wiki_node:node_a", "wiki_node:node_c", None, None, Some(0.5)).await?;
+
+    let results = backend.query_symbolic_scored("wiki_node:node_a", None, Some(3), None).await?;
+    
+    let hit_c = results.iter().find(|h| h.node_id == "wiki_node:node_c").unwrap();
+    // Chain path: 0.8 * 0.5 = 0.4. Shortcut path: 0.5. We should retain max (0.5).
+    assert_eq!(hit_c.path_confidence, 0.5);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_query_symbolic_scored_temporal_filtering() -> Result<()> {
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    // Create wiki nodes
+    for name in &["node_a", "node_b", "node_c"] {
+        let node_contract = mythrax_core::contracts::WikiNode {
+            id: Some(format!("wiki_node:{}", name)),
+            name: name.to_string(),
+            content: "content".to_string(),
+            scope: "general".to_string(),
+            vault_path: None,
+            embedding: None,
+        };
+        backend.save_wiki_node(&node_contract).await?;
+    }
+
+    // A -[valid at Utc::now()]-> B
+    // A -[valid ONLY in future]-> C
+    let now = chrono::Utc::now();
+    let future = now + chrono::Duration::days(1);
+    
+    let rel_ab = "RELATE wiki_node:node_a->relates_to->wiki_node:node_b SET confidence = 1.0, valid_from = $from, valid_to = $to;";
+    backend.db.query(rel_ab)
+        .bind(("from", now - chrono::Duration::days(1)))
+        .bind(("to", now + chrono::Duration::days(5)))
+        .await?.check()?;
+
+    let rel_ac = "RELATE wiki_node:node_a->relates_to->wiki_node:node_c SET confidence = 1.0, valid_from = $from;";
+    backend.db.query(rel_ac)
+        .bind(("from", future))
+        .await?.check()?;
+
+    // Query as of now: node_b should be returned, but NOT node_c
+    let hits_now = backend.query_symbolic_scored("wiki_node:node_a", None, Some(3), Some(now)).await?;
+    let ids_now: Vec<String> = hits_now.into_iter().map(|h| h.node_id).collect();
+    assert!(ids_now.contains(&"wiki_node:node_b".to_string()));
+    assert!(!ids_now.contains(&"wiki_node:node_c".to_string()));
+
+    // Query as of future: both should be returned
+    let hits_future = backend.query_symbolic_scored("wiki_node:node_a", None, Some(3), Some(future + chrono::Duration::hours(1))).await?;
+    let ids_future: Vec<String> = hits_future.into_iter().map(|h| h.node_id).collect();
+    assert!(ids_future.contains(&"wiki_node:node_b".to_string()));
+    assert!(ids_future.contains(&"wiki_node:node_c".to_string()));
 
     Ok(())
 }
