@@ -42,7 +42,7 @@ pub async fn mine_if_due(
     // 3. Check if we crossed a 15-message interval boundary
     if should_save(prev_count, new_count) {
         // 4. Run the transcript mining to capture the raw turns verbatim
-        let count = crate::hooks::precompact::mine_transcript(session, transcript_path, backend, store, ignore)
+        let count = crate::hooks::precompact::mine_transcript(session, transcript_path, backend.as_ref(), store.as_ref(), ignore)
             .await
             .context("Failed to mine transcript in stop hook")?;
 

@@ -831,7 +831,7 @@ files_read: None,
 files_modified: None,
 };
 
-            let id = crate::vault::watcher::save_episode_bidirectional(&episode, &state.backend, &state.store, &state.ignore_list).await?;
+            let id = crate::vault::watcher::save_episode_bidirectional(&episode, state.backend.as_ref(), &state.store, &state.ignore_list).await?;
 
             // T1: Zero-Touch Mistake Learning case-insensitive check
             let content_lower = content.to_lowercase();

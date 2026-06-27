@@ -185,6 +185,8 @@ pub trait StorageBackend: Send + Sync {
         concepts: &[String],
         files: &[String],
     ) -> Result<SearchResponse>;
+    async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>>;
+    async fn get_session_last_activity(&self, session_id: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>>;
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
@@ -1100,6 +1102,26 @@ struct KnnRow {
 impl StorageBackend for SurrealBackend {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>> {
+        let sql = "SELECT session_id, value FROM short_term_memory WHERE key = '_transcript_path';";
+        let mut response = self.db.query(sql).await?.check()?;
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+        struct StmRecord {
+            session_id: String,
+            value: String,
+        }
+        let records: Vec<StmRecord> = response.take(0)?;
+        let res = records.into_iter().map(|r| (r.session_id, r.value)).collect();
+        Ok(res)
+    }
+
+    async fn get_session_last_activity(&self, session_id: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        let sql = "SELECT VALUE updated_at FROM short_term_memory WHERE session_id = $session_id ORDER BY updated_at DESC LIMIT 1;";
+        let mut response = self.db.query(sql).bind(("session_id", session_id)).await?.check()?;
+        let last_activity: Option<chrono::DateTime<chrono::Utc>> = response.take(0)?;
+        Ok(last_activity)
     }
 
     async fn search_filtered(
