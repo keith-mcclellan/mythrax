@@ -1,11 +1,11 @@
-# Loop Design: Phased Implementation and Verification
+# Loop Design: Phased LLM Broker Implementation and Verification
 
-This document specifies the execution loop design for implementing code fixes and verifying system data flows.
+This document specifies the execution loop design for implementing the production dynamic model broker completions integration and verifying the LLM-dependent data flows.
 
 ## 1. Objective and Mode
-* **Objective**: Execute the tasks in [tasks.md](file:///Users/keith/Documents/mythrax/specs/docs_and_sweep/tasks.md) sequentially, validating each phase with an independent evaluator check and logging ground truth/divergences in [verification_review.md](file:///Users/keith/Documents/mythrax/specs/docs_and_sweep/verification_review.md).
+* **Objective**: Execute and verify the integration of the dynamic model broker into LLM completions and perform sequential data flow verification of LLM-dependent flows (Flows 6–9), logging ground truth and divergences in `verification_review.md`.
 * **Inputs Watched**: `tasks.md` and the Rust codebase.
-* **Outputs Allowed**: Rust code changes in `synthesis.rs`, `main.rs`, `test_abandoned_session_sweep.rs`, documentation updates in `ARCHITECTURE.md` and `DEVELOPMENT.md`, and review logging in `verification_review.md`.
+* **Outputs Allowed**: Rust code changes in `src/llm/mod.rs`, new test file `tests/test_completion_dynamic_server.rs`, documentation updates in `ARCHITECTURE.md` and `verification_review.md`.
 * **Loop Mode**: Ephemeral (human-initiated run-to-completion).
 
 ---
@@ -13,12 +13,12 @@ This document specifies the execution loop design for implementing code fixes an
 ## 2. Loop Design
 The loop uses a state-machine execution flow:
 1. **Discovery**: Read `tasks.md` and find the first item that is not completed `[ ]` or is in progress `[/]`.
-2. **Handoff**: Assign the task to the execution subagent (`local_code_writer` for Phase 1 coding; cloud agent for Phase 2 docs).
+2. **Handoff**: Assign the task to the executor.
 3. **Execution**:
-   * **Phase 1**: Write code, compilation fixes, and integration tests.
-   * **Phase 2**: Write doc flow mappings, execute tests/CLI checks, and log results.
+   * **Phase 1 (Implementation)**: Integrate the dynamic model broker completions intercept in `src/llm/mod.rs` and implement the integration test.
+   * **Phase 2 (Verification)**: Verify Flows 6, 7, 8, 9 using the test suite under the `mlx` feature, logging observed behaviors and documenting divergences.
 4. **Verification**: Invoke the evaluator to test the step's changes.
-5. **Persistence**: Update `tasks.md` and write findings/divergences to `verification_review.md`.
+5. **Persistence**: Update `tasks.md` and write findings to `verification_review.md`.
 6. **Scheduling**: Transition to the next task if verified, or return control to the human if blocked/completed.
 
 ---
@@ -26,11 +26,11 @@ The loop uses a state-machine execution flow:
 ## 3. Evaluator
 * **Role**: Adversarial reviewer. Assumes output is broken until proven otherwise.
 * **Checks**:
-  * For Phase 1: `cargo check` and `cargo test --test test_abandoned_session_sweep` must compile and pass cleanly without warnings.
-  * For Phase 2: Run specific cargo test commands mapped to each flow. Compare command outputs to documented assertions.
+  * For Phase 1: `cargo check --features mlx` and `cargo test --test test_completion_dynamic_server --features mlx` must pass cleanly without warnings.
+  * For Phase 2: Run specific cargo test commands mapped to Flows 6, 7, 8, and 9.
 * **Verdict Gates**:
-  * **PASS**: Compilation is clean, test outputs match documented assertions with zero failures, and `verification_review.md` is updated.
-  * **REJECT**: Compilation fails, tests fail, warnings are present, or a documentation discrepancy is detected but undocumented.
+  * **PASS**: Compilation is clean, test outputs match expected behaviors, and `verification_review.md` is updated.
+  * **REJECT**: Compilation fails, tests fail, warnings are present, or a data flow discrepancy is undocumented.
 
 ---
 
@@ -58,7 +58,7 @@ The loop maintains two local state files:
 ## 7. Human Boundary / Return of Control
 The loop will stop and return control to the user:
 * **Immediate Block**: If a test or build fails after 2 retry attempts.
-* **Phase Seam**: At the end of Phase 1 (before writing documentation) to verify code updates.
+* **Phase Seam**: At the end of Phase 1 (before starting data flow verification).
 * **Divergence Checkpoint**: During Phase 2, if a divergence is discovered between the code implementation and expected documentation assertions.
 * **Completion**: When all tasks are marked `[x]` and the audit yields a `PASS`.
 
@@ -66,9 +66,8 @@ The loop will stop and return control to the user:
 
 ## 8. First Implementation Sketch
 1. Read `tasks.md`.
-2. Locate task `T1: Implement Background Sweep`.
+2. Locate task `T1: Integrate completions routing to DynamicModelBroker`.
 3. Set status to `[/]` in `tasks.md`.
-4. Delegate coding of T1 to `local_code_writer` using the local Qwen model.
-5. Execute the code changes in the workspace.
-6. Verify via `cargo check`.
-7. Move to T2.
+4. Implement the completion intercept in `src/llm/mod.rs`.
+5. Verify via `cargo check --features mlx`.
+6. Proceed to test creation.

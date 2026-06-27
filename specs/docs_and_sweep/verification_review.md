@@ -17,6 +17,10 @@ This document records the critical test execution outputs, observed behaviors, d
 | **T7: Flow 3 Verify** | Docs | Medium | `done` | `confirmed:tests` | orchestrator | verified Flow 3 request routing | none | nextest ok | none | yes | 2026-06-27 |
 | **T8: Flow 4 Verify** | Docs | High | `done` | `confirmed:tests` | orchestrator | verified Flow 4 memory retrieval | none | nextest ok | none | yes | 2026-06-27 |
 | **T9: Verify Sweep** | Docs | High | `done` | `confirmed:tests` | orchestrator | verified Flow 5 compactor sweep | none | nextest ok | none | yes | 2026-06-27 |
+| **T10: Flow 6 Verify** | Docs/Inference | High | `done` | `confirmed:tests` | orchestrator | verified Flow 6 ingestion & extraction (Forge) | none | nextest ok | none | yes | 2026-06-27 |
+| **T11: Flow 7 Verify** | Docs/Inference | High | `done` | `confirmed:tests` | orchestrator | verified Flow 7 session compaction | none | nextest ok | none | yes | 2026-06-27 |
+| **T12: Flow 8 Verify** | Docs/Inference | High | `done` | `confirmed:tests` | orchestrator | verified Flow 8 dreaming loop | none | nextest ok | none | yes | 2026-06-27 |
+| **T13: Flow 9 Verify** | Docs/Inference | High | `done` | `confirmed:tests` | orchestrator | verified Flow 9 model broker & eviction | none | nextest ok | none | yes | 2026-06-27 |
 
 ---
 
@@ -82,3 +86,49 @@ This document records the critical test execution outputs, observed behaviors, d
     - If the transcript file is deleted or missing, the compactor deletes the registered session path from the STM registry to prevent leakage.
 *   **Divergences**: None.
 *   **Status**: `verified`
+
+### Flow 6: Ingestion & Extraction - Forge (T10)
+*   **Verification Command**: `cargo nextest run --test test_forge --features mlx`
+*   **Expected Behavior**:
+    - The document ingestion process parses flat/nested files and PDFs.
+    - Uses local LLM and embedding models to extract logical structures (Table of Contents), rules, and concepts, producing well-formed markdown node artifacts.
+*   **Observed Behavior**:
+    - `cargo nextest run --test test_forge --features mlx --no-capture` ran all 8 tests and passed successfully on GPU Metal acceleration.
+    - Verified text chunking, logical section splitting, second-pass character chunking, and mock LLM table-of-contents extraction workflows execute cleanly.
+*   **Divergences**: None.
+*   **Status**: `verified`
+
+### Flow 7: Session/Scope Compaction - Compactor (T11)
+*   **Verification Command**: `cargo nextest run --test test_abandoned_session_sweep --features mlx`
+*   **Expected Behavior**:
+    - The compactor identifies active and abandoned sessions.
+    - Mines raw jsonl transcripts, extracts user turns and tool results, and compiles/compacts summaries into permanent database memory nodes.
+*   **Observed Behavior**:
+    - `cargo nextest run --test test_abandoned_session_sweep --features mlx --no-capture` passed successfully unmocked on real SurrealDB KV backend in 5.6s.
+*   **Divergences**: None.
+*   **Status**: `verified`
+
+### Flow 8: Continuous Compaction & dreaming - Dreaming (T12)
+*   **Verification Command**: `cargo nextest run --test test_arbor_htr_loop_lifecycle --features mlx`
+*   **Expected Behavior**:
+    - The dreaming compactor groups episodes into structured clusters.
+    - Uses the Arbor HTR (Hypothesis-Test-Refinement) cognitive loop to run code generation and refinement tests against repository states.
+    - Synthesizes findings into permanent knowledge wiki nodes.
+*   **Observed Behavior**:
+    - `cargo nextest run --test test_arbor_htr_loop_lifecycle --features mlx` compiled and passed successfully unmocked.
+    - Verified the HTR loop successfully creates temporary git worktrees, runs refinement checks, commits positive revisions, and cleans up workspace states.
+*   **Divergences**: None.
+*   **Status**: `verified`
+
+### Flow 9: Model Broker & VRAM Eviction - Broker (T13)
+*   **Verification Command**: `cargo nextest run --test test_model_broker --features mlx`
+*   **Expected Behavior**:
+    - The `DynamicModelBroker` dynamically manages the in-process local models (embeddings, coder models).
+    - Caches loaded models via weak pointers and runs garbage collection/eviction when switching between model tiers to manage GPU VRAM.
+    - Triggers pre-inference shader warm-up queries upon loading to prevent generation stutter.
+*   **Observed Behavior**:
+    - `cargo nextest run --test test_model_broker --features mlx --no-capture` executed cleanly unmocked on the Metal GPU in 45.5s.
+    - Verified caching, stop token retrieval, warm-up assertions, model tier swap eviction, and corrupted-broker fallbacks.
+*   **Divergences**: None.
+*   **Status**: `verified`
+

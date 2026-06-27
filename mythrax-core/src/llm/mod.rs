@@ -7,6 +7,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[cfg(feature = "mlx")]
+use tokenizers::Tokenizer;
+#[cfg(feature = "mlx")]
+use mlx_rs::{Array, StreamOrDevice};
+
+#[cfg(feature = "mlx")]
+pub mod mlx_weights;
+#[cfg(feature = "mlx")]
+pub mod nomic_mlx;
+#[cfg(feature = "mlx")]
+pub mod qwen2_mlx;
+
+#[cfg(not(feature = "mlx"))]
+pub struct Qwen2Model;
+#[cfg(not(feature = "mlx"))]
+pub struct Tokenizer;
+
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
 static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 static METAL_EMBEDDING_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
@@ -55,6 +72,7 @@ impl LLMClient {
             &config.model,
             system_instruction,
             prompt,
+            false,
         )
         .await
     }
@@ -67,6 +85,7 @@ impl LLMClient {
         model: &str,
         system_instruction: Option<&str>,
         prompt: &str,
+        enable_thinking: bool,
     ) -> Result<String> {
         if let Ok(mock) = std::env::var("MYTHRAX_MOCK_LLM") {
             if mock == "true" {
@@ -98,6 +117,27 @@ impl LLMClient {
         
         let response_text = match active_provider {
             "local" => {
+                #[cfg(feature = "mlx")]
+                {
+                    let is_external = model.contains("35B") || model.contains("3.6") || model.contains("gemma-4-26b");
+                    if !is_external {
+                        if let Some(broker) = DYNAMIC_MODEL_BROKER.get() {
+                            let tier = match model {
+                                m if m.contains("0.5B") || m.contains("1.5B") || m.contains("Tier1") => ModelTier::Tier1,
+                                m if m.contains("35B") || m.contains("3.6") || m.contains("Tier3") || m.contains("Tier2") || m.contains("a3b") || m.contains("a4b") => ModelTier::Tier3,
+                                _ => ModelTier::Tier2,
+                            };
+                            tracing::info!("mlx feature active: routing local inference in-process via DynamicModelBroker for tier {:?}", tier);
+                            let engine = broker.acquire_llm(tier).await?;
+                            let raw = engine.generate(prompt, system_instruction).await?;
+                            return Ok(strip_think_block(&raw));
+                        }
+                    }
+                }
+
+                // Fallback to HTTP request when mlx feature is disabled or broker is uninitialized
+                tracing::debug!("mlx feature disabled or broker not initialized: routing local inference to mlx-lm HTTP server at :8080");
+
                 let url = "http://127.0.0.1:8080/v1/chat/completions";
                 let truncated_prompt = if prompt.len() > 100_000 {
                     let truncated = truncate_to_boundary(prompt, 100_000);
@@ -106,26 +146,26 @@ impl LLMClient {
                     prompt.to_string()
                 };
 
-                let mut messages = Vec::new();
-                if let Some(sys) = system_instruction {
-                    messages.push(serde_json::json!({
-                        "role": "system",
-                        "content": sys
-                    }));
-                }
-                messages.push(serde_json::json!({
-                    "role": "user",
-                    "content": truncated_prompt
-                }));
+                let thinking_directive = if enable_thinking { "/think" } else { "/no_think" };
+                let effective_system = match system_instruction {
+                    Some(sys) => format!("{thinking_directive}\n{sys}"),
+                    None => thinking_directive.to_string(),
+                };
+
+                let temperature = if enable_thinking { 0.6_f32 } else { 0.2_f32 };
+
+                let messages = vec![
+                    serde_json::json!({ "role": "system", "content": effective_system }),
+                    serde_json::json!({ "role": "user",   "content": truncated_prompt }),
+                ];
 
                 let payload = serde_json::json!({
                     "model": model,
                     "messages": messages,
-                    "temperature": 0.2,
+                    "temperature": temperature,
                     "max_tokens": 8192
                 });
 
-                // Serialize all local LLM calls — only one request in-flight at a time
                 let _permit = metal_inference_semaphore().acquire().await
                     .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
 
@@ -135,10 +175,7 @@ impl LLMClient {
                 tracing::debug!("Local LLM raw response: {}", json);
                 let content = json["choices"][0]["message"]["content"].clone();
                 
-                let result = if content.is_null() {
-                    // Gemma 4 / thinking models emit `reasoning` instead of `content`
-                    // when finish_reason=length (hit max_tokens mid-thought) or when
-                    // the model uses a separate reasoning field.
+                let raw = if content.is_null() {
                     let alt = json["choices"][0]["message"]["reasoning"]
                         .as_str()
                         .or_else(|| json["choices"][0]["message"]["reasoning_content"].as_str())
@@ -154,7 +191,8 @@ impl LLMClient {
                         .to_string()
                 };
 
-                // Pause for 5 seconds to give GPU/cache recovery time before releasing semaphore
+                let result = strip_think_block(&raw);
+
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 
                 result
@@ -384,6 +422,32 @@ async fn send_with_retry(
 
 /// Truncates a string to a maximum character count, respecting boundary
 /// awareness (paragraphs, lines, words) to avoid cutting mid-sentence.
+/// Remove the Qwen3 `<think>…</think>` reasoning block from a model response.
+///
+/// Qwen3 always wraps its chain-of-thought inside `<think>` tags before the
+/// final answer. Callers of `completion_explicit` only want the answer text,
+/// so we strip the block unconditionally regardless of whether thinking was
+/// explicitly requested. This also handles the rare case where `/no_think` is
+/// set but the model still emits a partial trace.
+fn strip_think_block(s: &str) -> String {
+    // Fast path: no thinking block present.
+    if !s.contains("<think>") {
+        return s.trim().to_string();
+    }
+    // Find the closing tag; if malformed (no closing tag) return everything
+    // after the opening tag so we don't silently drop the whole response.
+    match s.find("</think>") {
+        Some(end) => s[end + "</think>".len()..].trim().to_string(),
+        None => {
+            // Partial / truncated thinking block — strip what we can.
+            match s.find("<think>") {
+                Some(start) if start > 0 => s[..start].trim().to_string(),
+                _ => s.trim().to_string(),
+            }
+        }
+    }
+}
+
 fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
     // Check if the string is within limits
     if s.chars().count() <= max_chars {
@@ -438,6 +502,11 @@ pub trait InferenceEngine: Send + Sync {
     fn is_warmed_up(&self) -> bool;
     fn stop_tokens(&self) -> Vec<String>;
     fn execution_mode(&self) -> String;
+    fn generate(&self, _prompt: &str, _system_instruction: Option<&str>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!("Local inference is not enabled on this platform"))
+        })
+    }
 }
 
 /// A concrete implementation of InferenceEngine for MLX-based models.
@@ -446,6 +515,10 @@ pub struct InProcessMlxEngine {
     warmed_up: bool,
     stop_tokens: Vec<String>,
     execution_mode: String,
+    #[cfg(feature = "mlx")]
+    model: Option<std::sync::Arc<tokio::sync::Mutex<qwen2_mlx::Qwen2Model>>>,
+    #[cfg(feature = "mlx")]
+    tokenizer: Option<std::sync::Arc<Tokenizer>>,
 }
 
 // Safety: This struct contains no raw pointers or unsafe data that would violate Send/Sync
@@ -459,12 +532,20 @@ impl InProcessMlxEngine {
         warmed_up: bool,
         stop_tokens: Vec<String>,
         execution_mode: String,
+        #[cfg(feature = "mlx")]
+        model: Option<std::sync::Arc<tokio::sync::Mutex<qwen2_mlx::Qwen2Model>>>,
+        #[cfg(feature = "mlx")]
+        tokenizer: Option<std::sync::Arc<Tokenizer>>,
     ) -> Self {
         Self {
             name,
             warmed_up,
             stop_tokens,
             execution_mode,
+            #[cfg(feature = "mlx")]
+            model,
+            #[cfg(feature = "mlx")]
+            tokenizer,
         }
     }
 }
@@ -484,6 +565,114 @@ impl InferenceEngine for InProcessMlxEngine {
 
     fn execution_mode(&self) -> String {
         self.execution_mode.clone()
+    }
+
+    #[cfg(feature = "mlx")]
+    fn generate(&self, prompt: &str, system_instruction: Option<&str>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+        let model_opt = self.model.clone();
+        let tokenizer_opt = self.tokenizer.clone();
+        let prompt = prompt.to_string();
+        let system_instruction = system_instruction.map(|s| s.to_string());
+
+        Box::pin(async move {
+            if model_opt.is_none() || tokenizer_opt.is_none() {
+                return Ok("Mock local generation response".to_string());
+            }
+
+            let model_arc = model_opt.unwrap();
+            let tokenizer = tokenizer_opt.unwrap();
+
+            // Apply Chat Template (Qwen style)
+            let formatted_prompt = match system_instruction {
+                Some(sys) => format!(
+                    "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                    sys, prompt
+                ),
+                None => format!(
+                    "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                    prompt
+                ),
+            };
+
+            // Tokenize prompt
+            let tokens = tokenizer.encode(formatted_prompt, true)
+                .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?
+                .get_ids()
+                .to_vec();
+
+            let mut input_ids = tokens.clone();
+            let mut generated_text = String::new();
+
+            let mut model = model_arc.lock().await;
+
+            // Initialize KV cache
+            let num_layers = model.layers.len();
+            let mut kv_cache = Vec::with_capacity(num_layers);
+            for layer in &model.layers {
+                let kv = (
+                    mlx_rs::ops::zeros::<f32>(&[1, layer.self_attn.num_kv_heads, 0, layer.self_attn.head_dim])
+                        .map_err(|e| anyhow::anyhow!("zeros cached_k build failed: {:?}", e))?,
+                    mlx_rs::ops::zeros::<f32>(&[1, layer.self_attn.num_kv_heads, 0, layer.self_attn.head_dim])
+                        .map_err(|e| anyhow::anyhow!("zeros cached_v build failed: {:?}", e))?,
+                );
+                kv_cache.push(kv);
+            }
+
+            // Run autoregressive generation
+            for index in 0..1024 {
+                let input_array = if index == 0 {
+                    let tokens_i32: Vec<i32> = input_ids.iter().map(|&x| x as i32).collect();
+                    Array::from_slice(&tokens_i32, &[1, tokens_i32.len() as i32])
+                } else {
+                    let last_token = input_ids[input_ids.len() - 1] as i32;
+                    Array::from_slice(&[last_token], &[1, 1])
+                };
+
+                let position_offset = if index == 0 {
+                    0
+                } else {
+                    (input_ids.len() - 1) as i32
+                };
+
+                // Forward pass to get logits of shape [1, seq_len, vocab_size]
+                let logits = model.forward(&input_array, None, position_offset, &mut kv_cache)?;
+                let seq_len = logits.shape()[1];
+
+                // Extract last token's logits [vocab_size]
+                use mlx_rs::ops::indexing::TryIndexOp;
+                let last_logits = logits.try_index((0, (seq_len - 1) as i32))?;
+
+                // Argmax to sample the most likely token (greedy)
+                let next_token_arr = mlx_rs::ops::indexing::argmax_axis_device(last_logits, 0, false, StreamOrDevice::gpu())?;
+                next_token_arr.eval()
+                    .map_err(|e| anyhow::anyhow!("MLX logits eval failed: {:?}", e))?;
+                
+                let next_token = next_token_arr.as_slice::<u32>()[0];
+                input_ids.push(next_token);
+
+                // Decode and check stop tokens
+                let decoded = tokenizer.decode(&[next_token], true)
+                    .map_err(|e| anyhow::anyhow!("Tokenizer decode error: {}", e))?;
+                
+                if decoded.contains("<|im_end|>") || decoded.contains("<|endoftext|>") || decoded.is_empty() {
+                    break;
+                }
+                
+                generated_text.push_str(&decoded);
+            }
+
+            Ok(generated_text)
+        })
+    }
+}
+
+impl Drop for InProcessMlxEngine {
+    fn drop(&mut self) {
+        #[cfg(feature = "mlx")]
+        {
+            mlx_rs::transforms::compile::clear_cache();
+            tracing::info!("Cleared MLX compile and Metal caches");
+        }
     }
 }
 
@@ -506,11 +695,13 @@ pub struct DynamicModelBroker {
     last_weak_ref: Arc<Mutex<Option<Weak<dyn InferenceEngine>>>>,
     corrupt_mock: bool,
     active_tier: Arc<Mutex<Option<ModelTier>>>,
+    #[allow(dead_code)]
+    models_dir: PathBuf,
 }
 
 impl DynamicModelBroker {
     /// Creates a new DynamicModelBroker.
-    pub async fn new(_model_dir: PathBuf) -> Result<Self> {
+    pub async fn new(model_dir: PathBuf) -> Result<Self> {
         Ok(Self {
             models: Arc::new(Mutex::new(HashMap::new())),
             embedding_model_loaded: AtomicBool::new(false),
@@ -518,6 +709,7 @@ impl DynamicModelBroker {
             last_weak_ref: Arc::new(Mutex::new(None)),
             corrupt_mock: false,
             active_tier: Arc::new(Mutex::new(None)),
+            models_dir: model_dir,
         })
     }
 
@@ -566,25 +758,151 @@ impl DynamicModelBroker {
             tracing::info!("Evicted model tier {:?} successfully deallocated from VRAM", t);
         }
 
-        // 3. Now load the new model safely
+        // 3. Determine the model name and download paths WITHOUT holding the lock
+        let model_name = match tier {
+            ModelTier::Tier1 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
+            ModelTier::Tier2 => {
+                let config_model = self.config_model.lock().unwrap();
+                config_model.as_ref().cloned().unwrap_or_else(|| "mlx-community/Qwen3.6-35B-A3B-4bit".to_string())
+            }
+            ModelTier::Tier3 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
+        };
+
+        #[cfg(feature = "mlx")]
+        let model_subdir = self.models_dir.join(model_name.replace("/", "_"));
+        #[cfg(feature = "mlx")]
+        std::fs::create_dir_all(&model_subdir)?;
+
+        #[cfg(feature = "mlx")]
+        {
+            if std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+                // 1. Download config.json if missing
+                let config_path = model_subdir.join("config.json");
+                if !config_path.exists() {
+                    let config_url = format!("https://huggingface.co/{}/resolve/main/config.json", model_name);
+                    download_file_if_missing(&config_url, &config_path).await?;
+                }
+
+                // 2. Download tokenizer.json if missing
+                let tokenizer_path = model_subdir.join("tokenizer.json");
+                if !tokenizer_path.exists() {
+                    let tokenizer_url = format!("https://huggingface.co/{}/resolve/main/tokenizer.json", model_name);
+                    download_file_if_missing(&tokenizer_url, &tokenizer_path).await?;
+                }
+
+                // 3. Check for model.safetensors.index.json
+                let index_path = model_subdir.join("model.safetensors.index.json");
+                let index_url = format!("https://huggingface.co/{}/resolve/main/model.safetensors.index.json", model_name);
+                
+                let is_sharded = match reqwest::Client::new().head(&index_url).send().await {
+                    Ok(resp) => resp.status().is_success(),
+                    Err(_) => false,
+                };
+
+                if is_sharded {
+                    download_file_if_missing(&index_url, &index_path).await?;
+                    let content = std::fs::read_to_string(&index_path)?;
+                    let index: serde_json::Value = serde_json::from_str(&content)?;
+                    let weight_map = index.get("weight_map").context("weight_map not found in index")?;
+                    let weight_map = weight_map.as_object().context("weight_map is not a JSON object")?;
+
+                    let mut shard_files = std::collections::HashSet::new();
+                    for shard_val in weight_map.values() {
+                        if let Some(shard_str) = shard_val.as_str() {
+                            shard_files.insert(shard_str.to_string());
+                        }
+                    }
+
+                    for shard in shard_files {
+                        let shard_path = model_subdir.join(&shard);
+                        let shard_url = format!("https://huggingface.co/{}/resolve/main/{}", model_name, shard);
+                        download_file_if_missing(&shard_url, &shard_path).await?;
+                    }
+                } else {
+                    let safetensors_path = model_subdir.join("model.safetensors");
+                    let safetensors_url = format!("https://huggingface.co/{}/resolve/main/model.safetensors", model_name);
+                    download_file_if_missing(&safetensors_url, &safetensors_path).await?;
+                }
+            }
+        }
+
+        // 4. Now load the new model safely under lock
         let mut models = self.models.lock().unwrap();
         // Check again in case another thread loaded it while we were waiting
         let model = if let Some(model) = models.get(&tier) {
             model.clone()
         } else {
-            // Determine the model name based on config
-            let config_model = self.config_model.lock().unwrap();
-            let model_name = match config_model.as_ref() {
-                Some(name) => name.clone(),
-                None => "Qwen2.5-Coder-7B-Instruct-MLX-4bit".to_string(),
+            #[cfg(feature = "mlx")]
+            let (model_opt, tok_opt) = {
+                if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+                    (None, None)
+                } else {
+                    tracing::info!("Loading Qwen2 model from {} onto Metal", model_subdir.display());
+                    let config_content = std::fs::read_to_string(&model_subdir.join("config.json"))?;
+                    let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
+
+                    let num_layers = config_json.get("num_hidden_layers").and_then(|v| v.as_i64()).unwrap_or(28) as i32;
+                    let num_heads = config_json.get("num_attention_heads").and_then(|v| v.as_i64()).unwrap_or(12) as i32;
+                    let num_kv_heads = config_json.get("num_key_value_heads").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
+                    let hidden_size = config_json.get("hidden_size").and_then(|v| v.as_i64()).unwrap_or(1536) as i32;
+                    let head_dim = hidden_size / num_heads;
+                    let rms_norm_eps = config_json.get("rms_norm_eps").and_then(|v| v.as_f64()).unwrap_or(1e-6) as f32;
+                    let vocab_size = config_json.get("vocab_size").and_then(|v| v.as_i64()).unwrap_or(151936) as i32;
+
+                    let rope_theta = config_json.get("rope_theta")
+                        .and_then(|v| v.as_f64())
+                        .or_else(|| {
+                            config_json.get("rope_parameters")
+                                .and_then(|p| p.get("rope_theta"))
+                                .and_then(|v| v.as_f64())
+                        })
+                        .unwrap_or(1000000.0) as f32;
+
+                    let quantization = config_json.get("quantization")
+                        .or_else(|| config_json.get("quantization_config"));
+                    let bits = quantization.and_then(|q| q.get("bits").and_then(|v| v.as_i64())).unwrap_or(4) as i32;
+                    let group_size = quantization.and_then(|q| q.get("group_size").and_then(|v| v.as_i64())).unwrap_or(64) as i32;
+
+                    let num_experts = config_json.get("num_experts").and_then(|v| v.as_i64()).map(|x| x as i32);
+                    let num_experts_per_tok = config_json.get("num_experts_per_tok").and_then(|v| v.as_i64()).map(|x| x as i32);
+
+                    let weights = mlx_weights::load_model_weights(&model_subdir)?;
+                    let weights_model = qwen2_mlx::Qwen2Model::new(
+                        &weights,
+                        num_layers,
+                        num_heads,
+                        num_kv_heads,
+                        head_dim,
+                        rope_theta,
+                        rms_norm_eps,
+                        vocab_size,
+                        hidden_size,
+                        group_size,
+                        bits,
+                        num_experts,
+                        num_experts_per_tok,
+                    )?;
+                    
+                    let tokenizer = Tokenizer::from_file(&model_subdir.join("tokenizer.json"))
+                        .map_err(|e| anyhow::anyhow!("Tokenizer load error: {}", e))?;
+                    
+                    (Some(std::sync::Arc::new(tokio::sync::Mutex::new(weights_model))), Some(std::sync::Arc::new(tokenizer)))
+                }
             };
-            
+
+            #[cfg(not(feature = "mlx"))]
+            let (_model_opt, _tok_opt): (Option<std::sync::Arc<tokio::sync::Mutex<Qwen2Model>>>, Option<std::sync::Arc<Tokenizer>>) = (None, None);
+
             // Create a new model instance
             let engine = Arc::new(InProcessMlxEngine::new(
-                model_name,
+                model_name.clone(),
                 true, // warmed_up: true
                 vec!["<|eot_id|>".to_string(), "\"\"".to_string()], // stop_tokens
                 "gpu".to_string(), // execution_mode
+                #[cfg(feature = "mlx")]
+                model_opt,
+                #[cfg(feature = "mlx")]
+                tok_opt,
             ));
             
             // Store the model
@@ -618,6 +936,10 @@ impl DynamicModelBroker {
                 false,
                 vec![],
                 "cpu".to_string(),
+                #[cfg(feature = "mlx")]
+                None,
+                #[cfg(feature = "mlx")]
+                None,
             ));
             Arc::downgrade(&dummy)
         })
@@ -645,6 +967,7 @@ impl DynamicModelBroker {
             last_weak_ref: Arc::new(Mutex::new(None)),
             corrupt_mock: true,
             active_tier: Arc::new(Mutex::new(None)),
+            models_dir: PathBuf::new(),
         })
     }
 
@@ -661,6 +984,10 @@ impl DynamicModelBroker {
                     true,
                     vec!["<|eot_id|>".to_string(), "\"\"".to_string()],
                     "cpu".to_string(),
+                    #[cfg(feature = "mlx")]
+                    None,
+                    #[cfg(feature = "mlx")]
+                    None,
                 ));
                 
                 models.insert(tier, fallback_model.clone());
@@ -688,4 +1015,44 @@ mod tests {
         let expected_no_lang = "some non-json content";
         assert_eq!(strip_code_fences(input_no_lang), expected_no_lang);
     }
+}
+
+#[cfg(feature = "mlx")]
+async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<()> {
+    if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, b"dummy")?;
+        return Ok(());
+    }
+    if path.exists() {
+        if let Ok(metadata) = std::fs::metadata(path) {
+            if metadata.len() > 0 {
+                return Ok(());
+            }
+        }
+    }
+    tracing::info!("Downloading model asset from {} to {}...", url, path.display());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    use futures_util::StreamExt;
+    let response = reqwest::get(url).await?;
+    let status = response.status();
+    if !status.is_success() && !status.is_redirection() {
+        anyhow::bail!(
+            "Failed to download model from {}. HTTP status: {}. \
+             Supply a pre-downloaded model asset file at {}.",
+            url, status, path.display()
+        );
+    }
+    let mut file = std::fs::File::create(path)?;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        std::io::copy(&mut std::io::Cursor::new(chunk), &mut file)?;
+    }
+    tracing::info!("Successfully downloaded asset to {}", path.display());
+    Ok(())
 }

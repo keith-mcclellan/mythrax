@@ -18,7 +18,21 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
     unsafe {
         std::env::remove_var("MYTHRAX_VAULT_ROOT");
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_path.to_str().unwrap());
-        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+            std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+        } else {
+            std::env::set_var("MYTHRAX_MOCK_LLM", "false");
+        }
+    }
+
+    #[cfg(feature = "mlx")]
+    {
+        if std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+            let home = std::env::var("HOME").unwrap();
+            let models_dir = std::path::PathBuf::from(home).join(".mythrax/models");
+            let broker = mythrax_core::llm::DynamicModelBroker::new(models_dir).await.unwrap();
+            let _ = mythrax_core::llm::DYNAMIC_MODEL_BROKER.set(Arc::new(broker));
+        }
     }
 
     // 1. Build in-memory backend + MarkdownStore(tempdir)

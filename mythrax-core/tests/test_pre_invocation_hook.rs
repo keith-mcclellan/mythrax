@@ -29,11 +29,20 @@ async fn test_soft_thresholding_and_hook_injection() {
     backend.save_episode(&episode).await.unwrap();
 
     // Initialize Model Broker
-    let broker = DynamicModelBroker::new(temp_dir.path().to_path_buf()).await.unwrap();
+    let models_dir = if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+        temp_dir.path().to_path_buf()
+    } else {
+        let home = std::env::var("HOME").unwrap();
+        std::path::PathBuf::from(home).join(".mythrax/models")
+    };
+    let broker = DynamicModelBroker::new(models_dir).await.unwrap();
     let broker = Arc::new(broker);
     let _ = mythrax_core::llm::DYNAMIC_MODEL_BROKER.set(broker.clone());
     // Preload embedding model and acquire a Tier2 LLM to simulate active state
     broker.preload_embedding_model("mlx-community/nomic-embed-text-v1.5-mlx").await.unwrap();
+    if std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+        broker.update_config_model("mlx-community/Qwen2.5-0.5B-Instruct-4bit").await.unwrap();
+    }
     let _ = broker.acquire_llm(ModelTier::Tier2).await.unwrap();
 
     // Construct ApiState with necessary dependencies

@@ -2,17 +2,20 @@ use anyhow::{Result, Context};
 use tokenizers::Tokenizer;
 use std::path::Path;
 use std::env;
+#[cfg(not(feature = "mlx"))]
 use std::sync::Mutex;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
+#[cfg(not(feature = "mlx"))]
 pub struct LocalEmbedder {
     session: Mutex<ort::session::Session>,
     tokenizer: Tokenizer,
 }
 
+#[cfg(not(feature = "mlx"))]
 impl LocalEmbedder {
     pub fn get_global() -> Result<Arc<Self>> {
         let res = GLOBAL_EMBEDDER.get_or_init(|| {
@@ -275,19 +278,142 @@ impl LocalEmbedder {
     }
 }
 
+#[cfg(feature = "mlx")]
+use mlx_rs::Array;
+
+#[cfg(feature = "mlx")]
+pub struct LocalEmbedder {
+    model: std::sync::Mutex<crate::llm::nomic_mlx::NomicBertModel>,
+    tokenizer: Tokenizer,
+}
+
+#[cfg(feature = "mlx")]
+unsafe impl Send for LocalEmbedder {}
+#[cfg(feature = "mlx")]
+unsafe impl Sync for LocalEmbedder {}
+
+#[cfg(feature = "mlx")]
+impl LocalEmbedder {
+    pub fn get_global() -> Result<Arc<Self>> {
+        let res = GLOBAL_EMBEDDER.get_or_init(|| {
+            Self::new().map(Arc::new).map_err(|e| e.to_string())
+        });
+        match res {
+            Ok(emb) => Ok(emb.clone()),
+            Err(err) => Err(anyhow::anyhow!("Failed to initialize global embedder: {}", err)),
+        }
+    }
+
+    pub fn new() -> Result<Self> {
+        let home = env::var("HOME").context("HOME env var not set")?;
+        let base_path = Path::new(&home).join(".mythrax/models");
+        
+        let model_path = base_path.join("model.safetensors");
+        let tokenizer_path = base_path.join("tokenizer.json");
+
+        if !model_path.exists() || !tokenizer_path.exists() {
+            anyhow::bail!("MLX model.safetensors or tokenizer files not found in ~/.mythrax/models/");
+        }
+
+        let weights = Array::load_safetensors(&model_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load safetensors: {:?}", e))?;
+
+        let model = crate::llm::nomic_mlx::NomicBertModel::new(&weights)?;
+        let tokenizer = Tokenizer::from_file(&tokenizer_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
+
+        Ok(Self { model: std::sync::Mutex::new(model), tokenizer })
+    }
+
+    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let formatted_text = if text.contains(':') {
+            text.to_string()
+        } else {
+            format!("search_document: {}", text)
+        };
+
+        let encoding = self.tokenizer.encode(formatted_text, true)
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+
+        let ids = encoding.get_ids();
+        let mask = encoding.get_attention_mask();
+        let mut seq_len = ids.len();
+
+        if seq_len == 0 {
+            return Ok(vec![0.0; 768]);
+        }
+
+        if seq_len > 2048 {
+            seq_len = 2048;
+        }
+
+        let ids_i32: Vec<i32> = ids.iter().take(seq_len).map(|&x| x as i32).collect();
+        let input_array = Array::from_slice(&ids_i32, &[1, seq_len as i32]);
+
+        let mask_i32: Vec<i32> = mask.iter().take(seq_len).map(|&x| x as i32).collect();
+        let mask_array = Array::from_slice(&mask_i32, &[1, seq_len as i32]);
+
+        let mut model = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        let output = model.forward(&input_array, Some(&mask_array))?;
+
+        // Mean pool on GPU: sum(x * mask) / max(sum(mask), 1.0)
+        let mask_expanded = mask_array.reshape(&[1, seq_len as i32, 1])?
+            .as_dtype(mlx_rs::Dtype::Float32)?;
+        let masked_output = output.multiply(&mask_expanded)?;
+        let sum_emb = masked_output.sum_axes(&[1], false)?;
+        let active_tokens = mask_expanded.sum_axes(&[1], false)?;
+        let active_tokens_clamped = mlx_rs::ops::maximum(&active_tokens, &Array::from(1.0f32))?;
+        let mean_emb = sum_emb.divide(&active_tokens_clamped)?;
+
+        // L2 Normalization on GPU: mean_emb / sqrt(sum(mean_emb^2) + 1e-12)
+        let sq_emb = mean_emb.square()?;
+        let sum_sq = sq_emb.sum_axes(&[1], false)?;
+        let norm = sum_sq.add(&Array::from(1e-12f32))?.sqrt()?;
+        let normalized = mean_emb.divide(&norm)?;
+
+        let normalized = normalized.reshape(&[768])?;
+        normalized.eval()
+            .map_err(|e| anyhow::anyhow!("MLX eval failed: {:?}", e))?;
+        
+        let vec = normalized.as_slice::<f32>().to_vec();
+        Ok(vec)
+    }
+
+    pub fn count_tokens(&self, text: &str) -> Result<usize> {
+        let encoding = self.tokenizer.encode(text, true)
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+        Ok(encoding.get_ids().len())
+    }
+
+    pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let mut results = Vec::with_capacity(texts.len());
+        for text in texts {
+            results.push(self.embed(text)?);
+        }
+        Ok(results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_local_embeddings() {
-        // Verify we can load the model and run embedding inference
         if let Ok(embedder) = LocalEmbedder::new() {
-            let vec = embedder.embed("Test embedding query").unwrap();
-            assert_eq!(vec.len(), 768);
+            let s1 = "The quick brown fox jumps over the lazy dog.";
+            let s2 = "Algorithm design and data structures are fundamental to computer science.";
+            let vec1 = embedder.embed(s1).unwrap();
+            let vec2 = embedder.embed(s2).unwrap();
             
-            // Check L2 Normalized (sum of squares is ~1.0)
-            let sum_sq: f32 = vec.iter().map(|&x| x * x).sum();
+            println!("DEBUG: vec1 first 5 = {:?}", &vec1[0..5]);
+            println!("DEBUG: vec2 first 5 = {:?}", &vec2[0..5]);
+            
+            let dot_prod: f32 = vec1.iter().zip(vec2.iter()).map(|(&x, &y)| x * y).sum();
+            println!("DEBUG: cosine similarity distinct sentences = {}", dot_prod);
+
+            assert_eq!(vec1.len(), 768);
+            let sum_sq: f32 = vec1.iter().map(|&x| x * x).sum();
             assert!((sum_sq - 1.0).abs() < 1e-4);
         } else {
             println!("Skipping embeddings test: model files not present in ~/.mythrax/models/");
