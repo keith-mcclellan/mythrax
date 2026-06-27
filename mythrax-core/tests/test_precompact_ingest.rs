@@ -75,3 +75,62 @@ async fn precompact_persists_raw_tool_output() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<()> {
+    // Real Claude/Codex transcripts represent a user turn's `content` as an ARRAY
+    // of content blocks (text + tool_result), not a flat string. The old
+    // deserializer typed content as Option<String>, so these lines failed to parse
+    // and the verbatim tool output was silently dropped. This exercises the
+    // array-of-blocks path through extract_text().
+    let backend: Arc<dyn StorageBackend> = Arc::new(SurrealBackend::new_in_memory().await?);
+    backend.init().await?;
+
+    let vault_dir = tempdir()?;
+    let store = Arc::new(MarkdownStore::new(vault_dir.path())?);
+    let ignore = WatchIgnoreList::new();
+
+    let trans_dir = tempdir()?;
+    let transcript_path = trans_dir.path().join("transcript.jsonl");
+    let mut trans_file = File::create(&transcript_path)?;
+
+    // A user turn whose content is an array of blocks, including a tool_result
+    // whose own content is itself an array of text blocks (the nested shape used
+    // by real transcripts). Also covers the `message`-nested wrapper form.
+    let turns = vec![
+        r#"{"role":"user","content":[{"type":"text","text":"Here is the build output."},{"type":"tool_result","content":[{"type":"text","text":"BLOCK_TOOL_PAYLOAD_ABC compiled ok"}]}]}"#,
+        r#"{"message":{"role":"user","content":[{"type":"tool_result","content":"NESTED_TOOL_PAYLOAD_DEF"}]}}"#,
+    ];
+    for turn in turns {
+        writeln!(trans_file, "{}", turn)?;
+    }
+
+    let path_str = transcript_path.to_string_lossy();
+    let count = mythrax_core::hooks::precompact::mine_transcript(
+        "sess-blocks",
+        &path_str,
+        &backend,
+        &store,
+        &ignore,
+    ).await?;
+    assert!(count >= 2, "expected both array-form turns mined, got {}", count);
+
+    for payload in ["BLOCK_TOOL_PAYLOAD_ABC", "NESTED_TOOL_PAYLOAD_DEF"] {
+        let response = backend.search(
+            payload,
+            Some("general"),
+            false,
+            5,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+        ).await?;
+        let found = response.results.iter().any(|r| r.content.contains(payload));
+        assert!(found, "verbatim tool output {} was dropped from array-form content", payload);
+    }
+
+    Ok(())
+}

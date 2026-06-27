@@ -1,85 +1,71 @@
 #!/bin/bash
-# eval.sh - Wrapper for SWE-bench Verified evaluation
+# eval.sh - Wrapper for the OFFICIAL SWE-bench Verified evaluation harness.
+#
+# This invokes the dataset authors' published scorer at arm's length (subprocess,
+# pinned version) per the spec's CODE vs DATA vs OFFICIAL SCORER exception. It does
+# NOT re-implement "% Resolved" and has NO mock mode. The official harness applies
+# each predicted patch inside Docker, runs the repo's tests, and emits a report
+# JSON (resolved_ids / unresolved_ids / error_ids), which summarize.py then parses.
+set -euo pipefail
+
+DATASET_NAME="princeton-nlp/SWE-bench_Verified"
+# Pinned dataset revision (HF commit SHA) — recorded for reproducibility.
+DATASET_REVISION="c104f840cc67f8b6eec6f759ebc8b2693d585d4a"
 
 show_help() {
-    echo "Usage: ./eval.sh [options]"
-    echo "Options:"
-    echo "  --mock               Run in mock evaluation mode (generates mock baseline and mythrax JSONL files for 500 instances)."
-    echo "  --predictions FILE   Path to predictions JSONL file."
-    echo "  --output FILE        Path to output results JSONL file."
+    cat <<EOF
+Usage: ./eval.sh --predictions <file.jsonl> --run-id <id> [--max-workers N]
+
+Runs the official swebench harness (Docker required) over the full
+SWE-bench_Verified set against the given predictions file.
+
+Options:
+  --predictions FILE   Predictions JSONL ({instance_id,model_name_or_path,model_patch}).
+  --run-id ID          Unique run id (e.g. baseline | mythrax). Names the report JSON.
+  --max-workers N      Parallel Docker workers (default 4).
+  -h | --help          Show this help.
+EOF
 }
 
-MOCK=false
 PREDS=""
-OUT=""
+RUN_ID=""
+MAX_WORKERS="4"
 
 while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        --mock) MOCK=true ;;
+    case "$1" in
         --predictions) PREDS="$2"; shift ;;
-        --output) OUT="$2"; shift ;;
+        --run-id) RUN_ID="$2"; shift ;;
+        --max-workers) MAX_WORKERS="$2"; shift ;;
         -h|--help) show_help; exit 0 ;;
-        *) echo "Unknown parameter: $1"; show_help; exit 1 ;;
+        *) echo "Unknown parameter: $1" >&2; show_help; exit 1 ;;
     esac
     shift
 done
 
-if [ "$MOCK" = true ]; then
-    echo "Running in mock evaluation mode..."
-    
-    # Generate mock baseline
-    echo "Generating mock_baseline.jsonl..."
-    rm -f mock_baseline.jsonl
-    for i in $(seq 1 500); do
-        inst_id="django__django-$((10000 + i))"
-        # 30% resolved (150 instances), 6% error (30 instances), rest unresolved (320 instances)
-        if [ $i -le 150 ]; then
-            status="resolved"
-        elif [ $i -le 180 ]; then
-            status="error"
-        else
-            status="unresolved"
-        fi
-        echo "{\"instance_id\": \"$inst_id\", \"status\": \"$status\"}" >> mock_baseline.jsonl
-    done
-    
-    # Generate mock mythrax (improved: 35.6% resolved, 5% error)
-    echo "Generating mock_mythrax.jsonl..."
-    rm -f mock_mythrax.jsonl
-    for i in $(seq 1 500); do
-        inst_id="django__django-$((10000 + i))"
-        # We improve: some baseline unresolved/errors become resolved
-        # Baseline resolved (1..150) remain resolved
-        # Baseline errors (151..180): 151..155 become resolved, 156..180 remain error (except 156..160 become unresolved)
-        # Baseline unresolved (181..500): 181..203 become resolved
-        if [ $i -le 150 ]; then
-            status="resolved"
-        elif [ $i -le 155 ]; then
-            status="resolved" # Improved from error
-        elif [ $i -le 160 ]; then
-            status="unresolved" # Improved from error
-        elif [ $i -le 180 ]; then
-            status="error"
-        elif [ $i -le 203 ]; then
-            status="resolved" # Improved from unresolved
-        else
-            status="unresolved"
-        fi
-        echo "{\"instance_id\": \"$inst_id\", \"status\": \"$status\"}" >> mock_mythrax.jsonl
-    done
-    
-    echo "Mock evaluation complete. Generated mock_baseline.jsonl and mock_mythrax.jsonl."
-    exit 0
-fi
-
-# Real execution
-if [ -z "$PREDS" ] || [ -z "$OUT" ]; then
-    echo "Error: --predictions and --output are required for real runs."
+if [[ -z "$PREDS" || -z "$RUN_ID" ]]; then
+    echo "Error: --predictions and --run-id are required." >&2
+    show_help
     exit 1
 fi
 
-echo "Executing official SWE-bench evaluation harness..."
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Error: Docker is required by the official swebench harness but was not found." >&2
+    exit 4
+fi
+
+# Record the actual installed harness version into the run manifest for reproducibility.
+SWEBENCH_VERSION="$(python3 -c 'import importlib.metadata as m; print(m.version("swebench"))' 2>/dev/null || echo unknown)"
+echo "Using official swebench harness version: ${SWEBENCH_VERSION}"
+echo "Dataset: ${DATASET_NAME} @ ${DATASET_REVISION}"
+
+# Official CLI contract (NOT --dataset/--predictions/--output):
+#   python -m swebench.harness.run_evaluation \
+#     --dataset_name <name> --predictions_path <file> --run_id <id> --max_workers N
 python3 -m swebench.harness.run_evaluation \
-    --dataset princeton-nlp/SWE-bench_Verified \
-    --predictions "$PREDS" \
-    --output "$OUT"
+    --dataset_name "$DATASET_NAME" \
+    --predictions_path "$PREDS" \
+    --run_id "$RUN_ID" \
+    --max_workers "$MAX_WORKERS"
+
+echo "Official harness complete. The report JSON (<model>.<run_id>.json) contains"
+echo "resolved_ids / unresolved_ids / error_ids — feed it to summarize.py."

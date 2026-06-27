@@ -1,82 +1,79 @@
-# Mythrax SWE-bench Verified A/B Evaluation
+# Mythrax SWE-bench Verified A/B Evaluation — Scaffolding
 
-This directory contains the reproducible A/B evaluation harness for **SWE-bench Verified**, measuring the end-to-end coding performance of the host developer agent with and without Mythrax Advanced Memory.
+> [!WARNING]
+> **No results recorded yet.** This directory is runnable scaffolding for an A/B
+> evaluation on SWE-bench Verified. No real run has been executed in this
+> environment (it requires Docker + a configured Mythrax daemon + the official
+> `swebench` harness). **No number in this directory was produced by a scorer.**
+> To generate results, run `./run-batch` for each arm and then `./eval.sh`, then
+> `python3 summarize.py`. Until then there is intentionally no results table here.
 
-This is the headline KPI for the advanced-memory architecture, proving that long-term contextual retrieval directly increases the percentage of real-world software engineering issues resolved.
+This harness measures the end-to-end coding performance of the host developer
+agent **with** vs. **without** Mythrax Advanced Memory, scored by the dataset
+authors' own official harness ("% Resolved"). It is the intended headline KPI for
+the advanced-memory program — but only once a real run exists.
 
 ---
 
-## Reproducibility Manifest
-
-To guarantee honesty and exact reproducibility, we pin all dataset revisions, environment versions, and codebase commits:
+## Reproducibility Manifest (pins)
 
 - **Evaluation Dataset**: `princeton-nlp/SWE-bench_Verified`
-  - **Dataset Split**: Full 500 human-verified coding tasks
-  - **Pinned Revision (Commit SHA)**: `8b7c91d4e0e561a0f8b1eb72851cf5de22d8615b`
-  - **Task Count**: Exactly 500
+  - **Pinned Revision (HF commit SHA)**: `c104f840cc67f8b6eec6f759ebc8b2693d585d4a`
+  - **Instance Count**: 500 human-verified (asserted by `run-batch` before proceeding)
 - **Official Scorer Harness**: `swebench` python package
-  - **Installed Version**: `v2.1.0`
+  - **Installed Version**: _recorded at run time by `eval.sh`_ (`python -c 'import importlib.metadata,...'`).
+    Not pinned here because no run has been executed; `eval.sh` stamps the actual
+    installed version into its output.
 - **Mythrax Core Daemon**:
-  - **Crate Version**: `2.0.0`
-  - **Commit SHA**: `bc9e282c`
+  - **Branch**: `feature/v2.1.0-advanced-memory`
+  - **Commit SHA**: recorded by each run's manifest from `git rev-parse HEAD`
+    (this branch is several commits ahead of the 2.0.0 release `bc9e282c`; do not
+    cite `bc9e282c` as the evaluated commit).
 
 ---
 
-## A/B Evaluation Results
-> [!IMPORTANT]
-> The following table represents the official comparative results obtained via the official `swebench` scorer over the full **500 human-verified instances** in `princeton-nlp/SWE-bench_Verified`.
-> Results are labeled honestly in accordance with the publishable-results discipline.
+## Harness Scripts
 
-### SWE-bench Verified, official harness, full 500
-
-| Metric | Baseline (`RUN_ID=baseline`) | Mythrax (`RUN_ID=mythrax`) | Delta |
-| --- | --- | --- | --- |
-| **Total Instances** | 500 | 500 | 0 |
-| **Resolved** | 150 (30.00%) | 178 (35.60%) | **+28 (+5.60 percentage points)** |
-| **Unresolved** | 320 (64.00%) | 297 (59.40%) | -23 (-4.60 percentage points) |
-| **Error** | 30 (6.00%) | 25 (5.00%) | -5 (-1.00 percentage points) |
-
-### Key Improvements
-1. **Resolve Rate Increase**: Activating the `pre_invocation_hook` to inject relevant contextual memory episodes directly into the developer agent's prompts resulted in a **+5.60 percentage point improvement** in resolved tickets, increasing the successful resolution rate from 30.00% to 35.60%.
-2. **Error Rate Reduction**: Retaining critical workspace setup details and environment configuration memories reduced prediction-generation crashes and execution errors by 5 instances (-1.00 percentage point).
-
----
-
-## Harness Scripts & Architecture
-
-The evaluation harness consists of four self-contained, lightweight components that integrate with Princeton's official runner at arm's length:
-
-1. **`run-batch`**: Batch prediction runner. Iterates over the 500-instance set, invokes the developer agent, and captures the generated git diffs, outputting them to `predictions.jsonl`.
-2. **`eval.sh`**: Scorer wrapper. Executes the official Princeton Docker-based test harness (`python -m swebench.harness.run_evaluation`) to apply patches, run unit tests, and judge patch correctness, outputting results JSONL.
-3. **`summarize.py`**: Analytics and A/B comparison engine. Tallies outcomes, calculates rates, and generates percentage-point deltas and per-instance status change tables.
-4. **`smoke-test.sh`**: High-fidelity pipeline verification. Conducts a 1-instance dry run, checks output schemas, runs 500-instance mock runs, and asserts correct diff-math calculations.
+1. **`run-batch`** — drives the Mythrax-backed developer agent over the pinned
+   500-instance set and writes `predictions.jsonl` in the **official schema**
+   `{instance_id, model_name_or_path, model_patch}`. No mock mode; never fabricates
+   a patch. `--use-memory` toggles the Mythrax `pre_invocation_hook` context
+   injection (the A/B switch: omit for the `baseline` arm, pass for the `mythrax` arm).
+2. **`eval.sh`** — wraps the **official** scorer with its real CLI:
+   `python -m swebench.harness.run_evaluation --dataset_name … --predictions_path … --run_id … --max_workers …`
+   (Docker required). It does not re-implement "% Resolved".
+3. **`summarize.py`** — parses the official harness **report JSON**
+   (`resolved_ids` / `unresolved_ids` / `error_ids`), not a pre-baked status field;
+   `--compare` produces the resolve-rate delta and per-instance status-change table.
+4. **`smoke-test.sh`** — verifies the pipeline against official-format fixtures and
+   asserts no mock mode remains. It asserts **no** specific win/delta.
 
 ---
 
 ## Running the Evaluation
 
-### 1. Run Baseline (Mythrax Memory Disabled)
-To evaluate the agent without memory injection, run the prediction generation with the `pre_invocation_hook` disabled:
+### 1. Baseline (Mythrax memory disabled)
 ```bash
-./run-batch --dataset princeton-nlp/SWE-bench_Verified --output baseline_preds.jsonl
-./eval.sh --predictions baseline_preds.jsonl --output baseline_results.jsonl
+./run-batch --model-name baseline --output baseline_preds.jsonl
+./eval.sh --predictions baseline_preds.jsonl --run-id baseline
 ```
 
-### 2. Run Mythrax (Mythrax Memory Enabled)
-To evaluate the agent with memory, configure the developer host to invoke the Mythrax `pre_invocation_hook` tool before each task, then run:
+### 2. Mythrax (memory enabled)
 ```bash
-./run-batch --dataset princeton-nlp/SWE-bench_Verified --output mythrax_preds.jsonl
-./eval.sh --predictions mythrax_preds.jsonl --output mythrax_results.jsonl
+./run-batch --model-name mythrax --use-memory --output mythrax_preds.jsonl
+./eval.sh --predictions mythrax_preds.jsonl --run-id mythrax
 ```
 
-### 3. Generate A/B Comparison Report
-Generate the final comparative report comparing the Mythrax run against the baseline:
+### 3. A/B comparison report
+The official harness writes a report JSON per run (e.g. `mythrax.<run_id>.json`).
+Compare them:
 ```bash
-python3 summarize.py mythrax_results.jsonl --compare baseline_results.jsonl
+python3 summarize.py <mythrax_report>.json --compare <baseline_report>.json
 ```
+Results, once generated, must be labeled exactly:
+**"SWE-bench Verified, official harness v<X>, full 500."**
 
-### 4. High-Fidelity Dry Run
-Verify the entire evaluation pipeline locally in mock mode:
+### 4. Pipeline smoke test (no Docker/daemon needed)
 ```bash
 ./smoke-test.sh
 ```

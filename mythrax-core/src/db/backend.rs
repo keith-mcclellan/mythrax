@@ -2164,13 +2164,10 @@ impl StorageBackend for SurrealBackend {
         // Apply Epic 4 distance-reduction boosts if enabled
         if is_boost_name_enabled || is_boost_quote_enabled || is_boost_temporal_enabled || is_boost_overlap_enabled {
             fn detect_person_name(query: &str, candidate_text: &str) -> bool {
-                let common_names = ["keith", "mcclellan", "andrej", "karpathy", "wu", "princeton", "xiaowu"];
+                // Generic heuristic: a capitalized query token (a proper-noun candidate)
+                // that also appears in the candidate text. No hardcoded name list — a
+                // baked-in roster would game specific benchmark authors/entities.
                 let candidate_lower = candidate_text.to_lowercase();
-                for name in &common_names {
-                    if query.to_lowercase().contains(name) && candidate_lower.contains(name) {
-                        return true;
-                    }
-                }
                 let words: Vec<&str> = query.split_whitespace().collect();
                 for word in words {
                     if word.is_empty() { continue; }
@@ -2245,6 +2242,17 @@ impl StorageBackend for SurrealBackend {
 
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
 
+        // Rank-position boost ladder (Epic 4): reduce the distance of the top
+        // candidates by a fixed, position-indexed amount so the strongest matches
+        // are pulled further toward the top. effective_dist = clamp(dist - boost, 0, 2).
+        const RANK_POSITION_LADDER: [f32; 5] = [0.40, 0.25, 0.15, 0.08, 0.04];
+        for (pos, c) in candidates.iter_mut().take(RANK_POSITION_LADDER.len()).enumerate() {
+            let dist = 1.0 - c.similarity;
+            let effective_dist = (dist - RANK_POSITION_LADDER[pos]).clamp(0.0, 2.0);
+            c.similarity = 1.0 - effective_dist;
+        }
+        candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+
         let mut final_results = Vec::new();
         let mut seen_related_ids = std::collections::HashSet::new();
 
@@ -2260,6 +2268,15 @@ impl StorageBackend for SurrealBackend {
             final_results.push(item);
         }
         candidates = final_results;
+
+        // Bounded verbatim hydration (Epic 4): cap injected verbatim content per
+        // result so a single large episode cannot blow out the context window.
+        const MAX_HYDRATION_CHARS: usize = 10000;
+        for c in &mut candidates {
+            if c.content.chars().count() > MAX_HYDRATION_CHARS {
+                c.content = c.content.chars().take(MAX_HYDRATION_CHARS).collect();
+            }
+        }
 
         let mut omitted_ids = None;
 

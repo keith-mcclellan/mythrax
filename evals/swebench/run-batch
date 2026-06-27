@@ -1,32 +1,115 @@
 #!/usr/bin/env python3
-import json
+"""Generate SWE-bench Verified predictions by driving the Mythrax daemon.
+
+Produces a predictions JSONL with the OFFICIAL schema expected by
+`swebench.harness.run_evaluation`:
+    {"instance_id": ..., "model_name_or_path": ..., "model_patch": ...}
+
+There is NO mock mode. If the dataset or the daemon cannot be reached, this
+exits non-zero WITHOUT writing fabricated predictions. Honesty over completeness:
+an empty/aborted run is acceptable; an invented one is not.
+"""
 import argparse
+import json
+import os
 import sys
 
+DATASET_NAME = "princeton-nlp/SWE-bench_Verified"
+# Pinned revision of the dataset (commit SHA on the HF hub). Recorded for reproducibility.
+DATASET_REVISION = "c104f840cc67f8b6eec6f759ebc8b2693d585d4a"
+
+
+def load_instances(dataset_name, revision):
+    """Load the full 500 verified instances from the pinned dataset revision."""
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        print(
+            "ERROR: the `datasets` package is required to load the official "
+            "SWE-bench Verified set. `pip install datasets`.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    ds = load_dataset(dataset_name, split="test", revision=revision)
+    return list(ds)
+
+
+def generate_patch_via_daemon(instance, daemon_url, token, use_memory):
+    """Drive the developer agent over the daemon to produce a unified-diff patch.
+
+    Returns the model_patch string, or None if no patch was produced. This is the
+    integration point with the host developer agent: it must invoke the agent on
+    the instance's problem statement (optionally with Mythrax pre_invocation_hook
+    context injection enabled when use_memory=True) and capture the resulting git
+    diff. It is intentionally left as an explicit integration boundary rather than
+    a stub that emits fake diffs.
+    """
+    raise NotImplementedError(
+        "Connect this to the host developer agent + Mythrax daemon to capture a "
+        "real git diff for the instance. Must not emit a synthetic patch."
+    )
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Generate predictions for SWE-bench Verified.")
-    parser.add_argument("--mock", action="store_true", help="Run in dry-run/mock mode.")
-    parser.add_argument("--dataset", default="princeton-nlp/SWE-bench_Verified", help="Dataset name.")
-    parser.add_argument("--output", default="predictions.jsonl", help="Output file path.")
+    parser = argparse.ArgumentParser(
+        description="Generate real SWE-bench Verified predictions from the Mythrax-backed agent."
+    )
+    parser.add_argument("--dataset", default=DATASET_NAME)
+    parser.add_argument("--revision", default=DATASET_REVISION)
+    parser.add_argument("--output", default="predictions.jsonl")
+    parser.add_argument(
+        "--model-name",
+        default="mythrax",
+        help="model_name_or_path stamped on each prediction (e.g. baseline | mythrax).",
+    )
+    parser.add_argument(
+        "--use-memory",
+        action="store_true",
+        help="Enable the Mythrax pre_invocation_hook context injection (the A/B 'mythrax' arm).",
+    )
+    parser.add_argument("--daemon-url", default=os.environ.get("MYTHRAX_URL", "http://127.0.0.1:8090"))
+    parser.add_argument("--limit", type=int, default=0, help="Optional cap for debugging (0 = all 500).")
     args = parser.parse_args()
 
-    if args.mock:
-        print("Running in mock prediction mode...")
-        mock_predictions = [
-            {
-                "instance_id": "django__django-11111",
-                "model_name_or_path": "mock-mythrax-model",
-                "model_patch": "diff --git a/django/db/models/query.py b/django/db/models/query.py\nindex a1b2c3d..e5f6g7h 100\n--- a/django/db/models/query.py\n+++ b/django/db/models/query.py\n@@ -99,3 +99,4 @@\n+        # Mock patch applied"
-            }
-        ]
-        with open(args.output, 'w') as f:
-            for pred in mock_predictions:
-                f.write(json.dumps(pred) + "\n")
-        print(f"Mock predictions written to {args.output}")
-    else:
-        # In a real run, this would load the dataset and query the LLM daemon
-        print("Real prediction execution requires configured daemon access.", file=sys.stderr)
-        sys.exit(1)
+    token = os.environ.get("MYTHRAX_TOKEN", "")
+    instances = load_instances(args.dataset, args.revision)
+    if args.limit > 0:
+        instances = instances[: args.limit]
+
+    expected = 500
+    if args.limit == 0 and len(instances) != expected:
+        print(
+            f"ERROR: expected {expected} SWE-bench Verified instances at revision "
+            f"{args.revision}, got {len(instances)}. Refusing to proceed.",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+
+    written = 0
+    with open(args.output, "w") as f:
+        for inst in instances:
+            instance_id = inst["instance_id"]
+            patch = generate_patch_via_daemon(
+                inst, args.daemon_url, token, args.use_memory
+            )
+            if not patch:
+                # Empty patch is a legitimate "no prediction"; the official harness
+                # will score it as unresolved. Never fabricate a diff.
+                patch = ""
+            f.write(
+                json.dumps(
+                    {
+                        "instance_id": instance_id,
+                        "model_name_or_path": args.model_name,
+                        "model_patch": patch,
+                    }
+                )
+                + "\n"
+            )
+            written += 1
+
+    print(f"Wrote {written} predictions to {args.output}")
+
 
 if __name__ == "__main__":
     main()
