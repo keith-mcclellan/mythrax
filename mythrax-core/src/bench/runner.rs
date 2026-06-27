@@ -35,7 +35,7 @@ struct QuestionEntry {
     question_type: String,
     question: String,
     #[allow(dead_code)]
-    answer: String,
+    answer: serde_json::Value,
     haystack_session_ids: Vec<String>,
     haystack_sessions: Vec<Vec<TurnEntry>>,
 }
@@ -159,9 +159,7 @@ async fn main() -> Result<()> {
     let total_q = target_questions.len();
 
     for (q_idx, q) in target_questions.iter().enumerate() {
-        if (q_idx + 1) % 50 == 0 || q_idx == 0 || q_idx == total_q - 1 {
-            println!("Evaluating question {}/{}...", q_idx + 1, total_q);
-        }
+        println!("Evaluating question {}/{}...", q_idx + 1, total_q);
 
         // Ingest into a fresh in-memory SurrealBackend
         let backend = SurrealBackend::new_in_memory().await
