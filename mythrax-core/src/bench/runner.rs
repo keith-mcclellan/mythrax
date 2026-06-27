@@ -309,13 +309,16 @@ async fn main() -> Result<()> {
     for (q_idx, q) in target_questions.iter().enumerate() {
         println!("Evaluating question {}/{}...", q_idx + 1, total_q);
 
-        let backend = SurrealBackend::new_in_memory()
-            .await
-            .context("Failed to create in-memory backend")?;
+        let backend = std::sync::Arc::new(
+            SurrealBackend::new_in_memory()
+                .await
+                .context("Failed to create in-memory backend")?
+        );
         backend.init().await.context("Failed to initialize backend")?;
 
-        // Ingest the COMPLETE per-question haystack (all sessions, distractors included).
+        // Ingest the COMPLETE per-question haystack (all sessions, distractors included) in parallel.
         let mut correct_turn_ids = Vec::new();
+        let mut ingest_tasks = Vec::new();
         for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
             if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
                 for (turn_idx, turn) in session_turns.iter().enumerate() {
@@ -328,15 +331,21 @@ async fn main() -> Result<()> {
                         session_id: Some(session_id.clone()),
                         ..Default::default()
                     };
-                    backend
-                        .save_episode(&ep)
-                        .await
-                        .context("Failed to save episode turn during ingestion")?;
                     if turn.has_answer {
                         correct_turn_ids.push(corpus_id);
                     }
+                    
+                    let backend_clone = backend.clone();
+                    ingest_tasks.push(tokio::spawn(async move {
+                        backend_clone.save_episode(&ep).await
+                    }));
                 }
             }
+        }
+
+        for task in ingest_tasks {
+            task.await.context("Benchmark ingest task panicked")?
+                .context("Failed to save episode turn during ingestion")?;
         }
 
         let search_response = backend
