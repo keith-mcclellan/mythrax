@@ -1,3 +1,13 @@
+//! Host adapters for various AI developer tools and agents.
+//!
+//! Supported hosts:
+//! - Claude Code (fully supported, payload schema validated)
+//! - Gemini (fully supported, payload schema validated)
+//!
+//! Unsupported hosts:
+//! - Codex (unsupported in v2.1.0 — real hook payload keys not yet specified)
+//! - Cursor (unsupported in v2.1.0 — real hook payload keys not yet specified)
+
 use serde::Deserialize;
 use anyhow::{Result, Context};
 use crate::hooks::shell::{sanitize_session_id, normalize_transcript_path};
@@ -41,11 +51,11 @@ pub fn adapt_claude_code(val: serde_json::Value) -> Result<(String, bool, String
 }
 
 pub fn adapt_codex(_val: serde_json::Value) -> Result<(String, bool, String)> {
-    anyhow::bail!("SPEC-GAP: Codex host payload keys are unknown (do not invent host keys)")
+    anyhow::bail!("Codex is unsupported in v2.1.0 — real hook payload keys not yet specified")
 }
 
 pub fn adapt_cursor(_val: serde_json::Value) -> Result<(String, bool, String)> {
-    anyhow::bail!("SPEC-GAP: Cursor host payload keys are unknown (do not invent host keys)")
+    anyhow::bail!("Cursor is unsupported in v2.1.0 — real hook payload keys not yet specified")
 }
 
 pub fn adapt_gemini(val: serde_json::Value) -> Result<(String, bool, String)> {

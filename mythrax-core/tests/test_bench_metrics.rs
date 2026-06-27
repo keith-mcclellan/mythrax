@@ -1,3 +1,5 @@
+#![cfg(feature = "bench")]
+
 use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg};
 
 #[test]

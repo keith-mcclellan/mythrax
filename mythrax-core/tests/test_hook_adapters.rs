@@ -37,9 +37,9 @@ fn test_codex_payload_maps_to_canonical() {
     });
 
     let res = adapt_payload(payload, "codex");
-    assert!(res.is_err(), "Codex payload must fail with SPEC-GAP");
+    assert!(res.is_err(), "Codex payload must fail with unsupported message");
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("SPEC-GAP"), "Error must contain SPEC-GAP");
+    assert!(err.contains("unsupported in v2.1.0"), "Error must contain unsupported in v2.1.0");
 }
 
 #[test]
@@ -51,9 +51,9 @@ fn test_cursor_payload_maps_to_canonical() {
     });
 
     let res = adapt_payload(payload, "cursor");
-    assert!(res.is_err(), "Cursor payload must fail with SPEC-GAP");
+    assert!(res.is_err(), "Cursor payload must fail with unsupported message");
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("SPEC-GAP"), "Error must contain SPEC-GAP");
+    assert!(err.contains("unsupported in v2.1.0"), "Error must contain unsupported in v2.1.0");
 }
 
 #[test]

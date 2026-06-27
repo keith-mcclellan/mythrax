@@ -1,3 +1,5 @@
+#![cfg(feature = "bench")]
+
 use mythrax_core::bench::metrics::evaluate_retrieval;
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};

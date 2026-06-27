@@ -118,3 +118,41 @@ async fn test_query_symbolic_scored_temporal_filtering() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_resolve_query_anchors_knn_multi() -> anyhow::Result<()> {
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    // Seed 3 entities with 768-dimensional embeddings to satisfy HNSW constraints
+    let mut emb1 = vec![0.0f32; 768];
+    emb1[0] = 0.1;
+    let mut emb2 = vec![0.0f32; 768];
+    emb2[0] = 0.1; emb2[1] = 0.01;
+    let mut emb3 = vec![0.0f32; 768];
+    emb3[0] = 0.1; emb3[1] = 0.02;
+
+    backend.db.query("CREATE entity SET name = 'Entity 1', entity_type = 'person', summary = 'Entity summary', labels = ['label1'], embedding = $emb;")
+        .bind(("emb", emb1))
+        .await?.check()?;
+    backend.db.query("CREATE entity SET name = 'Entity 2', entity_type = 'person', summary = 'Entity summary', labels = ['label1'], embedding = $emb;")
+        .bind(("emb", emb2))
+        .await?.check()?;
+    backend.db.query("CREATE entity SET name = 'Entity 3', entity_type = 'person', summary = 'Entity summary', labels = ['label1'], embedding = $emb;")
+        .bind(("emb", emb3))
+        .await?.check()?;
+
+    let query_emb = {
+        let mut qe = vec![0.0f32; 768];
+        qe[0] = 0.1;
+        qe
+    };
+    // Call resolve_query_anchors
+    let anchors = backend.resolve_query_anchors("some query with no exact matches", Some(&query_emb)).await;
+
+    // It should return more than 1 anchor (proves k > 1)
+    assert!(anchors.len() > 1, "Should return more than 1 anchor, got {}", anchors.len());
+    assert!(anchors.len() <= 5, "Should be capped at 5 anchors");
+
+    Ok(())
+}

@@ -104,9 +104,20 @@ fn test_summarize_diff_math() {
     // Delta: +33.33 percentage points
     assert!(stdout_str.contains("+33.33 percentage points"), "Output should contain '+33.33 percentage points'");
     assert!(stdout_str.contains("+1"), "Output should contain '+1' delta for resolved count");
-    
     // Assert status changes
     assert!(stdout_str.contains("inst-2"), "Output should contain inst-2");
     assert!(stdout_str.contains("Improved (+)"), "Output should contain 'Improved (+)'");
 }
 
+#[test]
+fn test_unconditional_println_hygiene_in_backend() {
+    let backend_path = Path::new("src/db/backend.rs");
+    assert!(backend_path.exists(), "src/db/backend.rs not found");
+    let content = fs::read_to_string(backend_path).unwrap();
+    
+    // Assert the Auto-Promoted println! message is not present
+    assert!(
+        !content.contains("println!(\"[Mythrax Synapse:"),
+        "Offending unconditional println! found in src/db/backend.rs"
+    );
+}

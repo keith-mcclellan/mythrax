@@ -575,26 +575,9 @@ impl SurrealBackend {
 
         if anchors.len() < 5 {
             if let Some(emb) = query_emb {
-                let sql_knn_entities = "SELECT id, (embedding <|1|> $emb) AS similarity FROM entity WHERE embedding IS NOT NONE ORDER BY similarity ASC LIMIT 5;";
-                if let Ok(mut response) = self.db.query(sql_knn_entities).bind(("emb", emb.clone())).await {
-                    if let Ok(rows) = response.take::<Vec<KnnRow>>(0) {
-                        for r in rows {
-                            let id_str = format_record_id(&r.id);
-                            if seen.insert(id_str.clone()) {
-                                let dist = r.similarity.unwrap_or(1.0);
-                                let sim = (1.0f32 - dist).clamp(0.0, 1.0);
-                                anchors.push((id_str, sim));
-                                if anchors.len() >= 5 {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if anchors.len() < 5 {
-                    let sql_knn_wiki = "SELECT id, (embedding <|1|> $emb) AS similarity FROM wiki_node WHERE embedding IS NOT NONE ORDER BY similarity ASC LIMIT 5;";
-                    if let Ok(mut response) = self.db.query(sql_knn_wiki).bind(("emb", emb.clone())).await {
+                let sql_knn_entities = "SELECT id, vector::similarity::cosine(embedding, $emb) AS similarity FROM entity WHERE embedding <|5, 100|> $emb LIMIT 5;";
+                if let Ok(response) = self.db.query(sql_knn_entities).bind(("emb", emb.clone())).await {
+                    if let Ok(mut response) = response.check() {
                         if let Ok(rows) = response.take::<Vec<KnnRow>>(0) {
                             for r in rows {
                                 let id_str = format_record_id(&r.id);
@@ -604,6 +587,27 @@ impl SurrealBackend {
                                     anchors.push((id_str, sim));
                                     if anchors.len() >= 5 {
                                         break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if anchors.len() < 5 {
+                    let sql_knn_wiki = "SELECT id, vector::similarity::cosine(embedding, $emb) AS similarity FROM wiki_node WHERE embedding <|5, 100|> $emb LIMIT 5;";
+                    if let Ok(response) = self.db.query(sql_knn_wiki).bind(("emb", emb.clone())).await {
+                        if let Ok(mut response) = response.check() {
+                            if let Ok(rows) = response.take::<Vec<KnnRow>>(0) {
+                                for r in rows {
+                                    let id_str = format_record_id(&r.id);
+                                    if seen.insert(id_str.clone()) {
+                                        let dist = r.similarity.unwrap_or(1.0);
+                                        let sim = (1.0f32 - dist).clamp(0.0, 1.0);
+                                        anchors.push((id_str, sim));
+                                        if anchors.len() >= 5 {
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -1610,7 +1614,7 @@ impl StorageBackend for SurrealBackend {
                                                     .current_dir(&project_root_clone)
                                                     .status();
                                                 
-                                                println!("[Mythrax Synapse: Auto-Promoted Wisdom Rule to GitHub -> committed as {}. To rollback, run: git revert {}]", hash, hash);
+                                                tracing::info!("[Mythrax Synapse: Auto-Promoted Wisdom Rule to GitHub -> committed as {}. To rollback, run: git revert {}]", hash, hash);
                                             }
                                         }
                                     }
