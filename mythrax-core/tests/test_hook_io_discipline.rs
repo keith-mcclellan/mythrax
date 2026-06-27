@@ -78,15 +78,11 @@ fn test_summarize_diff_math() {
     // Write base fixture: 3 instances, 1 resolved (33.33%), 1 unresolved, 1 error
     let mut base_file = fs::File::create(&base_path).unwrap();
     use std::io::Write;
-    writeln!(base_file, "{{\"instance_id\": \"inst-1\", \"status\": \"resolved\"}}").unwrap();
-    writeln!(base_file, "{{\"instance_id\": \"inst-2\", \"status\": \"unresolved\"}}").unwrap();
-    writeln!(base_file, "{{\"instance_id\": \"inst-3\", \"status\": \"error\"}}").unwrap();
+    writeln!(base_file, "{{\"resolved_ids\": [\"inst-1\"], \"unresolved_ids\": [\"inst-2\"], \"error_ids\": [\"inst-3\"]}}").unwrap();
 
     // Write current fixture: 3 instances, 2 resolved (66.67%), 1 unresolved, 0 error
     let mut curr_file = fs::File::create(&curr_path).unwrap();
-    writeln!(curr_file, "{{\"instance_id\": \"inst-1\", \"status\": \"resolved\"}}").unwrap();
-    writeln!(curr_file, "{{\"instance_id\": \"inst-2\", \"status\": \"resolved\"}}").unwrap(); // Improved!
-    writeln!(curr_file, "{{\"instance_id\": \"inst-3\", \"status\": \"unresolved\"}}").unwrap(); // Improved!
+    writeln!(curr_file, "{{\"resolved_ids\": [\"inst-1\", \"inst-2\"], \"unresolved_ids\": [\"inst-3\"], \"error_ids\": []}}").unwrap();
 
     // Execute summarize.py
     let output = std::process::Command::new("python3")
