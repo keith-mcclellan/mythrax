@@ -64,7 +64,7 @@ struct Args {
     allow_download: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct QuestionEntry {
     question_id: String,
     question_type: String,
@@ -79,7 +79,7 @@ struct QuestionEntry {
     answer_session_ids: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct TurnEntry {
     role: String,
     content: String,
@@ -292,6 +292,9 @@ async fn main() -> Result<()> {
     };
 
     // --- Evaluate. ---
+    let shared_backend = SurrealBackend::new_in_memory()
+        .await
+        .context("Failed to create shared in-memory database engine")?;
     let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
     let mut records = Vec::new();
     let mut sum_recall_any_turn = 0.0f32;
@@ -306,130 +309,161 @@ async fn main() -> Result<()> {
         std::collections::HashMap::new();
 
     let total_q = target_questions.len();
+    let mut join_set = tokio::task::JoinSet::new();
+    let concurrency_limit = 8;
 
     for (q_idx, q) in target_questions.iter().enumerate() {
-        println!("Evaluating question {}/{}...", q_idx + 1, total_q);
+        while join_set.len() >= concurrency_limit {
+            if let Some(res) = join_set.join_next().await {
+                let record: QuestionResultRecord = res.context("Parallel evaluation task panicked")??;
+                sum_recall_any_turn += record.recall_any_turn_at5;
+                sum_recall_all_turn += record.recall_all_turn_at5;
+                sum_ndcg_turn += record.ndcg_turn_at10;
+                sum_recall_any_session += record.recall_any_session_at5;
+                sum_recall_all_session += record.recall_all_session_at5;
 
-        let backend = std::sync::Arc::new(
-            SurrealBackend::new_in_memory()
-                .await
-                .context("Failed to create in-memory backend")?
-        );
-        backend.init().await.context("Failed to initialize backend")?;
+                *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
+                *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
 
-        // Collect all texts to embed for this question
-        let mut texts_to_embed = Vec::new();
-        for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
-            if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
-                for (turn_idx, turn) in session_turns.iter().enumerate() {
-                    let title = format!("Session {} - Turn {}", session_id, turn_idx);
-                    let content = format!("{}: {}", turn.role, turn.content);
-                    texts_to_embed.push(format!("{}: {}", title, content));
-                }
+                records.push(record);
             }
         }
 
-        // Generate embeddings in a single batch
-        let embeddings = backend.embed_batch(&texts_to_embed).await
-            .context("Failed to batch embed haystack turns")?;
+        let q = q.clone();
+        let published = published;
+        let note = note.clone();
+        let shared_backend_clone = shared_backend.clone();
 
-        // Populate the global embedding cache for transparent on-the-fly hits in save_episode
-        for (idx, text) in texts_to_embed.iter().enumerate() {
-            mythrax_core::embeddings::cache_embedding(text.clone(), embeddings[idx].clone());
-        }
+        join_set.spawn(async move {
+            println!("Evaluating question {}/{}...", q_idx + 1, total_q);
 
-        // Ingest the COMPLETE per-question haystack sequentially (will hit cache instantly, avoiding DB conflicts)
-        let mut correct_turn_ids = Vec::new();
-        for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
-            if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
-                for (turn_idx, turn) in session_turns.iter().enumerate() {
-                    let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
-                    let ep = EpisodeSave {
-                        title: format!("Session {} - Turn {}", session_id, turn_idx),
-                        content: format!("{}: {}", turn.role, turn.content),
-                        scope: Some("general".to_string()),
-                        vault_path: Some(corpus_id.clone()),
-                        session_id: Some(session_id.clone()),
-                        ..Default::default()
-                    };
-                    if turn.has_answer {
-                        correct_turn_ids.push(corpus_id);
+            let mut backend = shared_backend_clone;
+            backend.term_counts_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+            backend.avg_dl_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+            backend.db.use_ns("mythrax").use_db(format!("q_{}", q_idx)).await
+                .context("Failed to select namespace/database")?;
+            backend.init().await.context("Failed to initialize database schema")?;
+            let backend = std::sync::Arc::new(backend);
+
+            // Collect all texts to embed for this question
+            let mut texts_to_embed = Vec::new();
+            for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+                if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+                    for (turn_idx, turn) in session_turns.iter().enumerate() {
+                        let title = format!("Session {} - Turn {}", session_id, turn_idx);
+                        let content = format!("{}: {}", turn.role, turn.content);
+                        texts_to_embed.push(format!("{}: {}", title, content));
                     }
-                    
-                    backend.save_episode(&ep).await
-                        .context("Failed to save episode turn during ingestion")?;
                 }
             }
-        }
+
+            // Generate embeddings in a single batch
+            let embeddings = backend.embed_batch(&texts_to_embed).await
+                .context("Failed to batch embed haystack turns")?;
+
+            // Populate the global embedding cache for transparent on-the-fly hits in save_episode
+            for (idx, text) in texts_to_embed.iter().enumerate() {
+                mythrax_core::embeddings::cache_embedding(text.clone(), embeddings[idx].clone());
+            }
+
+            // Ingest the COMPLETE per-question haystack sequentially (will hit cache instantly, avoiding DB conflicts)
+            let mut correct_turn_ids = Vec::new();
+            for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+                if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+                    for (turn_idx, turn) in session_turns.iter().enumerate() {
+                        let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
+                        let ep = EpisodeSave {
+                            title: format!("Session {} - Turn {}", session_id, turn_idx),
+                            content: format!("{}: {}", turn.role, turn.content),
+                            scope: Some("general".to_string()),
+                            vault_path: Some(corpus_id.clone()),
+                            session_id: Some(session_id.clone()),
+                            ..Default::default()
+                        };
+                        if turn.has_answer {
+                            correct_turn_ids.push(corpus_id);
+                        }
+                        
+                        backend.save_episode(&ep).await
+                            .context("Failed to save episode turn during ingestion")?;
+                    }
+                }
+            }
 
 
-        let search_response = backend
-            .search(
-                &q.question,
-                Some("general"),
-                false,       // deep_insight
-                retrieve_k,  // limit: over-fetch to max(k_recall, k_ndcg)
-                0,           // offset
-                0.0,         // threshold (allow all)
-                None,        // token_budget
-                false,       // allow_downward
-                true,        // include_episodes
-                true,        // include_artifacts
-            )
-            .await
-            .context("Search query failed during evaluation")?;
+            let search_response = backend
+                .search(
+                    &q.question,
+                    Some("general"),
+                    false,       // deep_insight
+                    retrieve_k,  // limit: over-fetch to max(k_recall, k_ndcg)
+                    0,           // offset
+                    0.0,         // threshold (allow all)
+                    None,        // token_budget
+                    false,       // allow_downward
+                    true,        // include_episodes
+                    true,        // include_artifacts
+                )
+                .await
+                .context("Search query failed during evaluation")?;
 
-        let retrieved_corpus_ids: Vec<String> = search_response
-            .results
-            .iter()
-            .filter_map(|r| r.vault_path.clone())
-            .collect();
-        let rankings: Vec<usize> = (0..retrieved_corpus_ids.len()).collect();
+            let retrieved_corpus_ids: Vec<String> = search_response
+                .results
+                .iter()
+                .filter_map(|r| r.vault_path.clone())
+                .collect();
+            let rankings: Vec<usize> = (0..retrieved_corpus_ids.len()).collect();
 
-        // Turn-granularity (BI-8): recall@5, nDCG@10, plus R@10 for the per-type table.
-        let turn5 = evaluate_retrieval(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_RECALL);
-        let ndcg10 = ndcg(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_NDCG);
-        let turn10 =
-            evaluate_retrieval(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_NDCG);
+            // Turn-granularity (BI-8): recall@5, nDCG@10, plus R@10 for the per-type table.
+            let turn5 = evaluate_retrieval(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_RECALL);
+            let ndcg10 = ndcg(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_NDCG);
+            let turn10 =
+                evaluate_retrieval(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_NDCG);
 
-        // Session-granularity (BI-6): map retrieved corpus ids -> session ids, compare set
-        // against answer_session_ids.
-        let retrieved_session_ids: Vec<String> = retrieved_corpus_ids
-            .iter()
-            .map(|id| session_id_from_corpus_id(id).to_string())
-            .collect();
-        let session_rankings: Vec<usize> = (0..retrieved_session_ids.len()).collect();
-        let sess5 = evaluate_retrieval(
-            &session_rankings,
-            &q.answer_session_ids,
-            &retrieved_session_ids,
-            K_RECALL,
-        );
+            // Session-granularity (BI-6): map retrieved corpus ids -> session ids, compare set
+            // against answer_session_ids.
+            let retrieved_session_ids: Vec<String> = retrieved_corpus_ids
+                .iter()
+                .map(|id| session_id_from_corpus_id(id).to_string())
+                .collect();
+            let session_rankings: Vec<usize> = (0..retrieved_session_ids.len()).collect();
+            let sess5 = evaluate_retrieval(
+                &session_rankings,
+                &q.answer_session_ids,
+                &retrieved_session_ids,
+                K_RECALL,
+            );
 
-        sum_recall_any_turn += turn5.recall_any;
-        sum_recall_all_turn += turn5.recall_all;
-        sum_ndcg_turn += ndcg10;
-        sum_recall_any_session += sess5.recall_any;
-        sum_recall_all_session += sess5.recall_all;
-
-        *type_counts.entry(q.question_type.clone()).or_insert(0) += 1;
-        *type_recall_at10.entry(q.question_type.clone()).or_insert(0.0) += turn10.recall_any;
-
-        records.push(QuestionResultRecord {
-            question_id: q.question_id.clone(),
-            question_type: q.question_type.clone(),
-            recall_any_turn_at5: turn5.recall_any,
-            recall_all_turn_at5: turn5.recall_all,
-            ndcg_turn_at10: ndcg10,
-            recall_any_turn_at10: turn10.recall_any,
-            recall_any_session_at5: sess5.recall_any,
-            recall_all_session_at5: sess5.recall_all,
-            retrieved_corpus_ids,
-            gold_corpus_ids: correct_turn_ids,
-            gold_session_ids: q.answer_session_ids.clone(),
-            published,
-            note: note.clone(),
+            Ok::<QuestionResultRecord, anyhow::Error>(QuestionResultRecord {
+                question_id: q.question_id,
+                question_type: q.question_type,
+                recall_any_turn_at5: turn5.recall_any,
+                recall_all_turn_at5: turn5.recall_all,
+                ndcg_turn_at10: ndcg10,
+                recall_any_turn_at10: turn10.recall_any,
+                recall_any_session_at5: sess5.recall_any,
+                recall_all_session_at5: sess5.recall_all,
+                retrieved_corpus_ids,
+                gold_corpus_ids: correct_turn_ids,
+                gold_session_ids: q.answer_session_ids,
+                published,
+                note,
+            })
         });
+    }
+
+    while let Some(res) = join_set.join_next().await {
+        let record: QuestionResultRecord = res.context("Parallel evaluation task panicked")??;
+        sum_recall_any_turn += record.recall_any_turn_at5;
+        sum_recall_all_turn += record.recall_all_turn_at5;
+        sum_ndcg_turn += record.ndcg_turn_at10;
+        sum_recall_any_session += record.recall_any_session_at5;
+        sum_recall_all_session += record.recall_all_session_at5;
+
+        *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
+        *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
+
+        records.push(record);
     }
 
     // CB-2: guard division-by-zero on an empty question set.

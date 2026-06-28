@@ -1715,12 +1715,12 @@ impl StorageBackend for SurrealBackend {
         };
 
         let sigmoid_center = match self.get_profile_key("search.sigmoid_center").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
-            _ => 0.60f32,
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.55f32),
+            _ => 0.55f32,
         };
         let sigmoid_steepness = match self.get_profile_key("search.sigmoid_steepness").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(20.0f32),
-            _ => 20.0f32,
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(15.0f32),
+            _ => 15.0f32,
         };
         let w_imp_ep = match self.get_profile_key("search.weight_importance_episode").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.3f32),
@@ -2484,7 +2484,17 @@ impl StorageBackend for SurrealBackend {
                 }
 
                 let corpus: Vec<(String, String)> = merged.iter().map(|c| (c.id.clone(), format!("{} {}", c.title, c.content))).collect();
-                let bm25 = crate::retrieval::bm25::OkapiBM25::with_global_stats(&corpus, global_df.clone(), total_n, avg_dl);
+                let bm25_k1 = match self.get_profile_key("retrieval.bm25.k1").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.2f32),
+                    _ => 1.2f32,
+                };
+                let bm25_b = match self.get_profile_key("retrieval.bm25.b").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
+                    _ => 0.60f32,
+                };
+                let bm25 = crate::retrieval::bm25::OkapiBM25::with_global_stats(&corpus, global_df.clone(), total_n, avg_dl)
+                    .with_k1(bm25_k1)
+                    .with_b(bm25_b);
                 let bm25_scores = bm25.score_normalized(cleaned_query.as_str());
                 let bm25_map: std::collections::HashMap<String, f32> = bm25_scores.into_iter().collect();
 
@@ -2739,7 +2749,11 @@ impl StorageBackend for SurrealBackend {
             _ => 0.2f32,
         };
 
-        let pool_len = merged_candidates.len().min(10);
+        let rerank_pool_size = match self.get_profile_key("search.rerank_pool_size").await {
+            Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
+            _ => 25,
+        };
+        let pool_len = merged_candidates.len().min(rerank_pool_size);
         let mut rerank_pool = merged_candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
         
         for c in &mut rerank_pool {

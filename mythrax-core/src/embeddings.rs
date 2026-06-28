@@ -1,6 +1,7 @@
 use anyhow::{Result, Context};
 use tokenizers::Tokenizer;
 use std::path::Path;
+use std::io::{Read, Write};
 use std::env;
 #[cfg(not(feature = "mlx"))]
 use std::sync::Mutex;
@@ -25,6 +26,94 @@ pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
         }
     }
     None
+}
+
+pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+
+    let mut loaded_cache = std::collections::HashMap::new();
+
+    // Read number of entries
+    let mut num_entries_buf = [0u8; 4];
+    reader.read_exact(&mut num_entries_buf)?;
+    let num_entries = u32::from_le_bytes(num_entries_buf) as usize;
+
+    for _ in 0..num_entries {
+        // Read key length
+        let mut key_len_buf = [0u8; 4];
+        reader.read_exact(&mut key_len_buf)?;
+        let key_len = u32::from_le_bytes(key_len_buf) as usize;
+
+        // Read key bytes
+        let mut key_bytes = vec![0u8; key_len];
+        reader.read_exact(&mut key_bytes)?;
+        let key = String::from_utf8(key_bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        // Read number of f32 values
+        let mut num_values_buf = [0u8; 4];
+        reader.read_exact(&mut num_values_buf)?;
+        let num_values = u32::from_le_bytes(num_values_buf) as usize;
+
+        // Read f32 values
+        let mut values = Vec::with_capacity(num_values);
+        for _ in 0..num_values {
+            let mut f32_buf = [0u8; 4];
+            reader.read_exact(&mut f32_buf)?;
+            let val = f32::from_le_bytes(f32_buf);
+            values.push(val);
+        }
+
+        loaded_cache.insert(key, values);
+    }
+
+    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(mut cache) = cache_mutex.lock() {
+        cache.extend(loaded_cache);
+    }
+
+    Ok(())
+}
+
+pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
+    let cache = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let map = cache.lock().map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
+
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    // Write number of entries
+    let num_entries = map.len() as u32;
+    writer.write_all(&num_entries.to_le_bytes())?;
+
+    for (key, values) in map.iter() {
+        // Write key length
+        let key_bytes = key.as_bytes();
+        let key_len = key_bytes.len() as u32;
+        writer.write_all(&key_len.to_le_bytes())?;
+        // Write key bytes
+        writer.write_all(key_bytes)?;
+
+        // Write number of f32 values
+        let num_values = values.len() as u32;
+        writer.write_all(&num_values.to_le_bytes())?;
+
+        // Write f32 values
+        for val in values.iter() {
+            writer.write_all(&val.to_le_bytes())?;
+        }
+    }
+
+    writer.flush()?;
+
+    Ok(())
 }
 
 #[cfg(not(feature = "mlx"))]
@@ -178,12 +267,36 @@ impl LocalEmbedder {
             return Ok(vec![]);
         }
 
-        let mut all_embeddings = Vec::with_capacity(texts.len());
-        for chunk in texts.chunks(32) {
-            let chunk_embeddings = self.embed_sub_batch(chunk)?;
-            all_embeddings.extend(chunk_embeddings);
+        let mut results = vec![None; texts.len()];
+        let mut uncached_indices = Vec::new();
+        let mut uncached_texts = Vec::new();
+
+        for (i, text) in texts.iter().enumerate() {
+            if let Some(embedding) = get_cached_embedding(text) {
+                results[i] = Some(embedding);
+            } else {
+                uncached_indices.push(i);
+                uncached_texts.push(text.clone());
+            }
         }
-        Ok(all_embeddings)
+
+        if !uncached_texts.is_empty() {
+            let mut uncached_embeddings = Vec::with_capacity(uncached_texts.len());
+            for chunk in uncached_texts.chunks(128) {
+                let chunk_embeddings = self.embed_sub_batch(chunk)?;
+                uncached_embeddings.extend(chunk_embeddings);
+            }
+
+            for (i, embedding) in uncached_embeddings.into_iter().enumerate() {
+                let orig_idx = uncached_indices[i];
+                let text = &uncached_texts[i];
+                cache_embedding(text.clone(), embedding.clone());
+                results[orig_idx] = Some(embedding);
+            }
+        }
+
+        let final_embeddings = results.into_iter().map(|opt| opt.unwrap()).collect();
+        Ok(final_embeddings)
     }
 
     fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -414,12 +527,36 @@ impl LocalEmbedder {
             return Ok(vec![]);
         }
 
-        let mut all_embeddings = Vec::with_capacity(texts.len());
-        for chunk in texts.chunks(32) {
-            let chunk_embeddings = self.embed_sub_batch(chunk)?;
-            all_embeddings.extend(chunk_embeddings);
+        let mut results = vec![None; texts.len()];
+        let mut uncached_indices = Vec::new();
+        let mut uncached_texts = Vec::new();
+
+        for (i, text) in texts.iter().enumerate() {
+            if let Some(embedding) = get_cached_embedding(text) {
+                results[i] = Some(embedding);
+            } else {
+                uncached_indices.push(i);
+                uncached_texts.push(text.clone());
+            }
         }
-        Ok(all_embeddings)
+
+        if !uncached_texts.is_empty() {
+            let mut uncached_embeddings = Vec::with_capacity(uncached_texts.len());
+            for chunk in uncached_texts.chunks(128) {
+                let chunk_embeddings = self.embed_sub_batch(chunk)?;
+                uncached_embeddings.extend(chunk_embeddings);
+            }
+
+            for (i, embedding) in uncached_embeddings.into_iter().enumerate() {
+                let orig_idx = uncached_indices[i];
+                let text = &uncached_texts[i];
+                cache_embedding(text.clone(), embedding.clone());
+                results[orig_idx] = Some(embedding);
+            }
+        }
+
+        let final_embeddings = results.into_iter().map(|opt| opt.unwrap()).collect();
+        Ok(final_embeddings)
     }
 
     fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
