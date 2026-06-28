@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "mythrax", version = "1.0.0", about = "Mythrax Local Memory and Cognitive Daemon CLI")]
+#[command(name = "mythrax", version = env!("CARGO_PKG_VERSION"), about = "Mythrax Local Memory and Cognitive Daemon CLI")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

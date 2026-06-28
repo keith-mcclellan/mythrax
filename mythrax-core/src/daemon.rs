@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, Duration};
+use sysinfo::{Pid, System, Signal};
 use anyhow::{Context, Result};
 use crate::db::{SurrealBackend, StorageBackend};
 use crate::store::MarkdownStore;
@@ -31,19 +32,20 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 PathBuf::from(&home).join("mythrax-vault")
             };
 
-            let auth_token = if token_path.exists() {
-                auth::load_token(&token_path)?
-            } else {
-                "secret-token".to_string()
-            };
+            let auth_token = auth::get_or_create_token(&token_path)?;
 
-            let surreal_url = if config_path.exists() {
-                let content = std::fs::read_to_string(&config_path)?;
-                let val: serde_json::Value = serde_json::from_str(&content)?;
-                val["surrealdb_url"].as_str().unwrap_or("mem://").to_string()
-            } else {
-                "mem://".to_string()
-            };
+            let surreal_url = std::env::var("MYTHRAX_DB_URL")
+                .ok()
+                .or_else(|| {
+                    if config_path.exists() {
+                        let content = std::fs::read_to_string(&config_path).ok()?;
+                        let val: serde_json::Value = serde_json::from_str(&content).ok()?;
+                        val["surrealdb_url"].as_str().map(|s| s.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| format!("surrealkv://{}/.mythrax/db", home));
 
             println!("Starting Mythrax Core Daemon...");
             println!("Vault root: {:?}", vault_path);
@@ -153,7 +155,14 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                             tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
                             
                             tracing::info!("Daily scheduled background handoff cleanup starting...");
-                            if let Err(e) = backend_daily.delete_stale_handoffs().await {
+                            let pruning_days = match backend_daily.get_profile_key("stm.pruning_days").await {
+                                Ok(Some(val_str)) => val_str.parse::<i64>().unwrap_or(7),
+                                _ => std::env::var("MYTHRAX_STM_PRUNING_DAYS")
+                                    .ok()
+                                    .and_then(|v| v.parse::<i64>().ok())
+                                    .unwrap_or(7),
+                            };
+                            if let Err(e) = backend_daily.delete_stale_handoffs(pruning_days).await {
                                 tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
                             }
 
@@ -390,21 +399,31 @@ pub fn stop_daemon() -> Result<()> {
     if pid_path.exists() {
         let content = std::fs::read_to_string(&pid_path)?;
         let pid_str = content.trim();
-        if let Ok(pid) = pid_str.parse::<i32>() {
+        if let Ok(pid_usize) = pid_str.parse::<usize>() {
+            let pid = Pid::from(pid_usize);
             println!("Stopping daemon process with PID: {}", pid);
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("kill")
-                    .arg("-15")
-                    .arg(pid_str)
-                    .status();
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = std::process::Command::new("kill")
-                    .arg(pid_str)
-                    .status();
+            let mut system = System::new_all();
+            if system.process(pid).is_some() {
+                if let Some(process) = system.process(pid) {
+                    process.kill_with(Signal::Term);
+                }
+                let start = std::time::Instant::now();
+                while start.elapsed() < Duration::from_secs(1) {
+                    system.refresh_processes();
+                    if system.process(pid).is_none() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                if system.process(pid).is_some() {
+                    println!("Process did not exit, sending SIGKILL...");
+                    if let Some(process) = system.process(pid) {
+                        process.kill_with(Signal::Kill);
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            } else {
+                println!("Process with PID {} not found.", pid);
             }
         }
         let _ = std::fs::remove_file(pid_path);
@@ -513,7 +532,7 @@ pub mod monitor {
 
         Ok(())
     }
-
+    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
     pub fn check_swap_pressure(tier: crate::llm::ModelTier, swap_used_bytes: u64) -> bool {
         let threshold = match tier {
             crate::llm::ModelTier::Tier1 => 2_000 * 1024 * 1024,
@@ -523,6 +542,7 @@ pub mod monitor {
         swap_used_bytes >= threshold
     }
 
+    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
     pub fn check_memory_pressure() -> bool {
         false
     }

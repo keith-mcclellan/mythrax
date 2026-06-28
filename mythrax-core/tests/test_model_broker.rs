@@ -42,7 +42,7 @@ async fn test_model_broker_lifecycle_and_warmup_fallback() {
     drop(coder_model);
     
     broker.evict_unused_models().await;
-    assert!(weak_ref.upgrade().is_none(), "Model must be evicted from VRAM when strong reference count drops to 0");
+    assert!(weak_ref.and_then(|w| w.upgrade()).is_none(), "Model must be evicted from VRAM when strong reference count drops to 0");
 
     // 5. Verify dynamic model selection: update config to another model and load
     println!("DEBUG BROKER TEST: Testing alternative model acquisition");

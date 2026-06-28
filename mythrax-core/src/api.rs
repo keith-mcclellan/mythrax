@@ -158,11 +158,7 @@ async fn post_llm_config_handler(
 
     match state.backend.update_llm_config(&payload).await {
         Ok(_) => {
-            let expires = if payload.duration.as_deref() != Some("permanent") {
-                Some("2026-06-21T23:59:59Z".to_string())
-            } else {
-                None
-            };
+            let expires: Option<String> = None;
             Ok(Json(json!({
                 "status": "success",
                 "active_provider": payload.provider,

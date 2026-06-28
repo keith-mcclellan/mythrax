@@ -834,7 +834,17 @@ impl DynamicModelBroker {
         } else {
             #[cfg(feature = "mlx")]
             let (model_opt, tok_opt) = {
-                if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+                let is_mock = {
+                    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+                    {
+                        std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
+                    }
+                    #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+                    {
+                        false
+                    }
+                };
+                if is_mock {
                     (None, None)
                 } else {
                     tracing::info!("Loading Qwen2 model from {} onto Metal", model_subdir.display());
@@ -927,22 +937,9 @@ impl DynamicModelBroker {
     }
 
     /// Gets a weak reference to the last acquired LLM.
-    pub fn get_weak_llm_reference(&self) -> Weak<dyn InferenceEngine> {
+    pub fn get_weak_llm_reference(&self) -> Option<Weak<dyn InferenceEngine>> {
         let last_weak_ref = self.last_weak_ref.lock().unwrap();
-        last_weak_ref.clone().unwrap_or_else(|| {
-            // Return a dummy weak reference if none exists
-            let dummy: Arc<dyn InferenceEngine> = Arc::new(InProcessMlxEngine::new(
-                "dummy".to_string(),
-                false,
-                vec![],
-                "cpu".to_string(),
-                #[cfg(feature = "mlx")]
-                None,
-                #[cfg(feature = "mlx")]
-                None,
-            ));
-            Arc::downgrade(&dummy)
-        })
+        last_weak_ref.clone()
     }
 
     /// Evicts unused models from the cache.
@@ -959,6 +956,7 @@ impl DynamicModelBroker {
     }
 
     /// Creates a new corrupt mock broker.
+    #[cfg(any(test, debug_assertions, feature = "test-mock", feature = "test-utils"))]
     pub async fn new_corrupt_mock() -> Result<Self> {
         Ok(Self {
             models: Arc::new(Mutex::new(HashMap::new())),
@@ -975,7 +973,8 @@ impl DynamicModelBroker {
     pub async fn acquire_llm_with_warmup_fallback(&self, tier: ModelTier) -> Result<Arc<dyn InferenceEngine>> {
         match self.acquire_llm(tier).await {
             Ok(model) => Ok(model),
-            Err(_) => {
+            #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+            Err(_e) => {
                 let mut models = self.models.lock().unwrap();
                 models.clear();
                 
@@ -997,6 +996,8 @@ impl DynamicModelBroker {
                 
                 Ok(fallback_model)
             }
+            #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+            Err(e) => Err(e),
         }
     }
 }
@@ -1019,7 +1020,17 @@ mod tests {
 
 #[cfg(feature = "mlx")]
 async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<()> {
-    if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+    let is_mock = {
+        #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+        {
+            std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
+        }
+        #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+        {
+            false
+        }
+    };
+    if is_mock {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

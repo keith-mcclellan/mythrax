@@ -158,13 +158,13 @@ impl McpServer {
                 let pid = child.id();
                 let _ = std::fs::write(&pid_file, pid.to_string());
                 
-                // Poll port 8090 for up to 5 seconds
+                // Poll port 8090 for up to 15 seconds
                 let poll_client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_millis(200))
                     .build()?;
                 
                 let start_time = std::time::Instant::now();
-                let timeout = std::time::Duration::from_secs(5);
+                let timeout = std::time::Duration::from_secs(15);
                 let mut healthy = false;
                 
                 while start_time.elapsed() < timeout {

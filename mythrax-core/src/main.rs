@@ -22,13 +22,7 @@ async fn execute_cli_tool_call(tool_name: &str, arguments: serde_json::Value) ->
     let mythrax_dir = PathBuf::from(&home).join(".mythrax");
     let token_path = mythrax_dir.join("token");
 
-    // Read token
-    let auth_token = if token_path.exists() {
-        std::fs::read_to_string(&token_path)?.trim().to_string()
-    } else {
-        // Fallback to default token for headless, test, or first-time environments
-        "secret-token".to_string()
-    };
+    let auth_token = mythrax_core::auth::get_or_create_token(&token_path)?;
 
     let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
     let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
@@ -824,13 +818,7 @@ async fn main() -> Result<()> {
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             let token_path = mythrax_dir.join("token");
 
-            // Read token
-            let auth_token = if token_path.exists() {
-                std::fs::read_to_string(&token_path)?.trim().to_string()
-            } else {
-                // Fallback to default token for headless, test, or first-time environments
-                "secret-token".to_string()
-            };
+            let auth_token = mythrax_core::auth::get_or_create_token(&token_path)?;
             
             let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
             let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
@@ -1267,6 +1255,24 @@ async fn handle_pre_commit() -> Result<()> {
 }
 
 async fn handle_exec(command_name: &str, args: &[String]) -> Result<()> {
+    // Validate command_name and all args against shell metacharacters
+    let shell_metacharacters = ";&|$`()<>\\\n\r";
+    
+    let validate_string = |s: &str, label: &str| -> Result<()> {
+        if s.chars().any(|c| shell_metacharacters.contains(c)) {
+            anyhow::bail!("Security violation: {} contains shell metacharacters: {}", label, s);
+        }
+        Ok(())
+    };
+
+    validate_string(command_name, "command_name")?;
+    for (i, arg) in args.iter().enumerate() {
+        validate_string(arg, &format!("arg[{}]", i))?;
+    }
+
+    // Log the execution
+    tracing::info!("Executing command: {} with args: {:?}", command_name, args);
+
     let home = std::env::var("HOME").context("HOME env var not set")?;
     let mythrax_dir = PathBuf::from(&home).join(".mythrax");
     let token_path = mythrax_dir.join("token");

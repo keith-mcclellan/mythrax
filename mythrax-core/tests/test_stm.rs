@@ -233,8 +233,8 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
     .bind(("r4", rec4))
     .await?.check()?;
 
-    // Perform cleanup
-    backend.delete_stale_handoffs().await?;
+    // Perform cleanup with 7 days threshold (matches 8d age in test setup)
+    backend.delete_stale_handoffs(7).await?;
 
     // Assert stale files are deleted
     assert!(!h1_file.exists());
@@ -697,8 +697,20 @@ async fn test_stm_continuous_pruning() -> Result<()> {
     // Insert a fresh STM record (2 hours old)
     backend.save_stm("fresh_sess", "k2", "v2").await?;
 
+    // Set environment variable to customize pruning days to 3 (so 4d old records get pruned)
+    unsafe {
+        std::env::set_var("MYTHRAX_STM_PRUNING_DAYS", "3");
+    }
+
     // Run pruning
-    backend.prune_stale_memories(&vault_root).await?;
+    let prune_result = backend.prune_stale_memories(&vault_root).await;
+
+    // Clean up environment variable
+    unsafe {
+        std::env::remove_var("MYTHRAX_STM_PRUNING_DAYS");
+    }
+
+    prune_result?;
 
     // Assertions
     assert!(!old_stm_file.exists(), "Old STM file should be pruned");
