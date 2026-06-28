@@ -3,7 +3,7 @@ name: mythrax
 description: Always query Mythrax memory via the MCP server before starting tasks or making edits, verify vault/knowledge graph integrity, and run HTR cognitive execution loops.
 ---
 
-# Mythrax Unified Memory, Integrity & Cognitive Guidance (v2.0)
+# Mythrax Unified Memory, Integrity & Cognitive Guidance (v2.3.1)
 
 You are equipped with the **Mythrax** MCP server, which exposes tools for semantic memory storage, retrieval, reinforcement, compliance verification, vault integrity self-healing, cognitive hypothesis execution, short-term memory sharing between agents, and document ingestion via Forge.
 
