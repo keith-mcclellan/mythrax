@@ -31,9 +31,13 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS concepts ON episode TYPE option<array<string>>;
     DEFINE FIELD IF NOT EXISTS files_read ON episode TYPE option<array<string>>;
     DEFINE FIELD IF NOT EXISTS files_modified ON episode TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS session_id ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS word_count ON episode TYPE option<int>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX IF NOT EXISTS episode_session ON episode FIELDS session_id;
+    DEFINE INDEX IF NOT EXISTS episode_scope_created ON episode FIELDS scope, created_at;
 
 
 

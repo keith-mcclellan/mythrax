@@ -11,17 +11,45 @@ pub struct NomicBertAttention {
     out_proj: Linear,
     num_heads: i32,
     head_dim: i32,
+    cos_cached: Array,
+    sin_cached: Array,
 }
 
 impl NomicBertAttention {
     pub fn new(weights: &HashMap<String, Array>, prefix: &str) -> Result<Self> {
         let wqkv = get_linear(weights, &format!("{}.Wqkv", prefix), false)?;
         let out_proj = get_linear(weights, &format!("{}.out_proj", prefix), false)?;
+
+        // Precompute RoPE cos and sin for max length (2048)
+        let max_len = 2048usize;
+        let head_dim = 64usize;
+        let half = 32usize;
+        let mut cos_val = vec![0.0f32; max_len * head_dim];
+        let mut sin_val = vec![0.0f32; max_len * head_dim];
+        for pos in 0..max_len {
+            for i in 0..half {
+                let exponent = -2.0 * (i as f32) / (head_dim as f32);
+                let theta = 1000.0f32.powf(exponent);
+                let angle = (pos as f32) * theta;
+                let c = angle.cos();
+                let s = angle.sin();
+                
+                cos_val[pos * head_dim + i] = c;
+                sin_val[pos * head_dim + i] = s;
+                cos_val[pos * head_dim + half + i] = c;
+                sin_val[pos * head_dim + half + i] = s;
+            }
+        }
+        let cos_cached = Array::from_slice(&cos_val, &[1, max_len as i32, 1, head_dim as i32]);
+        let sin_cached = Array::from_slice(&sin_val, &[1, max_len as i32, 1, head_dim as i32]);
+
         Ok(Self {
             wqkv,
             out_proj,
             num_heads: 12,
             head_dim: 64,
+            cos_cached,
+            sin_cached,
         })
     }
 
@@ -71,29 +99,11 @@ impl NomicBertAttention {
         let rotate_half_k = mlx_rs::ops::concatenate_axis_device(&[neg_k2, k1], 3, StreamOrDevice::gpu())
             .map_err(|e| anyhow::anyhow!("Concat rotate K failed: {:?}", e))?;
 
-        // Compute cos and sin values for RoPE
-        let seq_len_u = seq_len as usize;
-        let head_dim_u = self.head_dim as usize;
-        let half_u = half as usize;
-        let mut cos_val = vec![0.0f32; seq_len_u * head_dim_u];
-        let mut sin_val = vec![0.0f32; seq_len_u * head_dim_u];
-        for pos in 0..seq_len_u {
-            for i in 0..half_u {
-                let exponent = -2.0 * (i as f32) / (self.head_dim as f32);
-                let theta = 1000.0f32.powf(exponent);
-                let angle = (pos as f32) * theta;
-                let c = angle.cos();
-                let s = angle.sin();
-                
-                cos_val[pos * head_dim_u + i] = c;
-                sin_val[pos * head_dim_u + i] = s;
-                cos_val[pos * head_dim_u + half_u + i] = c;
-                sin_val[pos * head_dim_u + half_u + i] = s;
-            }
-        }
-
-        let cos_arr = Array::from_slice(&cos_val, &[1, seq_len as i32, 1, self.head_dim]);
-        let sin_arr = Array::from_slice(&sin_val, &[1, seq_len as i32, 1, self.head_dim]);
+        // Slice the precomputed cos and sin arrays to the current seq_len
+        let cos_arr = self.cos_cached.try_index((.., 0..seq_len, .., ..))
+            .map_err(|e| anyhow::anyhow!("Slice cos_cached failed: {:?}", e))?;
+        let sin_arr = self.sin_cached.try_index((.., 0..seq_len, .., ..))
+            .map_err(|e| anyhow::anyhow!("Slice sin_cached failed: {:?}", e))?;
 
         let q = q.multiply(&cos_arr)?
             .add(&rotate_half_q.multiply(&sin_arr)?)

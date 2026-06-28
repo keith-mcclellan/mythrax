@@ -40,6 +40,7 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/api/*path", post(ollama_proxy_handler).get(ollama_proxy_handler))
         .route("/v1/hooks/precompact", post(precompact_handler))
         .route("/v1/hooks/stop", post(stop_handler))
+        .route("/v1/daemon/stop", post(stop_daemon_endpoint_handler))
         .with_state(state)
 }
 
@@ -763,4 +764,25 @@ async fn stop_handler(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+async fn stop_daemon_endpoint_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let pid_path_clone = std::path::PathBuf::from(home).join(".mythrax/daemon.pid");
+    
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tracing::info!("Graceful shutdown requested via API. Exiting...");
+        let _ = std::fs::remove_file(pid_path_clone);
+        std::process::exit(0);
+    });
+
+    Ok(Json(json!({ "status": "stopping" })))
 }

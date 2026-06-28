@@ -26,7 +26,25 @@ fn cmd(home: &std::path::Path, port: &str) -> Command {
 
 /// Helper to clean up a daemon process by sending SIGINT and waiting for exit.
 /// This ensures that PID files are cleaned up and ports are released between tests.
-fn cleanup_daemon(home: &std::path::Path) {
+fn cleanup_daemon(home: &std::path::Path, port: &str) {
+    let token_file = home.join(".mythrax/token");
+    if token_file.exists() {
+        if let Ok(token) = fs::read_to_string(&token_file) {
+            if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                let url = format!("http://127.0.0.1:{}/v1/daemon/stop", port);
+                let _ = rt.block_on(async {
+                    let client = reqwest::Client::new();
+                    let _ = client.post(&url)
+                        .header("X-Mythrax-Token", token.trim())
+                        .timeout(std::time::Duration::from_millis(500))
+                        .send()
+                        .await;
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     let pid_file = home.join(".mythrax/daemon.pid");
     if pid_file.exists() {
         if let Ok(pid_content) = fs::read_to_string(&pid_file) {
@@ -35,7 +53,7 @@ fn cleanup_daemon(home: &std::path::Path) {
                 let _ = Command::new("kill")
                     .args(["-2", pid])
                     .status();
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
         let _ = fs::remove_file(&pid_file);
@@ -72,7 +90,7 @@ fn test_help_exits_zero() {
         "--help should exit 0, stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    cleanup_daemon(tmp.path());
+    cleanup_daemon(tmp.path(), "18090");
 }
 
 #[test]
@@ -87,7 +105,7 @@ fn test_forge_missing_file_exits_nonzero() {
         "forge on a missing file should exit non-zero, stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    cleanup_daemon(tmp.path());
+    cleanup_daemon(tmp.path(), "18092");
 }
 
 #[test]
@@ -122,7 +140,7 @@ fn test_forge_text_file_exits_zero() {
         "Expected 'Successfully forged source document' or 'Forge ingestion complete' in stdout, got: {}",
         stdout
     );
-    cleanup_daemon(tmp.path());
+    cleanup_daemon(tmp.path(), "18093");
 }
 
 #[test]
@@ -188,7 +206,7 @@ fn test_forge_pdf_exits_zero() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    cleanup_daemon(tmp.path());
+    cleanup_daemon(tmp.path(), "18094");
 }
 
 #[test]
@@ -240,7 +258,7 @@ fn test_cli_daemon_run_and_cleanup() {
 
     // Check if the PID file has been deleted
     assert!(!pid_file.exists(), "PID file should be deleted on clean SIGINT exit");
-    cleanup_daemon(tmp.path());
+    cleanup_daemon(tmp.path(), "18091");
 }
 
 #[test]
@@ -325,5 +343,5 @@ fn test_cli_search_episodes_flag() {
         .expect("kill daemon");
     assert!(status.success());
     let _ = daemon.wait();
-    cleanup_daemon(tmp.path());
+    cleanup_daemon(tmp.path(), "18096");
 }

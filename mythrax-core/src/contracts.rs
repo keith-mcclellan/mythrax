@@ -40,6 +40,8 @@ pub struct Episode {
     pub concepts: Option<Vec<String>>,
     pub files_read: Option<Vec<String>>,
     pub files_modified: Option<Vec<String>>,
+    pub session_id: Option<String>,
+    pub word_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -82,6 +84,10 @@ pub struct SearchResult {
     pub factor_multiplier: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
