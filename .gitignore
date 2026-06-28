@@ -66,4 +66,5 @@ config.json
 
 # Benchmark data downloads
 /mythrax-core/bench_data/
+embedding_cache.bin
 
