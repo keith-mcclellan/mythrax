@@ -1704,17 +1704,11 @@ impl StorageBackend for SurrealBackend {
         }
         let temporal_cue_info = parse_temporal_cues(query);
         let cleaned_query = if temporal_cue_info.is_some() {
-            let cue_words = vec![
-                "before", "preceding", "previously", "prior", "earlier", "ago", "last",
-                "after", "following", "subsequently", "later", "next",
-                "recent", "recently", "latest", "newest", "today", "now"
-            ];
-            let mut cleaned = query.to_string();
-            for w in cue_words {
-                if let Ok(re) = regex::Regex::new(&format!(r"\b{}\b", w)) {
-                    cleaned = re.replace_all(&cleaned, "").to_string();
-                }
-            }
+            static CLEANING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+            let cleaning_re = CLEANING_RE.get_or_init(|| {
+                regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last|after|following|subsequently|later|next|recent|recently|latest|newest|today|now)\b").unwrap()
+            });
+            let cleaned = cleaning_re.replace_all(query, "").to_string();
             cleaned.split_whitespace().collect::<Vec<&str>>().join(" ")
         } else {
             query.to_string()
@@ -2435,21 +2429,25 @@ impl StorageBackend for SurrealBackend {
                             Err(_) => 0,
                         };
                         
-                        inner_write.insert(token.clone(), CacheEntry {
-                            count,
-                            expires_at: now + std::time::Duration::from_secs(60),
-                        });
-                        global_df.insert(token.clone(), count);
-                        
-                        let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                        if new_size > 10000 {
-                            drop(inner_write);
-                            let mut outer_clear = self.term_counts_cache.write().await;
-                            outer_clear.clear();
-                            self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
-                            break;
+                        if inner_write.len() < 1000 {
+                            inner_write.insert(token.clone(), CacheEntry {
+                                count,
+                                expires_at: now + std::time::Duration::from_secs(60),
+                            });
+                            global_df.insert(token.clone(), count);
+                            
+                            let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                            if new_size > 10000 {
+                                drop(inner_write);
+                                let mut outer_clear = self.term_counts_cache.write().await;
+                                outer_clear.clear();
+                                self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                                break;
+                            }
+                        } else {
+                            global_df.insert(token.clone(), count);
                         }
-                    }
+                }
                 }
 
                 let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
@@ -2716,17 +2714,19 @@ impl StorageBackend for SurrealBackend {
                     Err(_) => 0,
                 };
                 
-                inner_write.insert(token.clone(), CacheEntry {
-                    count,
-                    expires_at: now + std::time::Duration::from_secs(60),
-                });
-                let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                if new_size > 10000 {
-                    drop(inner_write);
-                    let mut outer_clear = self.term_counts_cache.write().await;
-                    outer_clear.clear();
-                    self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
-                    break;
+                if inner_write.len() < 1000 {
+                    inner_write.insert(token.clone(), CacheEntry {
+                        count,
+                        expires_at: now + std::time::Duration::from_secs(60),
+                    });
+                    let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    if new_size > 10000 {
+                        drop(inner_write);
+                        let mut outer_clear = self.term_counts_cache.write().await;
+                        outer_clear.clear();
+                        self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                        break;
+                    }
                 }
                 
                 let idf = (((total_n as f32 - count as f32 + 0.5) / (count as f32 + 0.5)) + 1.0).ln();
