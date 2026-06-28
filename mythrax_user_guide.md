@@ -6,7 +6,7 @@ This guide serves as the definitive reference manual for **Project Mythrax**, a 
 
 ## 1. System Overview & Architecture
 
-Mythrax 2.2.0 implements a client-server architecture to optimize resource utilization and ensure database integrity:
+Mythrax 2.2.1 implements a client-server architecture to optimize resource utilization and ensure database integrity:
 
 1. **Obsidian Vault (Filesystem Source of Truth)**: All episodes, insights, and wisdom rules are stored as clean markdown files under standardized folders. This allows users to read, edit, and navigate the entire memory graph using standard markdown links and tools like Obsidian.
 2. **SurrealDB (Vector & Graph Query Engine)**: The database layer caches vault files, stores vector embeddings (using local hardware-accelerated `nomic-embed-text-v1.5` in-process MLX/ONNX models), and maintains directed relationship edges (`relates_to` and `parent_of`) for graph traversal and semantic search.
@@ -122,7 +122,7 @@ When retrieved memories, rules, or user prompts conflict, apply this determinist
 
 ## 7. CLI Command Reference
 
-The `mythrax` CLI is located in the `mythrax-core` directory. Commands automatically route requests to the daemon over HTTP on port `8090` using the security token found in `~/.mythrax/token`. If the daemon is inactive, the CLI automatically spawns the background daemon and polls for 5 seconds before executing the command.
+The `mythrax` CLI is located in the `mythrax-core` directory. Commands automatically route requests to the daemon over HTTP on port `8090` using the security token found in `~/.mythrax/token`. If the daemon is inactive, the CLI automatically spawns the background daemon and polls for 15 seconds before executing the command.
 
 | Group / Subcommand | Arguments | Purpose |
 |--------------------|-----------|---------|
@@ -146,54 +146,70 @@ The `mythrax` CLI is located in the `mythrax-core` directory. Commands automatic
 
 ## 8. MCP Tools Reference
 
-The MCP server exposes 9 high-efficiency, action-enum-based tools to client harnesses, cutting schema token overhead by over 60% compared to legacy granular tools.
+The MCP server exposes 8 high-efficiency, action-enum-based tools to client harnesses, cutting schema token overhead by over 60% compared to legacy granular tools.
 
-### 8.1 `query_memory`
-- **Description**: Query the memory graph for episodes, rules, nodes, or root context.
+### 8.1 `manage_memory`
+- **Description**: Query, search, traverse, and record semantic long-term memory graph nodes.
 - **Actions**:
   - `search`: Performs semantic vector search (with text substring fallback if embeddings are missing).
   - `rules`: Retrieves wisdom rules matching a target pattern.
   - `nodes`: Retrieves specific database nodes by their IDs.
   - `root`: Returns the active Obsidian vault root path.
-
-### 8.2 `record_memory`
-- **Description**: Save new episodes or record feedback on existing ones.
-- **Actions**:
+  - `query_symbolic`: Queries symbolic relations in the memory graph.
   - `save`: Saves an episodic memory to the vault and indexes it in the database.
   - `feedback`: Registers success or failure feedback for a wisdom rule.
+  - `thought`: Records a temporal reasoning step.
+  - `search_index`: Queries or updates search indexing metadata.
+  - `timeline`: Generates chronological memory timelines.
+  - `get_full`: Retrieves full hydrated representation of memory nodes.
 
-### 8.3 `manage_htr`
+### 8.2 `manage_htr`
 - **Description**: Manages Hypothesis-Tree Refinement (Arbor) loops.
 - **Actions**:
-  - `init`, `ideate`, `execute`, `backprop`, `merge`, `run`.
+  - `init`: Initializes root HTR node.
+  - `ideate`: Generates child nodes or hypotheses.
+  - `execute`: Spawns worktree, applies edits, and runs tests.
+  - `backprop`: Backpropagates test results and insights up the tree.
+  - `merge`: Performs admission check and commits final changes.
+  - `run`: Autonomously executes a multi-step HTR search cycle.
 
-### 8.4 `manage_stm`
+### 8.3 `manage_stm`
 - **Description**: Manages short-term session variables and handoff contracts.
 - **Actions**:
-  - `put`, `get`, `clear`, `handoff`.
+  - `put`: Writes a session key/value pair.
+  - `get`: Retrieves session variables.
+  - `clear`: Clears session variables.
+  - `handoff`: Saves handoff contract metadata and STM state.
 
-### 8.5 `manage_vault`
-- **Description**: Manages vault database maintenance and lifecycle.
+### 8.4 `manage_vault`
+- **Description**: Manages vault database maintenance, compliance auditing, and document ingestion.
 - **Actions**:
-  - `verify`, `organize`, `reprocess`, `summarize`.
+  - `verify`: Checks database health and connection status.
+  - `organize`: Moves/tidies loose files.
+  - `reprocess`: Re-embeds or re-indexes vault files.
+  - `summarize`: Generates high-level summaries of directories.
+  - `audit`: Audits files for safety compliance.
+  - `ingest_bulk`: Ingests conversation transcripts in bulk.
+  - `ingest_forge`: Parses and chunks manuals/PDFs into structured knowledge.
 
-### 8.6 `manage_config`
+### 8.5 `manage_config`
 - **Description**: Retrieves or updates active LLM configurations.
 - **Actions**:
-  - `get`, `set`.
+  - `get`: Gets config settings.
+  - `set`: Sets config settings.
 
-### 8.7 `compliance_audit`
-- **Description**: Runs safety compliance audits on the active directory (checks Tailwind blocks, search history).
-
-### 8.8 `ingest_knowledge`
-- **Description**: Ingests transcript logs or documents.
+### 8.6 `manage_file`
+- **Description**: Read, view, and modify files with paging support.
 - **Actions**:
-  - `bulk`: Ingests conversation transcripts in bulk.
-  - `forge`: Extracts structured rules and wiki nodes from text or PDF source documents.
-  - `save_forged_assets`: Saves batches of forged sections.
+  - `view`: View contents of a file (paginated).
+  - `replace`: Replaces a contiguous block in a file.
+  - `multi_replace`: Replaces multiple non-contiguous blocks in a file.
 
-### 8.9 `pre_invocation_hook`
+### 8.7 `pre_invocation_hook`
 - **Description**: Executes automatic pre-invocation compliance routines.
+
+### 8.8 `complete_code_task`
+- **Description**: Executes reasoning and coding tasks in-process.
 
 ---
 

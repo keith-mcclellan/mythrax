@@ -325,12 +325,25 @@ impl DreamCoordinator {
         let (_default_eps, default_min_samples) = match active_mode.as_str() {
             "deep" => (0.15, 2),
             "bulk" => (0.12, 4),
-            _ => (0.08, 2), // incremental
+            _ => (0.25, 2), // default/incremental
         };
 
-        let min_samples = file_min_samples.unwrap_or(default_min_samples);
-        let final_eps = if let Some(f_eps) = file_eps {
-            f_eps
+        // Query database profile for DBSCAN settings
+        let db_min_samples = match db.get_profile_key("embeddings.dbscan_min_samples").await {
+            Ok(Some(val_str)) => val_str.parse::<usize>().ok(),
+            _ => None,
+        };
+        let db_eps = match db.get_profile_key("embeddings.dbscan_epsilon").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
+            _ => None,
+        };
+
+        let min_samples = db_min_samples
+            .or(file_min_samples)
+            .unwrap_or(default_min_samples);
+
+        let final_eps = if let Some(eps) = db_eps.or(file_eps) {
+            eps
         } else {
             // Dynamic epsilon calibration using k-distance elbow method
             let all_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();

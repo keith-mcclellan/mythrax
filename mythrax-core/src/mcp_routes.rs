@@ -1407,8 +1407,7 @@ files_modified: None,
                     {
                         "type": "text",
                         "text": format!(
-                            "Audit Results:\n- Tailwind Clean: {}\n- Search History Clean: {}\n- Daemon Health OK: {}\nViolations/Errors details: {:#?}",
-                            audit_results.tailwind_ok,
+                            "Audit Results:\n- Search History Clean: {}\n- Daemon Health OK: {}\nViolations/Errors details: {:#?}",
                             audit_results.search_history_ok,
                             audit_results.daemon_ok,
                             audit_results
@@ -1657,9 +1656,12 @@ files_modified: None,
             None => "None (Idle)".to_string(),
         };
         let emb_loaded = if broker.is_embedding_model_loaded() { "Loaded" } else { "Not Loaded" };
-        let weak_ref = broker.get_weak_llm_reference();
-        let (model_name, execution_mode) = if let Some(engine) = weak_ref.upgrade() {
-            (engine.name(), engine.execution_mode())
+        let (model_name, execution_mode) = if let Some(weak_ref) = broker.get_weak_llm_reference() {
+            if let Some(engine) = weak_ref.upgrade() {
+                (engine.name(), engine.execution_mode())
+            } else {
+                ("None".to_string(), "cpu".to_string())
+            }
         } else {
             ("None".to_string(), "cpu".to_string())
         };

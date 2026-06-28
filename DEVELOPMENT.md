@@ -17,10 +17,10 @@ This approach creates significant overhead:
 3.  **Complexity**: Managing 32 distinct endpoints increases the cognitive load for both the developer and the LLM.
 
 ### The Solution: Action-Enum-Based Tools
-Mythrax 1.0 collapses these 32 legacy tools into **9 high-efficiency, action-enum-based tools**.
+Mythrax 1.0 collapses these 32 legacy tools into **8 high-efficiency, action-enum-based tools**.
 
 #### Core Concept
-Instead of exposing 32 tools, we expose 9 "super-tools." Each tool accepts an `action` enum parameter that dictates the specific behavior.
+Instead of exposing 32 tools, we expose 8 "super-tools." Each tool accepts an `action` enum parameter that dictates the specific behavior.
 
 **Example:**
 *   **Legacy**: `add_memory`, `get_memory`, `delete_memory` (3 tools)

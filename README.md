@@ -164,5 +164,5 @@ Start the memory server in the background:
 ### 3. Run Tests
 Verify compile and test status:
 ```bash
-cargo test
+MYTHRAX_TEST_MOCK=1 cargo nextest run --features mlx
 ```

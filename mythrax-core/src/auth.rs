@@ -81,3 +81,75 @@ pub fn get_or_create_token<P: AsRef<Path>>(path: P) -> Result<String> {
     
     Ok(new_token)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_get_or_create_token_generates_valid_uuid() {
+        let temp_dir = std::env::temp_dir();
+        let token_path = temp_dir.join("test_token_v4.txt");
+        
+        // Ensure clean state
+        let _ = fs::remove_file(&token_path);
+
+        let token = get_or_create_token(&token_path).expect("Failed to get or create token");
+        
+        // Basic UUID v4 validation: 36 chars, contains hyphens, version 4
+        assert_eq!(token.len(), 36);
+        assert!(token.contains('-'));
+        assert!(token.chars().nth(14).unwrap() == '4');
+        
+        // Cleanup
+        let _ = fs::remove_file(&token_path);
+    }
+
+    #[test]
+    fn test_token_file_permissions() {
+        let temp_dir = std::env::temp_dir();
+        let token_path = temp_dir.join("test_token_perms.txt");
+        
+        // Ensure clean state
+        let _ = fs::remove_file(&token_path);
+
+        let _ = get_or_create_token(&token_path).expect("Failed to get or create token");
+
+        // Check permissions
+        let metadata = fs::metadata(&token_path).expect("Failed to read metadata");
+        let permissions = metadata.permissions();
+        
+        // On Unix, check that only owner has read/write (0o600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = permissions.mode();
+            // Mask out file type bits to get permission bits
+            assert_eq!(mode & 0o777, 0o600, "Token file should have 0600 permissions");
+        }
+
+        // Cleanup
+        let _ = fs::remove_file(&token_path);
+    }
+
+    #[test]
+    fn test_successive_calls_load_existing_token() {
+        let temp_dir = std::env::temp_dir();
+        let token_path = temp_dir.join("test_token_persist.txt");
+        
+        // Ensure clean state
+        let _ = fs::remove_file(&token_path);
+
+        // First call generates a token
+        let token1 = get_or_create_token(&token_path).expect("Failed to get or create token");
+        
+        // Second call should return the exact same token
+        let token2 = get_or_create_token(&token_path).expect("Failed to get or create token");
+        
+        assert_eq!(token1, token2, "Successive calls should return the same existing token");
+
+        // Cleanup
+        let _ = fs::remove_file(&token_path);
+    }
+}

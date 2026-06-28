@@ -3,8 +3,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub struct AuditResults {
-    pub tailwind_ok: bool,
-    pub tailwind_violations: Vec<String>,
     pub search_history_ok: bool,
     pub search_history_error: Option<String>,
     pub daemon_ok: bool,
@@ -12,22 +10,15 @@ pub struct AuditResults {
 }
 
 pub async fn run_workspace_audit(workspace_path: &Path) -> AuditResults {
-    let (tailwind_ok, tailwind_violations) = audit_tailwind(workspace_path);
     let (search_history_ok, search_history_error) = check_search_history(workspace_path);
     let (daemon_ok, daemon_error) = verify_daemon_health().await;
 
     AuditResults {
-        tailwind_ok,
-        tailwind_violations,
         search_history_ok,
         search_history_error,
         daemon_ok,
         daemon_error,
     }
-}
-
-fn audit_tailwind(_workspace_path: &Path) -> (bool, Vec<String>) {
-    (true, Vec::new())
 }
 
 fn check_search_history(workspace_path: &Path) -> (bool, Option<String>) {

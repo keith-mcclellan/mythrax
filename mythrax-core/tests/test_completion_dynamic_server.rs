@@ -54,7 +54,7 @@ async fn test_completion_dynamic_server_loading() {
     
     // Weak reference upgrade must fail indicating the model was evicted/cleaned up
     let weak_ref = broker_arc.get_weak_llm_reference();
-    assert!(weak_ref.upgrade().is_none(), "In-process model must be cleaned up and evicted upon drop");
+    assert!(weak_ref.and_then(|w| w.upgrade()).is_none(), "In-process model must be cleaned up and evicted upon drop");
 }
 
 #[tokio::test]
@@ -150,5 +150,5 @@ async fn test_tier3_completion_and_eviction() {
     
     // Weak reference upgrade must fail indicating the model was evicted/cleaned up
     let weak_ref = broker_arc.get_weak_llm_reference();
-    assert!(weak_ref.upgrade().is_none(), "Tier 3 model must be cleaned up and evicted upon drop");
+    assert!(weak_ref.and_then(|w| w.upgrade()).is_none(), "Tier 3 model must be cleaned up and evicted upon drop");
 }

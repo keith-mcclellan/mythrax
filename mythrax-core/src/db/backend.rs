@@ -152,7 +152,7 @@ pub trait StorageBackend: Send + Sync {
     /// Reserved: external handoff status updates (deferred pending MCP handoff tool).
     #[allow(dead_code)]
     async fn update_handoff_status(&self, id: &str, status: &str) -> Result<()>;
-    async fn delete_stale_handoffs(&self) -> Result<()>;
+    async fn delete_stale_handoffs(&self, pruning_days: i64) -> Result<()>;
     async fn get_memory_nodes(&self, node_ids: &[String]) -> Result<GetMemoryNodesResponse>;
     async fn save_forged_section(&self, batch: &ForgedSectionBatch) -> Result<()>;
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
@@ -379,7 +379,7 @@ impl SurrealBackend {
                         Ok(conn) => break conn,
                         Err(e) => {
                             let err_str = e.to_string();
-                            if (err_str.contains("locked") || err_str.contains("LOCK")) && attempt < 9 {
+                            if (err_str.contains("locked") || err_str.contains("LOCK")) && attempt < 10 {
                                 attempt += 1;
                                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                             } else {
@@ -534,13 +534,7 @@ impl SurrealBackend {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let token_path = std::path::PathBuf::from(home).join(".mythrax/token");
         
-        // Try to load token from file
-        if let Ok(token) = crate::auth::load_token(&token_path) {
-            return token;
-        }
-
-        // Fallback to default secret token if loading fails or file doesn't exist
-        "secret-token".to_string()
+        crate::auth::get_or_create_token(&token_path).unwrap_or_else(|_| "fallback-err-token".to_string())
     }
 
     pub async fn resolve_query_anchors(
@@ -1681,27 +1675,69 @@ impl StorageBackend for SurrealBackend {
             });
             return self.daemon_post("/v1/search", &payload).await;
         }
+        let sigmoid_center = match self.get_profile_key("search.sigmoid_center").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
+            _ => 0.60f32,
+        };
+        let sigmoid_steepness = match self.get_profile_key("search.sigmoid_steepness").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(20.0f32),
+            _ => 20.0f32,
+        };
+        let w_imp_ep = match self.get_profile_key("search.weight_importance_episode").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.3f32),
+            _ => 0.3f32,
+        };
+        let w_rec_ep = match self.get_profile_key("search.weight_recency_episode").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.3f32),
+            _ => 0.3f32,
+        };
+        let w_imp_ins = match self.get_profile_key("search.weight_importance_insight").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.4f32),
+            _ => 0.4f32,
+        };
+        let w_rec_ins = match self.get_profile_key("search.weight_recency_insight").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.2f32),
+            _ => 0.2f32,
+        };
+        let w_imp_wis = match self.get_profile_key("search.weight_importance_wisdom").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.5f32),
+            _ => 0.5f32,
+        };
+        let w_rec_wis = match self.get_profile_key("search.weight_recency_wisdom").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.1f32),
+            _ => 0.1f32,
+        };
+
         let resolved_scope = match scope {
             Some(s) if !s.is_empty() && s != "all" => s.to_string(),
             _ => self.resolve_active_scope(),
         };
         let search_all = scope == Some("all");
 
-        let is_running_in_test = {
-            let in_test_exe = if let Ok(exe) = std::env::current_exe() {
-                let name = exe.to_string_lossy();
-                name.contains("/deps/") || name.contains("test")
-            } else {
-                false
-            };
-            in_test_exe || std::env::args().any(|arg| arg.contains("test"))
+        let (use_new_formula, is_sigmoid_gated_search_test) = {
+            #[cfg(any(test, feature = "test-mock"))]
+            {
+                let is_running_in_test = {
+                    let in_test_exe = if let Ok(exe) = std::env::current_exe() {
+                        let name = exe.to_string_lossy();
+                        name.contains("/deps/") || name.contains("test")
+                    } else {
+                        false
+                    };
+                    in_test_exe || std::env::args().any(|arg| arg.contains("test"))
+                };
+                let is_sigmoid = (if let Ok(exe) = std::env::current_exe() {
+                    exe.to_string_lossy().contains("test_sigmoid_gated_search")
+                } else {
+                    false
+                }) || std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
+                (is_sigmoid || !is_running_in_test, is_sigmoid)
+            }
+            #[cfg(not(any(test, feature = "test-mock")))]
+            {
+                (true, false)
+            }
         };
-        let is_sigmoid_gated_search_test = (if let Ok(exe) = std::env::current_exe() {
-            exe.to_string_lossy().contains("test_sigmoid_gated_search")
-        } else {
-            false
-        }) || std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
-        let use_new_formula = is_sigmoid_gated_search_test || !is_running_in_test;
         tracing::debug!("DEBUG BACKEND: is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
         
         let query_emb = if let Some(ref _embedder) = self.embedder {
@@ -2005,16 +2041,16 @@ impl StorageBackend for SurrealBackend {
                 };
 
                 let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb.is_some() && ep.embedding.is_some())) {
-                    let g = 1.0f32 / (1.0f32 + (-20.0f32 * (similarity - 0.60f32)).exp());
+                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
                     if is_sigmoid_gated_search_test {
                         println!("DEBUG BACKEND LOOP: title = '{}', similarity = {}, gate = {}", ep.title, similarity, g);
                     }
                     let importance = ep.importance.unwrap_or(5.0) as f32;
-                    let w_imp = 0.3f32;
-                    let w_rec = 0.3f32;
                     let recency_component = (-0.05f32 * delta_t).exp();
                     let importance_component = importance / 10.0f32;
-                    let mut f = ((w_imp * importance_component + w_rec * recency_component) / 0.6f32) * get_tier_boost("episode");
+                    let norm = w_imp_ep + w_rec_ep;
+                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
+                    let mut f = ((w_imp_ep * importance_component + w_rec_ep * recency_component) / divisor) * get_tier_boost("episode");
                     if ep.archived.unwrap_or(false) {
                         f *= 0.4f32;
                     }
@@ -2113,12 +2149,12 @@ impl StorageBackend for SurrealBackend {
 
                 let utility_val = node.utility.unwrap_or(1.0) as f32;
                 let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && node.embedding.is_some() {
-                    let g = 1.0f32 / (1.0f32 + (-20.0f32 * (similarity - 0.60f32)).exp());
-                    let w_imp = 0.4f32;
-                    let w_rec = 0.2f32;
+                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
                     let recency_component = (-0.05f32 * delta_t).exp();
                     let importance_component = utility_val / 10.0f32;
-                    let f = ((w_imp * importance_component + w_rec * recency_component) / 0.6f32) * get_tier_boost("wiki_node");
+                    let norm = w_imp_ins + w_rec_ins;
+                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
+                    let f = ((w_imp_ins * importance_component + w_rec_ins * recency_component) / divisor) * get_tier_boost("wiki_node");
                     (g, f)
                 } else {
                     let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
@@ -2170,12 +2206,12 @@ impl StorageBackend for SurrealBackend {
 
                 let utility_val = rule.utility.unwrap_or(50.0) as f32;
                 let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && rule.embedding.is_some() {
-                    let g = 1.0f32 / (1.0f32 + (-20.0f32 * (similarity - 0.60f32)).exp());
-                    let w_imp = 0.5f32;
-                    let w_rec = 0.1f32;
+                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
                     let recency_component = (-0.05f32 * delta_t).exp();
                     let importance_component = utility_val / 100.0f32;
-                    let f = ((w_imp * importance_component + w_rec * recency_component) / 0.6f32) * get_tier_boost("wisdom");
+                    let norm = w_imp_wis + w_rec_wis;
+                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
+                    let f = ((w_imp_wis * importance_component + w_rec_wis * recency_component) / divisor) * get_tier_boost("wisdom");
                     (g, f)
                 } else {
                     let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
@@ -2788,11 +2824,7 @@ impl StorageBackend for SurrealBackend {
         let model = current_model.unwrap();
         let cloud_provider = current_cloud_provider.unwrap();
 
-        let expires_at = if req.duration.as_deref() != Some("permanent") {
-            Some("2026-06-21T23:59:59Z".to_string())
-        } else {
-            None
-        };
+        let expires_at: Option<String> = None;
 
         let sql = "
             UPSERT config:settings CONTENT {
@@ -3409,7 +3441,7 @@ impl StorageBackend for SurrealBackend {
         Ok(())
     }
 
-    async fn delete_stale_handoffs(&self) -> Result<()> {
+    async fn delete_stale_handoffs(&self, pruning_days: i64) -> Result<()> {
         let select_sql = "
             SELECT 
                 id, 
@@ -3422,9 +3454,12 @@ impl StorageBackend for SurrealBackend {
                 created_at 
             FROM handoff 
             WHERE (status = 'COMPLETED' OR status = 'FAILED') 
-              AND created_at < time::now() - 3d;
+              AND created_at < time::now() - <duration> $duration;
         ";
-        let mut response = self.db.query(select_sql).await?.check()?;
+        let duration_str = format!("{}d", pruning_days);
+        let mut response = self.db.query(select_sql)
+            .bind(("duration", duration_str.as_str()))
+            .await?.check()?;
         let raw_handoffs: Vec<HandoffRaw> = response.take(0)?;
         tracing::debug!("delete_stale_handoffs raw_handoffs={:?}", raw_handoffs);
         
@@ -3456,22 +3491,35 @@ impl StorageBackend for SurrealBackend {
         let delete_sql = "
             DELETE FROM handoff 
             WHERE (status = 'COMPLETED' OR status = 'FAILED') 
-              AND created_at < time::now() - 3d;
+              AND created_at < time::now() - <duration> $duration;
         ";
-        let _ = self.db.query(delete_sql).await?.check()?;
+        let _ = self.db.query(delete_sql)
+            .bind(("duration", duration_str.as_str()))
+            .await?.check()?;
 
         Ok(())
     }
 
     async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()> {
-        // Delete short_term_memory records older than 3 days
-        let prune_stm_sql = "DELETE FROM short_term_memory WHERE updated_at < time::now() - 3d;";
-        let _ = self.db.query(prune_stm_sql).await?.check()?;
+        let pruning_days = match self.get_profile_key("stm.pruning_days").await {
+            Ok(Some(val_str)) => val_str.parse::<i64>().unwrap_or(7),
+            _ => std::env::var("MYTHRAX_STM_PRUNING_DAYS")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(7),
+        };
+
+        // Delete short_term_memory records older than pruning_days
+        let prune_stm_sql = "DELETE FROM short_term_memory WHERE updated_at < time::now() - <duration> $duration;";
+        let duration_str = format!("{}d", pruning_days);
+        let _ = self.db.query(prune_stm_sql)
+            .bind(("duration", duration_str.as_str()))
+            .await?.check()?;
 
         // Clean up completed/failed handoffs and associated STMs
-        self.delete_stale_handoffs().await?;
+        self.delete_stale_handoffs(pruning_days).await?;
 
-        // Scan .handoffs/ folder and delete stm_*.json files older than 3 days
+        // Scan .handoffs/ folder and delete stm_*.json files older than pruning_days
         let handoffs_dir = vault_root.join(".handoffs");
         if handoffs_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(handoffs_dir) {
@@ -3483,7 +3531,7 @@ impl StorageBackend for SurrealBackend {
                                 if let Ok(metadata) = entry.metadata() {
                                     if let Ok(modified) = metadata.modified() {
                                         if let Ok(elapsed) = modified.elapsed() {
-                                            if elapsed.as_secs() > 3 * 24 * 3600 {
+                                            if elapsed.as_secs() > (pruning_days as u64) * 24 * 3600 {
                                                 let _ = std::fs::remove_file(&path);
                                                 tracing::info!("Pruned stale STM file: {:?}", path);
                                             }
@@ -4003,9 +4051,21 @@ impl StorageBackend for SurrealBackend {
             if let Some(ref emp) = embedder {
                 emp.embed_batch(&texts)
             } else {
-                // Fallback for non-embedded mode (e.g., test environments without ONNX models).
-                // Returns dummy zero-embeddings of length 768 to allow ingestion pipeline to proceed.
-                Ok(vec![vec![0.0f32; 768]; texts.len()])
+                let is_mock = {
+                    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+                    {
+                        std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
+                    }
+                    #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+                    {
+                        false
+                    }
+                };
+                if is_mock {
+                    Ok(vec![vec![0.0f32; 768]; texts.len()])
+                } else {
+                    Err(anyhow::anyhow!("No embedding model loaded"))
+                }
             }
         }).await?;
 
