@@ -66,7 +66,7 @@ When delegating work to a subagent, minimize context window usage and establish 
 
 ## MemoryOS Paging & Paging-Aware Editing (v2.0)
 
-To stay within LLM context windows and prevent token budget exhaustion while working with large codebases, Mythrax implements **MemoryOS Virtual Paging**:
+To stay within LLM context windows and prevent token budget exhaustion while working with large codebases, Mythrax implements **Virtual Paging**:
 
 ### 1. Virtual In-Memory Skeletons (`read(action="view_file")`)
 *   When you read a source code file (like `.rs`, `.py`, `.js`, `.ts`) using `read(action="view_file")`, the daemon automatically parses and pages out large symbol bodies (functions, structs, impls) to the `symbol_archive` SurrealDB table.
