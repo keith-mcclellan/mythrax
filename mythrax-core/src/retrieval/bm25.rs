@@ -86,6 +86,16 @@ impl OkapiBM25 {
         }
     }
 
+    pub fn with_k1(mut self, k1: f32) -> Self {
+        self.k1 = k1;
+        self
+    }
+
+    pub fn with_b(mut self, b: f32) -> Self {
+        self.b = b;
+        self
+    }
+
     pub fn score(&self, query: &str) -> Vec<(String, f32)> {
         let query_tokens = tokenize(query);
         let mut results = Vec::new();

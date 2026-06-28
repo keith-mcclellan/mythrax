@@ -3147,7 +3147,7 @@ dependencies = [
 
 [[package]]
 name = "mythrax-core"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
