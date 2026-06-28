@@ -715,7 +715,11 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_config", payload).await?;
+            if act_str == "get" {
+                execute_cli_tool_call("read", payload).await?;
+            } else {
+                execute_cli_tool_call("write", payload).await?;
+            }
         }
         Commands::Daemon { action } => {
             daemon::handle_daemon(action).await?;
@@ -747,7 +751,7 @@ async fn main() -> Result<()> {
                         "include_artifacts": include_artifacts,
                         "session_id": session_id,
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("read", args).await?;
                 }
                 MemoryAction::Record { title, file, scope } => {
                     let path = Path::new(&file);
@@ -759,7 +763,7 @@ async fn main() -> Result<()> {
                         "content": content,
                         "scope": scope,
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("write", args).await?;
                 }
                 MemoryAction::Feedback { id, success } => {
                     let args = serde_json::json!({
@@ -767,13 +771,13 @@ async fn main() -> Result<()> {
                         "episode_id": id,
                         "success": success,
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("write", args).await?;
                 }
                 MemoryAction::Root => {
                     let args = serde_json::json!({
                         "action": "root",
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("read", args).await?;
                 }
             }
         }
@@ -800,7 +804,11 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_stm", payload).await?;
+            if act_str == "get" {
+                execute_cli_tool_call("read", payload).await?;
+            } else {
+                execute_cli_tool_call("write", payload).await?;
+            }
         }
         Commands::Mcp => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
@@ -840,7 +848,7 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_vault", payload).await?;
+            execute_cli_tool_call("manage", payload).await?;
         }
         Commands::Htr { action } => {
             let (act_str, args) = match action {
@@ -865,7 +873,7 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_htr", payload).await?;
+            execute_cli_tool_call("manage", payload).await?;
         }
         Commands::InstallHook => {
             handle_install_hook().await?;
@@ -971,12 +979,10 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
                 {
                     "type": "mcp",
                     "server": "mythrax",
-                    "tool": "compliance_audit"
-                },
-                {
-                    "type": "mcp",
-                    "server": "mythrax",
-                    "tool": "pre_invocation_hook"
+                    "tool": "manage",
+                    "arguments": {
+                        "action": "pre_invocation"
+                    }
                 }
             ])
         );

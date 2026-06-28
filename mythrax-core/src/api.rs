@@ -630,11 +630,11 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        // Test POST /v1/mcp/call (Authorized, manage_memory action root)
+        // Test POST /v1/mcp/call (Authorized, read action get_vault_root)
         let call_payload = serde_json::json!({
-            "name": "manage_memory",
+            "name": "read",
             "arguments": {
-                "action": "root"
+                "action": "get_vault_root"
             }
         });
         let response = app.clone()
@@ -712,16 +712,16 @@ async fn precompact_handler(
         }
     };
 
-    match crate::hooks::precompact::mine_transcript(
-        &sanitized_session,
-        &normalized_path,
-        state.backend.as_ref(),
-        state.store.as_ref(),
-        &state.ignore_list,
-    ).await {
-        Ok(count) => Ok(Json(json!({ "status": "success", "episodes_saved": count }))),
+    let mcp_args = json!({
+        "action": "precompact",
+        "session_id": sanitized_session,
+        "transcript_path": normalized_path,
+    });
+
+    match crate::mcp_routes::call_mcp_tool(&state, "manage", mcp_args).await {
+        Ok(val) => Ok(Json(val)),
         Err(e) => {
-            tracing::error!("Precompact hook failed: {:?}", e);
+            tracing::error!("Precompact hook tool call failed: {:?}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

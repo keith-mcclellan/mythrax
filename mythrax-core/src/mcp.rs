@@ -229,69 +229,6 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
             }));
         }
 
-        // Map legacy tool names to the new consolidated ones
-        let (mapped_name, mapped_args) = match name {
-            // Memory Management Tools -> "manage_memory"
-            "save_episode" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("save");
-                ("manage_memory", m_args)
-            }
-            "record_feedback" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("feedback");
-                ("manage_memory", m_args)
-            }
-            "search_memories" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("search");
-                ("manage_memory", m_args)
-            }
-            "search_wisdom" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("rules");
-                ("manage_memory", m_args)
-            }
-            "get_memory_nodes" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("nodes");
-                ("manage_memory", m_args)
-            }
-            "get_vault_root" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("root");
-                ("manage_memory", m_args)
-            }
-            // Short-Term Memory Tools -> "manage_stm" (unchanged)
-            "put_short_term" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("put");
-                ("manage_stm", m_args)
-            }
-            "get_short_term" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("get");
-                ("manage_stm", m_args)
-            }
-            "clear_short_term" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("clear");
-                ("manage_stm", m_args)
-            }
-            "save_handoff" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("handoff");
-                ("manage_stm", m_args)
-            }
-            // Vault Management Tools -> "manage_vault"
-            "save_forged_assets" => {
-                let mut m_args = args.clone();
-                m_args["action"] = json!("save_forged_assets");
-                ("manage_vault", m_args)
-            }
-            _ => (name, args)
-        };
-
         if let Some(ref local) = self.local_state {
             let api_state = crate::api::ApiState {
                 backend: local.backend.clone(),
@@ -300,13 +237,13 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 ignore_list: std::sync::Arc::new(crate::vault::watcher::WatchIgnoreList::new()),
                 dream_tx: None,
             };
-            crate::mcp_routes::call_mcp_tool(&api_state, mapped_name, mapped_args).await
+            crate::mcp_routes::call_mcp_tool(&api_state, name, args).await
         } else {
             let client = reqwest::Client::new();
             let url = format!("{}/v1/mcp/call", self.daemon_url);
             let payload = json!({
-                "name": mapped_name,
-                "arguments": mapped_args
+                "name": name,
+                "arguments": args
             });
             let resp = client.post(&url)
                 .header("X-Mythrax-Token", &self.auth_token)
@@ -315,7 +252,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 .await
                 .context("Failed to contact daemon call endpoint")?;
             if resp.status() != reqwest::StatusCode::OK {
-                anyhow::bail!("Daemon returned error status calling tool '{}': {}", mapped_name, resp.status());
+                anyhow::bail!("Daemon returned error status calling tool '{}': {}", name, resp.status());
             }
             resp.json().await.map_err(Into::into)
         }
@@ -388,7 +325,6 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 }
                 "tools/call" => {
                     let name = params.get("name").and_then(|v| v.as_str()).context("Missing tool name in tools/call")?;
-                    let name = if name == "verify_compliance" { "compliance_audit" } else { name };
                     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                     
                     let client = reqwest::Client::new();

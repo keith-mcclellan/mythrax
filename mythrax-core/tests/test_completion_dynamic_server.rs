@@ -94,14 +94,15 @@ async fn test_complete_code_task_mcp_tool() {
         dream_tx: None,
     };
 
-    // Invoke complete_code_task MCP tool
+    // Invoke complete_code_task MCP tool via consolidated agent tool
     let args = serde_json::json!({
+        "action": "complete_task",
         "prompt": "Write a rust function to add two numbers.",
         "system_instruction": "Be concise.",
         "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
     });
 
-    let res = mythrax_core::mcp_routes::call_mcp_tool(&api_state, "complete_code_task", args).await;
+    let res = mythrax_core::mcp_routes::call_mcp_tool(&api_state, "agent", args).await;
     assert!(res.is_ok(), "MCP tool complete_code_task call must succeed: {:?}", res.err());
     
     let val = res.unwrap();

@@ -74,7 +74,7 @@ async fn test_search_index_omits_content() -> Result<()> {
     }
 
     // Call search_index
-    let mcp_res = call_mcp_tool(&state, "manage_memory", json!({
+    let mcp_res = call_mcp_tool(&state, "read", json!({
         "action": "search_index",
         "query": "Episode",
         "limit": 10
@@ -130,7 +130,7 @@ async fn test_get_full_hydrates() -> Result<()> {
     let ep_id = backend.save_episode(&ep).await?;
 
     // Call search_index first to get the ID
-    let mcp_res = call_mcp_tool(&state, "manage_memory", json!({
+    let mcp_res = call_mcp_tool(&state, "read", json!({
         "action": "search_index",
         "query": "Hydration",
         "limit": 1
@@ -142,7 +142,7 @@ async fn test_get_full_hydrates() -> Result<()> {
     assert_eq!(index_rows[0].id, ep_id);
 
     // Call get_full to hydrate it
-    let full_res = call_mcp_tool(&state, "manage_memory", json!({
+    let full_res = call_mcp_tool(&state, "read", json!({
         "action": "get_full",
         "ids": [ep_id.clone()]
     })).await?;
@@ -201,7 +201,7 @@ async fn test_timeline_orders_neighbors() -> Result<()> {
 
     // Call timeline centered on the 3rd episode (index 2) with depth_before=1, depth_after=1
     let mid_id = &ids[2];
-    let mcp_res = call_mcp_tool(&state, "manage_memory", json!({
+    let mcp_res = call_mcp_tool(&state, "read", json!({
         "action": "timeline",
         "anchor_id": mid_id,
         "depth_before": 1,
@@ -217,7 +217,7 @@ async fn test_timeline_orders_neighbors() -> Result<()> {
     assert_eq!(index_rows[1].id, ids[3]); // Episode 4 (subsequent)
 
     // Test with query anchor search
-    let mcp_res_query = call_mcp_tool(&state, "manage_memory", json!({
+    let mcp_res_query = call_mcp_tool(&state, "read", json!({
         "action": "timeline",
         "query": "Timeline Episode 3",
         "depth_before": 1,
@@ -266,7 +266,7 @@ async fn test_index_then_full_token_savings() -> Result<()> {
     }
 
     // 1. Full search (hydrates all matching episodes)
-    let full_search_res = call_mcp_tool(&state, "manage_memory", json!({
+    let full_search_res = call_mcp_tool(&state, "read", json!({
         "action": "search",
         "query": "Big Episode",
         "include_episodes": true,
@@ -276,7 +276,7 @@ async fn test_index_then_full_token_savings() -> Result<()> {
     let full_search_size = full_search_text.len();
 
     // 2. Progressive disclosure: search_index + get_full for only 2 episodes
-    let index_res = call_mcp_tool(&state, "manage_memory", json!({
+    let index_res = call_mcp_tool(&state, "read", json!({
         "action": "search_index",
         "query": "Big Episode",
         "limit": 10
@@ -284,7 +284,7 @@ async fn test_index_then_full_token_savings() -> Result<()> {
     let index_text = index_res["content"][0]["text"].as_str().unwrap();
     let index_size = index_text.len();
 
-    let get_full_res = call_mcp_tool(&state, "manage_memory", json!({
+    let get_full_res = call_mcp_tool(&state, "read", json!({
         "action": "get_full",
         "ids": [ids[0].clone(), ids[1].clone()]
     })).await?;

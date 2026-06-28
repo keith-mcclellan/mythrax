@@ -82,12 +82,19 @@ pub fn get_mcp_tools_schema() -> Value {
     json!({
         "tools": [
             {
-                "name": "manage_memory",
-                "description": "Consolidated tool to query, search, traverse, and record semantic long-term memory graph nodes.",
+                "name": "read",
+                "description": "Consolidated tool for all reading and querying operations including file view, semantic memory search, stm retrieval, and LLM configuration retrieval.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["search", "rules", "nodes", "root", "query_symbolic", "save", "feedback", "thought", "search_index", "timeline", "get_full"] },
+                        "action": { "type": "string", "enum": ["view", "search", "rules", "nodes", "root", "query_symbolic", "search_index", "timeline", "get_full", "get"] },
+                        "path": { "type": "string" },
+                        "AbsolutePath": { "type": "string" },
+                        "TargetFile": { "type": "string" },
+                        "start_line": { "type": "integer" },
+                        "StartLine": { "type": "integer" },
+                        "end_line": { "type": "integer" },
+                        "EndLine": { "type": "integer" },
                         "query": { "type": "string" },
                         "scope": { "type": "string" },
                         "limit": { "type": "integer", "default": 15 },
@@ -107,97 +114,30 @@ pub fn get_mcp_tools_schema() -> Value {
                         "node_id": { "type": "string" },
                         "relation": { "type": "string" },
                         "max_depth": { "type": "integer", "default": 3 },
-                        "title": { "type": "string" },
-                        "content": { "type": "string" },
-                        "entities": { "type": "array" },
-                        "vault_path": { "type": "string" },
-                        "task_id": { "type": "string" },
-                        "episode_id": { "type": "string" },
-                        "success": { "type": "boolean" }
-                    },
-                    "required": ["action"]
-                }
-            },
-            {
-                "name": "manage_htr",
-                "description": "Manage High-Temporal Reasoning (HTR) processes including hypothesis generation and execution.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "action": { "type": "string", "enum": ["init", "ideate", "execute", "backprop", "merge", "run"] },
-                        "scope": { "type": "string" },
-                        "hypothesis": { "type": "string" },
-                        "node_id": { "type": "string" },
-                        "files": { "type": "array", "items": { "type": "string" } },
-                        "test_command": { "type": "string" },
-                        "max_steps": { "type": "integer", "default": 5 }
-                    },
-                    "required": ["action", "scope"]
-                }
-            },
-            {
-                "name": "manage_stm",
-                "description": "Manage Short-Term Memory (STM) operations including put, get, clear, and handoff.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "action": { "type": "string", "enum": ["put", "get", "clear", "handoff"] },
-                        "session_id": { "type": "string" },
                         "key": { "type": "string" },
-                        "value": { "type": "string" },
-                        "parent_conversation_id": { "type": "string" },
-                        "subagent_conversation_id": { "type": "string" },
-                        "summary": { "type": "string" },
-                        "handoff_file_path": { "type": "string" },
-                        "scope": { "type": "string" }
+                        "is_skill_file": { "type": "boolean" }
                     },
                     "required": ["action"]
                 }
             },
             {
-                "name": "manage_vault",
-                "description": "Manage vault integrity, organization, reprocessing, summarization, compliance auditing, and document ingestion.",
+                "name": "write",
+                "description": "Consolidated tool for all writing and modification operations including file replace, memory recording, stm updates, and LLM configuration updates.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge"] },
-                        "fix": { "type": "boolean", "default": false },
-                        "scope": { "type": "string" },
-                        "workspace_path": { "type": "string", "default": "." },
-                        "source": { "type": "string" },
-                        "harness": { "type": "string" }
-                    },
-                    "required": ["action"]
-                }
-            },
-            {
-                "name": "manage_config",
-                "description": "Get or set configuration parameters for providers, models, and cloud services.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "action": { "type": "string", "enum": ["get", "set"] },
-                        "provider": { "type": "string" },
-                        "duration": { "type": "string" },
-                        "model": { "type": "string" },
-                        "cloud_provider": { "type": "string" },
-                        "api_key": { "type": "string" }
-                    },
-                    "required": ["action"]
-                }
-            },
-            {
-                "name": "manage_file",
-                "description": "Consolidated tool to view, replace, or multi-replace content in files with virtual paging support.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "action": { "type": "string", "enum": ["view", "replace", "multi_replace"] },
+                        "action": { "type": "string", "enum": ["replace", "multi_replace", "save", "feedback", "thought", "put", "clear", "handoff", "set"] },
                         "path": { "type": "string" },
+                        "AbsolutePath": { "type": "string" },
+                        "TargetFile": { "type": "string" },
                         "start_line": { "type": "integer" },
+                        "StartLine": { "type": "integer" },
                         "end_line": { "type": "integer" },
+                        "EndLine": { "type": "integer" },
                         "target_content": { "type": "string" },
+                        "TargetContent": { "type": "string" },
                         "replacement_content": { "type": "string" },
+                        "ReplacementContent": { "type": "string" },
                         "chunks": {
                             "type": "array",
                             "items": {
@@ -213,42 +153,340 @@ pub fn get_mcp_tools_schema() -> Value {
                             }
                         },
                         "allow_multiple": { "type": "boolean" },
+                        "AllowMultiple": { "type": "boolean" },
                         "instruction": { "type": "string" },
                         "description": { "type": "string" },
-                        "is_skill_file": { "type": "boolean" }
+                        "title": { "type": "string" },
+                        "content": { "type": "string" },
+                        "scope": { "type": "string" },
+                        "episode_id": { "type": "string" },
+                        "success": { "type": "boolean" },
+                        "session_id": { "type": "string" },
+                        "key": { "type": "string" },
+                        "value": { "type": "string" },
+                        "parent_conversation_id": { "type": "string" },
+                        "subagent_conversation_id": { "type": "string" },
+                        "summary": { "type": "string" },
+                        "handoff_file_path": { "type": "string" },
+                        "provider": { "type": "string" },
+                        "duration": { "type": "string" },
+                        "model": { "type": "string" },
+                        "cloud_provider": { "type": "string" },
+                        "api_key": { "type": "string" }
                     },
-                    "required": ["action", "path"]
+                    "required": ["action"]
                 }
             },
             {
-                "name": "pre_invocation_hook",
-                "description": "Execute pre-invocation checks including state sync, vault integrity, and constraint validation.",
+                "name": "manage",
+                "description": "Consolidated tool for all management, lifecycle, validation, reasoning (HTR), and ingestion operations.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge", "save_forged_assets", "init", "ideate", "execute", "backprop", "merge", "run", "pre_invocation", "precompact", "audit_compliance"] },
+                        "fix": { "type": "boolean", "default": false },
+                        "scope": { "type": "string" },
+                        "workspace_path": { "type": "string", "default": "." },
+                        "source": { "type": "string" },
+                        "harness": { "type": "string" },
+                        "source_path": { "type": "string" },
+                        "hypothesis": { "type": "string" },
+                        "node_id": { "type": "string" },
+                        "files": { "type": "array", "items": { "type": "string" } },
+                        "test_command": { "type": "string" },
+                        "max_steps": { "type": "integer", "default": 5 },
                         "session_id": { "type": "string" },
                         "query": { "type": "string" },
-                        "workspace_path": { "type": "string" }
+                        "transcript_path": { "type": "string" }
                     },
-                    "required": ["session_id"]
+                    "required": ["action"]
                 }
             },
             {
-                "name": "complete_code_task",
-                "description": "Request a coding or reasoning task to be completed by Mythrax's local model natively in-process.",
+                "name": "agent",
+                "description": "Consolidated tool for orchestrating local model autonomous task execution.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "action": { "type": "string", "enum": ["complete_code_task"] },
                         "prompt": { "type": "string" },
                         "system_instruction": { "type": "string" },
                         "model": { "type": "string" },
-                        "enable_thinking": { "type": "boolean", "description": "Enable reasoning/thinking tokens for thinking models" }
+                        "enable_thinking": { "type": "boolean" }
                     },
-                    "required": ["prompt"]
+                    "required": ["action"]
                 }
             }
         ]
     })
+}
+
+async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
+    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter")?.to_string();
+    let mapped_action = match action.as_str() {
+        "view" | "view_file" => "view",
+        "search" | "search_memory" => "search",
+        "search_index" => "search_index",
+        "rules" | "search_wisdom" => "rules",
+        "nodes" | "get_memory_nodes" => "nodes",
+        "query_symbolic" => "query_symbolic",
+        "timeline" => "timeline",
+        "get_full" => "get_full",
+        "root" | "get_vault_root" => "root",
+        "get" | "get_short_term" | "get_config" => "get",
+        other => other,
+    };
+    if let Some(obj) = args.as_object_mut() {
+        obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+    }
+
+    match mapped_action {
+        "view" => {
+            let _path = args.get("path")
+                .or_else(|| args.get("AbsolutePath"))
+                .or_else(|| args.get("TargetFile"))
+                .and_then(|v| v.as_str())
+                .context("Missing path/AbsolutePath/TargetFile")?;
+            handle_manage_file(state, args).await
+        }
+        "search" | "search_index" => {
+            let _query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
+            handle_query_memory(state, args).await
+        }
+        "rules" => {
+            let _query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
+            handle_query_memory(state, args).await
+        }
+        "nodes" => {
+            let node_ids_val = args.get("node_ids").context("Missing node_ids")?;
+            let _node_ids_arr = node_ids_val.as_array().context("node_ids must be an array")?;
+            handle_query_memory(state, args).await
+        }
+        "query_symbolic" => {
+            let _node_id = args.get("node_id").and_then(|v| v.as_str()).context("Missing node_id")?;
+            handle_query_memory(state, args).await
+        }
+        "timeline" => {
+            if args.get("anchor_id").and_then(|v| v.as_str()).is_none() && args.get("query").and_then(|v| v.as_str()).is_none() {
+                anyhow::bail!("Either anchor_id or query must be provided for timeline");
+            }
+            handle_query_memory(state, args).await
+        }
+        "get_full" => {
+            if args.get("ids").and_then(|v| v.as_array()).is_none() && args.get("node_ids").and_then(|v| v.as_array()).is_none() {
+                anyhow::bail!("Missing ids or node_ids array parameter");
+            }
+            handle_query_memory(state, args).await
+        }
+        "root" => {
+            handle_query_memory(state, args).await
+        }
+        "get" => {
+            if action == "get_short_term" || (action == "get" && (args.get("key").and_then(|v| v.as_str()).is_some() || args.get("session_id").and_then(|v| v.as_str()).is_some())) {
+                let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+                let _key = args.get("key").and_then(|v| v.as_str()).context("Missing key")?;
+                handle_manage_stm(state, args).await
+            } else {
+                handle_manage_config(state, args).await
+            }
+        }
+        _ => anyhow::bail!("Invalid action for read tool: {}", action),
+    }
+}
+
+async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
+    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter")?.to_string();
+    let mapped_action = match action.as_str() {
+        "replace" | "edit_file" => "replace",
+        "multi_replace" | "multi_edit_file" => "multi_replace",
+        "save" | "save_episode" => "save",
+        "feedback" | "record_feedback" => "feedback",
+        "put" | "put_short_term" => "put",
+        "clear" | "clear_short_term" => "clear",
+        "save_forged_assets" => "save_forged_assets",
+        "ingest_bulk" => "ingest_bulk",
+        "ingest_forge" => "ingest_forge",
+        "set" | "set_config" => "set",
+        other => other,
+    };
+    if let Some(obj) = args.as_object_mut() {
+        obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+    }
+
+    match mapped_action {
+        "replace" => {
+            let _path = args.get("path")
+                .or_else(|| args.get("AbsolutePath"))
+                .or_else(|| args.get("TargetFile"))
+                .and_then(|v| v.as_str())
+                .context("Missing path/AbsolutePath/TargetFile")?;
+            let _target_content = args.get("target_content")
+                .or_else(|| args.get("TargetContent"))
+                .and_then(|v| v.as_str())
+                .context("Missing target_content/TargetContent")?;
+            let _replacement_content = args.get("replacement_content")
+                .or_else(|| args.get("ReplacementContent"))
+                .and_then(|v| v.as_str())
+                .context("Missing replacement_content/ReplacementContent")?;
+            handle_manage_file(state, args).await
+        }
+        "multi_replace" => {
+            let _path = args.get("path")
+                .or_else(|| args.get("AbsolutePath"))
+                .or_else(|| args.get("TargetFile"))
+                .and_then(|v| v.as_str())
+                .context("Missing path/AbsolutePath/TargetFile")?;
+            let _chunks = args.get("chunks").and_then(|v| v.as_array()).context("Missing chunks array parameter")?;
+            handle_manage_file(state, args).await
+        }
+        "save" => {
+            let _title = args.get("title").and_then(|v| v.as_str()).context("Missing title")?;
+            let _content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?;
+            handle_record_memory(state, args).await
+        }
+        "feedback" => {
+            let _episode_id = args.get("episode_id").and_then(|v| v.as_str()).context("Missing episode_id")?;
+            let _success = args.get("success").and_then(|v| v.as_bool()).context("Missing success")?;
+            handle_record_memory(state, args).await
+        }
+        "thought" => {
+            let _content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?;
+            handle_record_memory(state, args).await
+        }
+        "put" => {
+            let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+            let _key = args.get("key").and_then(|v| v.as_str()).context("Missing key")?;
+            let _value = args.get("value").and_then(|v| v.as_str()).context("Missing value")?;
+            handle_manage_stm(state, args).await
+        }
+        "clear" => {
+            let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+            handle_manage_stm(state, args).await
+        }
+        "handoff" => {
+            let _parent = args.get("parent_conversation_id").and_then(|v| v.as_str()).context("Missing parent_conversation_id")?;
+            let _subagent = args.get("subagent_conversation_id").and_then(|v| v.as_str()).context("Missing subagent_conversation_id")?;
+            let _summary = args.get("summary").and_then(|v| v.as_str()).context("Missing summary")?;
+            handle_manage_stm(state, args).await
+        }
+        "set" => {
+            let _provider = args.get("provider").and_then(|v| v.as_str()).context("Missing provider")?;
+            handle_manage_config(state, args).await
+        }
+        "save_forged_assets" | "ingest_bulk" | "ingest_forge" => {
+            handle_manage_vault(state, args).await
+        }
+        _ => anyhow::bail!("Invalid action for write tool: {}", action),
+    }
+}
+
+async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
+    let action_opt = args.get("action").and_then(|v| v.as_str());
+    let resolved_action = if let Some(act) = action_opt {
+        act
+    } else {
+        if args.get("session_id").and_then(|v| v.as_str()).is_some() {
+            "pre_invocation"
+        } else if args.get("workspace_path").and_then(|v| v.as_str()).is_some() {
+            "audit_compliance"
+        } else {
+            anyhow::bail!("Missing action parameter for manage tool");
+        }
+    };
+
+    let mapped_action = match resolved_action {
+        "verify_vault" => "verify",
+        "organize_vault" => "organize",
+        "reprocess_vault" => "reprocess",
+        "summarize_vault" => "summarize",
+        "audit_compliance" => "audit",
+        "init_htr" => "init",
+        "ideate_htr" => "ideate",
+        "execute_htr" => "execute",
+        "backprop_htr" => "backprop",
+        "merge_htr" => "merge",
+        "run_htr" => "run",
+        other => other,
+    };
+
+    match mapped_action {
+        "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk" | "ingest_forge" | "save_forged_assets" => {
+            match mapped_action {
+                "ingest_bulk" => {
+                    let _source = args.get("source").and_then(|v| v.as_str()).context("Missing source parameter for ingest_bulk")?;
+                    let _harness = args.get("harness").and_then(|v| v.as_str()).context("Missing harness parameter for ingest_bulk")?;
+                }
+                "ingest_forge" => {
+                    let _source_path = args.get("source").or_else(|| args.get("source_path")).and_then(|v| v.as_str()).context("Missing source parameter for ingest_forge")?;
+                }
+                "save_forged_assets" => {
+                    let _doc_title = args.get("doc_title").context("Missing doc_title parameter for save_forged_assets")?;
+                }
+                _ => {}
+            }
+            let mut modified_args = args.clone();
+            if let Some(obj) = modified_args.as_object_mut() {
+                obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+            }
+            handle_manage_vault(state, modified_args).await
+        }
+        "init" | "ideate" | "execute" | "backprop" | "merge" | "run" => {
+            let _scope = args.get("scope").and_then(|v| v.as_str()).context("Missing scope parameter for HTR action")?;
+            match mapped_action {
+                "init" | "run" => {
+                    let _hypothesis = args.get("hypothesis").and_then(|v| v.as_str()).context("Missing hypothesis parameter")?;
+                }
+                "ideate" | "execute" | "backprop" | "merge" => {
+                    let _node_id = args.get("node_id").and_then(|v| v.as_str()).context("Missing node_id parameter")?;
+                }
+                _ => {}
+            }
+            let mut modified_args = args.clone();
+            if let Some(obj) = modified_args.as_object_mut() {
+                obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+            }
+            handle_manage_htr(state, modified_args).await
+        }
+        "pre_invocation" => {
+            let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for pre_invocation")?;
+            handle_pre_invocation_hook(state, args).await
+        }
+        "precompact" => {
+            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for precompact")?;
+            let transcript_path_str = args.get("transcript_path").and_then(|v| v.as_str()).context("Missing transcript_path parameter for precompact")?;
+            let count = crate::hooks::precompact::mine_transcript(
+                session_id,
+                transcript_path_str,
+                state.backend.as_ref(),
+                state.store.as_ref(),
+                &state.ignore_list,
+            ).await?;
+            Ok(json!({ "status": "success", "episodes_saved": count }))
+        }
+        _ => anyhow::bail!("Invalid action for manage tool: {}", resolved_action),
+    }
+}
+
+async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
+    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter for agent tool")?;
+    let mapped_action = match action {
+        "complete_task" => "complete_code_task",
+        "save_handoff" => "handoff",
+        other => other,
+    };
+    match mapped_action {
+        "complete_code_task" => {
+            let _prompt = args.get("prompt").and_then(|v| v.as_str()).context("Missing prompt parameter for agent:complete_code_task")?;
+            handle_complete_code_task(state, args).await
+        }
+        "handoff" => {
+            let _parent = args.get("parent_conversation_id").and_then(|v| v.as_str()).context("Missing parent_conversation_id")?;
+            let _subagent = args.get("subagent_conversation_id").and_then(|v| v.as_str()).context("Missing subagent_conversation_id")?;
+            let _summary = args.get("summary").and_then(|v| v.as_str()).context("Missing summary")?;
+            handle_manage_stm(state, args).await
+        }
+        _ => anyhow::bail!("Invalid action for agent tool: {}", action),
+    }
 }
 
 pub async fn call_mcp_tool(
@@ -257,14 +495,10 @@ pub async fn call_mcp_tool(
     args: Value,
 ) -> Result<Value> {
     let result = match name {
-        "manage_memory" => handle_manage_memory(state, args.clone()).await,
-        "manage_htr" => handle_manage_htr(state, args.clone()).await,
-        "manage_stm" => handle_manage_stm(state, args.clone()).await,
-        "manage_vault" => handle_manage_vault(state, args.clone()).await,
-        "manage_config" => handle_manage_config(state, args.clone()).await,
-        "pre_invocation_hook" => handle_pre_invocation_hook(state, args.clone()).await,
-        "manage_file" => handle_manage_file(state, args.clone()).await,
-        "complete_code_task" => handle_complete_code_task(state, args.clone()).await,
+        "read" => handle_read(state, args.clone()).await,
+        "write" => handle_write(state, args.clone()).await,
+        "manage" => handle_manage(state, args.clone()).await,
+        "agent" => handle_agent(state, args.clone()).await,
         _ => anyhow::bail!("Tool not found: {}", name),
     };
 
@@ -273,8 +507,22 @@ pub async fn call_mcp_tool(
         .or_else(|| args.get("subagent_conversation_id"))
         .and_then(|v| v.as_str());
 
+    let action_opt = args.get("action").and_then(|v| v.as_str());
+    let resolved_action = if name == "manage" && action_opt.is_none() {
+        if args.get("session_id").and_then(|v| v.as_str()).is_some() {
+            "pre_invocation"
+        } else if args.get("workspace_path").and_then(|v| v.as_str()).is_some() {
+            "audit_compliance"
+        } else {
+            ""
+        }
+    } else {
+        action_opt.unwrap_or("")
+    };
+    let is_pre_invocation = name == "manage" && resolved_action == "pre_invocation";
+
     if let Some(session_id) = session_id_opt {
-        if name != "pre_invocation_hook" {
+        if !is_pre_invocation {
             if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
                 let tool_name = name.to_string();
                 let score_delta = if result.is_ok() { 0.02f32 } else { -0.05f32 };
@@ -366,7 +614,7 @@ pub async fn call_mcp_tool(
         }
     }
 
-    if result.is_ok() && matches!(name, "manage_memory" | "manage_stm" | "manage_htr" | "manage_vault") {
+    if result.is_ok() && (name == "read" || name == "write" || name == "manage" || name == "agent") {
         let session_id_opt = args.get("session_id")
             .or_else(|| args.get("subagent_id"))
             .or_else(|| args.get("subagent_conversation_id"))
@@ -380,18 +628,7 @@ pub async fn call_mcp_tool(
     result
 }
 
-async fn handle_manage_memory(state: &ApiState, args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter")?;
-    match action {
-        "search" | "rules" | "nodes" | "root" | "query_symbolic" | "search_index" | "timeline" | "get_full" => {
-            handle_query_memory(state, args).await
-        }
-        "save" | "feedback" | "thought" => {
-            handle_record_memory(state, args).await
-        }
-        _ => anyhow::bail!("Invalid action for manage_memory: {}", action),
-    }
-}
+
 
 async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
     let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()

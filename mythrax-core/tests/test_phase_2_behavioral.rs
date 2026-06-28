@@ -45,12 +45,13 @@ async fn test_zero_touch_correction_and_critic_extraction() -> Result<()> {
 
     // 1. Trigger zero-touch correction by saving an episode containing a correction indicator
     let save_args = serde_json::json!({
+        "action": "save",
         "title": "Correction Episode",
         "content": "Wait, that was a mistake! You forgot to run the tests first.",
         "scope": "test-project"
     });
 
-    let result = server.call_tool("save_episode", save_args).await?;
+    let result = server.call_tool("write", save_args).await?;
     assert!(result.to_string().contains("Episode saved successfully"));
 
     // Call run_llm_critic directly to diagnose any errors synchronously
