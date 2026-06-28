@@ -19,7 +19,7 @@ For in-depth guides, architectural references, and developer playbooks, see the 
 
 ## 🏗️ Architectural Overview & Data Flow
 
-Mythrax 2.0 employs a lightweight sidecar intelligence topology. The CLI and external MCP integrations act as thin HTTP/RPC clients, while heavy operations are offloaded to a persistent, central daemon process. This guarantees database locks are held exclusively by the daemon, eliminating process write contention.
+Mythrax 2.x employs a lightweight sidecar intelligence topology. The CLI and external MCP integrations act as thin HTTP/RPC clients, while heavy operations are offloaded to a persistent, central daemon process. This guarantees database locks are held exclusively by the daemon, eliminating process write contention.
 
 **Zero-CLI Autonomy**: For agents interacting through the MCP server (e.g. in Cursor, VS Code, or Antigravity), the MCP server automatically pings and spawns the background daemon on startup. This detached daemon runs all background scheduling loops—including the Obsidian file watcher, the daily deep dreaming cycle, the inactivity-debounced compaction loop, and WAL flushing—without requiring any manual CLI interaction.
 
@@ -30,84 +30,124 @@ graph TB
         MCP[mythrax mcp<br/>MCP Thin Proxy Gateway]
     end
 
-    subgraph "Mythrax 2.0 Core Daemon (Port 8090 / 8080)"
-        REST[Axum REST API / MCP / Proxy<br/>127.0.0.1 with Token Auth]
-        Store[Markdown Store<br/>Atomic Writes + safe YAML]
-        Watcher[notify File-Watcher<br/>500ms Coalesced Vault sync]
+    subgraph "Mythrax 2.x Core Daemon (Port 8090 / 8080)"
+        GATEWAY[Unified Gateway /v1/mcp/call<br/>127.0.0.1 with Token Auth]
+        
+        subgraph "Consolidated Tools Router"
+            READ[read tool]
+            WRITE[write tool]
+            MANAGE[manage tool]
+            AGENT[agent tool]
+        end
+
         DB[(SurrealDB Server<br/>Persistent RocksDB/SurrealKV)]
         Broker[Model Broker<br/>Local MLX GPU / ORT CPU / Mock]
         WAL[WAL Concurrency Actor<br/>Transaction Journaling]
         SCHED[Tokio background scheduler<br/>Dreaming + Compaction loops]
     end
 
-    CLI -->|HTTP REST / Token| REST
-    MCP -->|HTTP REST / Token| REST
-    REST --> Store
-    REST --> DB
-    REST --> Broker
-    REST --> WAL
-    Watcher -->|Coalesced FS Event| DB
-    Store -->|writes| DB
+    CLI -->|HTTP POST /v1/mcp/call| GATEWAY
+    MCP -->|HTTP POST /v1/mcp/call| GATEWAY
+    
+    GATEWAY --> READ
+    GATEWAY --> WRITE
+    GATEWAY --> MANAGE
+    GATEWAY --> AGENT
+    
+    READ --> DB
+    WRITE --> DB
+    MANAGE --> DB
+    AGENT --> Broker
+    
     SCHED --> DB
-    SCHED --> Store
+    WAL --> DB
 ```
 
 ---
 
-## 📡 Core API Specification
+## 📡 Unified API Specification
 
-All REST endpoints are bound to localhost (`127.0.0.1:8090`) and secured with header validation: `X-Mythrax-Token`.
+All client requests are routed through a single, unified POST API gateway (`127.0.0.1:8090/v1/mcp/call`) and secured with header validation: `X-Mythrax-Token`.
 
-### 1. Save Episode (`POST /v1/episodes`)
+### 1. Save Episodic Memory (via `write` tool)
 Atomic save and index of a new episodic context.
 - **Request:**
   ```json
   {
-    "title": "Fixing VRAM database locks",
-    "content": "Resolved database lock contention in test runs by adding a 10-attempt retry loop...",
-    "entities": [{"name": "SurrealBackend", "type": "struct", "summary": "Manages connection"}],
-    "scope": "mythrax-project"
+    "name": "write",
+    "arguments": {
+      "action": "save",
+      "title": "Fixing VRAM database locks",
+      "content": "Resolved database lock contention in test runs by adding a 10-attempt retry loop...",
+      "scope": "general"
+    }
   }
   ```
 - **Response:**
   ```json
   {
-    "id": "episode:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3d207b",
-    "status": "success"
-  }
-  ```
-
-### 2. Search Memories (`POST /v1/search`)
-Combined vector and graph similarity retrieval utilizing Hybrid Reciprocal Rank Fusion (RRF).
-- **Request:**
-  ```json
-  {
-    "query": "VRAM lock retry",
-    "scope": "mythrax-project",
-    "limit": 3
-  }
-  ```
-- **Response:**
-  ```json
-  {
-    "results": [
+    "content": [
       {
-        "id": "episode:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3d207b",
-        "title": "Fixing VRAM database locks",
-        "content": "Resolved database lock contention in...",
-        "similarity": 0.89,
-        "utility": 1.0,
-        "tier": "dynamic"
+        "type": "text",
+        "text": "Saved memory card. ID: episode:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3d207b"
       }
     ]
   }
   ```
 
-### 3. Record Feedback (`POST /v1/feedback`)
-Applies Exponential Moving Average (EMA) reinforcement to dynamic rules: `utility = 0.3 * success + 0.7 * previous_utility`.
+### 2. Search Memories (via `read` tool)
+Combined vector and graph similarity retrieval utilizing Hybrid Reciprocal Rank Fusion (RRF).
+- **Request:**
+  ```json
+  {
+    "name": "read",
+    "arguments": {
+      "action": "search",
+      "query": "VRAM lock retry",
+      "scope": "general",
+      "limit": 3
+    }
+  }
+  ```
+- **Response:**
+  ```json
+  {
+    "content": [
+      {
+        "type": "text",
+        "text": "#### 📑 Memory Card: Fixing VRAM database locks\n- **ID**: `episode:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3d207b`\n- **Scope**: `general`\n- **Summary**: Resolved database lock contention in..."
+      }
+    ]
+  }
+  ```
 
-### 4. Fetch/Update LLM Configuration (`GET/POST /v1/config/llm`)
+### 3. Record Feedback (via `write` tool)
+Applies Exponential Moving Average (EMA) reinforcement to dynamic rules: `utility = 0.3 * success + 0.7 * previous_utility`.
+- **Request:**
+  ```json
+  {
+    "name": "write",
+    "arguments": {
+      "action": "feedback",
+      "episode_id": "episode:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3d207b",
+      "success": true
+    }
+  }
+  ```
+
+### 4. Fetch/Update LLM Configuration (via `write`/`read` tools)
 Permits dynamic switching between cloud (Gemini) and local (Qwen via local OpenAI-compatible endpoints) providers.
+- **Request:**
+  ```json
+  {
+    "name": "write",
+    "arguments": {
+      "action": "set",
+      "provider": "local",
+      "model": "mlx-community/Qwen3.6-35B-A3B-4bit"
+    }
+  }
+  ```
 
 ---
 

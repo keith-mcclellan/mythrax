@@ -338,6 +338,8 @@ async fn main() -> Result<()> {
             println!("Evaluating question {}/{}...", q_idx + 1, total_q);
 
             let mut backend = shared_backend_clone;
+            backend.write_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+            backend.indexing_writes = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
             backend.term_counts_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
             backend.avg_dl_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
             backend.db.use_ns("mythrax").use_db(format!("q_{}", q_idx)).await
