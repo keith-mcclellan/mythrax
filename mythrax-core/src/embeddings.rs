@@ -9,6 +9,24 @@ use std::sync::OnceLock;
 
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
+static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>> = OnceLock::new();
+
+pub fn cache_embedding(text: String, embedding: Vec<f32>) {
+    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(mut cache) = cache_mutex.lock() {
+        cache.insert(text, embedding);
+    }
+}
+
+pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
+    if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+        if let Ok(cache) = cache_mutex.lock() {
+            return cache.get(text).cloned();
+        }
+    }
+    None
+}
+
 #[cfg(not(feature = "mlx"))]
 pub struct LocalEmbedder {
     session: Mutex<ort::session::Session>,
@@ -54,6 +72,9 @@ impl LocalEmbedder {
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        if let Some(cached) = get_cached_embedding(text) {
+            return Ok(cached);
+        }
         // Nomic Embed Text requires a prefix for search queries vs document indices:
         // "search_query: " or "search_document: "
         let formatted_text = if text.contains(':') {
@@ -326,6 +347,9 @@ impl LocalEmbedder {
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        if let Some(cached) = get_cached_embedding(text) {
+            return Ok(cached);
+        }
         let formatted_text = if text.contains(':') {
             text.to_string()
         } else {
@@ -386,9 +410,89 @@ impl LocalEmbedder {
     }
 
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut results = Vec::with_capacity(texts.len());
-        for text in texts {
-            results.push(self.embed(text)?);
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut all_embeddings = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(32) {
+            let chunk_embeddings = self.embed_sub_batch(chunk)?;
+            all_embeddings.extend(chunk_embeddings);
+        }
+        Ok(all_embeddings)
+    }
+
+    fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let formatted_texts: Vec<String> = texts.iter().map(|text| {
+            if text.contains(':') {
+                text.clone()
+            } else {
+                format!("search_document: {}", text)
+            }
+        }).collect();
+
+        let encodings = self.tokenizer.encode_batch(formatted_texts, true)
+            .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+
+        let max_len = encodings.iter()
+            .map(|enc| enc.get_ids().len())
+            .max()
+            .unwrap_or(0)
+            .min(2048)
+            .max(1);
+
+        let batch_size = encodings.len();
+
+        let mut input_ids_data = Vec::with_capacity(batch_size * max_len);
+        let mut attention_mask_data = Vec::with_capacity(batch_size * max_len);
+
+        for enc in &encodings {
+            let ids = enc.get_ids();
+            let mask = enc.get_attention_mask();
+            let len = ids.len();
+            let take_len = std::cmp::min(len, max_len);
+
+            input_ids_data.extend(ids.iter().take(take_len).map(|&id| id as i32));
+            attention_mask_data.extend(mask.iter().take(take_len).map(|&m| m as i32));
+
+            let padding_len = max_len - take_len;
+            if padding_len > 0 {
+                input_ids_data.resize(input_ids_data.len() + padding_len, 0);
+                attention_mask_data.resize(attention_mask_data.len() + padding_len, 0);
+            }
+        }
+
+        let input_array = Array::from_slice(&input_ids_data, &[batch_size as i32, max_len as i32]);
+        let mask_array = Array::from_slice(&attention_mask_data, &[batch_size as i32, max_len as i32]);
+
+        let mut model = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        let output = model.forward(&input_array, Some(&mask_array))?;
+
+        let mask_expanded = mask_array.reshape(&[batch_size as i32, max_len as i32, 1])?
+            .as_dtype(mlx_rs::Dtype::Float32)?;
+        let masked_output = output.multiply(&mask_expanded)?;
+        let sum_emb = masked_output.sum_axes(&[1], false)?;
+        let active_tokens = mask_expanded.sum_axes(&[1], false)?;
+        let active_tokens_clamped = mlx_rs::ops::maximum(&active_tokens, &Array::from(1.0f32))?;
+        let mean_emb = sum_emb.divide(&active_tokens_clamped)?;
+
+        let sq_emb = mean_emb.square()?;
+        let sum_sq = sq_emb.sum_axes(&[1], true)?;
+        let norm = sum_sq.add(&Array::from(1e-12f32))?.sqrt()?;
+        let normalized = mean_emb.divide(&norm)?;
+
+        // Ensure evaluation triggers calculations on GPU
+        normalized.eval()
+            .map_err(|e| anyhow::anyhow!("MLX eval failed: {:?}", e))?;
+
+        let data = normalized.as_slice::<f32>();
+        let mut results = Vec::with_capacity(batch_size);
+        for chunk in data.chunks_exact(768) {
+            results.push(chunk.to_vec());
         }
         Ok(results)
     }

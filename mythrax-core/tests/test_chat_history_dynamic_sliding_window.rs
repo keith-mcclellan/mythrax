@@ -53,12 +53,13 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
 
     // 1. Verify user query logging
     let hook_args = json!({
+        "action": "pre_invocation",
         "session_id": session_id,
         "query": "Hello, how do I optimize the pipeline?",
         "workspace_path": workspace_root.to_str().unwrap()
     });
 
-    let _hook_res = call_mcp_tool(&state, "pre_invocation_hook", hook_args).await?;
+    let _hook_res = call_mcp_tool(&state, "manage", hook_args).await?;
     
     // Verify that the query was logged
     let mut db_resp = backend.db.query("SELECT * FROM chat_history WHERE session_id = $session_id;")
@@ -76,7 +77,7 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
     assert_eq!(messages[0].content, "Hello, how do I optimize the pipeline?");
 
     // 2. Verify assistant response logging after tool execution
-    let _tool_res = call_mcp_tool(&state, "manage_memory", json!({
+    let _tool_res = call_mcp_tool(&state, "read", json!({
         "session_id": session_id,
         "action": "root"
     })).await?;
@@ -101,7 +102,8 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
     }
 
     // Call hook again
-    let hook_res2 = call_mcp_tool(&state, "pre_invocation_hook", json!({
+    let hook_res2 = call_mcp_tool(&state, "manage", json!({
+        "action": "pre_invocation",
         "session_id": session_id,
         "query": "current status",
         "workspace_path": workspace_root.to_str().unwrap()

@@ -327,30 +327,19 @@ fn recover_stale_locks() {
     }
 }
 
+static SYSTEM_MONITOR: std::sync::OnceLock<std::sync::Mutex<sysinfo::System>> = std::sync::OnceLock::new();
+
 fn get_swap_used_bytes() -> Option<u64> {
-    let output = std::process::Command::new("sysctl")
-        .args(&["-n", "vm.swapusage"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&output.stdout);
-    let used_idx = s.find("used =")?;
-    let sub = &s[used_idx + 6..];
-    let val_str = sub.split_whitespace().next()?;
-    
-    let numeric_str: String = val_str.chars().take_while(|c| c.is_digit(10) || *c == '.').collect();
-    let val: f64 = numeric_str.parse().ok()?;
-    
-    if val_str.contains('G') || val_str.contains('g') {
-        Some((val * 1024.0 * 1024.0 * 1024.0) as u64)
-    } else if val_str.contains('M') || val_str.contains('m') {
-        Some((val * 1024.0 * 1024.0) as u64)
-    } else if val_str.contains('K') || val_str.contains('k') {
-        Some((val * 1024.0) as u64)
+    let sys_mutex = SYSTEM_MONITOR.get_or_init(|| {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        std::sync::Mutex::new(sys)
+    });
+    if let Ok(mut sys) = sys_mutex.lock() {
+        sys.refresh_memory();
+        Some(sys.used_swap())
     } else {
-        Some(val as u64)
+        None
     }
 }
 
@@ -726,7 +715,11 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_config", payload).await?;
+            if act_str == "get" {
+                execute_cli_tool_call("read", payload).await?;
+            } else {
+                execute_cli_tool_call("write", payload).await?;
+            }
         }
         Commands::Daemon { action } => {
             daemon::handle_daemon(action).await?;
@@ -758,7 +751,7 @@ async fn main() -> Result<()> {
                         "include_artifacts": include_artifacts,
                         "session_id": session_id,
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("read", args).await?;
                 }
                 MemoryAction::Record { title, file, scope } => {
                     let path = Path::new(&file);
@@ -770,7 +763,7 @@ async fn main() -> Result<()> {
                         "content": content,
                         "scope": scope,
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("write", args).await?;
                 }
                 MemoryAction::Feedback { id, success } => {
                     let args = serde_json::json!({
@@ -778,13 +771,13 @@ async fn main() -> Result<()> {
                         "episode_id": id,
                         "success": success,
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("write", args).await?;
                 }
                 MemoryAction::Root => {
                     let args = serde_json::json!({
                         "action": "root",
                     });
-                    execute_cli_tool_call("manage_memory", args).await?;
+                    execute_cli_tool_call("read", args).await?;
                 }
             }
         }
@@ -811,7 +804,11 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_stm", payload).await?;
+            if act_str == "get" {
+                execute_cli_tool_call("read", payload).await?;
+            } else {
+                execute_cli_tool_call("write", payload).await?;
+            }
         }
         Commands::Mcp => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
@@ -851,7 +848,7 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_vault", payload).await?;
+            execute_cli_tool_call("manage", payload).await?;
         }
         Commands::Htr { action } => {
             let (act_str, args) = match action {
@@ -876,7 +873,7 @@ async fn main() -> Result<()> {
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
-            execute_cli_tool_call("manage_htr", payload).await?;
+            execute_cli_tool_call("manage", payload).await?;
         }
         Commands::InstallHook => {
             handle_install_hook().await?;
@@ -982,12 +979,10 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
                 {
                     "type": "mcp",
                     "server": "mythrax",
-                    "tool": "compliance_audit"
-                },
-                {
-                    "type": "mcp",
-                    "server": "mythrax",
-                    "tool": "pre_invocation_hook"
+                    "tool": "manage",
+                    "arguments": {
+                        "action": "pre_invocation"
+                    }
                 }
             ])
         );
@@ -1413,6 +1408,19 @@ impl Write for &SizeRollingFileWriter {
             file.flush()?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_swap_monitor_cross_platform() {
+        let swap = get_swap_used_bytes();
+        assert!(swap.is_some(), "Swap usage should be retrievable and non-empty");
+        let bytes = swap.unwrap();
+        assert!(bytes > 0 || bytes == 0, "Swap bytes should be a valid non-negative number");
     }
 }
 

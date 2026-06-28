@@ -40,6 +40,7 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/api/*path", post(ollama_proxy_handler).get(ollama_proxy_handler))
         .route("/v1/hooks/precompact", post(precompact_handler))
         .route("/v1/hooks/stop", post(stop_handler))
+        .route("/v1/daemon/stop", post(stop_daemon_endpoint_handler))
         .with_state(state)
 }
 
@@ -629,11 +630,11 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-        // Test POST /v1/mcp/call (Authorized, manage_memory action root)
+        // Test POST /v1/mcp/call (Authorized, read action get_vault_root)
         let call_payload = serde_json::json!({
-            "name": "manage_memory",
+            "name": "read",
             "arguments": {
-                "action": "root"
+                "action": "get_vault_root"
             }
         });
         let response = app.clone()
@@ -711,16 +712,16 @@ async fn precompact_handler(
         }
     };
 
-    match crate::hooks::precompact::mine_transcript(
-        &sanitized_session,
-        &normalized_path,
-        state.backend.as_ref(),
-        state.store.as_ref(),
-        &state.ignore_list,
-    ).await {
-        Ok(count) => Ok(Json(json!({ "status": "success", "episodes_saved": count }))),
+    let mcp_args = json!({
+        "action": "precompact",
+        "session_id": sanitized_session,
+        "transcript_path": normalized_path,
+    });
+
+    match crate::mcp_routes::call_mcp_tool(&state, "manage", mcp_args).await {
+        Ok(val) => Ok(Json(val)),
         Err(e) => {
-            tracing::error!("Precompact hook failed: {:?}", e);
+            tracing::error!("Precompact hook tool call failed: {:?}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -763,4 +764,25 @@ async fn stop_handler(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+async fn stop_daemon_endpoint_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let pid_path_clone = std::path::PathBuf::from(home).join(".mythrax/daemon.pid");
+    
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tracing::info!("Graceful shutdown requested via API. Exiting...");
+        let _ = std::fs::remove_file(pid_path_clone);
+        std::process::exit(0);
+    });
+
+    Ok(Json(json!({ "status": "stopping" })))
 }

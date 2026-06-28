@@ -304,7 +304,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
             run_res?;
         }
         DaemonAction::Stop => {
-            stop_daemon()?;
+            stop_daemon().await?;
         }
     }
     Ok(())
@@ -393,9 +393,32 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
     Ok(())
 }
 
-pub fn stop_daemon() -> Result<()> {
+pub async fn stop_daemon() -> Result<()> {
     let home = std::env::var("HOME").context("HOME env var not set")?;
-    let pid_path = PathBuf::from(&home).join(".mythrax/daemon.pid");
+    let mythrax_dir = PathBuf::from(&home).join(".mythrax");
+    
+    // Attempt stopping via HTTP POST request
+    let token_path = mythrax_dir.join("token");
+    let auth_token = crate::auth::get_or_create_token(&token_path).ok();
+    
+    let port_str = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+    if let (Some(token), Ok(port)) = (auth_token, port_str.parse::<u16>()) {
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{}/v1/daemon/stop", port);
+        match client.post(&url)
+            .header("X-Mythrax-Token", &token)
+            .timeout(Duration::from_secs(2))
+            .send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    println!("Successfully sent stop request to daemon on port {}", port);
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    return Ok(());
+                }
+                _ => {}
+            }
+    }
+
+    let pid_path = mythrax_dir.join("daemon.pid");
     if pid_path.exists() {
         let content = std::fs::read_to_string(&pid_path)?;
         let pid_str = content.trim();

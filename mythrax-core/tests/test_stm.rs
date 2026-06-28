@@ -79,14 +79,17 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
     let mcp_server = mythrax_core::mcp::McpServer::new_local(backend.clone(), store);
 
     // 1. Put short term memory via MCP
-    let params = serde_json::json!({
+    let mut params = serde_json::json!({
         "session_id": "sess_x",
         "key": "secret_data",
         "value": "bearer my-secret-token"
     });
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert("action".to_string(), serde_json::Value::String("put_short_term".to_string()));
+    }
     
     mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "put_short_term",
+        "name": "write",
         "arguments": params
     })).await?;
 
@@ -103,23 +106,29 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
     assert!(!file_content.contains("my-secret-token"));
 
     // 2. Get short term memory via MCP
-    let get_args = serde_json::json!({
+    let mut get_args = serde_json::json!({
         "session_id": "sess_x",
         "key": "secret_data"
     });
+    if let Some(obj) = get_args.as_object_mut() {
+        obj.insert("action".to_string(), serde_json::Value::String("get_short_term".to_string()));
+    }
     let get_resp = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "get_short_term",
+        "name": "read",
         "arguments": get_args
     })).await?;
     let text = get_resp["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("bearer my-secret-token"));
 
     // 3. Clear short term memory via MCP
-    let clear_args = serde_json::json!({
+    let mut clear_args = serde_json::json!({
         "session_id": "sess_x"
     });
+    if let Some(obj) = clear_args.as_object_mut() {
+        obj.insert("action".to_string(), serde_json::Value::String("clear_short_term".to_string()));
+    }
     mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "clear_short_term",
+        "name": "write",
         "arguments": clear_args
     })).await?;
 
@@ -532,9 +541,14 @@ async fn test_mcp_forge_tools() -> Result<()> {
         ]
     });
 
+    let mut write_args = batch.clone();
+    if let Some(obj) = write_args.as_object_mut() {
+        obj.insert("action".to_string(), serde_json::Value::String("save_forged_assets".to_string()));
+    }
+
     let save_resp = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "save_forged_assets",
-        "arguments": batch
+        "name": "write",
+        "arguments": write_args
     })).await?;
 
     let save_text = save_resp["content"][0]["text"].as_str().unwrap();
@@ -785,13 +799,14 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
     // 3. Add distilled context nodes to STM
     backend.save_stm("subagent_456", "distilled_context_nodes", &format!("[\"{}\"]", saved_id)).await?;
 
-    // 4. Call pre_invocation_hook via MCP
+    // 4. Call pre_invocation_hook via MCP consolidated manage tool
     let args = serde_json::json!({
+        "action": "pre_invocation",
         "session_id": "subagent_456",
         "query": "test query"
     });
     let resp = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "pre_invocation_hook",
+        "name": "manage",
         "arguments": args
     })).await?;
 
@@ -802,12 +817,13 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
 
     // 5. Test root agent path (when no handoff active)
     let args_root = serde_json::json!({
+        "action": "pre_invocation",
         "session_id": "root_session_789",
         "query": "test query",
         "workspace_path": workspace_root.to_str().unwrap()
     });
     let resp_root = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "pre_invocation_hook",
+        "name": "manage",
         "arguments": args_root
     })).await?;
     let text_root = resp_root["content"][0]["text"].as_str().unwrap();

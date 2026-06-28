@@ -152,6 +152,7 @@ fn expected_sha_for(filename: &str) -> Option<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    unsafe { std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); }
     let args = Args::parse();
     println!("Starting Mythrax LongMemEval retrieval benchmark runner...");
     println!("Split mode: {}", args.split);
@@ -316,9 +317,29 @@ async fn main() -> Result<()> {
         );
         backend.init().await.context("Failed to initialize backend")?;
 
-        // Ingest the COMPLETE per-question haystack (all sessions, distractors included) in parallel.
+        // Collect all texts to embed for this question
+        let mut texts_to_embed = Vec::new();
+        for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+            if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+                for (turn_idx, turn) in session_turns.iter().enumerate() {
+                    let title = format!("Session {} - Turn {}", session_id, turn_idx);
+                    let content = format!("{}: {}", turn.role, turn.content);
+                    texts_to_embed.push(format!("{}: {}", title, content));
+                }
+            }
+        }
+
+        // Generate embeddings in a single batch
+        let embeddings = backend.embed_batch(&texts_to_embed).await
+            .context("Failed to batch embed haystack turns")?;
+
+        // Populate the global embedding cache for transparent on-the-fly hits in save_episode
+        for (idx, text) in texts_to_embed.iter().enumerate() {
+            mythrax_core::embeddings::cache_embedding(text.clone(), embeddings[idx].clone());
+        }
+
+        // Ingest the COMPLETE per-question haystack sequentially (will hit cache instantly, avoiding DB conflicts)
         let mut correct_turn_ids = Vec::new();
-        let mut ingest_tasks = Vec::new();
         for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
             if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
                 for (turn_idx, turn) in session_turns.iter().enumerate() {
@@ -335,18 +356,12 @@ async fn main() -> Result<()> {
                         correct_turn_ids.push(corpus_id);
                     }
                     
-                    let backend_clone = backend.clone();
-                    ingest_tasks.push(tokio::spawn(async move {
-                        backend_clone.save_episode(&ep).await
-                    }));
+                    backend.save_episode(&ep).await
+                        .context("Failed to save episode turn during ingestion")?;
                 }
             }
         }
 
-        for task in ingest_tasks {
-            task.await.context("Benchmark ingest task panicked")?
-                .context("Failed to save episode turn during ingestion")?;
-        }
 
         let search_response = backend
             .search(

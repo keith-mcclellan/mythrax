@@ -46,14 +46,15 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
     };
     state.backend.save_handoff(&handoff).await?;
 
-    // Call pre_invocation_hook
+    // Call pre_invocation_hook via consolidated manage tool
     let args = json!({
+        "action": "pre_invocation",
         "session_id": session_id,
         "query": "test query",
         "workspace_path": temp_dir.path().to_str().unwrap()
     });
     
-    let response = call_mcp_tool(&state, "pre_invocation_hook", args).await?;
+    let response = call_mcp_tool(&state, "manage", args).await?;
     
     let text = response["content"][0]["text"].as_str().unwrap();
     

@@ -190,6 +190,12 @@ pub trait StorageBackend: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
+#[derive(Debug, Clone)]
+pub struct CacheEntry {
+    pub count: usize,
+    pub expires_at: std::time::Instant,
+}
+
 #[derive(Clone)]
 pub struct SurrealBackend {
     pub db: Surreal<Db>,
@@ -202,6 +208,9 @@ pub struct SurrealBackend {
     pub max_concurrent_embeddings: Arc<std::sync::atomic::AtomicUsize>,
     pub indexing_writes: Arc<tokio::sync::Mutex<std::collections::HashMap<String, usize>>>,
     pub embedding_semaphore: Arc<tokio::sync::Mutex<Option<(usize, Arc<tokio::sync::Semaphore>)>>>,
+    pub term_counts_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Arc<tokio::sync::RwLock<std::collections::HashMap<String, CacheEntry>>>>>>,
+    pub global_cache_size: Arc<std::sync::atomic::AtomicUsize>,
+    pub avg_dl_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, (f32, std::time::Instant)>>>,
 }
 
 impl SurrealBackend {
@@ -466,6 +475,9 @@ impl SurrealBackend {
             max_concurrent_embeddings,
             indexing_writes,
             embedding_semaphore,
+            term_counts_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            global_cache_size: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         };
         let _ = GLOBAL_BACKEND.set(Arc::new(backend.clone()));
         Ok(backend)
@@ -483,6 +495,9 @@ impl SurrealBackend {
             max_concurrent_embeddings: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             indexing_writes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             embedding_semaphore: Arc::new(tokio::sync::Mutex::new(None)),
+            term_counts_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            global_cache_size: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -877,6 +892,9 @@ struct SearchRaw {
     created_at: Option<chrono::DateTime<chrono::Utc>>,
     archived: Option<bool>,
     discovery_tokens: Option<u32>,
+    session_id: Option<String>,
+    word_count: Option<u32>,
+    scope: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -931,6 +949,8 @@ struct EpisodeRaw {
     concepts: Option<Vec<String>>,
     files_read: Option<Vec<String>>,
     files_modified: Option<Vec<String>>,
+    session_id: Option<String>,
+    word_count: Option<u32>,
 }
 
 /// Full hydrated Handoff contract — returned by queries; construction deferred pending
@@ -1292,7 +1312,9 @@ impl StorageBackend for SurrealBackend {
                     facts: $facts,
                     concepts: $concepts,
                     files_read: $files_read,
-                    files_modified: $files_modified
+                    files_modified: $files_modified,
+                    session_id: $session_id,
+                    word_count: $word_count
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -1317,7 +1339,9 @@ impl StorageBackend for SurrealBackend {
                     facts: $facts,
                     concepts: $concepts,
                     files_read: $files_read,
-                    files_modified: $files_modified
+                    files_modified: $files_modified,
+                    session_id: $session_id,
+                    word_count: $word_count
                 };
                 
                 CREATE $met CONTENT {
@@ -1349,6 +1373,7 @@ impl StorageBackend for SurrealBackend {
 
         let now_str = chrono::Utc::now().to_rfc3339();
         let utility_init = 50.0f32;
+        let word_count = crate::retrieval::bm25::tokenize(&episode.content).len() as u32;
 
         let response = self.db.query(query_str)
             .bind(("ep_uuid", ep_uuid.as_str()))
@@ -1365,6 +1390,8 @@ impl StorageBackend for SurrealBackend {
             .bind(("concepts", episode.concepts.clone().unwrap_or_default()))
             .bind(("files_read", episode.files_read.clone().unwrap_or_default()))
             .bind(("files_modified", episode.files_modified.clone().unwrap_or_default()))
+            .bind(("session_id", episode.session_id.clone()))
+            .bind(("word_count", word_count))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -1675,6 +1702,18 @@ impl StorageBackend for SurrealBackend {
             });
             return self.daemon_post("/v1/search", &payload).await;
         }
+        let temporal_cue_info = parse_temporal_cues(query);
+        let cleaned_query = if temporal_cue_info.is_some() {
+            static CLEANING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+            let cleaning_re = CLEANING_RE.get_or_init(|| {
+                regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last|after|following|subsequently|later|next|recent|recently|latest|newest|today|now)\b").unwrap()
+            });
+            let cleaned = cleaning_re.replace_all(query, "").to_string();
+            cleaned.split_whitespace().collect::<Vec<&str>>().join(" ")
+        } else {
+            query.to_string()
+        };
+
         let sigmoid_center = match self.get_profile_key("search.sigmoid_center").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
             _ => 0.60f32,
@@ -1741,7 +1780,7 @@ impl StorageBackend for SurrealBackend {
         tracing::debug!("DEBUG BACKEND: is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
         
         let query_emb = if let Some(ref _embedder) = self.embedder {
-            let formatted_query = format!("search_query: {}", query);
+            let formatted_query = format!("search_query: {}", cleaned_query);
             match self.embed(&formatted_query).await {
                 Ok(vec) => Some(vec),
                 Err(e) => {
@@ -1771,7 +1810,7 @@ impl StorageBackend for SurrealBackend {
             if include_episodes {
                 if deep_insight {
                     vector_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens,
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                                <-followed_by<-episode.* AS prev_episodes,
@@ -1785,7 +1824,7 @@ impl StorageBackend for SurrealBackend {
                     ));
                 } else {
                     vector_sql.push_str("
-                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens,
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
@@ -1841,7 +1880,7 @@ impl StorageBackend for SurrealBackend {
         if include_episodes {
             if deep_insight {
                 keyword_sql.push_str(&format!(
-                    "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens,
+                    "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
                            (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                            <-followed_by<-episode.* AS prev_episodes,
@@ -1855,7 +1894,7 @@ impl StorageBackend for SurrealBackend {
                 ));
             } else {
                 keyword_sql.push_str("
-                    SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens,
+                    SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
                            (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
                     FROM episode 
                     WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
@@ -1912,14 +1951,14 @@ impl StorageBackend for SurrealBackend {
                 .bind(("search_all", search_all))
                 .bind(("query_embedding", q_vec.clone()));
             let keyword_fut = self.db.query(&keyword_sql)
-                .bind(("query", query))
+                .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all));
             let (v_res, k_res) = tokio::join!(vector_fut, keyword_fut);
             (Some(v_res), Some(k_res))
         } else {
             let keyword_fut = self.db.query(&keyword_sql)
-                .bind(("query", query))
+                .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all));
             (None, Some(keyword_fut.await))
@@ -2087,6 +2126,8 @@ impl StorageBackend for SurrealBackend {
                         original_gate: Some(gate),
                         factor_multiplier: Some(factor_multiplier),
                         created_at: ep.created_at,
+                        session_id: ep.session_id.clone(),
+                        word_count: ep.word_count,
                     });
                 }
             }
@@ -2184,6 +2225,7 @@ impl StorageBackend for SurrealBackend {
                         original_gate: Some(gate),
                         factor_multiplier: Some(factor_multiplier),
                         created_at: node.created_at,
+                        ..Default::default()
                     });
                 }
             }
@@ -2247,6 +2289,7 @@ impl StorageBackend for SurrealBackend {
                                 original_gate: None,
                                 factor_multiplier: None,
                                 created_at: None,
+                                ..Default::default()
                             });
                         }
                     }
@@ -2273,6 +2316,7 @@ impl StorageBackend for SurrealBackend {
                         original_gate: Some(gate),
                         factor_multiplier: Some(factor_multiplier),
                         created_at: rule.created_at,
+                        ..Default::default()
                     });
                 }
             }
@@ -2336,11 +2380,135 @@ impl StorageBackend for SurrealBackend {
                 
                 let mut merged: Vec<SearchResult> = unique_map.into_values().collect();
                 
-                let corpus: Vec<(String, String)> = merged.iter().map(|c| (c.id.clone(), format!("{} {}", c.title, c.content))).collect();
-                let bm25 = crate::retrieval::bm25::OkapiBM25::new(&corpus);
-                let bm25_scores = bm25.score_normalized(query);
-                let bm25_map: std::collections::HashMap<String, f32> = bm25_scores.into_iter().collect();
+                let query_tokens = crate::retrieval::bm25::tokenize(cleaned_query.as_str());
+                let mut global_df = std::collections::HashMap::new();
+                let mut missed_tokens = Vec::new();
+                let now = std::time::Instant::now();
                 
+                {
+                    let outer_read = self.term_counts_cache.read().await;
+                    if let Some(inner_map_lock) = outer_read.get(&resolved_scope) {
+                        let inner_read = inner_map_lock.read().await;
+                        for token in &query_tokens {
+                            if let Some(entry) = inner_read.get(token) {
+                                if entry.expires_at > now {
+                                    global_df.insert(token.clone(), entry.count);
+                                    continue;
+                                }
+                            }
+                            missed_tokens.push(token.clone());
+                        }
+                    } else {
+                        missed_tokens.extend(query_tokens.clone());
+                    }
+                }
+
+                if !missed_tokens.is_empty() {
+                    let mut outer_write = self.term_counts_cache.write().await;
+                    let inner_map_lock = outer_write.entry(resolved_scope.clone())
+                        .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
+                        .clone();
+                    
+                    drop(outer_write);
+                    
+                    let mut inner_write = inner_map_lock.write().await;
+                    for token in missed_tokens {
+                        if let Some(entry) = inner_write.get(&token) {
+                            if entry.expires_at > now {
+                                global_df.insert(token.clone(), entry.count);
+                                continue;
+                            }
+                        }
+                        
+                        let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
+                        let count = match self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).bind(("token", token.as_str())).await {
+                            Ok(mut res) => {
+                                let cnt: Option<usize> = res.take(0).unwrap_or(None);
+                                cnt.unwrap_or(0)
+                            }
+                            Err(_) => 0,
+                        };
+                        
+                        if inner_write.len() < 1000 {
+                            inner_write.insert(token.clone(), CacheEntry {
+                                count,
+                                expires_at: now + std::time::Duration::from_secs(60),
+                            });
+                            global_df.insert(token.clone(), count);
+                            
+                            let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                            if new_size > 10000 {
+                                drop(inner_write);
+                                let mut outer_clear = self.term_counts_cache.write().await;
+                                outer_clear.clear();
+                                self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                                break;
+                            }
+                        } else {
+                            global_df.insert(token.clone(), count);
+                        }
+                }
+                }
+
+                let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
+                let total_n = match self.db.query(n_sql).bind(("scope", resolved_scope.as_str())).await {
+                    Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+                    Err(_) => 0,
+                }.max(1);
+
+                let mut avg_dl = 0.0f32;
+                {
+                    let avg_read = self.avg_dl_cache.read().await;
+                    if let Some(&(val, expires)) = avg_read.get(&resolved_scope) {
+                        if expires > now {
+                            avg_dl = val;
+                        }
+                    }
+                }
+                if avg_dl == 0.0f32 {
+                    let mut avg_write = self.avg_dl_cache.write().await;
+                    if let Some(&(val, expires)) = avg_write.get(&resolved_scope) {
+                        if expires > now {
+                            avg_dl = val;
+                        }
+                    }
+                    if avg_dl == 0.0f32 {
+                        let mean_sql = "SELECT VALUE math::mean(word_count) FROM episode WHERE scope = $scope OR scope = 'general';";
+                        let mean_val = match self.db.query(mean_sql).bind(("scope", resolved_scope.as_str())).await {
+                            Ok(mut res) => res.take::<Option<f32>>(0).unwrap_or(None).unwrap_or(0.0),
+                            Err(_) => 0.0,
+                        };
+                        avg_dl = mean_val.max(1.0);
+                        avg_write.insert(resolved_scope.clone(), (avg_dl, now + std::time::Duration::from_secs(60)));
+                    }
+                }
+
+                let corpus: Vec<(String, String)> = merged.iter().map(|c| (c.id.clone(), format!("{} {}", c.title, c.content))).collect();
+                let bm25 = crate::retrieval::bm25::OkapiBM25::with_global_stats(&corpus, global_df.clone(), total_n, avg_dl);
+                let bm25_scores = bm25.score_normalized(cleaned_query.as_str());
+                let bm25_map: std::collections::HashMap<String, f32> = bm25_scores.into_iter().collect();
+
+                let mut sum_idf = 0.0f32;
+                let mut query_token_count = 0;
+                for token in &query_tokens {
+                    let df_t = *global_df.get(token).unwrap_or(&0);
+                    let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
+                    sum_idf += idf;
+                    query_token_count += 1;
+                }
+                let avg_idf = if query_token_count > 0 {
+                    sum_idf / query_token_count as f32
+                } else {
+                    0.0
+                };
+
+                let beta = if query_token_count == 0 {
+                    0.2f32
+                } else {
+                    (0.2f32 + 0.15f32 * (avg_idf - 2.5f32).max(0.0f32)).min(0.8f32)
+                };
+                let alpha = 1.0f32 - beta;
+
                 for c in &mut merged {
                     let bm25_norm = *bm25_map.get(&c.id).unwrap_or(&0.0);
                     let raw_sim = if let Some(r_sim) = c.raw_vector_sim {
@@ -2352,7 +2520,7 @@ impl StorageBackend for SurrealBackend {
                         c.similarity
                     };
                     
-                    let fused = 0.6 * raw_sim + 0.4 * bm25_norm;
+                    let fused = alpha * raw_sim + beta * bm25_norm;
                     let final_sim = if let (Some(orig_gate), Some(factor)) = (c.original_gate, c.factor_multiplier) {
                         let new_gate = if orig_gate != 1.0f32 {
                             1.0f32 / (1.0f32 + (-20.0f32 * (fused - 0.60f32)).exp())
@@ -2372,6 +2540,227 @@ impl StorageBackend for SurrealBackend {
         } else {
             candidates = parse_results(keyword_resp_res.unwrap(), false)?;
         }
+
+        // 2.5) Strict Session Isolation filtering
+        let mut active_session_id = None;
+        for c in &candidates {
+            if let Some(ref sess) = c.session_id {
+                active_session_id = Some(sess.clone());
+                break;
+            }
+        }
+        if let Some(ref active_sess) = active_session_id {
+            candidates.retain(|c| c.session_id.is_none() || c.session_id.as_ref() == Some(active_sess));
+        }
+
+        // 3) Neighbor Turn Expansion (for top-5 candidates only)
+        let mut neighbor_candidates = Vec::new();
+        if let Some((cue_type, _)) = temporal_cue_info {
+            candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+            let top_5_primary: Vec<SearchResult> = candidates.iter().take(5).cloned().collect();
+            let primary_ids: Vec<surrealdb::types::RecordId> = top_5_primary.iter()
+                .filter_map(|c| parse_record_id(&c.id).ok())
+                .collect();
+                
+            if !primary_ids.is_empty() {
+                let sql = "SELECT id, <-followed_by<-episode AS predecessors, ->followed_by->episode AS successors, session_id, scope FROM episode WHERE id IN $primary_ids;";
+                if let Ok(mut res) = self.db.query(sql).bind(("primary_ids", primary_ids.clone())).await {
+                    #[derive(serde::Serialize, serde::Deserialize, Debug, SurrealValue)]
+                    struct EpisodeRelations {
+                        id: surrealdb::types::RecordId,
+                        predecessors: Option<Vec<surrealdb::types::RecordId>>,
+                        successors: Option<Vec<surrealdb::types::RecordId>>,
+                        session_id: Option<String>,
+                        scope: Option<String>,
+                    }
+                    
+                    if let Ok(relations_list) = res.take::<Vec<EpisodeRelations>>(0) {
+                        let rel_map: std::collections::HashMap<String, EpisodeRelations> = relations_list.into_iter()
+                            .map(|r| (format_record_id(&r.id), r))
+                            .collect();
+                            
+                        let mut neighbor_ids_to_fetch = Vec::new();
+                        let mut neighbor_to_primary: std::collections::HashMap<String, Vec<(String, f32)>> = std::collections::HashMap::new();
+                        
+                        for c in &top_5_primary {
+                            if let Some(rel) = rel_map.get(&c.id) {
+                                if cue_type == TemporalCueType::Preceding {
+                                    if let Some(ref preds) = rel.predecessors {
+                                        if let Some(pred_id) = preds.first() {
+                                            let pred_str = format_record_id(pred_id);
+                                            neighbor_ids_to_fetch.push(pred_id.clone());
+                                            neighbor_to_primary.entry(pred_str)
+                                                .or_default()
+                                                .push((c.id.clone(), c.similarity));
+                                        }
+                                    }
+                                }
+                                if cue_type == TemporalCueType::Succeeding {
+                                    if let Some(ref succs) = rel.successors {
+                                        if let Some(succ_id) = succs.first() {
+                                            let succ_str = format_record_id(succ_id);
+                                            neighbor_ids_to_fetch.push(succ_id.clone());
+                                            neighbor_to_primary.entry(succ_str)
+                                                .or_default()
+                                                .push((c.id.clone(), c.similarity));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if !neighbor_ids_to_fetch.is_empty() {
+                            let fetch_sql = "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, scope,
+                                                   (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                                            FROM episode
+                                            WHERE id IN $neighbor_ids;";
+                            if let Ok(mut fetch_res) = self.db.query(fetch_sql).bind(("neighbor_ids", neighbor_ids_to_fetch.clone())).await {
+                                if let Ok(raw_neighbors) = fetch_res.take::<Vec<SearchRaw>>(0) {
+                                    for raw in raw_neighbors {
+                                        let neighbor_id_str = format_record_id(&raw.id);
+                                        let neighbor_scope = raw.scope.clone().unwrap_or_else(|| "general".to_string());
+                                        if neighbor_scope != resolved_scope && neighbor_scope != "general" && !search_all {
+                                            continue;
+                                        }
+                                        
+                                        if let Some(prim_info) = neighbor_to_primary.get(&neighbor_id_str) {
+                                            for (prim_id, prim_score) in prim_info {
+                                                if let Some(primary_cand) = top_5_primary.iter().find(|x| x.id == *prim_id) {
+                                                    if raw.session_id.is_some() && raw.session_id == primary_cand.session_id {
+                                                        let neighbor_score = 0.5f32 * prim_score;
+                                                        
+                                                        let neighbor_cand = SearchResult {
+                                                            id: neighbor_id_str.clone(),
+                                                            title: raw.title.clone(),
+                                                            content: raw.content.clone(),
+                                                            similarity: neighbor_score,
+                                                            utility: raw.utility.unwrap_or(50.0) as f32,
+                                                            tier: "episode".to_string(),
+                                                            embedding: None,
+                                                            vault_path: raw.vault_path.clone(),
+                                                            source_episode: None,
+                                                            discovery_tokens: raw.discovery_tokens,
+                                                            related_nodes: None,
+                                                            raw_vector_sim: None,
+                                                            original_gate: None,
+                                                            factor_multiplier: None,
+                                                            created_at: raw.created_at,
+                                                            session_id: raw.session_id.clone(),
+                                                            word_count: raw.word_count,
+                                                        };
+                                                        neighbor_candidates.push(neighbor_cand);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4) Merge & Deduplicate Neighbors
+        let mut unique_map = std::collections::HashMap::new();
+        for c in candidates {
+            unique_map.insert(c.id.clone(), c);
+        }
+        for c in neighbor_candidates {
+            if let Some(existing) = unique_map.get_mut(&c.id) {
+                existing.similarity = existing.similarity.max(c.similarity);
+            } else {
+                unique_map.insert(c.id.clone(), c);
+            }
+        }
+        let mut merged_candidates: Vec<SearchResult> = unique_map.into_values().collect();
+        merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+
+        // 5) Sentence-level TF-IDF Cosine Reranking (top-10 only)
+        let query_tokens = crate::retrieval::bm25::tokenize(cleaned_query.as_str());
+        let mut global_idf = std::collections::HashMap::new();
+        if !query_tokens.is_empty() {
+            let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
+            let total_n = match self.db.query(n_sql).bind(("scope", resolved_scope.as_str())).await {
+                Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+                Err(_) => 0,
+            }.max(1);
+
+            let now = std::time::Instant::now();
+            let mut outer_write = self.term_counts_cache.write().await;
+            let inner_map_lock = outer_write.entry(resolved_scope.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
+                .clone();
+            drop(outer_write);
+
+            let mut inner_write = inner_map_lock.write().await;
+            for token in &query_tokens {
+                if let Some(entry) = inner_write.get(token) {
+                    if entry.expires_at > now {
+                        let df_t = entry.count;
+                        let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
+                        global_idf.insert(token.clone(), idf);
+                        continue;
+                    }
+                }
+                
+                let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
+                let count = match self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).bind(("token", token.as_str())).await {
+                    Ok(mut res) => {
+                        let cnt: Option<usize> = res.take(0).unwrap_or(None);
+                        cnt.unwrap_or(0)
+                    }
+                    Err(_) => 0,
+                };
+                
+                if inner_write.len() < 1000 {
+                    inner_write.insert(token.clone(), CacheEntry {
+                        count,
+                        expires_at: now + std::time::Duration::from_secs(60),
+                    });
+                    let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    if new_size > 10000 {
+                        drop(inner_write);
+                        let mut outer_clear = self.term_counts_cache.write().await;
+                        outer_clear.clear();
+                        self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                        break;
+                    }
+                }
+                
+                let idf = (((total_n as f32 - count as f32 + 0.5) / (count as f32 + 0.5)) + 1.0).ln();
+                global_idf.insert(token.clone(), idf);
+            }
+        }
+
+        let gamma_rerank = match self.get_profile_key("search.gamma_rerank").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.2f32).clamp(0.0f32, 1.0f32),
+            _ => 0.2f32,
+        };
+
+        let pool_len = merged_candidates.len().min(10);
+        let mut rerank_pool = merged_candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
+        
+        for c in &mut rerank_pool {
+            let content_lower = c.content.to_lowercase();
+            let sentences: Vec<&str> = content_lower.split(|ch| ch == '.' || ch == '\n').collect();
+            let mut max_sim = 0.0f32;
+            for sentence in sentences {
+                let sentence_trimmed = sentence.trim();
+                if !sentence_trimmed.is_empty() {
+                    let sim = sentence_cosine_similarity(&query_tokens, sentence_trimmed, &global_idf);
+                    if sim > max_sim {
+                        max_sim = sim;
+                    }
+                }
+            }
+            c.similarity = c.similarity + gamma_rerank * max_sim;
+        }
+
+        merged_candidates.extend(rerank_pool);
+        merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+        candidates = merged_candidates;
 
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit * 3);
@@ -2448,9 +2837,29 @@ impl StorageBackend for SurrealBackend {
                 let exact_quote = is_boost_quote_enabled && detect_quoted_phrase(query, &candidate_text);
                 let temporal_proximity = if is_boost_temporal_enabled {
                     if let Some(created) = c.created_at {
-                        let elapsed = chrono::Utc::now().signed_duration_since(created);
-                        let delta_t = (elapsed.num_seconds() as f32 / 86400.0f32).max(0.0f32);
-                        (-0.05f32 * delta_t).exp()
+                        let mut anchor = None;
+                        if let Some(ref sess_id) = c.session_id {
+                            let max_sess_sql = "SELECT VALUE max(created_at) FROM episode WHERE (scope = $scope OR scope = 'general') AND session_id = $session_id;";
+                            if let Ok(mut res) = self.db.query(max_sess_sql).bind(("scope", resolved_scope.as_str())).bind(("session_id", sess_id.as_str())).await {
+                                anchor = res.take::<Option<chrono::DateTime<chrono::Utc>>>(0).unwrap_or(None);
+                            }
+                        }
+                        let anchor = match anchor {
+                            Some(t) => t,
+                            None => {
+                                let max_scope_sql = "SELECT VALUE max(created_at) FROM episode WHERE scope = $scope OR scope = 'general';";
+                                let scope_max = match self.db.query(max_scope_sql).bind(("scope", resolved_scope.as_str())).await {
+                                    Ok(mut res) => res.take::<Option<chrono::DateTime<chrono::Utc>>>(0).unwrap_or(None),
+                                    Err(_) => None,
+                                };
+                                scope_max.unwrap_or_else(|| chrono::Utc::now())
+                            }
+                        };
+                        let decay_lambda = match self.get_profile_key("search.decay_lambda").await {
+                            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.05f32).max(0.0f32),
+                            _ => 0.05f32,
+                        };
+                        calculate_temporal_decay(created, anchor, decay_lambda)
                     } else {
                         0.0
                     }
@@ -2876,6 +3285,8 @@ impl StorageBackend for SurrealBackend {
             concepts: raw.concepts,
             files_read: raw.files_read,
             files_modified: raw.files_modified,
+            session_id: raw.session_id,
+            word_count: raw.word_count,
         }).collect();
         Ok(episodes)
     }
@@ -2910,6 +3321,8 @@ impl StorageBackend for SurrealBackend {
             concepts: raw.concepts,
             files_read: raw.files_read,
             files_modified: raw.files_modified,
+            session_id: raw.session_id,
+            word_count: raw.word_count,
         }).collect();
         Ok(episodes)
     }
@@ -3584,6 +3997,8 @@ impl StorageBackend for SurrealBackend {
                             concepts: raw.concepts,
                             files_read: raw.files_read,
                             files_modified: raw.files_modified,
+                            session_id: raw.session_id,
+                            word_count: raw.word_count,
                         };
                         episodes.push(ep);
                     }
@@ -4364,6 +4779,101 @@ fn save_api_key(provider: &str, key: &str) -> Result<()> {
 }
 
 
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum TemporalCueType {
+    Preceding,
+    Succeeding,
+    Relative,
+}
+
+pub fn parse_temporal_cues(query: &str) -> Option<(TemporalCueType, f32)> {
+    static PRECEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static SUCCEEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static RELATIVE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+    let preceding_re = PRECEDING_RE.get_or_init(|| {
+        regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last)\b").unwrap()
+    });
+    
+    let succeeding_re = SUCCEEDING_RE.get_or_init(|| {
+        regex::Regex::new(r"\b(after|following|subsequently|later|next)\b").unwrap()
+    });
+    
+    let relative_re = RELATIVE_RE.get_or_init(|| {
+        regex::Regex::new(r"\b(recent|recently|latest|newest|today|now)\b").unwrap()
+    });
+
+    if preceding_re.is_match(query) {
+        return Some((TemporalCueType::Preceding, 1.0));
+    }
+    if succeeding_re.is_match(query) {
+        return Some((TemporalCueType::Succeeding, 1.0));
+    }
+    if relative_re.is_match(query) {
+        return Some((TemporalCueType::Relative, 1.0));
+    }
+
+    None
+}
+
+pub fn calculate_temporal_decay(
+    created_at: chrono::DateTime<chrono::Utc>,
+    anchor: chrono::DateTime<chrono::Utc>,
+    lambda: f32,
+) -> f32 {
+    let delta_t_secs = (anchor.timestamp() - created_at.timestamp()) as f64;
+    let delta_t_days = delta_t_secs.max(0.0) / 86400.0;
+    let clamped_lambda = lambda.max(0.0) as f64;
+    
+    ((-clamped_lambda * delta_t_days).exp()) as f32
+}
+
+pub fn sentence_cosine_similarity(
+    query_tokens: &[String],
+    sentence: &str,
+    global_idf: &std::collections::HashMap<String, f32>,
+) -> f32 {
+    let sentence_tokens = crate::retrieval::bm25::tokenize(sentence);
+    
+    let mut sentence_freq: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    for token in &sentence_tokens {
+        *sentence_freq.entry(token.clone()).or_insert(0.0) += 1.0;
+    }
+
+    let mut dot_product: f64 = 0.0;
+    let mut norm_query: f64 = 0.0;
+    let mut norm_sentence: f64 = 0.0;
+
+    for t in query_tokens {
+        let idf = global_idf.get(t).copied().unwrap_or(0.0);
+        let idf_f64 = idf as f64;
+        
+        norm_query += idf_f64 * idf_f64;
+        
+        let tf = *sentence_freq.get(t).unwrap_or(&0.0) as f64;
+        dot_product += tf * (idf_f64 * idf_f64);
+        
+        let sentence_component = tf * idf_f64;
+        norm_sentence += sentence_component * sentence_component;
+    }
+
+    for (w, &tf) in &sentence_freq {
+        if !query_tokens.contains(w) {
+            let tf_f64 = tf as f64;
+            norm_sentence += tf_f64 * tf_f64;
+        }
+    }
+
+    let norm_query = norm_query.sqrt();
+    let norm_sentence = norm_sentence.sqrt();
+
+    if norm_query < 1e-9 || norm_sentence < 1e-9 {
+        return 0.0;
+    }
+
+    (dot_product / (norm_query * norm_sentence)) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5017,6 +5527,147 @@ files_modified: None,
         let titles: Vec<String> = res_include.results.iter().map(|r| r.title.clone()).collect();
         assert!(titles.contains(&"Normal Node".to_string()));
         assert!(titles.contains(&"Artifact Node".to_string()));
+    }
+
+    #[test]
+    fn test_temporal_cue_parser() {
+        let result = parse_temporal_cues("before that happened");
+        assert_eq!(result, Some((TemporalCueType::Preceding, 1.0)));
+
+        let result_after = parse_temporal_cues("after the event");
+        assert_eq!(result_after, Some((TemporalCueType::Succeeding, 1.0)));
+
+        let result_recent = parse_temporal_cues("recently updated");
+        assert_eq!(result_recent, Some((TemporalCueType::Relative, 1.0)));
+
+        let result_none = parse_temporal_cues("just a normal sentence");
+        assert_eq!(result_none, None);
+    }
+
+    #[test]
+    fn test_relative_temporal_decay() {
+        let now = chrono::Utc::now();
+        let one_minute_ago = now - chrono::Duration::minutes(1);
+        let one_day_ago = now - chrono::Duration::days(1);
+        let lambda = 0.1;
+
+        let decay_recent = calculate_temporal_decay(one_minute_ago, now, lambda);
+        let decay_old = calculate_temporal_decay(one_day_ago, now, lambda);
+
+        assert!(decay_recent > decay_old, "Recent timestamp should decay less than older timestamp");
+        assert!(decay_recent > 0.0, "Decay values must be positive");
+        assert!(decay_old > 0.0, "Decay values must be positive");
+    }
+
+    #[test]
+    fn test_lightweight_span_reranker() {
+        let mut global_idf = std::collections::HashMap::new();
+        global_idf.insert("redis".to_string(), 1.0);
+        global_idf.insert("crash".to_string(), 1.0);
+        global_idf.insert("server".to_string(), 0.5);
+
+        let query_tokens_exact = vec!["redis".to_string(), "crash".to_string()];
+        let sentence_exact = "redis server did crash";
+        let sim_exact = sentence_cosine_similarity(&query_tokens_exact, sentence_exact, &global_idf);
+        assert!(sim_exact > 0.8, "Exact match similarity should be high, got {}", sim_exact);
+
+        let query_tokens_unrelated = vec!["quantum".to_string(), "physics".to_string()];
+        let sentence_unrelated = "redis server did crash";
+        let sim_unrelated = sentence_cosine_similarity(&query_tokens_unrelated, sentence_unrelated, &global_idf);
+        assert!(sim_unrelated < 0.1, "Unrelated match similarity should be low, got {}", sim_unrelated);
+    }
+
+    #[tokio::test]
+    async fn test_context_turn_injection_secure() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let ep1 = EpisodeSave {
+            title: "first step".to_string(),
+            content: "This is the first step of the build".to_string(),
+            entities: vec![],
+            scope: Some("general".to_string()),
+            vault_path: Some("wiki/scope/build1.md".to_string()),
+            source_episode: None,
+            session_id: Some("session-1".to_string()),
+            task_id: None,
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+        };
+        let ep1_id = backend.save_episode(&ep1).await.unwrap();
+
+        let ep2 = EpisodeSave {
+            title: "second step".to_string(),
+            content: "This is the second step of the build".to_string(),
+            entities: vec![],
+            scope: Some("general".to_string()),
+            vault_path: Some("wiki/scope/build2.md".to_string()),
+            source_episode: None,
+            session_id: Some("session-1".to_string()),
+            task_id: None,
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+        };
+        let ep2_id = backend.save_episode(&ep2).await.unwrap();
+
+        let ep1_rec = parse_record_id(&ep1_id).unwrap();
+        let ep2_rec = parse_record_id(&ep2_id).unwrap();
+        backend.db.query("RELATE $from -> followed_by -> $to;")
+            .bind(("from", ep1_rec))
+            .bind(("to", ep2_rec))
+            .await.unwrap().check().unwrap();
+
+        let ep3 = EpisodeSave {
+            title: "unrelated user step".to_string(),
+            content: "Third step of build from a completely separate session".to_string(),
+            entities: vec![],
+            scope: Some("general".to_string()),
+            vault_path: Some("wiki/scope/build3.md".to_string()),
+            source_episode: None,
+            session_id: Some("session-2".to_string()),
+            task_id: None,
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+        };
+        let ep3_id = backend.save_episode(&ep3).await.unwrap();
+
+        let response = backend.search(
+            "second step before",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            false
+        ).await.unwrap();
+
+        let results = response.results;
+        
+        println!("DEBUG SEARCH RESULTS:");
+        for r in &results {
+            println!("  id={}, title='{}', content='{}', similarity={}", r.id, r.title, r.content, r.similarity);
+        }
+
+        let ep2_found = results.iter().any(|ep| ep.id == ep2_id);
+        assert!(ep2_found, "Primary candidate Episode 2 should be in results");
+
+        let ep1_found = results.iter().any(|ep| ep.id == ep1_id);
+        assert!(ep1_found, "Neighbor candidate Episode 1 should be fetched via neighbor turn expansion");
+
+        let ep3_found = results.iter().any(|ep| ep.id == ep3_id);
+        assert!(!ep3_found, "Episode 3 from different session must not be returned");
     }
 }
 

@@ -41,13 +41,13 @@ async fn test_get_full_hydration_cap() -> Result<()> {
     };
     let ep_id = backend.save_episode(&ep_save).await?;
 
-    // Call get_full tool via call_mcp_tool
+    // Call get_full tool via consolidated read tool
     let args = json!({
         "action": "get_full",
         "ids": [ep_id]
     });
 
-    let resp = call_mcp_tool(&state, "manage_memory", args).await?;
+    let resp = call_mcp_tool(&state, "read", args).await?;
     
     // Parse the output content:
     let content_arr = resp.get("content").unwrap().as_array().unwrap();

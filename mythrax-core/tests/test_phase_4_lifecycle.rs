@@ -359,7 +359,9 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
         task_id: None,
         ..Default::default()
     };
-    let ep_id = mcp.call_tool("save_episode", serde_json::to_value(&ep)?).await?;
+    let mut ep_val = serde_json::to_value(&ep)?;
+    ep_val["action"] = serde_json::json!("save");
+    let ep_id = mcp.call_tool("write", ep_val).await?;
     
     // Test Auditor Self-Healing Calibration directly in-memory against the seeded episode
     mythrax_core::cli::run_auditor(&backend_arc).await.unwrap();
@@ -367,22 +369,24 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
     let ep_id_str = ep_id["content"][0]["text"].as_str().unwrap().split("episode:").last().unwrap().trim_matches('"');
     let full_ep_id = format!("episode:{}", ep_id_str);
 
-    // Call search_memories with a session_id
+    // Call search_memories with a session_id via read tool
     let search_args = serde_json::json!({
+        "action": "search",
         "query": "Cited",
         "scope": "citations-test",
         "session_id": "session123",
         "include_episodes": true
     });
-    let search_res = mcp.call_tool("search_memories", search_args).await?;
+    let search_res = mcp.call_tool("read", search_args).await?;
     assert!(search_res.is_object());
 
-    // Verify citation ID is written to session STM
+    // Verify citation ID is written to session STM via read tool
     let get_args = serde_json::json!({
+        "action": "get",
         "session_id": "session123",
         "key": "_session_citations"
     });
-    let get_res = mcp.call_tool("get_short_term", get_args).await?;
+    let get_res = mcp.call_tool("read", get_args).await?;
     let citations_text = get_res["content"][0]["text"].as_str().unwrap();
     assert!(citations_text.contains(&full_ep_id));
 
@@ -391,13 +395,14 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
     fs::write(&handoff_file, "# Task Plan\nThis is a task plan.")?;
 
     let handoff_args = serde_json::json!({
+        "action": "handoff",
         "parent_conversation_id": "session123",
         "subagent_conversation_id": "subagent456",
         "summary": "citations handoff",
         "handoff_file_path": handoff_file.to_str().unwrap(),
         "scope": "citations-test"
     });
-    let _ = mcp.call_tool("save_handoff", handoff_args).await?;
+    let _ = mcp.call_tool("write", handoff_args).await?;
 
     // Verify Citations footnote block is appended to the handoff file
     let handoff_content = fs::read_to_string(&handoff_file)?;

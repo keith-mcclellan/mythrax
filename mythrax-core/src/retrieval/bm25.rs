@@ -54,6 +54,38 @@ impl OkapiBM25 {
         }
     }
 
+    pub fn with_global_stats(
+        corpus: &[(String, String)],
+        global_df: HashMap<String, usize>,
+        global_n: usize,
+        global_avg_dl: f32,
+    ) -> Self {
+        let mut doc_lengths = HashMap::new();
+        let mut doc_term_freqs = HashMap::new();
+
+        for (doc_id, content) in corpus {
+            let tokens = tokenize(content);
+            let doc_len = tokens.len();
+            doc_lengths.insert(doc_id.clone(), doc_len);
+
+            let mut term_freqs = HashMap::new();
+            for token in tokens {
+                *term_freqs.entry(token.clone()).or_insert(0) += 1;
+            }
+            doc_term_freqs.insert(doc_id.clone(), term_freqs);
+        }
+
+        Self {
+            doc_lengths,
+            doc_term_freqs,
+            df: global_df,
+            n: global_n,
+            avg_dl: global_avg_dl,
+            k1: 1.5,
+            b: 0.75,
+        }
+    }
+
     pub fn score(&self, query: &str) -> Vec<(String, f32)> {
         let query_tokens = tokenize(query);
         let mut results = Vec::new();

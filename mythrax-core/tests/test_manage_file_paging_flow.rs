@@ -51,8 +51,8 @@ pub fn display_val(val: i32) {
         dream_tx: None,
     };
 
-    // 1. Test "view" (Virtual Paging)
-    let view_res = call_mcp_tool(&state, "manage_file", json!({
+    // 1. Test "view" (Virtual Paging) via read tool
+    let view_res = call_mcp_tool(&state, "read", json!({
         "action": "view",
         "path": file_path.to_str().unwrap()
     })).await?;
@@ -71,8 +71,8 @@ pub fn display_val(val: i32) {
     let disk_content = fs::read_to_string(&file_path)?;
     assert_eq!(disk_content, initial_content);
 
-    // 2. Test "replace" (Paging-Aware Contiguous Edit)
-    let _replace_res = call_mcp_tool(&state, "manage_file", json!({
+    // 2. Test "replace" (Paging-Aware Contiguous Edit) via write tool
+    let _replace_res = call_mcp_tool(&state, "write", json!({
         "action": "replace",
         "path": file_path.to_str().unwrap(),
         "target_content": "[Paged Symbol: Reference page_fn_run_calc]",
@@ -86,7 +86,7 @@ pub fn display_val(val: i32) {
 
     // 3. Test "multi_replace" (Multi-Block Edit)
     // First, let's re-view to generate placeholders on the new content
-    let view_res2 = call_mcp_tool(&state, "manage_file", json!({
+    let view_res2 = call_mcp_tool(&state, "read", json!({
         "action": "view",
         "path": file_path.to_str().unwrap()
     })).await?;
@@ -101,7 +101,7 @@ pub fn display_val(val: i32) {
     assert!(view_text2.contains("[Paged Symbol: Reference page_fn_run_calc]"));
     assert!(view_text2.contains("[Paged Symbol: Reference page_fn_display_val]"));
 
-    let _multi_replace_res = call_mcp_tool(&state, "manage_file", json!({
+    let _multi_replace_res = call_mcp_tool(&state, "write", json!({
         "action": "multi_replace",
         "path": file_path.to_str().unwrap(),
         "chunks": [

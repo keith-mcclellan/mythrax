@@ -139,12 +139,13 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     // Invoke complete_code_task which routes through the mlx-lm HTTP server at
     // :8080. Uses the production Qwen3.6-35B-A3B MoE model running on Metal GPU.
     let args = serde_json::json!({
+        "action": "complete_task",
         "prompt": "How should we pass query parameters to SurrealDB WHERE clauses?",
         "system_instruction": "Use retrieved context.",
         "model": "mlx-community/Qwen3.6-35B-A3B-4bit"
     });
 
-    let mcp_res = mythrax_core::mcp_routes::call_mcp_tool(&api_state, "complete_code_task", args).await;
+    let mcp_res = mythrax_core::mcp_routes::call_mcp_tool(&api_state, "agent", args).await;
     if let Err(ref e) = mcp_res {
         eprintln!("MCP TOOL ERROR: {:?}", e);
     }
