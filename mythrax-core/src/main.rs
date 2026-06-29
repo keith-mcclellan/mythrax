@@ -1104,8 +1104,31 @@ async fn config_harness_action(
             println!("Installed global /mythrax skill playbook at: {:?}", skill_dest);
         }
         "claude" => {
-            let path = std::path::PathBuf::from(&home).join(".claude.json");
-            merge_json_mcp(&path, &exe_path)?;
+            let path_code = std::path::PathBuf::from(&home).join(".claude.json");
+            if let Err(e) = merge_json_mcp(&path_code, &exe_path) {
+                tracing::warn!("Failed to configure Claude Code config: {}", e);
+            }
+            
+            let path_desktop = {
+                #[cfg(target_os = "macos")]
+                {
+                    std::path::PathBuf::from(&home).join("Library/Application Support/Claude/claude_desktop_config.json")
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(appdata) = std::env::var("APPDATA") {
+                        std::path::PathBuf::from(&appdata).join("Claude/claude_desktop_config.json")
+                    } else {
+                        std::path::PathBuf::from(&home).join("AppData/Roaming/Claude/claude_desktop_config.json")
+                    }
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                {
+                    std::path::PathBuf::from(&home).join(".config/Claude/claude_desktop_config.json")
+                }
+            };
+            merge_json_mcp(&path_desktop, &exe_path)?;
+            println!("Registered mythrax MCP server in Claude Desktop config at: {:?}", path_desktop);
         }
         "cursor" => {
             let path = std::path::PathBuf::from(&home).join(".cursor/mcp.json");

@@ -183,26 +183,71 @@ To enforce compliance, a pre-invocation hook automatically executes `verify_comp
 
 ---
 
-## 🚀 Quick Start / Try It Out
+## 🚀 Quick Start & Integration
 
-### 1. Bootstrapping
-Build the project, initialize the database directories, and configure your target harness:
+### 1. Build and Initialize
+Build the optimized release binary and initialize your desired agent harness environment.
+
 ```bash
-# Build optimized release binary
+# Build the production release binary
 cargo build --release
 
-# Initialize for antigravity harness (bootstraps folders and database)
-./mythrax-core/target/release/mythrax init antigravity
+# Initialize for Google Antigravity SDK
+./target/release/mythrax init antigravity
+
+# Or initialize for Claude (WARNING: currently UNTESTED)
+./target/release/mythrax init claude
 ```
 
-### 2. Start Daemon
-Start the memory server in the background:
+> [!NOTE]
+> Running `mythrax init antigravity` automatically performs the following local configurations:
+> 1. Registers the **Mythrax MCP server** in `~/.gemini/config/mcp_config.json`.
+> 2. Registers the **Pre-Invocation Hook** in `~/.gemini/config/hooks.json` under `mythrax-compliance`.
+> 3. Installs the global **`/mythrax` Skill Playbook** at `~/.gemini/config/skills/mythrax/SKILL.md`.
+>
+> Claude Desktop/Code integration (`mythrax init claude`) is currently **untested** and does not support hooks natively.
+
+### 2. Start the Daemon
+Launch the central memory daemon. For Antigravity agents, the daemon will automatically spawn in the background on the first MCP request if it is not already running.
 ```bash
-./mythrax-core/target/release/mythrax daemon start
+./target/release/mythrax daemon start
 ```
 
-### 3. Run Tests
-Verify compile and test status:
+### 3. Verification & Testing
+Verify that your local build is stable and pass integration checks:
 ```bash
 MYTHRAX_TEST_MOCK=1 cargo nextest run --features mlx
 ```
+
+### 4. Hook Registrations & Integration
+
+#### Pre-Invocation Hook (Auto-Installed)
+The pre-invocation hook executes immediately before each model turn. It verifies the workspace, checks memory daemon health, and compiles active context node IDs into the short-term memory (STM) cache.
+* **Location**: Configured inside `~/.gemini/config/hooks.json`:
+  ```json
+  "mythrax-compliance": {
+    "PreInvocation": [
+      {
+        "type": "mcp",
+        "server": "mythrax",
+        "tool": "manage",
+        "arguments": {
+          "action": "pre_invocation"
+        }
+      }
+    ]
+  }
+  ```
+
+#### Pre-Compaction (Precompact) Hook
+The pre-compaction hook runs asynchronously at the end of an agent session or workflow milestone to mine transcripts, extract wisdom rules/insights, and write them to the Obsidian vault.
+* **HTTP Endpoint**: Execute via a `POST` request to the daemon:
+  ```bash
+  curl -X POST http://127.0.0.1:8090/v1/hooks/precompact \
+    -H "Content-Type: application/json" \
+    -H "X-Mythrax-Token: $(cat ~/.mythrax/token)" \
+    -d '{
+      "session_id": "session_abc123",
+      "transcript_path": "/absolute/path/to/transcript.jsonl"
+    }'
+  ```
