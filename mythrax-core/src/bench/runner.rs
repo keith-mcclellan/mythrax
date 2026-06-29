@@ -292,6 +292,21 @@ async fn main() -> Result<()> {
     };
 
     // --- Evaluate. ---
+    let cache_path = std::path::PathBuf::from("embedding_cache.bin");
+    let cache_path_parent = std::path::PathBuf::from("../embedding_cache.bin");
+    let target_cache_path = if cache_path.exists() {
+        cache_path
+    } else if cache_path_parent.exists() {
+        cache_path_parent
+    } else {
+        cache_path
+    };
+    if let Err(e) = mythrax_core::embeddings::load_embedding_cache_from_disk(&target_cache_path) {
+        println!("Warning: failed to load embedding cache: {}", e);
+    } else {
+        println!("Loaded embedding cache from {:?}", target_cache_path);
+    }
+
     let shared_backend = SurrealBackend::new_in_memory()
         .await
         .context("Failed to create shared in-memory database engine")?;
@@ -326,6 +341,10 @@ async fn main() -> Result<()> {
                 *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
 
                 records.push(record);
+
+                if records.len() % 10 == 0 {
+                    let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
+                }
             }
         }
 
@@ -466,7 +485,14 @@ async fn main() -> Result<()> {
         *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
 
         records.push(record);
+
+        if records.len() % 10 == 0 {
+            let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
+        }
     }
+
+    // Save final state
+    let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
 
     // CB-2: guard division-by-zero on an empty question set.
     if total_q == 0 {
