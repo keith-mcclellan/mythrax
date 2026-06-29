@@ -293,9 +293,12 @@ async fn main() -> Result<()> {
 
     // --- Evaluate. ---
     let cache_path = std::path::PathBuf::from("embedding_cache.bin");
+    let cache_path_core = std::path::PathBuf::from("mythrax-core/embedding_cache.bin");
     let cache_path_parent = std::path::PathBuf::from("../embedding_cache.bin");
     let target_cache_path = if cache_path.exists() {
         cache_path
+    } else if cache_path_core.exists() {
+        cache_path_core
     } else if cache_path_parent.exists() {
         cache_path_parent
     } else {
