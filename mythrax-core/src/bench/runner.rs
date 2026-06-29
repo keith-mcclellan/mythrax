@@ -152,7 +152,10 @@ fn expected_sha_for(filename: &str) -> Option<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    unsafe { std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); }
+    unsafe { 
+        std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); 
+        std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false");
+    }
     let args = Args::parse();
     println!("Starting Mythrax LongMemEval retrieval benchmark runner...");
     println!("Split mode: {}", args.split);
@@ -292,9 +295,24 @@ async fn main() -> Result<()> {
     };
 
     // --- Evaluate. ---
-    let shared_backend = SurrealBackend::new_in_memory()
-        .await
-        .context("Failed to create shared in-memory database engine")?;
+    let cache_path = std::path::PathBuf::from("embedding_cache.bin");
+    let cache_path_core = std::path::PathBuf::from("mythrax-core/embedding_cache.bin");
+    let cache_path_parent = std::path::PathBuf::from("../embedding_cache.bin");
+    let target_cache_path = if cache_path.exists() {
+        cache_path
+    } else if cache_path_core.exists() {
+        cache_path_core
+    } else if cache_path_parent.exists() {
+        cache_path_parent
+    } else {
+        cache_path
+    };
+    if let Err(e) = mythrax_core::embeddings::load_embedding_cache_from_disk(&target_cache_path) {
+        println!("Warning: failed to load embedding cache: {}", e);
+    } else {
+        println!("Loaded embedding cache from {:?}", target_cache_path);
+    }
+
     let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
     let mut records = Vec::new();
     let mut sum_recall_any_turn = 0.0f32;
@@ -326,24 +344,23 @@ async fn main() -> Result<()> {
                 *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
 
                 records.push(record);
+
+                if records.len() % 10 == 0 {
+                    let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
+                }
             }
         }
 
         let q = q.clone();
         let published = published;
         let note = note.clone();
-        let shared_backend_clone = shared_backend.clone();
 
         join_set.spawn(async move {
             println!("Evaluating question {}/{}...", q_idx + 1, total_q);
 
-            let mut backend = shared_backend_clone;
-            backend.write_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
-            backend.indexing_writes = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-            backend.term_counts_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-            backend.avg_dl_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-            backend.db.use_ns("mythrax").use_db(format!("q_{}", q_idx)).await
-                .context("Failed to select namespace/database")?;
+            let backend = SurrealBackend::new_in_memory()
+                .await
+                .context("Failed to create in-memory backend")?;
             backend.init().await.context("Failed to initialize database schema")?;
             let backend = std::sync::Arc::new(backend);
 
@@ -466,7 +483,14 @@ async fn main() -> Result<()> {
         *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
 
         records.push(record);
+
+        if records.len() % 10 == 0 {
+            let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
+        }
     }
+
+    // Save final state
+    let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
 
     // CB-2: guard division-by-zero on an empty question set.
     if total_q == 0 {
