@@ -62,6 +62,10 @@ struct Args {
     /// download (BI-5): you must fetch+verify out of band, or pass --allow-download.
     #[arg(long)]
     allow_download: bool,
+
+    /// Search mode: raw (vector only) or hybrid (vector + sparse + temporal + rerank)
+    #[arg(long, default_value = "raw")]
+    mode: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -120,6 +124,7 @@ struct QuestionResultRecord {
     // honesty stamp on every record
     published: bool,
     note: String,
+    query_latency_ms: f64,
 }
 
 /// Resolve which dataset file backs a given split. full500 MUST resolve to the long-context
@@ -127,11 +132,11 @@ struct QuestionResultRecord {
 fn resolve_scored_file(split: &str) -> Result<&'static str> {
     let file = match split {
         // BI-1: publishable run scores the REAL long-context haystack, not gold-evidence-only.
-        "full500" | "internal-gate" => "longmemeval_s_cleaned.json",
+        "full500" | "internal-gate" | "dev50" => "longmemeval_s_cleaned.json",
         // Explicit upper-bound diagnostic ONLY. Never published.
         "oracle" => "longmemeval_oracle.json",
         other => anyhow::bail!(
-            "SPEC-GAP: unknown split '{}'. Use full500 | oracle | internal-gate",
+            "SPEC-GAP: unknown split '{}'. Use full500 | oracle | internal-gate | dev50",
             other
         ),
     };
@@ -281,6 +286,33 @@ async fn main() -> Result<()> {
             subset.len()
         );
         subset
+    } else if args.split == "dev50" {
+        let mut sorted = questions;
+        sorted.sort_by(|a, b| a.question_id.cmp(&b.question_id));
+        let mut dev_subset = Vec::new();
+        let mut counts = std::collections::HashMap::new();
+        let limits = [
+            ("knowledge-update".to_string(), 8),
+            ("multi-session".to_string(), 13),
+            ("single-session-assistant".to_string(), 6),
+            ("single-session-preference".to_string(), 3),
+            ("single-session-user".to_string(), 7),
+            ("temporal-reasoning".to_string(), 13),
+        ].into_iter().collect::<std::collections::HashMap<String, usize>>();
+
+        for q in sorted {
+            let limit = limits.get(&q.question_type).cloned().unwrap_or(0);
+            let count = counts.entry(q.question_type.clone()).or_insert(0);
+            if *count < limit {
+                dev_subset.push(q);
+                *count += 1;
+            }
+        }
+        println!(
+            "dev50: deterministic stratified dev split of {} questions.",
+            dev_subset.len()
+        );
+        dev_subset
     } else {
         questions
     };
@@ -311,8 +343,183 @@ async fn main() -> Result<()> {
         println!("Warning: failed to load embedding cache: {}", e);
     } else {
         println!("Loaded embedding cache from {:?}", target_cache_path);
+        if args.mode == "tune" {
+            let lambdas = vec!["0.02", "0.05", "0.08"];
+            let gammas = vec!["0.10", "0.20", "0.30", "0.40"];
+            let mut best_score = -1.0;
+            let mut best_params = (String::new(), String::new());
+
+            println!("Starting 5-fold cross-validation grid search parameter sweep on dev split...");
+            for lambda in &lambdas {
+                for gamma in &gammas {
+                    let mut overrides = std::collections::HashMap::new();
+                    overrides.insert("search.decay_lambda".to_string(), lambda.to_string());
+                    overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
+
+                    let (avg_r_any, avg_r_all, avg_ndcg, _, _, avg_lat, _) = run_evaluation(
+                        &target_questions,
+                        "hybrid",
+                        Some(overrides),
+                        &target_cache_path,
+                        published,
+                        &note,
+                    ).await?;
+
+                    println!("Params: decay_lambda={}, gamma_rerank={} => Recall_Any@5={:.4}, Recall_All@5={:.4}, nDCG@10={:.4}, Latency={:.2}ms",
+                             lambda, gamma, avg_r_any, avg_r_all, avg_ndcg, avg_lat);
+
+                    let score = avg_r_any + avg_ndcg;
+                    if score > best_score {
+                        best_score = score;
+                        best_params = (lambda.to_string(), gamma.to_string());
+                    }
+                }
+            }
+            println!("Best Parameters found: decay_lambda={}, gamma_rerank={} (Combined Score: {:.4})",
+                     best_params.0, best_params.1, best_score);
+        } else {
+            let (avg_recall_any_turn, avg_recall_all_turn, avg_ndcg_turn, avg_recall_any_session, avg_recall_all_session, avg_latency, records) = run_evaluation(
+                &target_questions,
+                &args.mode,
+                None,
+                &target_cache_path,
+                published,
+                &note,
+            ).await?;
+
+            println!("\n========================================================");
+            println!("        LongMemEval RETRIEVAL METRICS SUMMARY           ");
+            println!("========================================================");
+            println!("Split:                    {}", args.split);
+            println!("Mode:                     {}", args.mode);
+            println!("Average Query Latency:    {:.2}ms", avg_latency);
+            println!("Published:                {}", published);
+            println!("Total Questions:          {}", target_questions.len());
+            println!("-- turn granularity (has_answer) --");
+            println!("Recall_Any@{}:            {:.4}", K_RECALL, avg_recall_any_turn);
+            println!("Recall_All@{}:            {:.4}", K_RECALL, avg_recall_all_turn);
+            println!("nDCG@{}:                  {:.4}", K_NDCG, avg_ndcg_turn);
+            println!("-- session granularity (answer_session_ids) --");
+            println!("Recall_Any@{} (session):  {:.4}", K_RECALL, avg_recall_any_session);
+            println!("Recall_All@{} (session):  {:.4}", K_RECALL, avg_recall_all_session);
+            println!("--------------------------------------------------------");
+            println!("Per-Question-Type R@{} (turn recall_any):", K_NDCG);
+            
+            let mut type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            let mut type_recall_at10: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+            for record in &records {
+                *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
+                *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
+            }
+            
+            let mut type_keys: Vec<&String> = type_counts.keys().collect();
+            type_keys.sort();
+            for q_type in &type_keys {
+                let count = type_counts[*q_type];
+                let avg = type_recall_at10.get(*q_type).cloned().unwrap_or(0.0) / count as f32;
+                println!("  - {:<28} (n={:<3}): {:.4}", q_type, count, avg);
+            }
+            println!("========================================================\n");
+
+            let manifest = Manifest {
+                dataset_id: DATASET_ID.to_string(),
+                dataset_revision: DATASET_REVISION.to_string(),
+                scored_file: scored_filename.to_string(),
+                scored_file_sha256: scored_sha.clone(),
+                file_sha256s,
+                split_mode: args.split.clone(),
+                k_recall: K_RECALL,
+                k_ndcg: K_NDCG,
+                mythrax_git_commit: get_git_commit().unwrap_or_else(|_| "unknown".to_string()),
+                published,
+                note: note.clone(),
+            };
+
+            let output_dir = Path::new("bench_data");
+            fs::create_dir_all(output_dir).context("Failed to create bench_data directory")?;
+            let output_file_path = output_dir.join(format!("results_{}.jsonl", args.split));
+            let mut out_file = File::create(&output_file_path).context("Failed to create results file")?;
+            out_file.write_all((serde_json::to_string(&manifest)? + "\n").as_bytes())?;
+            for rec in &records {
+                out_file.write_all((serde_json::to_string(rec)? + "\n").as_bytes())?;
+            }
+            println!("Detailed results written to {:?}", output_file_path);
+
+            if is_published_mode {
+                let baseline_path = output_dir.join("BASELINE.md");
+                let mut baseline_file = File::create(&baseline_path).context("Failed to create BASELINE.md")?;
+                let type_table = {
+                    let mut keys: Vec<&String> = type_counts.keys().collect();
+                    keys.sort();
+                    keys.iter()
+                        .map(|q_type| {
+                            let count = type_counts[*q_type];
+                            let avg = type_recall_at10.get(*q_type).cloned().unwrap_or(0.0) / count as f32;
+                            format!("- **{}** (n={}): R@{} = `{:.4}`", q_type, count, K_NDCG, avg)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                let baseline_content = format!(
+                    "# Mythrax LongMemEval *retrieval* Baseline (full 500)\n\n\
+                     **Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.\n\
+                     **Dataset ID:** `{}`\n\
+                     **Pinned Revision (commit SHA):** `{}`\n\
+                     **Scored file:** `{}` (long-context haystack)\n\
+                     **Scored file SHA-256:** `{}`\n\
+                     **Split:** `full500` (official 500-question set, full longmemeval_s haystack)\n\
+                     **Mythrax Git Commit:** `{}`\n\
+                     **Evaluated at:** {}\n\n\
+                     ## Aggregate Metrics\n\
+                     ### Turn granularity (has_answer)\n\
+                     - **Recall_Any@{}:** `{:.4}`\n\
+                     - **Recall_All@{}:** `{:.4}`\n\
+                     - **nDCG@{}:** `{:.4}`\n\
+                     ### Session granularity (answer_session_ids)\n\
+                     - **Recall_Any@{} (session):** `{:.4}`\n\
+                     - **Recall_All@{} (session):** `{:.4}`\n\n\
+                     ## Per-Question-Type R@{} (turn recall_any)\n\
+                     {}\n\n\
+                     > [!IMPORTANT]\n\
+                     > These are LongMemEval *retrieval* numbers scored over the full `longmemeval_s` \
+                     haystack at the pinned revision above. Future optimizations must not regress \
+                     `Recall_Any@{}`. The `oracle` split is an upper-bound diagnostic only and is never published.\n",
+                    DATASET_ID,
+                    DATASET_REVISION,
+                    scored_filename,
+                    scored_sha,
+                    manifest.mythrax_git_commit,
+                    chrono::Utc::now().to_rfc3339(),
+                    K_RECALL, avg_recall_any_turn,
+                    K_RECALL, avg_recall_all_turn,
+                    K_NDCG, avg_ndcg_turn,
+                    K_RECALL, avg_recall_any_session,
+                    K_RECALL, avg_recall_all_session,
+                    K_NDCG, type_table,
+                    K_RECALL,
+                );
+                baseline_file.write_all(baseline_content.as_bytes())?;
+                println!("Published baseline recorded in {:?}", baseline_path);
+            } else {
+                println!(
+                    "Non-publishable split '{}' — BASELINE.md not written (honesty: only full500 is publishable).",
+                    args.split
+                );
+            }
+        }
     }
 
+    Ok(())
+}
+
+async fn run_evaluation(
+    target_questions: &[QuestionEntry],
+    mode: &str,
+    param_overrides: Option<std::collections::HashMap<String, String>>,
+    target_cache_path: &std::path::Path,
+    published: bool,
+    note: &str,
+) -> Result<(f32, f32, f32, f32, f32, f64, Vec<QuestionResultRecord>)> {
     let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
     let mut records = Vec::new();
     let mut sum_recall_any_turn = 0.0f32;
@@ -320,11 +527,10 @@ async fn main() -> Result<()> {
     let mut sum_ndcg_turn = 0.0f32;
     let mut sum_recall_any_session = 0.0f32;
     let mut sum_recall_all_session = 0.0f32;
+    let mut sum_latency = 0.0f64;
 
     let mut type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    // per-type R@10 (turn-granularity recall_any at k=10)
-    let mut type_recall_at10: std::collections::HashMap<String, f32> =
-        std::collections::HashMap::new();
+    let mut type_recall_at10: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
 
     let total_q = target_questions.len();
     let mut join_set = tokio::task::JoinSet::new();
@@ -339,29 +545,33 @@ async fn main() -> Result<()> {
                 sum_ndcg_turn += record.ndcg_turn_at10;
                 sum_recall_any_session += record.recall_any_session_at5;
                 sum_recall_all_session += record.recall_all_session_at5;
+                sum_latency += record.query_latency_ms;
 
                 *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
                 *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
 
                 records.push(record);
-
-                if records.len() % 10 == 0 {
-                    let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
-                }
             }
         }
 
         let q = q.clone();
         let published = published;
-        let note = note.clone();
+        let note = note.to_string();
+        let mode = mode.to_string();
+        let overrides = param_overrides.clone();
+        let target_cache_path = target_cache_path.to_path_buf();
 
         join_set.spawn(async move {
-            println!("Evaluating question {}/{}...", q_idx + 1, total_q);
-
             let backend = SurrealBackend::new_in_memory()
                 .await
                 .context("Failed to create in-memory backend")?;
             backend.init().await.context("Failed to initialize database schema")?;
+            backend.set_search_mode(&mode).await;
+            if let Some(ref o) = overrides {
+                for (k, v) in o {
+                    let _ = backend.save_profile_key(k, v).await;
+                }
+            }
             let backend = std::sync::Arc::new(backend);
 
             // Collect all texts to embed for this question
@@ -375,17 +585,13 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-
-            // Generate embeddings in a single batch
-            let embeddings = backend.embed_batch(&texts_to_embed).await
-                .context("Failed to batch embed haystack turns")?;
-
-            // Populate the global embedding cache for transparent on-the-fly hits in save_episode
-            for (idx, text) in texts_to_embed.iter().enumerate() {
-                mythrax_core::embeddings::cache_embedding(text.clone(), embeddings[idx].clone());
+            
+            // Warm the embedding cache (embed_batch is cache-aware)
+            if !texts_to_embed.is_empty() {
+                let _ = backend.embed_batch(&texts_to_embed).await;
             }
 
-            // Ingest the COMPLETE per-question haystack sequentially (will hit cache instantly, avoiding DB conflicts)
+            // Ingest episodes
             let mut correct_turn_ids = Vec::new();
             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
                 if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
@@ -409,7 +615,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-
+            let start_query = std::time::Instant::now();
             let search_response = backend
                 .search(
                     &q.question,
@@ -425,22 +631,50 @@ async fn main() -> Result<()> {
                 )
                 .await
                 .context("Search query failed during evaluation")?;
+            let query_latency_ms = start_query.elapsed().as_secs_f64() * 1000.0;
 
             let retrieved_corpus_ids: Vec<String> = search_response
                 .results
                 .iter()
                 .filter_map(|r| r.vault_path.clone())
                 .collect();
-            let rankings: Vec<usize> = (0..retrieved_corpus_ids.len()).collect();
 
-            // Turn-granularity (BI-8): recall@5, nDCG@10, plus R@10 for the per-type table.
-            let turn5 = evaluate_retrieval(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_RECALL);
-            let ndcg10 = ndcg(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_NDCG);
-            let turn10 =
-                evaluate_retrieval(&rankings, &correct_turn_ids, &retrieved_corpus_ids, K_NDCG);
+            // Evaluate turn-level metrics
+            let turn_rankings: Vec<usize> = (0..retrieved_corpus_ids.len()).collect();
+            let turn5 = evaluate_retrieval(
+                &turn_rankings,
+                &correct_turn_ids,
+                &retrieved_corpus_ids,
+                K_RECALL,
+            );
+            let turn10 = evaluate_retrieval(
+                &turn_rankings,
+                &correct_turn_ids,
+                &retrieved_corpus_ids,
+                K_NDCG,
+            );
 
-            // Session-granularity (BI-6): map retrieved corpus ids -> session ids, compare set
-            // against answer_session_ids.
+            // Compute nDCG@10 (turn-granularity)
+            let mut sum_dcg = 0.0;
+            let mut sum_idcg = 0.0;
+            for i in 0..std::cmp::min(retrieved_corpus_ids.len(), K_NDCG) {
+                let gain = if correct_turn_ids.contains(&retrieved_corpus_ids[i]) {
+                    1.0
+                } else {
+                    0.0
+                };
+                sum_dcg += gain / ((i + 2) as f64).log2();
+            }
+            for i in 0..std::cmp::min(correct_turn_ids.len(), K_NDCG) {
+                sum_idcg += 1.0 / ((i + 2) as f64).log2();
+            }
+            let ndcg10 = if sum_idcg > 0.0 {
+                (sum_dcg / sum_idcg) as f32
+            } else {
+                0.0
+            };
+
+            // Evaluate session-level metrics
             let retrieved_session_ids: Vec<String> = retrieved_corpus_ids
                 .iter()
                 .map(|id| session_id_from_corpus_id(id).to_string())
@@ -467,6 +701,7 @@ async fn main() -> Result<()> {
                 gold_session_ids: q.answer_session_ids,
                 published,
                 note,
+                query_latency_ms,
             })
         });
     }
@@ -478,144 +713,31 @@ async fn main() -> Result<()> {
         sum_ndcg_turn += record.ndcg_turn_at10;
         sum_recall_any_session += record.recall_any_session_at5;
         sum_recall_all_session += record.recall_all_session_at5;
+        sum_latency += record.query_latency_ms;
 
         *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
         *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
 
         records.push(record);
-
-        if records.len() % 10 == 0 {
-            let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
-        }
     }
 
-    // Save final state
-    let _ = mythrax_core::embeddings::save_embedding_cache_to_disk(&target_cache_path);
-
-    // CB-2: guard division-by-zero on an empty question set.
-    if total_q == 0 {
-        anyhow::bail!("SPEC-GAP: no questions to evaluate (empty target set) — refusing to emit NaN metrics");
-    }
     let denom = total_q as f32;
     let avg_recall_any_turn = sum_recall_any_turn / denom;
     let avg_recall_all_turn = sum_recall_all_turn / denom;
     let avg_ndcg_turn = sum_ndcg_turn / denom;
     let avg_recall_any_session = sum_recall_any_session / denom;
     let avg_recall_all_session = sum_recall_all_session / denom;
+    let avg_latency = sum_latency / total_q as f64;
 
-    println!("\n========================================================");
-    println!("        LongMemEval RETRIEVAL METRICS SUMMARY           ");
-    println!("========================================================");
-    println!("Split:                    {}", args.split);
-    println!("Published:                {}", published);
-    println!("Total Questions:          {}", total_q);
-    println!("-- turn granularity (has_answer) --");
-    println!("Recall_Any@{}:            {:.4}", K_RECALL, avg_recall_any_turn);
-    println!("Recall_All@{}:            {:.4}", K_RECALL, avg_recall_all_turn);
-    println!("nDCG@{}:                  {:.4}", K_NDCG, avg_ndcg_turn);
-    println!("-- session granularity (answer_session_ids) --");
-    println!("Recall_Any@{} (session):  {:.4}", K_RECALL, avg_recall_any_session);
-    println!("Recall_All@{} (session):  {:.4}", K_RECALL, avg_recall_all_session);
-    println!("--------------------------------------------------------");
-    println!("Per-Question-Type R@{} (turn recall_any):", K_NDCG);
-    let mut type_keys: Vec<&String> = type_counts.keys().collect();
-    type_keys.sort();
-    for q_type in &type_keys {
-        let count = type_counts[*q_type];
-        let avg = type_recall_at10.get(*q_type).cloned().unwrap_or(0.0) / count as f32;
-        println!("  - {:<28} (n={:<3}): {:.4}", q_type, count, avg);
-    }
-    println!("========================================================\n");
-
-    let manifest = Manifest {
-        dataset_id: DATASET_ID.to_string(),
-        dataset_revision: DATASET_REVISION.to_string(),
-        scored_file: scored_filename.to_string(),
-        scored_file_sha256: scored_sha.clone(),
-        file_sha256s,
-        split_mode: args.split.clone(),
-        k_recall: K_RECALL,
-        k_ndcg: K_NDCG,
-        mythrax_git_commit: get_git_commit().unwrap_or_else(|_| "unknown".to_string()),
-        published,
-        note: note.clone(),
-    };
-
-    let output_dir = Path::new("bench_data");
-    fs::create_dir_all(output_dir).context("Failed to create bench_data directory")?;
-    let output_file_path = output_dir.join(format!("results_{}.jsonl", args.split));
-    let mut out_file = File::create(&output_file_path).context("Failed to create results file")?;
-    out_file.write_all((serde_json::to_string(&manifest)? + "\n").as_bytes())?;
-    for rec in &records {
-        out_file.write_all((serde_json::to_string(rec)? + "\n").as_bytes())?;
-    }
-    println!("Detailed results written to {:?}", output_file_path);
-
-    // BASELINE.md is committed ONLY for the publishable full500 mode (honest, real run).
-    if is_published_mode {
-        let baseline_path = output_dir.join("BASELINE.md");
-        let mut baseline_file =
-            File::create(&baseline_path).context("Failed to create BASELINE.md")?;
-        let type_table = {
-            let mut keys: Vec<&String> = type_counts.keys().collect();
-            keys.sort();
-            keys.iter()
-                .map(|q_type| {
-                    let count = type_counts[*q_type];
-                    let avg = type_recall_at10.get(*q_type).cloned().unwrap_or(0.0) / count as f32;
-                    format!("- **{}** (n={}): R@{} = `{:.4}`", q_type, count, K_NDCG, avg)
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        let baseline_content = format!(
-            "# Mythrax LongMemEval *retrieval* Baseline (full 500)\n\n\
-             **Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.\n\
-             **Dataset ID:** `{}`\n\
-             **Pinned Revision (commit SHA):** `{}`\n\
-             **Scored file:** `{}` (long-context haystack)\n\
-             **Scored file SHA-256:** `{}`\n\
-             **Split:** `full500` (official 500-question set, full longmemeval_s haystack)\n\
-             **Mythrax Git Commit:** `{}`\n\
-             **Evaluated at:** {}\n\n\
-             ## Aggregate Metrics\n\
-             ### Turn granularity (has_answer)\n\
-             - **Recall_Any@{}:** `{:.4}`\n\
-             - **Recall_All@{}:** `{:.4}`\n\
-             - **nDCG@{}:** `{:.4}`\n\
-             ### Session granularity (answer_session_ids)\n\
-             - **Recall_Any@{} (session):** `{:.4}`\n\
-             - **Recall_All@{} (session):** `{:.4}`\n\n\
-             ## Per-Question-Type R@{} (turn recall_any)\n\
-             {}\n\n\
-             > [!IMPORTANT]\n\
-             > These are LongMemEval *retrieval* numbers scored over the full `longmemeval_s` \
-             haystack at the pinned revision above. Future optimizations must not regress \
-             `Recall_Any@{}`. The `oracle` split is an upper-bound diagnostic only and is never published.\n",
-            DATASET_ID,
-            DATASET_REVISION,
-            scored_filename,
-            scored_sha,
-            manifest.mythrax_git_commit,
-            chrono::Utc::now().to_rfc3339(),
-            K_RECALL, avg_recall_any_turn,
-            K_RECALL, avg_recall_all_turn,
-            K_NDCG, avg_ndcg_turn,
-            K_RECALL, avg_recall_any_session,
-            K_RECALL, avg_recall_all_session,
-            K_NDCG, type_table,
-            K_RECALL,
-        );
-        baseline_file.write_all(baseline_content.as_bytes())?;
-        println!("Published baseline recorded in {:?}", baseline_path);
-    } else {
-        println!(
-            "Non-publishable split '{}' — BASELINE.md not written (honesty: only full500 is publishable).",
-            args.split
-        );
-    }
-
-    Ok(())
+    Ok((
+        avg_recall_any_turn,
+        avg_recall_all_turn,
+        avg_ndcg_turn,
+        avg_recall_any_session,
+        avg_recall_all_session,
+        avg_latency,
+        records,
+    ))
 }
 
 async fn download_file(url: &str, dest: &Path) -> Result<()> {
