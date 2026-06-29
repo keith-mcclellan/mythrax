@@ -2844,6 +2844,33 @@ impl StorageBackend for SurrealBackend {
                 }
             }
 
+            let mut session_anchors = std::collections::HashMap::new();
+            let mut global_anchor = None;
+            if is_boost_temporal_enabled {
+                let max_sql = "SELECT session_id, created_at FROM episode WHERE scope = $scope OR scope = 'general';";
+                if let Ok(mut res) = self.db.query(max_sql).bind(("scope", resolved_scope.as_str())).await {
+                    #[derive(serde::Deserialize)]
+                    struct EpTime {
+                        session_id: Option<String>,
+                        created_at: chrono::DateTime<chrono::Utc>,
+                    }
+                    if let Ok(episodes) = res.take::<Vec<EpTime>>(0) {
+                        for ep in episodes {
+                            if let Some(ref s_id) = ep.session_id {
+                                session_anchors.entry(s_id.clone())
+                                    .and_modify(|t| if ep.created_at > *t { *t = ep.created_at; })
+                                    .or_insert(ep.created_at);
+                            }
+                            global_anchor = match global_anchor {
+                                Some(t) => Some(std::cmp::max(t, ep.created_at)),
+                                None => Some(ep.created_at),
+                            };
+                        }
+                    }
+                }
+            }
+            let global_anchor = global_anchor.unwrap_or_else(|| chrono::Utc::now());
+
             let weights = crate::retrieval::boosts::BoostWeights::default();
             for c in &mut candidates {
                 let candidate_text = format!("{} {}", c.title, c.content);
@@ -2851,23 +2878,10 @@ impl StorageBackend for SurrealBackend {
                 let exact_quote = is_boost_quote_enabled && detect_quoted_phrase(query, &candidate_text);
                 let temporal_proximity = if is_boost_temporal_enabled {
                     if let Some(created) = c.created_at {
-                        let mut anchor = None;
-                        if let Some(ref sess_id) = c.session_id {
-                            let max_sess_sql = "SELECT VALUE max(created_at) FROM episode WHERE (scope = $scope OR scope = 'general') AND session_id = $session_id;";
-                            if let Ok(mut res) = self.db.query(max_sess_sql).bind(("scope", resolved_scope.as_str())).bind(("session_id", sess_id.as_str())).await {
-                                anchor = res.take::<Option<chrono::DateTime<chrono::Utc>>>(0).unwrap_or(None);
-                            }
-                        }
-                        let anchor = match anchor {
-                            Some(t) => t,
-                            None => {
-                                let max_scope_sql = "SELECT VALUE max(created_at) FROM episode WHERE scope = $scope OR scope = 'general';";
-                                let scope_max = match self.db.query(max_scope_sql).bind(("scope", resolved_scope.as_str())).await {
-                                    Ok(mut res) => res.take::<Option<chrono::DateTime<chrono::Utc>>>(0).unwrap_or(None),
-                                    Err(_) => None,
-                                };
-                                scope_max.unwrap_or_else(|| chrono::Utc::now())
-                            }
+                        let anchor = if let Some(ref s_id) = c.session_id {
+                            session_anchors.get(s_id).copied().unwrap_or(global_anchor)
+                        } else {
+                            global_anchor
                         };
                         let decay_lambda = match self.get_profile_key("search.decay_lambda").await {
                             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.05f32).max(0.0f32),
