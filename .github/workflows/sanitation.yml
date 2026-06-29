@@ -1,0 +1,49 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  scan:
+    name: Code Sanitation Scan
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 10 # Need history to calculate trend
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Run Sanitation Scanner
+      run: |
+        python3 scripts/sanitation_scanner.py
+
+    - name: Find PR number
+      if: github.event_name == 'push'
+      uses: jwalton/gh-find-current-pr@v1
+      id: findPr
+
+    - name: Comment PR (Push)
+      if: github.event_name == 'push' && steps.findPr.outputs.pr
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        number: ${{ steps.findPr.outputs.pr }}
+        path: sanitation_scorecard.md
+
+    - name: Comment PR (Pull Request)
+      if: github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        path: sanitation_scorecard.md
