@@ -2849,7 +2849,7 @@ impl StorageBackend for SurrealBackend {
             if is_boost_temporal_enabled {
                 let max_sql = "SELECT session_id, created_at FROM episode WHERE scope = $scope OR scope = 'general';";
                 if let Ok(mut res) = self.db.query(max_sql).bind(("scope", resolved_scope.as_str())).await {
-                    #[derive(serde::Deserialize)]
+                    #[derive(serde::Deserialize, SurrealValue)]
                     struct EpTime {
                         session_id: Option<String>,
                         created_at: chrono::DateTime<chrono::Utc>,

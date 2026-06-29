@@ -6,21 +6,21 @@
 **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
 **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
 **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
-**Mythrax Git Commit:** `68a3397186ecd9fd83bcd695d6cec0d3b5b7aeec`
-**Evaluated at:** 2026-06-29T03:38:26.993982+00:00
+**Mythrax Git Commit:** `7c0a5102ed2c6145af293cbd889ef564a7525dc2`
+**Evaluated at:** 2026-06-29T13:29:48.178145+00:00
 
 ## Aggregate Metrics
 ### Turn granularity (has_answer)
-- **Recall_Any@5:** `0.7380`
-- **Recall_All@5:** `0.2800`
-- **nDCG@10:** `0.4433`
+- **Recall_Any@5:** `0.7420`
+- **Recall_All@5:** `0.2820`
+- **nDCG@10:** `0.4457`
 ### Session granularity (answer_session_ids)
 - **Recall_Any@5 (session):** `0.8860`
 - **Recall_All@5 (session):** `0.2980`
 
 ## Per-Question-Type R@10 (turn recall_any)
 - **knowledge-update** (n=78): R@10 = `0.8846`
-- **multi-session** (n=133): R@10 = `0.7820`
+- **multi-session** (n=133): R@10 = `0.7970`
 - **single-session-assistant** (n=56): R@10 = `1.0000`
 - **single-session-preference** (n=30): R@10 = `0.6000`
 - **single-session-user** (n=70): R@10 = `0.8143`

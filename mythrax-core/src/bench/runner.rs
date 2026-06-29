@@ -310,9 +310,6 @@ async fn main() -> Result<()> {
         println!("Loaded embedding cache from {:?}", target_cache_path);
     }
 
-    let shared_backend = SurrealBackend::new_in_memory()
-        .await
-        .context("Failed to create shared in-memory database engine")?;
     let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
     let mut records = Vec::new();
     let mut sum_recall_any_turn = 0.0f32;
@@ -354,18 +351,13 @@ async fn main() -> Result<()> {
         let q = q.clone();
         let published = published;
         let note = note.clone();
-        let shared_backend_clone = shared_backend.clone();
 
         join_set.spawn(async move {
             println!("Evaluating question {}/{}...", q_idx + 1, total_q);
 
-            let mut backend = shared_backend_clone;
-            backend.write_lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
-            backend.indexing_writes = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-            backend.term_counts_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-            backend.avg_dl_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-            backend.db.use_ns("mythrax").use_db(format!("q_{}", q_idx)).await
-                .context("Failed to select namespace/database")?;
+            let backend = SurrealBackend::new_in_memory()
+                .await
+                .context("Failed to create in-memory backend")?;
             backend.init().await.context("Failed to initialize database schema")?;
             let backend = std::sync::Arc::new(backend);
 
