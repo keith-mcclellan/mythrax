@@ -89,7 +89,9 @@ impl LLMClient {
     ) -> Result<String> {
         if let Ok(mock) = std::env::var("MYTHRAX_MOCK_LLM") {
             if mock == "true" {
-                if prompt.contains("Analyze the following dialog") {
+                if prompt.contains("Table of Contents") || prompt.contains("logical sections") {
+                    return Ok(r#"[{"title": "test_title", "start_phrase": "Some document text"}]"#.to_string());
+                } else if prompt.contains("Analyze the following dialog") {
                     return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
                 } else if prompt.contains("Validate if these should merge") {
                     return Ok(r#"{"should_merge": true, "suggested_name": "git-workflow", "reason": "Redundant playbooks"}"#.to_string());
