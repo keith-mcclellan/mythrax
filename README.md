@@ -10,10 +10,10 @@ Project Mythrax is a 100% native Rust local memory, model routing, and cognitive
 
 For in-depth guides, architectural references, and developer playbooks, see the following documentation:
 
-- **[User Guide](file:///Users/keith/Documents/mythrax/mythrax_user_guide.md)**: A complete reference manual covering core memory entities, the Smart Handoff protocol, the ingestion pipeline, and a comprehensive CLI/MCP tool reference.
-- **[Architecture Reference](file:///Users/keith/Documents/mythrax/ARCHITECTURE.md)**: Detailed specifications of the single-port gateway, dual-engine database persistence, VRAM safeguards, WAL concurrency, and graceful shutdown lifecycles.
-- **[Developer Guide](file:///Users/keith/Documents/mythrax/DEVELOPMENT.md)**: A step-by-step guide for developers on how to add or extend tools under the action-enum-based architecture.
-- **[Agent Skill Playbook](file:///Users/keith/Documents/mythrax/.agents/skills/mythrax/SKILL.md)**: Guidelines and rules for AI agents utilizing the Mythrax MCP server, including the pre-invocation hook boot check compliance.
+- **[User Guide](mythrax_user_guide.md)**: A complete reference manual covering core memory entities, the Smart Handoff protocol, the ingestion pipeline, and a comprehensive CLI/MCP tool reference.
+- **[Architecture Reference](ARCHITECTURE.md)**: Detailed specifications of the single-port gateway, dual-engine database persistence, VRAM safeguards, WAL concurrency, and graceful shutdown lifecycles.
+- **[Developer Guide](DEVELOPMENT.md)**: A step-by-step guide for developers on how to add or extend tools under the action-enum-based architecture.
+- **[Agent Skill Playbook](.agents/skills/mythrax/SKILL.md)**: Guidelines and rules for AI agents utilizing the Mythrax MCP server, including the pre-invocation hook boot check compliance.
 
 ---
 

@@ -6,18 +6,18 @@ This guide serves as the definitive reference manual for **Project Mythrax**, a 
 
 ## 1. System Overview & Architecture
 
-Mythrax 2.2.1 implements a client-server architecture to optimize resource utilization and ensure database integrity:
+Mythrax 2.3.2 implements a client-server architecture to optimize resource utilization and ensure database integrity:
 
 1. **Obsidian Vault (Filesystem Source of Truth)**: All episodes, insights, and wisdom rules are stored as clean markdown files under standardized folders. This allows users to read, edit, and navigate the entire memory graph using standard markdown links and tools like Obsidian.
 2. **SurrealDB (Vector & Graph Query Engine)**: The database layer caches vault files, stores vector embeddings (using local hardware-accelerated `nomic-embed-text-v1.5` in-process MLX/ONNX models), and maintains directed relationship edges (`relates_to` and `parent_of`) for graph traversal and semantic search.
-3. **Lightweight Thin Clients (MCP & CLI)**: The command line interface and the Model Context Protocol (MCP) server run as thin HTTP clients forwarding all requests to a persistent background daemon.
-4. **Daemon Centrization**: The background daemon exclusively holds the RocksDB file write lock and coordinates the local in-process MLX model engines (embeddings and text completions). This design resolves RocksDB lock contention, lowers individual client memory footprints by 50%, and makes query execution instantaneous.
+3. **Lightweight Thin Clients (MCP & CLI)**: The command line interface and the Model Context Protocol (MCP) server run as thin HTTP clients forwarding all requests to a unified API gateway endpoint `/v1/mcp/call` on a persistent background daemon.
+4. **Daemon Centrization**: The background daemon exclusively holds the database file write lock and coordinates the local in-process MLX model engines (embeddings and text completions). This design resolves lock contention, lowers individual client memory footprints by 50%, and makes query execution instantaneous.
 
 ```
                   ┌───────────────────────────────┐
                   │       Agent / IDE UI          │
                   └───────────────┬───────────────┘
-                                  │ (MCP / CLI HTTP Requests)
+                                  │ (HTTP POST /v1/mcp/call)
                                   ▼
                   ┌───────────────────────────────┐
                   │   Mythrax Daemon (Port 8090)  │
@@ -126,7 +126,7 @@ The `mythrax` CLI is located in the `mythrax-core` directory. Commands automatic
 
 | Group / Subcommand | Arguments | Purpose |
 |--------------------|-----------|---------|
-| `mythrax init` | `[harness]` | Bootstraps configuration folders and auto-ingests transcripts. |
+| `mythrax init` | `[harness]` | Bootstraps configuration folders, merge hooks, and auto-ingests transcripts. |
 | `mythrax daemon start` | `--port <num>` | Launches the REST API daemon on the specified port in the background. |
 | `mythrax daemon stop` | None | Terminates the background daemon using its tracked PID. |
 | `mythrax daemon run` | `--port <num>` | Runs the daemon in the foreground (useful for local testing and logs). |
@@ -146,81 +146,123 @@ The `mythrax` CLI is located in the `mythrax-core` directory. Commands automatic
 
 ## 8. MCP Tools Reference
 
-The MCP server exposes 8 high-efficiency, action-enum-based tools to client harnesses, cutting schema token overhead by over 60% compared to legacy granular tools.
+The MCP server exposes exactly **4 consolidated, action-enum-based tools** to client harnesses, cutting schema token overhead by over 75%.
 
-### 8.1 `manage_memory`
-- **Description**: Query, search, traverse, and record semantic long-term memory graph nodes.
+### 8.1 `read`
+- **Description**: Consolidated tool for all reading and querying operations.
 - **Actions**:
-  - `search`: Performs semantic vector search (with text substring fallback if embeddings are missing).
+  - `view`: Paginated view of text, PDF, video, or audio files on the local filesystem.
+  - `search`: Semantic vector search on episodes, wiki nodes, and wisdom rules.
   - `rules`: Retrieves wisdom rules matching a target pattern.
-  - `nodes`: Retrieves specific database nodes by their IDs.
+  - `nodes`: Fetches specific database memory nodes by their IDs.
   - `root`: Returns the active Obsidian vault root path.
   - `query_symbolic`: Queries symbolic relations in the memory graph.
-  - `save`: Saves an episodic memory to the vault and indexes it in the database.
-  - `feedback`: Registers success or failure feedback for a wisdom rule.
-  - `thought`: Records a temporal reasoning step.
   - `search_index`: Queries or updates search indexing metadata.
   - `timeline`: Generates chronological memory timelines.
   - `get_full`: Retrieves full hydrated representation of memory nodes.
+  - `get`: Gets local configuration settings or specific STM values.
 
-### 8.2 `manage_htr`
-- **Description**: Manages Hypothesis-Tree Refinement (Arbor) loops.
+### 8.2 `write`
+- **Description**: Consolidated tool for all writing and modification operations.
 - **Actions**:
-  - `init`: Initializes root HTR node.
-  - `ideate`: Generates child nodes or hypotheses.
-  - `execute`: Spawns worktree, applies edits, and runs tests.
-  - `backprop`: Backpropagates test results and insights up the tree.
-  - `merge`: Performs admission check and commits final changes.
-  - `run`: Autonomously executes a multi-step HTR search cycle.
-
-### 8.3 `manage_stm`
-- **Description**: Manages short-term session variables and handoff contracts.
-- **Actions**:
-  - `put`: Writes a session key/value pair.
-  - `get`: Retrieves session variables.
-  - `clear`: Clears session variables.
+  - `replace`: Replaces a contiguous block in a file.
+  - `multi_replace`: Replaces multiple non-contiguous blocks in a file.
+  - `save`: Saves an episodic memory to the vault and indexes it.
+  - `feedback`: Records success or failure feedback for a wisdom rule.
+  - `thought`: Records a temporal reasoning thought step.
+  - `put`: Writes a short-term memory session key/value pair.
+  - `clear`: Purges all short-term memory variables for a session.
   - `handoff`: Saves handoff contract metadata and STM state.
+  - `set`: Sets active LLM provider configurations.
 
-### 8.4 `manage_vault`
-- **Description**: Manages vault database maintenance, compliance auditing, and document ingestion.
+### 8.3 `manage`
+- **Description**: Consolidated tool for all management, lifecycle, validation, reasoning (HTR), and ingestion operations.
 - **Actions**:
   - `verify`: Checks database health and connection status.
-  - `organize`: Moves/tidies loose files.
+  - `organize`: Organizes loose vault markdown files.
   - `reprocess`: Re-embeds or re-indexes vault files.
   - `summarize`: Generates high-level summaries of directories.
   - `audit`: Audits files for safety compliance.
   - `ingest_bulk`: Ingests conversation transcripts in bulk.
   - `ingest_forge`: Parses and chunks manuals/PDFs into structured knowledge.
+  - `init`: Initializes root HTR node.
+  - `ideate`: Generates child nodes or hypotheses for HTR.
+  - `execute`: Spawns worktree, applies edits, and runs tests.
+  - `backprop`: Backpropagates test results and insights up the tree.
+  - `merge`: Performs HTR admission check and commits final changes.
+  - `run`: Autonomously executes a multi-step HTR search cycle.
+  - `pre_invocation`: Syncs belief states, context, and rules into STM.
+  - `precompact`: Extracts wisdom rules and insights from conversation transcripts.
+  - `audit_compliance`: Checks workspace configurations for safety.
 
-### 8.5 `manage_config`
-- **Description**: Retrieves or updates active LLM configurations.
+### 8.4 `agent`
+- **Description**: Consolidated tool for orchestrating local model autonomous task execution.
 - **Actions**:
-  - `get`: Gets config settings.
-  - `set`: Sets config settings.
-
-### 8.6 `manage_file`
-- **Description**: Read, view, and modify files with paging support.
-- **Actions**:
-  - `view`: View contents of a file (paginated).
-  - `replace`: Replaces a contiguous block in a file.
-  - `multi_replace`: Replaces multiple non-contiguous blocks in a file.
-
-### 8.7 `pre_invocation_hook`
-- **Description**: Executes automatic pre-invocation compliance routines.
-
-### 8.8 `complete_code_task`
-- **Description**: Executes reasoning and coding tasks in-process.
+  - `complete_code_task`: Executes reasoning and coding tasks in-process.
 
 ---
 
-## 9. Troubleshooting & Lock Resolution
+## 9. Pre-Invocation & Pre-Compaction Hooks
 
-### 9.1 Single-Writer Architecture
-RocksDB requires an exclusive file lock on its database directory. Under the 1.0 architecture, lock contention is avoided because **only the daemon process interacts with the database files**.
-- All CLI commands and MCP server instances communicate with the daemon via HTTP on port `8090`.
-- Multiple clients can run concurrently without encountering "Resource temporarily unavailable" lock errors.
+To automate compliance checking, context preparation, and self-improvement loops, Mythrax features two primary hook entry points.
 
-### 9.2 Stale Processes & Force Unlocking
+### 9.1 Pre-Invocation Hook
+- **Purpose**: Runs immediately before the agent begins executing its turn. It checks code styles, audits the workspace directory for safety compliance, verifies the running memory daemon, and dynamically injects compiled context metadata nodes into the agent's short-term memory.
+- **MCP Call**: Routed to the `manage` tool with the action `pre_invocation`.
+- **How It Works**: The hook runner pings the daemon, checks directory states, and ensures the status block:
+  ```markdown
+  ### 🤖 Local Inference & Model Broker Status
+  ```
+  is formatted and injected cleanly into the agent context.
+
+### 9.2 Pre-Compaction (Precompact) Hook
+- **Purpose**: Triggered asynchronously after the agent completes a cycle or conversation session. It reads the raw log file or transcript path, runs extraction pipelines, distills new lessons/insights (as `WikiNode` or `WisdomRule` entities), writes them to the Obsidian vault, and updates the database.
+- **MCP Call**: Routed to the `manage` tool with the action `precompact`.
+- **API Endpoint**: Exposed via `POST /v1/hooks/precompact` on the core daemon:
+  ```json
+  {
+    "session_id": "session_123",
+    "transcript_path": "/absolute/path/to/transcript.jsonl"
+  }
+  ```
+
+### 9.3 Installing the Hooks
+Both hooks are registered automatically during initialization.
+
+1. **Automatic Installation**:
+   When you run the bootstrap command:
+   ```bash
+   mythrax init antigravity
+   ```
+   The CLI automatically reads the local CLI path and calls `merge_antigravity_hooks` to append the hook definitions to `~/.gemini/config/hooks.json`.
+
+2. **Manual Configuration (hooks.json)**:
+   Add the following JSON block to your `~/.gemini/config/hooks.json` under the `"mythrax-compliance"` key:
+   ```json
+   {
+     "mythrax-compliance": {
+       "PreInvocation": [
+         {
+           "type": "mcp",
+           "server": "mythrax",
+           "tool": "manage",
+           "arguments": {
+             "action": "pre_invocation"
+           }
+         }
+       ]
+     }
+   }
+   ```
+
+---
+
+## 10. Troubleshooting & Lock Resolution
+
+### 10.1 Single-Writer Architecture
+RocksDB requires an exclusive file lock on its database directory. Under the 2.x architecture, lock contention is avoided because **only the daemon process interacts with the database files**. All CLI commands and MCP server instances communicate with the daemon via HTTP on port `8090`. Multiple clients can run concurrently without encountering "Resource temporarily unavailable" lock errors.
+
+### 10.2 Stale Processes & Force Unlocking
 If the daemon becomes unresponsive or port `8090` is blocked by a zombie process:
 1. Stop all processes:
    ```bash
