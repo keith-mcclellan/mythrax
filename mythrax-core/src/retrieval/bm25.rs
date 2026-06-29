@@ -165,13 +165,35 @@ impl OkapiBM25 {
     }
 }
 
+pub fn stem(word: &str) -> String {
+    if word.len() <= 3 || word.contains('-') {
+        return word.to_string();
+    }
+    if word.ends_with("ing") {
+        word[..word.len() - 3].to_string()
+    } else if word.ends_with("ed") {
+        word[..word.len() - 2].to_string()
+    } else if word.ends_with("sses") {
+        word[..word.len() - 2].to_string()
+    } else if word.ends_with("ies") {
+        let stem_str = &word[..word.len() - 3];
+        format!("{}i", stem_str)
+    } else if word.ends_with("es") {
+        word[..word.len() - 2].to_string()
+    } else if word.ends_with('s') && !word.ends_with("ss") {
+        word[..word.len() - 1].to_string()
+    } else {
+        word.to_string()
+    }
+}
+
 pub fn tokenize(text: &str) -> Vec<String> {
     let lowercase = text.to_lowercase();
     lowercase
         .split(|c: char| !c.is_alphanumeric() && c != '-')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty() && !is_stop_word(s))
-        .map(|s| s.to_string())
+        .map(|s| stem(s))
         .collect()
 }
 
