@@ -236,6 +236,12 @@ Both hooks are registered automatically during initialization.
    ```
    The CLI automatically reads the local CLI path and calls `merge_antigravity_hooks` to append the hook definitions to `~/.gemini/config/hooks.json`.
 
+   For Claude Desktop or Claude Code, run the bootstrap command:
+   ```bash
+   mythrax init claude
+   ```
+   *(WARNING: Claude integration is currently **untested** and does not support hooks natively).*
+
 2. **Manual Configuration (hooks.json)**:
    Add the following JSON block to your `~/.gemini/config/hooks.json` under the `"mythrax-compliance"` key:
    ```json

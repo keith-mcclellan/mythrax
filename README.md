@@ -193,6 +193,12 @@ cargo build --release
 
 # Initialize for antigravity harness (bootstraps folders and database)
 ./mythrax-core/target/release/mythrax init antigravity
+
+# Or initialize for claude (WARNING: currently UNTESTED)
+./mythrax-core/target/release/mythrax init claude
+
+> [!WARNING]
+> Claude Desktop and Claude Code integration (`mythrax init claude`) is currently **untested**.
 ```
 
 ### 2. Start Daemon
