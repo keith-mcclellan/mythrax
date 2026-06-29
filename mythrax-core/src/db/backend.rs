@@ -2551,19 +2551,25 @@ impl StorageBackend for SurrealBackend {
             candidates = parse_results(keyword_resp_res.unwrap(), false)?;
         }
 
-        // 2.5) Strict Session Isolation filtering
-        let mut active_session_id = None;
-        for c in &candidates {
-            if let Some(ref sess) = c.session_id {
-                active_session_id = Some(sess.clone());
-                break;
+        let is_session_isolation_enabled = if let Ok(val) = std::env::var("MYTHRAX_SESSION_ISOLATION") {
+            val == "true"
+        } else {
+            true
+        };
+
+        if is_session_isolation_enabled {
+            // 2.5) Strict Session Isolation filtering
+            let mut active_session_id = None;
+            for c in &candidates {
+                if let Some(ref sess) = c.session_id {
+                    active_session_id = Some(sess.clone());
+                    break;
+                }
+            }
+            if let Some(ref active_sess) = active_session_id {
+                candidates.retain(|c| c.session_id.is_none() || c.session_id.as_ref() == Some(active_sess));
             }
         }
-        if let Some(ref active_sess) = active_session_id {
-            candidates.retain(|c| c.session_id.is_none() || c.session_id.as_ref() == Some(active_sess));
-        }
-
-        // 3) Neighbor Turn Expansion (for top-5 candidates only)
         let mut neighbor_candidates = Vec::new();
         if let Some((cue_type, _)) = temporal_cue_info {
             candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));

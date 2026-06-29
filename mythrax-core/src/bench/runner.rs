@@ -152,7 +152,10 @@ fn expected_sha_for(filename: &str) -> Option<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    unsafe { std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); }
+    unsafe { 
+        std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); 
+        std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false");
+    }
     let args = Args::parse();
     println!("Starting Mythrax LongMemEval retrieval benchmark runner...");
     println!("Split mode: {}", args.split);
