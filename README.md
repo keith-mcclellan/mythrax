@@ -241,13 +241,47 @@ The pre-invocation hook executes immediately before each model turn. It verifies
 
 #### Pre-Compaction (Precompact) Hook
 The pre-compaction hook runs asynchronously at the end of an agent session or workflow milestone to mine transcripts, extract wisdom rules/insights, and write them to the Obsidian vault.
-* **HTTP Endpoint**: Execute via a `POST` request to the daemon:
-  ```bash
-  curl -X POST http://127.0.0.1:8090/v1/hooks/precompact \
-    -H "Content-Type: application/json" \
-    -H "X-Mythrax-Token: $(cat ~/.mythrax/token)" \
-    -d '{
-      "session_id": "session_abc123",
-      "transcript_path": "/absolute/path/to/transcript.jsonl"
-    }'
-  ```
+
+##### 1. Google Antigravity Setup (hooks.json)
+Configure inside `~/.gemini/config/hooks.json` under the `"mythrax-compliance"` key to trigger automatically at compaction milestones:
+```json
+"PreCompaction": [
+  {
+    "type": "mcp",
+    "server": "mythrax",
+    "tool": "manage",
+    "arguments": {
+      "action": "precompact",
+      "session_id": "{{conversation_id}}",
+      "transcript_path": "{{transcript_path}}"
+    }
+  }
+]
+```
+
+##### 2. Claude Code Setup (.claude/settings.json)
+Trigger automatically at session termination using the `SessionEnd` lifecycle hook in `~/.claude/settings.json`:
+```json
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "type": "command",
+        "command": "curl -X POST http://127.0.0.1:8090/v1/hooks/precompact -H 'Content-Type: application/json' -H \"X-Mythrax-Token: $(cat ~/.mythrax/token)\" -d \"{\\\"session_id\\\": \\\"$CLAUDE_SESSION_ID\\\", \\\"transcript_path\\\": \\\"$CLAUDE_TRANSCRIPT_PATH\\\"}\""
+      }
+    ]
+  }
+}
+```
+
+##### 3. Manual Exec via HTTP POST
+```bash
+curl -X POST http://127.0.0.1:8090/v1/hooks/precompact \
+  -H "Content-Type: application/json" \
+  -H "X-Mythrax-Token: $(cat ~/.mythrax/token)" \
+  -d '{
+    "session_id": "session_abc123",
+    "transcript_path": "/absolute/path/to/transcript.jsonl"
+  }'
+```
+

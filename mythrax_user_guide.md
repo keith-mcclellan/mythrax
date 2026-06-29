@@ -218,13 +218,48 @@ To automate compliance checking, context preparation, and self-improvement loops
 ### 9.2 Pre-Compaction (Precompact) Hook
 - **Purpose**: Triggered asynchronously after the agent completes a cycle or conversation session. It reads the raw log file or transcript path, runs extraction pipelines, distills new lessons/insights (as `WikiNode` or `WisdomRule` entities), writes them to the Obsidian vault, and updates the database.
 - **MCP Call**: Routed to the `manage` tool with the action `precompact`.
-- **API Endpoint**: Exposed via `POST /v1/hooks/precompact` on the core daemon:
-  ```json
+
+#### 1. Google Antigravity Configuration (hooks.json)
+Configure inside `~/.gemini/config/hooks.json` under `mythrax-compliance` to trigger on compaction events:
+```json
+"PreCompaction": [
   {
-    "session_id": "session_123",
-    "transcript_path": "/absolute/path/to/transcript.jsonl"
+    "type": "mcp",
+    "server": "mythrax",
+    "tool": "manage",
+    "arguments": {
+      "action": "precompact",
+      "session_id": "{{conversation_id}}",
+      "transcript_path": "{{transcript_path}}"
+    }
   }
-  ```
+]
+```
+
+#### 2. Claude Code Configuration (.claude/settings.json)
+Configure inside `~/.claude/settings.json` under `SessionEnd` to trigger automatically when exiting a session:
+```json
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "type": "command",
+        "command": "curl -X POST http://127.0.0.1:8090/v1/hooks/precompact -H 'Content-Type: application/json' -H \"X-Mythrax-Token: $(cat ~/.mythrax/token)\" -d \"{\\\"session_id\\\": \\\"$CLAUDE_SESSION_ID\\\", \\\"transcript_path\\\": \\\"$CLAUDE_TRANSCRIPT_PATH\\\"}\""
+      }
+    ]
+  }
+}
+```
+
+#### 3. API Endpoint Reference
+Exposed via `POST /v1/hooks/precompact` on the core daemon:
+```json
+{
+  "session_id": "session_123",
+  "transcript_path": "/absolute/path/to/transcript.jsonl"
+}
+```
+
 
 ### 9.3 Installing the Hooks
 Both hooks are registered automatically during initialization.
