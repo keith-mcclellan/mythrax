@@ -971,21 +971,37 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
         .entry("mythrax-compliance".to_string())
         .or_insert_with(|| serde_json::json!({}));
         
-    mythrax_comp.as_object_mut()
-        .unwrap()
-        .insert(
-            "PreInvocation".to_string(),
-            serde_json::json!([
-                {
-                    "type": "mcp",
-                    "server": "mythrax",
-                    "tool": "manage",
-                    "arguments": {
-                        "action": "pre_invocation"
-                    }
+    let comp_obj = mythrax_comp.as_object_mut().unwrap();
+    
+    comp_obj.insert(
+        "PreInvocation".to_string(),
+        serde_json::json!([
+            {
+                "type": "mcp",
+                "server": "mythrax",
+                "tool": "manage",
+                "arguments": {
+                    "action": "pre_invocation"
                 }
-            ])
-        );
+            }
+        ])
+    );
+    
+    comp_obj.insert(
+        "PreCompaction".to_string(),
+        serde_json::json!([
+            {
+                "type": "mcp",
+                "server": "mythrax",
+                "tool": "manage",
+                "arguments": {
+                    "action": "precompact",
+                    "session_id": "{{conversation_id}}",
+                    "transcript_path": "{{transcript_path}}"
+                }
+            }
+        ])
+    );
         
     std::fs::write(path, serde_json::to_string_pretty(&data)?)?;
     Ok(())
