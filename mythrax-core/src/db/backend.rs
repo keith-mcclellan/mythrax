@@ -2737,7 +2737,7 @@ impl StorageBackend for SurrealBackend {
                             
                         let mut neighbor_ids_to_fetch = Vec::new();
                         let mut neighbor_to_primary: std::collections::HashMap<String, Vec<(String, f32)>> = std::collections::HashMap::new();
-                        let depth = weight.round() as usize;
+                        let depth = (weight.round() as usize).clamp(1, 3);
                         
                         for c in &top_5_primary {
                             if let Some(rel) = rel_map.get(&c.id) {
@@ -3133,7 +3133,7 @@ impl StorageBackend for SurrealBackend {
             }
 
             for c in &mut candidates {
-                if c.similarity >= 0.4f32 {
+                if c.similarity >= 0.50f32 {
                     let multiplier = (1.0f32 + (c.utility / 100.0f32) * 0.15f32).min(1.15f32);
                     c.similarity = c.similarity * multiplier;
                 }
