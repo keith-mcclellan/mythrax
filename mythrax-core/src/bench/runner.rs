@@ -356,7 +356,7 @@ async fn main() -> Result<()> {
                     overrides.insert("search.decay_lambda".to_string(), lambda.to_string());
                     overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
 
-                    let (avg_r_any, avg_r_all, avg_ndcg, _, _, avg_lat, _) = run_evaluation(
+                    let (avg_r_any, avg_r_all, avg_ndcg, _, _, avg_lat, _, _) = run_evaluation(
                         &target_questions,
                         "hybrid",
                         Some(overrides),
@@ -378,7 +378,7 @@ async fn main() -> Result<()> {
             println!("Best Parameters found: decay_lambda={}, gamma_rerank={} (Combined Score: {:.4})",
                      best_params.0, best_params.1, best_score);
         } else {
-            let (avg_recall_any_turn, avg_recall_all_turn, avg_ndcg_turn, avg_recall_any_session, avg_recall_all_session, avg_latency, records) = run_evaluation(
+            let (avg_recall_any_turn, avg_recall_all_turn, avg_ndcg_turn, avg_recall_any_session, avg_recall_all_session, avg_latency, p95_latency, records) = run_evaluation(
                 &target_questions,
                 &args.mode,
                 None,
@@ -393,6 +393,7 @@ async fn main() -> Result<()> {
             println!("Split:                    {}", args.split);
             println!("Mode:                     {}", args.mode);
             println!("Average Query Latency:    {:.2}ms", avg_latency);
+            println!("p95 Query Latency:        {:.2}ms", p95_latency);
             println!("Published:                {}", published);
             println!("Total Questions:          {}", target_questions.len());
             println!("-- turn granularity (has_answer) --");
@@ -519,7 +520,7 @@ async fn run_evaluation(
     target_cache_path: &std::path::Path,
     published: bool,
     note: &str,
-) -> Result<(f32, f32, f32, f32, f32, f64, Vec<QuestionResultRecord>)> {
+) -> Result<(f32, f32, f32, f32, f32, f64, f64, Vec<QuestionResultRecord>)> {
     let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
     let mut records = Vec::new();
     let mut sum_recall_any_turn = 0.0f32;
@@ -569,8 +570,14 @@ async fn run_evaluation(
     let expected_count = expected_corpus_ids.len();
 
     // Query database to see if we already have the expected episodes
-    let current_count: usize = match shared_backend.db.query("SELECT VALUE count(id) FROM episode;").await {
-        Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+    let current_count: usize = match shared_backend.db.query("SELECT count() FROM episode GROUP ALL;").await {
+        Ok(mut res) => {
+            let list: Vec<serde_json::Value> = res.take(0).unwrap_or_default();
+            list.first()
+                .and_then(|r| r.get("count"))
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0) as usize
+        }
         Err(_) => 0,
     };
 
@@ -766,6 +773,15 @@ async fn run_evaluation(
     let avg_recall_all_session = sum_recall_all_session / denom;
     let avg_latency = sum_latency / total_q as f64;
 
+    let mut latencies: Vec<f64> = records.iter().map(|r| r.query_latency_ms).collect();
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p95_latency = if latencies.is_empty() {
+        0.0
+    } else {
+        let idx = ((latencies.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
+        latencies[idx.min(latencies.len() - 1)]
+    };
+
     Ok((
         avg_recall_any_turn,
         avg_recall_all_turn,
@@ -773,6 +789,7 @@ async fn run_evaluation(
         avg_recall_any_session,
         avg_recall_all_session,
         avg_latency,
+        p95_latency,
         records,
     ))
 }
