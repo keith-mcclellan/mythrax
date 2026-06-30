@@ -165,23 +165,101 @@ impl OkapiBM25 {
     }
 }
 
+fn has_vowel(s: &str) -> bool {
+    s.chars().any(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y'))
+}
+
+fn ends_double_consonant_except_lsz(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    if len >= 2 {
+        let last = chars[len - 1];
+        let prev = chars[len - 2];
+        if last == prev {
+            let is_consonant = !matches!(last, 'a' | 'e' | 'i' | 'o' | 'u' | 'y');
+            is_consonant && !matches!(last, 'l' | 's' | 'z')
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+fn is_short_stem(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    let len = chars.len();
+    if len >= 3 {
+        let c1 = chars[len - 3];
+        let v = chars[len - 2];
+        let c2 = chars[len - 1];
+        let is_consonant = |c: char| !matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y');
+        is_consonant(c1) && !is_consonant(v) && is_consonant(c2) && !matches!(c2, 'w' | 'x' | 'y')
+    } else {
+        false
+    }
+}
+
 pub fn stem(word: &str) -> String {
     if word.len() <= 3 || word.contains('-') {
         return word.to_string();
     }
+
     if word.ends_with("ing") {
-        word[..word.len() - 3].to_string()
+        let stem_part = &word[..word.len() - 3];
+        if has_vowel(stem_part) {
+            if stem_part.ends_with("at") || stem_part.ends_with("bl") || stem_part.ends_with("iz") {
+                format!("{}e", stem_part)
+            } else if ends_double_consonant_except_lsz(stem_part) {
+                let chars: Vec<char> = stem_part.chars().collect();
+                chars[..chars.len() - 1].iter().collect()
+            } else if is_short_stem(stem_part) {
+                format!("{}e", stem_part)
+            } else {
+                stem_part.to_string()
+            }
+        } else {
+            word.to_string()
+        }
     } else if word.ends_with("ed") {
-        word[..word.len() - 2].to_string()
+        let stem_part = &word[..word.len() - 2];
+        if has_vowel(stem_part) {
+            if stem_part.ends_with("at") || stem_part.ends_with("bl") || stem_part.ends_with("iz") {
+                format!("{}e", stem_part)
+            } else if ends_double_consonant_except_lsz(stem_part) {
+                let chars: Vec<char> = stem_part.chars().collect();
+                chars[..chars.len() - 1].iter().collect()
+            } else if is_short_stem(stem_part) {
+                format!("{}e", stem_part)
+            } else {
+                stem_part.to_string()
+            }
+        } else {
+            word.to_string()
+        }
     } else if word.ends_with("sses") {
         word[..word.len() - 2].to_string()
     } else if word.ends_with("ies") {
-        let stem_str = &word[..word.len() - 3];
-        format!("{}i", stem_str)
+        format!("{}i", &word[..word.len() - 3])
     } else if word.ends_with("es") {
-        word[..word.len() - 2].to_string()
+        let chars: Vec<char> = word.chars().collect();
+        if chars.len() >= 3 {
+            let prec = chars[chars.len() - 3];
+            if matches!(prec, 'h' | 'x' | 's' | 'z' | 'o') {
+                word[..word.len() - 2].to_string()
+            } else {
+                word[..word.len() - 1].to_string()
+            }
+        } else {
+            word.to_string()
+        }
     } else if word.ends_with('s') && !word.ends_with("ss") {
-        word[..word.len() - 1].to_string()
+        let preceding = &word[..word.len() - 1];
+        if has_vowel(preceding) {
+            preceding.to_string()
+        } else {
+            word.to_string()
+        }
     } else {
         word.to_string()
     }
@@ -320,4 +398,20 @@ fn is_stop_word(w: &str) -> bool {
             | "yourself"
             | "yourselves"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stemmer_rules() {
+        assert_eq!(stem("running"), "run");
+        assert_eq!(stem("wiring"), "wire");
+        assert_eq!(stem("connected"), "connect");
+        assert_eq!(stem("values"), "value");
+        assert_eq!(stem("boxes"), "box");
+        assert_eq!(stem("flies"), "fli");
+        assert_eq!(stem("caresses"), "caress");
+    }
 }
