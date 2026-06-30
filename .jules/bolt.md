@@ -1,0 +1,3 @@
+## 2024-06-30 - Replace string clones with mem::take / mem::replace in ingestion.rs
+**Learning:** In Rust text processing pipelines, appending strings into chunks and cloning them when pushing to a list is an anti-pattern when we immediately clear the string anyway (`push(current.clone()); current.clear();`). Replacing it with `push(std::mem::take(&mut current))` is faster and avoids unnecessary allocations. Similarly, `current = chunk;` can be optimized with `push(std::mem::replace(&mut current, chunk))` to avoid cloning.
+**Action:** Always prefer `std::mem::take` or `std::mem::replace` over `.clone()` + `.clear()` for building and storing strings in Rust when the original buffer is no longer needed.
