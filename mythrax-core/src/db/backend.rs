@@ -1990,75 +1990,87 @@ impl StorageBackend for SurrealBackend {
         }
 
         let mut keyword_sql = String::new();
-        if include_episodes {
+        if is_hybrid {
+            if include_episodes {
+                if deep_insight {
+                    keyword_sql.push_str(&format!(
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
+                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
+                               <-followed_by<-episode.* AS prev_episodes,
+                               ->followed_by->episode.* AS next_episodes
+                        FROM episode 
+                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
+                        ",
+                        traversal = traversal,
+                        related_targets = related_targets
+                    ));
+                } else {
+                    keyword_sql.push_str("
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
+                        FROM episode 
+                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
+                    ");
+                }
+            }
+
             if deep_insight {
                 keyword_sql.push_str(&format!(
-                    "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
-                           (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
-                           <-followed_by<-episode.* AS prev_episodes,
-                           ->followed_by->episode.* AS next_episodes
-                    FROM episode 
-                    WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                    FROM wiki_node 
+                    WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      {wiki_node_filter};
+
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                    FROM wisdom 
+                    WHERE status != 'superseded'
+                      AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                     ",
                     traversal = traversal,
-                    related_targets = related_targets
+                    related_targets = related_targets,
+                    wiki_node_filter = wiki_node_filter
                 ));
             } else {
-                keyword_sql.push_str("
-                    SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
-                           (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
-                    FROM episode 
-                    WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
+                keyword_sql.push_str(&format!(
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wiki_node 
+                    WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      {wiki_node_filter};
+
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wisdom 
+                    WHERE status != 'superseded'
+                      AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                ");
+                    ",
+                    wiki_node_filter = wiki_node_filter
+                ));
             }
         }
 
-        if deep_insight {
-            keyword_sql.push_str(&format!(
-                "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                       {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
-                FROM wiki_node 
-                WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
-                  AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                  {wiki_node_filter};
-
-                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                       {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
-                FROM wisdom 
-                WHERE status != 'superseded'
-                  AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
-                  AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                ",
-                traversal = traversal,
-                related_targets = related_targets,
-                wiki_node_filter = wiki_node_filter
-            ));
-        } else {
-            keyword_sql.push_str(&format!(
-                "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM wiki_node 
-                WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
-                  AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                  {wiki_node_filter};
-
-                SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                FROM wisdom 
-                WHERE status != 'superseded'
-                  AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
-                  AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                ",
-                wiki_node_filter = wiki_node_filter
-            ));
-        }
-
-        let (vector_resp_res, keyword_resp_res) = if let Some(ref q_vec) = query_emb {
+        let (vector_resp_res, keyword_resp_res) = if !is_hybrid {
+            if let Some(ref q_vec) = query_emb {
+                let vector_fut = self.db.query(&vector_sql)
+                    .bind(("target_scope", resolved_scope.as_str()))
+                    .bind(("search_all", search_all))
+                    .bind(("query_embedding", q_vec.clone()));
+                (Some(vector_fut.await), None)
+            } else {
+                (None, None)
+            }
+        } else if let Some(ref q_vec) = query_emb {
             let vector_fut = self.db.query(&vector_sql)
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
@@ -2478,7 +2490,13 @@ impl StorageBackend for SurrealBackend {
         });
 
         let mut candidates;
-        if let Some(v_resp) = vector_resp_res {
+        if !is_hybrid {
+            if let Some(v_resp) = vector_resp_res {
+                candidates = parse_results(v_resp, true)?;
+            } else {
+                candidates = Vec::new();
+            }
+        } else if let Some(v_resp) = vector_resp_res {
             let vector_candidates = parse_results(v_resp, true)?;
             let keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
             
