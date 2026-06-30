@@ -41,7 +41,11 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS episode_vault_path ON episode FIELDS vault_path;
     DEFINE INDEX IF NOT EXISTS episode_scope_created ON episode FIELDS scope, created_at;
     DEFINE ANALYZER IF NOT EXISTS ascii TOKENIZERS blank, punct FILTERS lowercase, ascii;
-    DEFINE INDEX IF NOT EXISTS episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER ascii;
+    DEFINE ANALYZER IF NOT EXISTS custom_ngram TOKENIZERS class FILTERS lowercase, ascii, ngram(3,8);
+    DEFINE ANALYZER IF NOT EXISTS snowball_analyzer TOKENIZERS class, blank, punct FILTERS lowercase, ascii, snowball(english);
+    DEFINE INDEX IF NOT EXISTS episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER snowball_analyzer;
+    DEFINE INDEX IF NOT EXISTS episode_title_ngram ON TABLE episode FIELDS title FULLTEXT ANALYZER custom_ngram;
+    DEFINE INDEX IF NOT EXISTS episode_vault_path_ngram ON TABLE episode FIELDS vault_path FULLTEXT ANALYZER custom_ngram;
 
 
     DEFINE TABLE IF NOT EXISTS wiki_node SCHEMAFULL;
@@ -57,6 +61,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS wiki_node_name ON wiki_node FIELDS name UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX IF NOT EXISTS wiki_node_name_search ON TABLE wiki_node FIELDS name FULLTEXT ANALYZER snowball_analyzer;
+    DEFINE INDEX IF NOT EXISTS wiki_node_content_search ON TABLE wiki_node FIELDS content FULLTEXT ANALYZER snowball_analyzer;
 
 
     DEFINE TABLE IF NOT EXISTS wisdom SCHEMAFULL;
@@ -79,6 +85,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
     DEFINE INDEX IF NOT EXISTS wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX IF NOT EXISTS wisdom_pattern_search ON TABLE wisdom FIELDS target_pattern FULLTEXT ANALYZER snowball_analyzer;
+    DEFINE INDEX IF NOT EXISTS wisdom_action_search ON TABLE wisdom FIELDS action_to_avoid FULLTEXT ANALYZER snowball_analyzer;
+    DEFINE INDEX IF NOT EXISTS wisdom_explanation_search ON TABLE wisdom FIELDS causal_explanation FULLTEXT ANALYZER snowball_analyzer;
+    DEFINE INDEX IF NOT EXISTS wisdom_remedy_search ON TABLE wisdom FIELDS prescribed_remedy FULLTEXT ANALYZER snowball_analyzer;
 
 
     DEFINE TABLE IF NOT EXISTS hypothesis_node SCHEMALESS;
@@ -177,6 +187,11 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS content ON chat_history TYPE string;
     DEFINE FIELD IF NOT EXISTS created_at ON chat_history TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS ch_session ON chat_history FIELDS session_id;
+
+    DEFINE TABLE IF NOT EXISTS compaction_cursor SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS scope ON compaction_cursor TYPE string;
+    DEFINE FIELD IF NOT EXISTS last_compacted_at ON compaction_cursor TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS cursor_scope ON compaction_cursor FIELDS scope UNIQUE;
 
     DEFINE TABLE IF NOT EXISTS wiki_node_history SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS node_id ON wiki_node_history TYPE record<wiki_node>;

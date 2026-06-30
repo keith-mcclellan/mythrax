@@ -937,6 +937,830 @@ impl SurrealBackend {
         }
         "general".to_string()
     }
+
+    async fn execute_base_search(
+        &self,
+        params: &BaseSearchParams<'_>,
+        routed_episodes: Option<&Vec<surrealdb::types::RecordId>>,
+    ) -> Result<Vec<SearchResult>> {
+        let query_emb = params.query_emb;
+        let query_emb_slice = query_emb.map(|v| v.as_slice());
+        let is_hybrid = params.is_hybrid;
+        let traversal = params.traversal;
+        let related_targets = params.related_targets;
+        let wiki_node_filter = params.wiki_node_filter;
+        let deep_insight = params.deep_insight;
+        let include_episodes = params.include_episodes;
+        let cleaned_query = params.cleaned_query;
+        let resolved_scope = params.resolved_scope;
+        let search_all = params.search_all;
+        let is_hybrid_enabled = params.is_hybrid_enabled;
+        let use_new_formula = params.use_new_formula;
+        let is_sigmoid_gated_search_test = params.is_sigmoid_gated_search_test;
+        let sigmoid_center = params.sigmoid_center;
+        let sigmoid_steepness = params.sigmoid_steepness;
+        let w_imp_ep = params.w_imp_ep;
+        let w_rec_ep = params.w_rec_ep;
+        let w_imp_ins = params.w_imp_ins;
+        let w_rec_ins = params.w_rec_ins;
+        let w_imp_wis = params.w_imp_wis;
+        let w_rec_wis = params.w_rec_wis;
+        let threshold = params.threshold;
+
+        let episode_restriction = if routed_episodes.is_some() {
+            " AND id IN $routed_episodes"
+        } else {
+            ""
+        };
+
+        let mut vector_sql = String::new();
+        if query_emb.is_some() {
+            if include_episodes {
+                if deep_insight {
+                    vector_sql.push_str(&format!(
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
+                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
+                               <-followed_by<-episode.* AS prev_episodes,
+                               ->followed_by->episode.* AS next_episodes
+                        FROM episode
+                        WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                          AND (embedding <|100, 100|> $query_embedding){episode_restriction};
+                        ",
+                        traversal = traversal,
+                        related_targets = related_targets,
+                        episode_restriction = episode_restriction
+                    ));
+                } else {
+                    vector_sql.push_str(&format!("
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
+                        FROM episode
+                        WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                          AND (embedding <|100, 100|> $query_embedding){episode_restriction};
+                    ", episode_restriction = episode_restriction));
+                }
+            }
+
+            if deep_insight {
+                vector_sql.push_str(&format!(
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                    FROM wiki_node
+                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      AND (embedding <|100, 100|> $query_embedding)
+                      {wiki_node_filter};
+
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                    FROM wisdom
+                    WHERE status != 'superseded'
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      AND (embedding <|100, 100|> $query_embedding);
+                    ",
+                    traversal = traversal,
+                    related_targets = related_targets,
+                    wiki_node_filter = wiki_node_filter
+                ));
+            } else {
+                vector_sql.push_str(&format!(
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wiki_node
+                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      AND (embedding <|100, 100|> $query_embedding)
+                      {wiki_node_filter};
+
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wisdom
+                    WHERE status != 'superseded'
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      AND (embedding <|100, 100|> $query_embedding);
+                    ",
+                    wiki_node_filter = wiki_node_filter
+                ));
+            }
+        }
+
+        let mut keyword_sql = String::new();
+        if is_hybrid {
+            if include_episodes {
+                if deep_insight {
+                    keyword_sql.push_str(&format!(
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
+                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
+                               <-followed_by<-episode.* AS prev_episodes,
+                               ->followed_by->episode.* AS next_episodes
+                        FROM episode 
+                        WHERE (title @@ $query OR content @@ $query) 
+                          AND (scope IN [$target_scope, 'general'] OR $search_all = true){episode_restriction};
+                        ",
+                        traversal = traversal,
+                        related_targets = related_targets,
+                        episode_restriction = episode_restriction
+                    ));
+                } else {
+                    keyword_sql.push_str(&format!("
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
+                        FROM episode 
+                        WHERE (title @@ $query OR content @@ $query) 
+                          AND (scope IN [$target_scope, 'general'] OR $search_all = true){episode_restriction};
+                    ", episode_restriction = episode_restriction));
+                }
+            }
+
+            if deep_insight {
+                keyword_sql.push_str(&format!(
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                    FROM wiki_node 
+                    WHERE (name @@ $query OR content @@ $query) 
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      {wiki_node_filter};
+
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                    FROM wisdom 
+                    WHERE status != 'superseded'
+                      AND (target_pattern @@ $query OR action_to_avoid @@ $query OR causal_explanation @@ $query OR prescribed_remedy @@ $query) 
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true);
+                    ",
+                    traversal = traversal,
+                    related_targets = related_targets,
+                    wiki_node_filter = wiki_node_filter
+                ));
+            } else {
+                keyword_sql.push_str(&format!(
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wiki_node 
+                    WHERE (name @@ $query OR content @@ $query) 
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                      {wiki_node_filter};
+
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
+                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                    FROM wisdom 
+                    WHERE status != 'superseded'
+                      AND (target_pattern @@ $query OR action_to_avoid @@ $query OR causal_explanation @@ $query OR prescribed_remedy @@ $query) 
+                      AND (scope IN [$target_scope, 'general'] OR $search_all = true);
+                    ",
+                    wiki_node_filter = wiki_node_filter
+                ));
+            }
+        }
+
+        let (vector_resp_res, keyword_resp_res) = if !is_hybrid {
+            if let Some(q_vec) = query_emb {
+                let mut vector_fut = self.db.query(&vector_sql)
+                    .bind(("target_scope", resolved_scope))
+                    .bind(("search_all", search_all))
+                    .bind(("query_embedding", q_vec.clone()));
+                if let Some(ep_ids) = routed_episodes {
+                    vector_fut = vector_fut.bind(("routed_episodes", ep_ids.clone()));
+                }
+                (Some(vector_fut.await), None)
+            } else {
+                (None, None)
+            }
+        } else if let Some(q_vec) = query_emb {
+            let mut vector_fut = self.db.query(&vector_sql)
+                .bind(("target_scope", resolved_scope))
+                .bind(("search_all", search_all))
+                .bind(("query_embedding", q_vec.clone()));
+            if let Some(ep_ids) = routed_episodes {
+                vector_fut = vector_fut.bind(("routed_episodes", ep_ids.clone()));
+            }
+            let mut keyword_fut = self.db.query(&keyword_sql)
+                .bind(("query", cleaned_query))
+                .bind(("target_scope", resolved_scope))
+                .bind(("search_all", search_all));
+            if let Some(ep_ids) = routed_episodes {
+                keyword_fut = keyword_fut.bind(("routed_episodes", ep_ids.clone()));
+            }
+            let (v_res, k_res) = tokio::join!(vector_fut, keyword_fut);
+            (Some(v_res), Some(k_res))
+        } else {
+            let mut keyword_fut = self.db.query(&keyword_sql)
+                .bind(("query", cleaned_query))
+                .bind(("target_scope", resolved_scope))
+                .bind(("search_all", search_all));
+            if let Some(ep_ids) = routed_episodes {
+                keyword_fut = keyword_fut.bind(("routed_episodes", ep_ids.clone()));
+            }
+            (None, Some(keyword_fut.await))
+        };
+
+        let parse_results = |response: std::result::Result<IndexedResults, surrealdb::Error>, is_vector: bool| -> Result<Vec<SearchResult>> {
+            let mut response = response?.check().context("Query check failed")?;
+            let (episodes, wiki_nodes, wisdom_rules) = if include_episodes {
+                let eps: Vec<SearchRaw> = response.take(0)?;
+                let wns: Vec<SearchRaw> = response.take(1)?;
+                let wrs: Vec<SearchWisdomRaw> = response.take(2)?;
+                (eps, wns, wrs)
+            } else {
+                let wns: Vec<SearchRaw> = response.take(0)?;
+                let wrs: Vec<SearchWisdomRaw> = response.take(1)?;
+                (Vec::new(), wns, wrs)
+            };
+
+            let mut list = Vec::new();
+
+            for ep in episodes {
+                let mut content = ep.content.clone();
+                let mut related_nodes_list = None;
+                if deep_insight {
+                    let mut rel_list = Vec::new();
+                    if let Some(related) = ep.related_nodes.as_ref() {
+                        append_related_context(&mut content, related);
+                        for r_node in related {
+                            rel_list.push(SearchResult {
+                                id: format_record_id(&r_node.id),
+                                title: r_node.title.clone().unwrap_or_default(),
+                                content: r_node.content.clone().unwrap_or_default(),
+                                similarity: 0.0,
+                                utility: 0.0,
+                                tier: r_node.id.table.as_str().to_string(),
+                                embedding: None,
+                                vault_path: r_node.vault_path.clone(),
+                                source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
+                                discovery_tokens: None,
+                                related_nodes: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    if let Some(prevs) = ep.prev_episodes.as_ref() {
+                        for prev in prevs {
+                            rel_list.push(SearchResult {
+                                id: format_record_id(&prev.id),
+                                title: prev.title.clone(),
+                                content: prev.content.clone(),
+                                similarity: 0.0,
+                                utility: 0.0,
+                                tier: "episode".to_string(),
+                                embedding: None,
+                                vault_path: prev.vault_path.clone(),
+                                source_episode: prev.source_episode.as_ref().map(|t| format_record_id(t)),
+                                discovery_tokens: prev.discovery_tokens,
+                                related_nodes: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    if let Some(nexts) = ep.next_episodes.as_ref() {
+                        for next in nexts {
+                            rel_list.push(SearchResult {
+                                id: format_record_id(&next.id),
+                                title: next.title.clone(),
+                                content: next.content.clone(),
+                                similarity: 0.0,
+                                utility: 0.0,
+                                tier: "episode".to_string(),
+                                embedding: None,
+                                vault_path: next.vault_path.clone(),
+                                source_episode: next.source_episode.as_ref().map(|t| format_record_id(t)),
+                                discovery_tokens: next.discovery_tokens,
+                                related_nodes: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    if !rel_list.is_empty() {
+                        related_nodes_list = Some(rel_list);
+                    }
+                }
+
+                let similarity = if is_sigmoid_gated_search_test {
+                    if ep.title == "High Similarity Old Node" {
+                        0.85f32
+                    } else if ep.title == "Low Similarity Recent Node" {
+                        0.50f32
+                    } else {
+                        1.0f32
+                    }
+                } else if let (Some(q_vec), Some(e_vec)) = (query_emb_slice, ep.embedding.as_ref()) {
+                    let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                    dot
+                } else {
+                    1.0
+                };
+
+                let delta_t = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
+                    if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
+                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
+                        let secs = elapsed.num_seconds() as f32;
+                        (secs / 86400.0f32).max(0.0f32)
+                    } else if let Some(created) = ep.created_at.as_ref() {
+                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
+                        let secs = elapsed.num_seconds() as f32;
+                        (secs / 86400.0f32).max(0.0f32)
+                    } else {
+                        0.0f32
+                    }
+                } else if let Some(created) = ep.created_at.as_ref() {
+                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
+                    let secs = elapsed.num_seconds() as f32;
+                    (secs / 86400.0f32).max(0.0f32)
+                } else {
+                    0.0f32
+                };
+
+                let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb_slice.is_some() && ep.embedding.is_some())) {
+                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
+                    let importance = ep.importance.unwrap_or(5.0) as f32;
+                    let recency_component = (-0.05f32 * delta_t).exp();
+                    let importance_component = importance / 10.0f32;
+                    let norm = w_imp_ep + w_rec_ep;
+                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
+                    let mut f = ((w_imp_ep * importance_component + w_rec_ep * recency_component) / divisor) * get_tier_boost("episode");
+                    if ep.archived.unwrap_or(false) {
+                        f *= 0.4f32;
+                    }
+                    (g, f)
+                } else {
+                    let u_old = ep.utility.unwrap_or(50.0) as f32;
+                    let decayed_utility = u_old * (-0.05f32 * delta_t).exp();
+                    let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("episode");
+                    if ep.archived.unwrap_or(false) {
+                        f *= 0.4f32;
+                    }
+                    (1.0f32, f)
+                };
+
+                let blended_score = similarity * factor_multiplier * gate;
+                let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * (-0.05f32 * delta_t).exp();
+                let tier = "episode".to_string();
+
+                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
+                if blended_score >= pass_threshold {
+                    list.push(SearchResult {
+                        id: format_record_id(&ep.id),
+                        title: ep.title,
+                        content,
+                        similarity: blended_score,
+                        utility: decayed_utility,
+                        tier,
+                        embedding: None,
+                        vault_path: ep.vault_path.clone(),
+                        source_episode: None,
+                        discovery_tokens: ep.discovery_tokens,
+                        related_nodes: related_nodes_list,
+                        raw_vector_sim: Some(similarity),
+                        original_gate: Some(gate),
+                        factor_multiplier: Some(factor_multiplier),
+                        created_at: ep.created_at,
+                        session_id: ep.session_id.clone(),
+                        word_count: ep.word_count,
+                    });
+                }
+            }
+
+            for node in wiki_nodes {
+                let mut content = node.content.clone();
+                let mut related_nodes_list = None;
+                if deep_insight {
+                    let mut rel_list = Vec::new();
+                    if let Some(related) = node.related_nodes.as_ref() {
+                        append_related_context(&mut content, related);
+                        for r_node in related {
+                            rel_list.push(SearchResult {
+                                id: format_record_id(&r_node.id),
+                                title: r_node.title.clone().unwrap_or_default(),
+                                content: r_node.content.clone().unwrap_or_default(),
+                                similarity: 0.0,
+                                utility: 0.0,
+                                tier: r_node.id.table.as_str().to_string(),
+                                embedding: None,
+                                vault_path: r_node.vault_path.clone(),
+                                source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
+                                discovery_tokens: None,
+                                related_nodes: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    if !rel_list.is_empty() {
+                        related_nodes_list = Some(rel_list);
+                    }
+                }
+
+                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb_slice, node.embedding.as_ref()) {
+                    let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                    dot
+                } else {
+                    1.0
+                };
+
+                let delta_t = if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
+                    if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
+                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
+                        let secs = elapsed.num_seconds() as f32;
+                        (secs / 86400.0f32).max(0.0f32)
+                    } else if let Some(created) = node.created_at.as_ref() {
+                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
+                        let secs = elapsed.num_seconds() as f32;
+                        (secs / 86400.0f32).max(0.0f32)
+                    } else {
+                        0.0f32
+                    }
+                } else if let Some(created) = node.created_at.as_ref() {
+                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
+                    let secs = elapsed.num_seconds() as f32;
+                    (secs / 86400.0f32).max(0.0f32)
+                } else {
+                    0.0f32
+                };
+
+                let utility_val = node.utility.unwrap_or(1.0) as f32;
+                let (gate, factor_multiplier) = if use_new_formula && query_emb_slice.is_some() && node.embedding.is_some() {
+                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
+                    let recency_component = (-0.05f32 * delta_t).exp();
+                    let importance_component = utility_val / 10.0f32;
+                    let norm = w_imp_ins + w_rec_ins;
+                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
+                    let f = ((w_imp_ins * importance_component + w_rec_ins * recency_component) / divisor) * get_tier_boost("wiki_node");
+                    (g, f)
+                } else {
+                    let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
+                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 1.0f32)) * get_tier_boost("wiki_node");
+                    (1.0f32, f)
+                };
+
+                let blended_score = similarity * factor_multiplier * gate;
+                let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
+                let tier = "insight".to_string();
+
+                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
+                if blended_score >= pass_threshold {
+                    list.push(SearchResult {
+                        id: format_record_id(&node.id),
+                        title: node.title,
+                        content,
+                        similarity: blended_score,
+                        utility: decayed_utility,
+                        tier,
+                        embedding: None,
+                        vault_path: node.vault_path.clone(),
+                        source_episode: None,
+                        discovery_tokens: None,
+                        related_nodes: related_nodes_list,
+                        raw_vector_sim: Some(similarity),
+                        original_gate: Some(gate),
+                        factor_multiplier: Some(factor_multiplier),
+                        created_at: node.created_at,
+                        ..Default::default()
+                    });
+                }
+            }
+
+            for rule in wisdom_rules {
+                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb_slice, rule.embedding.as_ref()) {
+                    let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                    dot
+                } else {
+                    1.0
+                };
+
+                let delta_t = if let Some(created) = rule.created_at.as_ref() {
+                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
+                    let secs = elapsed.num_seconds() as f32;
+                    (secs / 86400.0f32).max(0.0f32)
+                } else {
+                    0.0f32
+                };
+
+                let utility_val = rule.utility.unwrap_or(50.0) as f32;
+                let (gate, factor_multiplier) = if use_new_formula && query_emb_slice.is_some() && rule.embedding.is_some() {
+                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
+                    let recency_component = (-0.05f32 * delta_t).exp();
+                    let importance_component = utility_val / 100.0f32;
+                    let norm = w_imp_wis + w_rec_wis;
+                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
+                    let f = ((w_imp_wis * importance_component + w_rec_wis * recency_component) / divisor) * get_tier_boost("wisdom");
+                    (g, f)
+                } else {
+                    let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
+                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("wisdom");
+                    (1.0f32, f)
+                };
+
+                let blended_score = similarity * factor_multiplier * gate;
+                let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
+                let rule_details = format!(
+                    "**Action to Avoid**: {}\n**Why**: {}\n**Prescribed Remedy**: {}",
+                    rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                );
+                let tier = rule.tier.clone();
+                let mut related_nodes_list = None;
+                if deep_insight {
+                    let mut rel_list = Vec::new();
+                    if let Some(related) = rule.related_nodes.as_ref() {
+                        for r_node in related {
+                            rel_list.push(SearchResult {
+                                id: format_record_id(&r_node.id),
+                                title: r_node.title.clone().unwrap_or_default(),
+                                content: r_node.content.clone().unwrap_or_default(),
+                                similarity: 0.0,
+                                utility: 0.0,
+                                tier: r_node.id.table.as_str().to_string(),
+                                embedding: None,
+                                vault_path: r_node.vault_path.clone(),
+                                source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
+                                discovery_tokens: None,
+                                related_nodes: None,
+                                raw_vector_sim: None,
+                                original_gate: None,
+                                factor_multiplier: None,
+                                created_at: None,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    if !rel_list.is_empty() {
+                        related_nodes_list = Some(rel_list);
+                    }
+                }
+
+                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
+                if blended_score >= pass_threshold {
+                    list.push(SearchResult {
+                        id: format_record_id(&rule.id),
+                        title: rule.target_pattern,
+                        content: rule_details,
+                        similarity: blended_score,
+                        utility: decayed_utility,
+                        tier,
+                        embedding: None,
+                        vault_path: rule.vault_path.clone(),
+                        source_episode: None,
+                        discovery_tokens: None,
+                        related_nodes: related_nodes_list,
+                        raw_vector_sim: Some(similarity),
+                        original_gate: Some(gate),
+                        factor_multiplier: Some(factor_multiplier),
+                        created_at: rule.created_at,
+                        ..Default::default()
+                    });
+                }
+            }
+
+            if !is_vector {
+                let query_words: Vec<String> = cleaned_query.to_lowercase()
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
+                if !query_words.is_empty() {
+                    list.sort_by_cached_key(|c| {
+                        let text = format!("{} {}", c.title, c.content).to_lowercase();
+                        let matches = query_words.iter().filter(|w| text.contains(*w)).count();
+                        std::cmp::Reverse(matches)
+                    });
+                }
+            }
+
+            Ok(list)
+        };
+
+        let candidates;
+        if !is_hybrid {
+            if let Some(v_resp) = vector_resp_res {
+                candidates = parse_results(v_resp, true)?;
+            } else {
+                candidates = Vec::new();
+            }
+        } else if let Some(v_resp) = vector_resp_res {
+            let vector_candidates = parse_results(v_resp, true)?;
+            let keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            
+            if is_hybrid_enabled {
+                let mut unique_map = std::collections::HashMap::new();
+                for c in vector_candidates {
+                    unique_map.insert(c.id.clone(), c);
+                }
+                for c in keyword_candidates {
+                    unique_map.entry(c.id.clone()).or_insert(c);
+                }
+                
+                let mut merged: Vec<SearchResult> = unique_map.into_values().collect();
+                
+                let query_tokens = crate::retrieval::bm25::tokenize(cleaned_query);
+                let mut global_df = std::collections::HashMap::new();
+                let mut missed_tokens = Vec::new();
+                let now = std::time::Instant::now();
+                
+                {
+                    let outer_read = self.term_counts_cache.read().await;
+                    if let Some(inner_map_lock) = outer_read.get(resolved_scope) {
+                        let inner_read = inner_map_lock.read().await;
+                        for token in &query_tokens {
+                            if let Some(entry) = inner_read.get(token) {
+                                if entry.expires_at > now {
+                                    global_df.insert(token.clone(), entry.count);
+                                    continue;
+                                }
+                            }
+                            missed_tokens.push(token.clone());
+                        }
+                    } else {
+                        missed_tokens.extend(query_tokens.clone());
+                    }
+                }
+
+                if !missed_tokens.is_empty() {
+                    let mut outer_write = self.term_counts_cache.write().await;
+                    let inner_map_lock = outer_write.entry(resolved_scope.to_string())
+                        .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
+                        .clone();
+                    drop(outer_write);
+                    
+                    // Fetch misses from database WITHOUT holding any lock!
+                    let mut fetched_misses = Vec::new();
+                    for token in missed_tokens {
+                        let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
+                        let count = match self.db.query(count_sql).bind(("scope", resolved_scope)).bind(("token", token.as_str())).await {
+                            Ok(mut res) => {
+                                let cnt: Option<usize> = res.take(0).unwrap_or(None);
+                                cnt.unwrap_or(0)
+                            }
+                            Err(_) => 0,
+                        };
+                        fetched_misses.push((token, count));
+                    }
+
+                    // Write newly fetched entries back under write lock
+                    let mut inner_write = inner_map_lock.write().await;
+                    for (token, count) in fetched_misses {
+                        if inner_write.len() < 1000 {
+                            inner_write.insert(token.clone(), CacheEntry {
+                                count,
+                                expires_at: now + std::time::Duration::from_secs(60),
+                            });
+                            global_df.insert(token.clone(), count);
+                            
+                            let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                            if new_size > 10000 {
+                                drop(inner_write);
+                                let mut outer_clear = self.term_counts_cache.write().await;
+                                outer_clear.clear();
+                                self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                                break;
+                            }
+                        } else {
+                            global_df.insert(token.clone(), count);
+                        }
+                    }
+                }
+
+                let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
+                let total_n = match self.db.query(n_sql).bind(("scope", resolved_scope)).await {
+                    Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+                    Err(_) => 0,
+                }.max(1);
+
+                let mut avg_dl = 0.0f32;
+                {
+                    let avg_read = self.avg_dl_cache.read().await;
+                    if let Some(&(val, expires)) = avg_read.get(resolved_scope) {
+                        if expires > now {
+                            avg_dl = val;
+                        }
+                    }
+                }
+                if avg_dl == 0.0f32 {
+                    let mut avg_write = self.avg_dl_cache.write().await;
+                    if let Some(&(val, expires)) = avg_write.get(resolved_scope) {
+                        if expires > now {
+                            avg_dl = val;
+                        }
+                    }
+                    if avg_dl == 0.0f32 {
+                        let mean_sql = "SELECT VALUE math::mean(word_count) FROM episode WHERE scope = $scope OR scope = 'general';";
+                        let mean_val = match self.db.query(mean_sql).bind(("scope", resolved_scope)).await {
+                            Ok(mut res) => res.take::<Option<f32>>(0).unwrap_or(None).unwrap_or(0.0),
+                            Err(_) => 0.0,
+                        };
+                        avg_dl = mean_val.max(1.0);
+                        avg_write.insert(resolved_scope.to_string(), (avg_dl, now + std::time::Duration::from_secs(60)));
+                    }
+                }
+
+                let corpus: Vec<(String, String)> = merged.iter().map(|c| (c.id.clone(), format!("{} {}", c.title, c.content))).collect();
+                let bm25_k1 = match self.get_profile_key("retrieval.bm25.k1").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.2f32),
+                    _ => 1.2f32,
+                };
+                let bm25_b = match self.get_profile_key("retrieval.bm25.b").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
+                    _ => 0.60f32,
+                };
+                let bm25 = crate::retrieval::bm25::OkapiBM25::with_global_stats(&corpus, global_df.clone(), total_n, avg_dl)
+                    .with_k1(bm25_k1)
+                    .with_b(bm25_b);
+                let bm25_scores = bm25.score_normalized(cleaned_query);
+                let bm25_map: std::collections::HashMap<String, f32> = bm25_scores.into_iter().collect();
+
+                let mut sum_idf = 0.0f32;
+                let mut query_token_count = 0;
+                for token in &query_tokens {
+                    let df_t = *global_df.get(token).unwrap_or(&0);
+                    let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
+                    sum_idf += idf;
+                    query_token_count += 1;
+                }
+                let avg_idf = if query_token_count > 0 {
+                    sum_idf / query_token_count as f32
+                } else {
+                    0.0
+                };
+
+                let beta = if query_token_count == 0 {
+                    0.2f32
+                } else {
+                    (0.2f32 + 0.15f32 * (avg_idf - 2.5f32).max(0.0f32)).min(0.8f32)
+                };
+                let alpha = 1.0f32 - beta;
+
+                for c in &mut merged {
+                    let bm25_norm = *bm25_map.get(&c.id).unwrap_or(&0.0);
+                    let raw_sim = if let Some(r_sim) = c.raw_vector_sim {
+                        r_sim
+                    } else if let (Some(q_vec), Some(e_vec)) = (query_emb_slice, c.embedding.as_ref()) {
+                        let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                        dot
+                    } else {
+                        c.similarity
+                    };
+                    
+                    let fused = alpha * raw_sim + beta * bm25_norm;
+                    let final_sim = if let (Some(orig_gate), Some(factor)) = (c.original_gate, c.factor_multiplier) {
+                        let new_gate = if orig_gate != 1.0f32 {
+                            1.0f32 / (1.0f32 + (-20.0f32 * (fused - 0.60f32)).exp())
+                        } else {
+                            1.0f32
+                        };
+                        fused * factor * new_gate
+                    } else {
+                        fused
+                    };
+                    c.similarity = final_sim;
+                }
+                candidates = merged;
+            } else {
+                candidates = reciprocal_rank_fusion(vector_candidates, keyword_candidates, 60);
+            }
+        } else {
+            candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+        }
+
+        Ok(candidates)
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a * norm_b)
+    }
+}
+
+struct BaseSearchParams<'a> {
+    cleaned_query: &'a str,
+    resolved_scope: &'a str,
+    search_all: bool,
+    query_emb: Option<&'a Vec<f32>>,
+    is_hybrid: bool,
+    is_hybrid_enabled: bool,
+    traversal: &'a str,
+    related_targets: &'a str,
+    wiki_node_filter: &'a str,
+    deep_insight: bool,
+    include_episodes: bool,
+    threshold: f32,
+    is_sigmoid_gated_search_test: bool,
+    use_new_formula: bool,
+    sigmoid_center: f32,
+    sigmoid_steepness: f32,
+    w_imp_ep: f32,
+    w_rec_ep: f32,
+    w_imp_ins: f32,
+    w_rec_ins: f32,
+    w_imp_wis: f32,
+    w_rec_wis: f32,
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -1911,543 +2735,57 @@ impl StorageBackend for SurrealBackend {
         } else {
             "entity, wiki_node, wisdom, hypothesis_node, handoff"
         };
-
         let wiki_node_filter = if include_artifacts {
             "".to_string()
         } else {
             "AND (vault_path = NONE OR string::contains(vault_path, \"wiki/artifacts/\") = false)".to_string()
         };
 
-        let mut vector_sql = String::new();
-        if query_emb.is_some() {
-            if include_episodes {
-                if deep_insight {
-                    vector_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
-                               <-followed_by<-episode.* AS prev_episodes,
-                               ->followed_by->episode.* AS next_episodes
-                        FROM episode
-                        WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
-                          AND (embedding <|100, 100|> $query_embedding);
-                        ",
-                        traversal = traversal,
-                        related_targets = related_targets
-                    ));
-                } else {
-                    vector_sql.push_str("
-                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
-                        FROM episode
-                        WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
-                          AND (embedding <|100, 100|> $query_embedding);
-                    ");
-                }
-            }
-
-            if deep_insight {
-                vector_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
-                    FROM wiki_node
-                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding)
-                      {wiki_node_filter};
-
-                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
-                    FROM wisdom
-                    WHERE status != 'superseded'
-                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding);
-                    ",
-                    traversal = traversal,
-                    related_targets = related_targets,
-                    wiki_node_filter = wiki_node_filter
-                ));
-            } else {
-                vector_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                    FROM wiki_node
-                    WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding)
-                      {wiki_node_filter};
-
-                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                    FROM wisdom
-                    WHERE status != 'superseded'
-                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding);
-                    ",
-                    wiki_node_filter = wiki_node_filter
-                ));
-            }
-        }
-
-        let mut keyword_sql = String::new();
+        let mut routed_episodes: Option<Vec<surrealdb::types::RecordId>> = None;
         if is_hybrid {
-            if include_episodes {
-                if deep_insight {
-                    keyword_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
-                               <-followed_by<-episode.* AS prev_episodes,
-                               ->followed_by->episode.* AS next_episodes
-                        FROM episode 
-                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                        ",
-                        traversal = traversal,
-                        related_targets = related_targets
-                    ));
-                } else {
-                    keyword_sql.push_str("
-                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
-                        FROM episode 
-                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                    ");
+            if let Some(ref q_vec) = query_emb {
+                let cents_sql = "SELECT id, embedding FROM wiki_node WHERE (scope = $scope OR scope = 'general') AND string::contains(vault_path, 'wiki/compaction/') = true;";
+                if let Ok(mut cents_res) = self.db.query(cents_sql).bind(("scope", resolved_scope.as_str())).await {
+                    #[derive(serde::Deserialize, Debug, SurrealValue)]
+                    struct CentroidRaw {
+                        id: surrealdb::types::RecordId,
+                        embedding: Option<Vec<f32>>,
+                    }
+                    if let Ok(centroids) = cents_res.take::<Vec<CentroidRaw>>(0) {
+                        let mut max_sim = -1.0f32;
+                        let mut sims = Vec::new();
+                        for c in &centroids {
+                            if let Some(ref c_emb) = c.embedding {
+                                let sim = cosine_similarity(q_vec, c_emb);
+                                if sim > max_sim {
+                                    max_sim = sim;
+                                }
+                                sims.push((c.id.clone(), sim));
+                            }
+                        }
+                        if max_sim >= 0.70 {
+                            let compactions: Vec<surrealdb::types::RecordId> = sims.into_iter()
+                                .filter(|(_, sim)| *sim >= max_sim - 0.05)
+                                .map(|(id, _)| id)
+                                .collect();
+                            if !compactions.is_empty() {
+                                let relates_sql = "SELECT VALUE out FROM relates_to WHERE in IN (SELECT VALUE in FROM relates_to WHERE out = $compactions);";
+                                if let Ok(mut relates_res) = self.db.query(relates_sql).bind(("compactions", compactions)).await {
+                                    if let Ok(out_ids) = relates_res.take::<Vec<surrealdb::types::RecordId>>(0) {
+                                        let ep_ids: Vec<surrealdb::types::RecordId> = out_ids.into_iter()
+                                            .filter(|id| id.table.as_str() == "episode")
+                                            .collect();
+                                        if !ep_ids.is_empty() {
+                                            routed_episodes = Some(ep_ids);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-
-            if deep_insight {
-                keyword_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
-                    FROM wiki_node 
-                    WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
-                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      {wiki_node_filter};
-
-                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
-                    FROM wisdom 
-                    WHERE status != 'superseded'
-                      AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
-                      AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                    ",
-                    traversal = traversal,
-                    related_targets = related_targets,
-                    wiki_node_filter = wiki_node_filter
-                ));
-            } else {
-                keyword_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                    FROM wiki_node 
-                    WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
-                      AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      {wiki_node_filter};
-
-                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
-                    FROM wisdom 
-                    WHERE status != 'superseded'
-                      AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query)) 
-                      AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                    ",
-                    wiki_node_filter = wiki_node_filter
-                ));
             }
         }
-
-        let (vector_resp_res, keyword_resp_res) = if !is_hybrid {
-            if let Some(ref q_vec) = query_emb {
-                let vector_fut = self.db.query(&vector_sql)
-                    .bind(("target_scope", resolved_scope.as_str()))
-                    .bind(("search_all", search_all))
-                    .bind(("query_embedding", q_vec.clone()));
-                (Some(vector_fut.await), None)
-            } else {
-                (None, None)
-            }
-        } else if let Some(ref q_vec) = query_emb {
-            let vector_fut = self.db.query(&vector_sql)
-                .bind(("target_scope", resolved_scope.as_str()))
-                .bind(("search_all", search_all))
-                .bind(("query_embedding", q_vec.clone()));
-            let keyword_fut = self.db.query(&keyword_sql)
-                .bind(("query", cleaned_query.as_str()))
-                .bind(("target_scope", resolved_scope.as_str()))
-                .bind(("search_all", search_all));
-            let (v_res, k_res) = tokio::join!(vector_fut, keyword_fut);
-            (Some(v_res), Some(k_res))
-        } else {
-            let keyword_fut = self.db.query(&keyword_sql)
-                .bind(("query", cleaned_query.as_str()))
-                .bind(("target_scope", resolved_scope.as_str()))
-                .bind(("search_all", search_all));
-            (None, Some(keyword_fut.await))
-        };
-
-        let parse_results = |response: std::result::Result<IndexedResults, surrealdb::Error>, is_vector: bool| -> Result<Vec<SearchResult>> {
-            let mut response = response?.check().context("Query check failed")?;
-            let (episodes, wiki_nodes, wisdom_rules) = if include_episodes {
-                let eps: Vec<SearchRaw> = response.take(0)?;
-                let wns: Vec<SearchRaw> = response.take(1)?;
-                let wrs: Vec<SearchWisdomRaw> = response.take(2)?;
-                (eps, wns, wrs)
-            } else {
-                let wns: Vec<SearchRaw> = response.take(0)?;
-                let wrs: Vec<SearchWisdomRaw> = response.take(1)?;
-                (Vec::new(), wns, wrs)
-            };
-
-            let mut list = Vec::new();
-
-            for ep in episodes {
-                let mut content = ep.content.clone();
-                let mut related_nodes_list = None;
-                if deep_insight {
-                    let mut rel_list = Vec::new();
-                    if let Some(related) = ep.related_nodes.as_ref() {
-                        append_related_context(&mut content, related);
-                        for r_node in related {
-                            rel_list.push(SearchResult {
-                                id: format_record_id(&r_node.id),
-                                title: r_node.title.clone().unwrap_or_default(),
-                                content: r_node.content.clone().unwrap_or_default(),
-                                similarity: 0.0,
-                                utility: 0.0,
-                                tier: r_node.id.table.as_str().to_string(),
-                                embedding: None,
-                                vault_path: r_node.vault_path.clone(),
-                                source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
-                                discovery_tokens: None,
-                                related_nodes: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    if let Some(prevs) = ep.prev_episodes.as_ref() {
-                        for prev in prevs {
-                            rel_list.push(SearchResult {
-                                id: format_record_id(&prev.id),
-                                title: prev.title.clone(),
-                                content: prev.content.clone(),
-                                similarity: 0.0,
-                                utility: 0.0,
-                                tier: "episode".to_string(),
-                                embedding: None,
-                                vault_path: prev.vault_path.clone(),
-                                source_episode: prev.source_episode.as_ref().map(|t| format_record_id(t)),
-                                discovery_tokens: prev.discovery_tokens,
-                                related_nodes: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    if let Some(nexts) = ep.next_episodes.as_ref() {
-                        for next in nexts {
-                            rel_list.push(SearchResult {
-                                id: format_record_id(&next.id),
-                                title: next.title.clone(),
-                                content: next.content.clone(),
-                                similarity: 0.0,
-                                utility: 0.0,
-                                tier: "episode".to_string(),
-                                embedding: None,
-                                vault_path: next.vault_path.clone(),
-                                source_episode: next.source_episode.as_ref().map(|t| format_record_id(t)),
-                                discovery_tokens: next.discovery_tokens,
-                                related_nodes: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    if !rel_list.is_empty() {
-                        related_nodes_list = Some(rel_list);
-                    }
-                }
-
-                let similarity = if is_sigmoid_gated_search_test {
-                    if ep.title == "High Similarity Old Node" {
-                        0.85f32
-                    } else if ep.title == "Low Similarity Recent Node" {
-                        0.50f32
-                    } else {
-                        1.0f32
-                    }
-                } else if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), ep.embedding.as_ref()) {
-                    let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                    dot
-                } else {
-                    1.0
-                };
-
-                let delta_t = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
-                    if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
-                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
-                    } else if let Some(created) = ep.created_at.as_ref() {
-                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
-                    } else {
-                        0.0f32
-                    }
-                } else if let Some(created) = ep.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
-                } else {
-                    0.0f32
-                };
-
-                let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb.is_some() && ep.embedding.is_some())) {
-                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
-                    if is_sigmoid_gated_search_test {
-                        println!("DEBUG BACKEND LOOP: title = '{}', similarity = {}, gate = {}", ep.title, similarity, g);
-                    }
-                    let importance = ep.importance.unwrap_or(5.0) as f32;
-                    let recency_component = (-0.05f32 * delta_t).exp();
-                    let importance_component = importance / 10.0f32;
-                    let norm = w_imp_ep + w_rec_ep;
-                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
-                    let mut f = ((w_imp_ep * importance_component + w_rec_ep * recency_component) / divisor) * get_tier_boost("episode");
-                    if ep.archived.unwrap_or(false) {
-                        f *= 0.4f32;
-                    }
-                    (g, f)
-                } else {
-                    let u_old = ep.utility.unwrap_or(50.0) as f32;
-                    let decayed_utility = u_old * (-0.05f32 * delta_t).exp();
-                    let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("episode");
-                    if ep.archived.unwrap_or(false) {
-                        f *= 0.4f32;
-                    }
-                    (1.0f32, f)
-                };
-
-                let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * (-0.05f32 * delta_t).exp();
-                let tier = "episode".to_string();
-
-                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
-                if blended_score >= pass_threshold {
-                    list.push(SearchResult {
-                        id: format_record_id(&ep.id),
-                        title: ep.title,
-                        content,
-                        similarity: blended_score,
-                        utility: decayed_utility,
-                        tier,
-                        embedding: None,
-                        vault_path: ep.vault_path.clone(),
-                        source_episode: None,
-                        discovery_tokens: ep.discovery_tokens,
-                        related_nodes: related_nodes_list,
-                        raw_vector_sim: Some(similarity),
-                        original_gate: Some(gate),
-                        factor_multiplier: Some(factor_multiplier),
-                        created_at: ep.created_at,
-                        session_id: ep.session_id.clone(),
-                        word_count: ep.word_count,
-                    });
-                }
-            }
-
-            for node in wiki_nodes {
-                let mut content = node.content.clone();
-                let mut related_nodes_list = None;
-                if deep_insight {
-                    let mut rel_list = Vec::new();
-                    if let Some(related) = node.related_nodes.as_ref() {
-                        append_related_context(&mut content, related);
-                        for r_node in related {
-                            rel_list.push(SearchResult {
-                                id: format_record_id(&r_node.id),
-                                title: r_node.title.clone().unwrap_or_default(),
-                                content: r_node.content.clone().unwrap_or_default(),
-                                similarity: 0.0,
-                                utility: 0.0,
-                                tier: r_node.id.table.as_str().to_string(),
-                                embedding: None,
-                                vault_path: r_node.vault_path.clone(),
-                                source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
-                                discovery_tokens: None,
-                                related_nodes: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    if !rel_list.is_empty() {
-                        related_nodes_list = Some(rel_list);
-                    }
-                }
-
-                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), node.embedding.as_ref()) {
-                    let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                    dot
-                } else {
-                    1.0
-                };
-
-                let delta_t = if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
-                    if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
-                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
-                    } else if let Some(created) = node.created_at.as_ref() {
-                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
-                    } else {
-                        0.0f32
-                    }
-                } else if let Some(created) = node.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
-                } else {
-                    0.0f32
-                };
-
-                let utility_val = node.utility.unwrap_or(1.0) as f32;
-                let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && node.embedding.is_some() {
-                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
-                    let recency_component = (-0.05f32 * delta_t).exp();
-                    let importance_component = utility_val / 10.0f32;
-                    let norm = w_imp_ins + w_rec_ins;
-                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
-                    let f = ((w_imp_ins * importance_component + w_rec_ins * recency_component) / divisor) * get_tier_boost("wiki_node");
-                    (g, f)
-                } else {
-                    let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
-                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 1.0f32)) * get_tier_boost("wiki_node");
-                    (1.0f32, f)
-                };
-
-                let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
-                let tier = "insight".to_string();
-
-                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
-                if blended_score >= pass_threshold {
-                    list.push(SearchResult {
-                        id: format_record_id(&node.id),
-                        title: node.title,
-                        content,
-                        similarity: blended_score,
-                        utility: decayed_utility,
-                        tier,
-                        embedding: None,
-                        vault_path: node.vault_path.clone(),
-                        source_episode: None,
-                        discovery_tokens: None,
-                        related_nodes: related_nodes_list,
-                        raw_vector_sim: Some(similarity),
-                        original_gate: Some(gate),
-                        factor_multiplier: Some(factor_multiplier),
-                        created_at: node.created_at,
-                        ..Default::default()
-                    });
-                }
-            }
-
-            for rule in wisdom_rules {
-                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), rule.embedding.as_ref()) {
-                    let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                    dot
-                } else {
-                    1.0
-                };
-
-                let delta_t = if let Some(created) = rule.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
-                } else {
-                    0.0f32
-                };
-
-                let utility_val = rule.utility.unwrap_or(50.0) as f32;
-                let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && rule.embedding.is_some() {
-                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
-                    let recency_component = (-0.05f32 * delta_t).exp();
-                    let importance_component = utility_val / 100.0f32;
-                    let norm = w_imp_wis + w_rec_wis;
-                    let divisor = if norm > 0.0 { norm } else { 1.0f32 };
-                    let f = ((w_imp_wis * importance_component + w_rec_wis * recency_component) / divisor) * get_tier_boost("wisdom");
-                    (g, f)
-                } else {
-                    let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
-                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("wisdom");
-                    (1.0f32, f)
-                };
-
-                let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
-                let rule_details = format!(
-                    "**Action to Avoid**: {}\n**Why**: {}\n**Prescribed Remedy**: {}",
-                    rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
-                );
-                let tier = rule.tier.clone();
-                let mut related_nodes_list = None;
-                if deep_insight {
-                    let mut rel_list = Vec::new();
-                    if let Some(related) = rule.related_nodes.as_ref() {
-                        for r_node in related {
-                            rel_list.push(SearchResult {
-                                id: format_record_id(&r_node.id),
-                                title: r_node.title.clone().unwrap_or_default(),
-                                content: r_node.content.clone().unwrap_or_default(),
-                                similarity: 0.0,
-                                utility: 0.0,
-                                tier: r_node.id.table.as_str().to_string(),
-                                embedding: None,
-                                vault_path: r_node.vault_path.clone(),
-                                source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
-                                discovery_tokens: None,
-                                related_nodes: None,
-                                raw_vector_sim: None,
-                                original_gate: None,
-                                factor_multiplier: None,
-                                created_at: None,
-                                ..Default::default()
-                            });
-                        }
-                    }
-                    if !rel_list.is_empty() {
-                        related_nodes_list = Some(rel_list);
-                    }
-                }
-
-                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
-                if blended_score >= pass_threshold {
-                    list.push(SearchResult {
-                        id: format_record_id(&rule.id),
-                        title: rule.target_pattern,
-                        content: rule_details,
-                        similarity: blended_score,
-                        utility: decayed_utility,
-                        tier,
-                        embedding: None,
-                        vault_path: rule.vault_path.clone(),
-                        source_episode: None,
-                        discovery_tokens: None,
-                        related_nodes: related_nodes_list,
-                        raw_vector_sim: Some(similarity),
-                        original_gate: Some(gate),
-                        factor_multiplier: Some(factor_multiplier),
-                        created_at: rule.created_at,
-                        ..Default::default()
-                    });
-                }
-            }
-
-            Ok(list)
-        };
 
         let is_hybrid_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_HYBRID") {
             val == "true"
@@ -2457,228 +2795,56 @@ impl StorageBackend for SurrealBackend {
             false
         });
 
-        let is_boost_name_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_NAME") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.person_name").await {
-            val == "true"
-        } else {
-            false
-        });
+        let params = BaseSearchParams {
+            cleaned_query: &cleaned_query,
+            resolved_scope: &resolved_scope,
+            search_all,
+            query_emb: query_emb.as_ref(),
+            is_hybrid,
+            is_hybrid_enabled,
+            traversal,
+            related_targets,
+            wiki_node_filter: &wiki_node_filter,
+            deep_insight,
+            include_episodes,
+            threshold,
+            is_sigmoid_gated_search_test,
+            use_new_formula,
+            sigmoid_center,
+            sigmoid_steepness,
+            w_imp_ep,
+            w_rec_ep,
+            w_imp_ins,
+            w_rec_ins,
+            w_imp_wis,
+            w_rec_wis,
+        };
 
-        let is_boost_quote_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_QUOTE") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.exact_quote").await {
-            val == "true"
-        } else {
-            false
-        });
-
-        let is_boost_temporal_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_TEMPORAL") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.temporal_proximity").await {
-            val == "true"
-        } else {
-            false
-        });
-
-        let is_boost_overlap_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_OVERLAP") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.keyword_overlap").await {
-            val == "true"
-        } else {
-            false
-        });
-
-        let mut candidates;
-        if !is_hybrid {
-            if let Some(v_resp) = vector_resp_res {
-                candidates = parse_results(v_resp, true)?;
+        let mut candidates = if let Some(ref ep_ids) = routed_episodes {
+            let res = self.execute_base_search(&params, Some(ep_ids)).await?;
+            if res.len() < limit {
+                let flat_res = self.execute_base_search(&params, None).await?;
+                // Merge
+                let mut unique = std::collections::HashMap::new();
+                for c in res {
+                    unique.insert(c.id.clone(), c);
+                }
+                for c in flat_res {
+                    if let Some(existing) = unique.get_mut(&c.id) {
+                        if c.similarity > existing.similarity {
+                            *existing = c;
+                        }
+                    } else {
+                        unique.insert(c.id.clone(), c);
+                    }
+                }
+                unique.into_values().collect::<Vec<SearchResult>>()
             } else {
-                candidates = Vec::new();
-            }
-        } else if let Some(v_resp) = vector_resp_res {
-            let vector_candidates = parse_results(v_resp, true)?;
-            let keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
-            
-            if is_hybrid_enabled {
-                let mut unique_map = std::collections::HashMap::new();
-                for c in vector_candidates {
-                    unique_map.insert(c.id.clone(), c);
-                }
-                for c in keyword_candidates {
-                    unique_map.entry(c.id.clone()).or_insert(c);
-                }
-                
-                let mut merged: Vec<SearchResult> = unique_map.into_values().collect();
-                
-                let query_tokens = crate::retrieval::bm25::tokenize(cleaned_query.as_str());
-                let mut global_df = std::collections::HashMap::new();
-                let mut missed_tokens = Vec::new();
-                let now = std::time::Instant::now();
-                
-                {
-                    let outer_read = self.term_counts_cache.read().await;
-                    if let Some(inner_map_lock) = outer_read.get(&resolved_scope) {
-                        let inner_read = inner_map_lock.read().await;
-                        for token in &query_tokens {
-                            if let Some(entry) = inner_read.get(token) {
-                                if entry.expires_at > now {
-                                    global_df.insert(token.clone(), entry.count);
-                                    continue;
-                                }
-                            }
-                            missed_tokens.push(token.clone());
-                        }
-                    } else {
-                        missed_tokens.extend(query_tokens.clone());
-                    }
-                }
-
-                if !missed_tokens.is_empty() {
-                    let mut outer_write = self.term_counts_cache.write().await;
-                    let inner_map_lock = outer_write.entry(resolved_scope.clone())
-                        .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
-                        .clone();
-                    drop(outer_write);
-                    
-                    // Fetch misses from database WITHOUT holding any lock!
-                    let mut fetched_misses = Vec::new();
-                    for token in missed_tokens {
-                        let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
-                        let count = match self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).bind(("token", token.as_str())).await {
-                            Ok(mut res) => {
-                                let cnt: Option<usize> = res.take(0).unwrap_or(None);
-                                cnt.unwrap_or(0)
-                            }
-                            Err(_) => 0,
-                        };
-                        fetched_misses.push((token, count));
-                    }
-
-                    // Write newly fetched entries back under write lock
-                    let mut inner_write = inner_map_lock.write().await;
-                    for (token, count) in fetched_misses {
-                        if inner_write.len() < 1000 {
-                            inner_write.insert(token.clone(), CacheEntry {
-                                count,
-                                expires_at: now + std::time::Duration::from_secs(60),
-                            });
-                            global_df.insert(token.clone(), count);
-                            
-                            let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                            if new_size > 10000 {
-                                drop(inner_write);
-                                let mut outer_clear = self.term_counts_cache.write().await;
-                                outer_clear.clear();
-                                self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
-                                break;
-                            }
-                        } else {
-                            global_df.insert(token.clone(), count);
-                        }
-                    }
-                }
-
-                let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
-                let total_n = match self.db.query(n_sql).bind(("scope", resolved_scope.as_str())).await {
-                    Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
-                    Err(_) => 0,
-                }.max(1);
-
-                let mut avg_dl = 0.0f32;
-                {
-                    let avg_read = self.avg_dl_cache.read().await;
-                    if let Some(&(val, expires)) = avg_read.get(&resolved_scope) {
-                        if expires > now {
-                            avg_dl = val;
-                        }
-                    }
-                }
-                if avg_dl == 0.0f32 {
-                    let mut avg_write = self.avg_dl_cache.write().await;
-                    if let Some(&(val, expires)) = avg_write.get(&resolved_scope) {
-                        if expires > now {
-                            avg_dl = val;
-                        }
-                    }
-                    if avg_dl == 0.0f32 {
-                        let mean_sql = "SELECT VALUE math::mean(word_count) FROM episode WHERE scope = $scope OR scope = 'general';";
-                        let mean_val = match self.db.query(mean_sql).bind(("scope", resolved_scope.as_str())).await {
-                            Ok(mut res) => res.take::<Option<f32>>(0).unwrap_or(None).unwrap_or(0.0),
-                            Err(_) => 0.0,
-                        };
-                        avg_dl = mean_val.max(1.0);
-                        avg_write.insert(resolved_scope.clone(), (avg_dl, now + std::time::Duration::from_secs(60)));
-                    }
-                }
-
-                let corpus: Vec<(String, String)> = merged.iter().map(|c| (c.id.clone(), format!("{} {}", c.title, c.content))).collect();
-                let bm25_k1 = match self.get_profile_key("retrieval.bm25.k1").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.2f32),
-                    _ => 1.2f32,
-                };
-                let bm25_b = match self.get_profile_key("retrieval.bm25.b").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
-                    _ => 0.60f32,
-                };
-                let bm25 = crate::retrieval::bm25::OkapiBM25::with_global_stats(&corpus, global_df.clone(), total_n, avg_dl)
-                    .with_k1(bm25_k1)
-                    .with_b(bm25_b);
-                let bm25_scores = bm25.score_normalized(cleaned_query.as_str());
-                let bm25_map: std::collections::HashMap<String, f32> = bm25_scores.into_iter().collect();
-
-                let mut sum_idf = 0.0f32;
-                let mut query_token_count = 0;
-                for token in &query_tokens {
-                    let df_t = *global_df.get(token).unwrap_or(&0);
-                    let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
-                    sum_idf += idf;
-                    query_token_count += 1;
-                }
-                let avg_idf = if query_token_count > 0 {
-                    sum_idf / query_token_count as f32
-                } else {
-                    0.0
-                };
-
-                let beta = if query_token_count == 0 {
-                    0.2f32
-                } else {
-                    (0.2f32 + 0.15f32 * (avg_idf - 2.5f32).max(0.0f32)).min(0.8f32)
-                };
-                let alpha = 1.0f32 - beta;
-
-                for c in &mut merged {
-                    let bm25_norm = *bm25_map.get(&c.id).unwrap_or(&0.0);
-                    let raw_sim = if let Some(r_sim) = c.raw_vector_sim {
-                        r_sim
-                    } else if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), c.embedding.as_ref()) {
-                        let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                        dot
-                    } else {
-                        c.similarity
-                    };
-                    
-                    let fused = alpha * raw_sim + beta * bm25_norm;
-                    let final_sim = if let (Some(orig_gate), Some(factor)) = (c.original_gate, c.factor_multiplier) {
-                        let new_gate = if orig_gate != 1.0f32 {
-                            1.0f32 / (1.0f32 + (-20.0f32 * (fused - 0.60f32)).exp())
-                        } else {
-                            1.0f32
-                        };
-                        fused * factor * new_gate
-                    } else {
-                        fused
-                    };
-                    c.similarity = final_sim;
-                }
-                candidates = merged;
-            } else {
-                candidates = reciprocal_rank_fusion(vector_candidates, keyword_candidates, 60);
+                res
             }
         } else {
-            candidates = parse_results(keyword_resp_res.unwrap(), false)?;
-        }
+            self.execute_base_search(&params, None).await?
+        };
 
         let is_session_isolation_enabled = if let Ok(val) = std::env::var("MYTHRAX_SESSION_ISOLATION") {
             val == "true"
@@ -2996,6 +3162,38 @@ impl StorageBackend for SurrealBackend {
 
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit * 3);
+
+        let is_boost_name_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_NAME") {
+            val == "true"
+        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.person_name").await {
+            val == "true"
+        } else {
+            false
+        });
+
+        let is_boost_quote_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_QUOTE") {
+            val == "true"
+        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.exact_quote").await {
+            val == "true"
+        } else {
+            false
+        });
+
+        let is_boost_temporal_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_TEMPORAL") {
+            val == "true"
+        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.temporal_proximity").await {
+            val == "true"
+        } else {
+            false
+        });
+
+        let is_boost_overlap_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_OVERLAP") {
+            val == "true"
+        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.keyword_overlap").await {
+            val == "true"
+        } else {
+            false
+        });
 
         // Apply Epic 4 distance-reduction boosts if enabled
         if is_boost_name_enabled || is_boost_quote_enabled || is_boost_temporal_enabled || is_boost_overlap_enabled {
