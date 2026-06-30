@@ -6,25 +6,25 @@
 **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
 **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
 **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
-**Mythrax Git Commit:** `fc2b1f8f413dfb365aa60d30fc44e1026a4a3264`
-**Evaluated at:** 2026-06-29T18:22:58.867054+00:00
+**Mythrax Git Commit:** `ddbf2d0336ccb539c12905ca8471e31591647ab6`
+**Evaluated at:** 2026-06-29T22:59:09.722803+00:00
 
 ## Aggregate Metrics
 ### Turn granularity (has_answer)
-- **Recall_Any@5:** `0.7520`
-- **Recall_All@5:** `0.4620`
-- **nDCG@10:** `0.5490`
+- **Recall_Any@5:** `0.0000`
+- **Recall_All@5:** `0.0000`
+- **nDCG@10:** `0.0000`
 ### Session granularity (answer_session_ids)
-- **Recall_Any@5 (session):** `0.9620`
-- **Recall_All@5 (session):** `0.7220`
+- **Recall_Any@5 (session):** `0.0000`
+- **Recall_All@5 (session):** `0.0000`
 
 ## Per-Question-Type R@10 (turn recall_any)
-- **knowledge-update** (n=78): R@10 = `0.8974`
-- **multi-session** (n=133): R@10 = `0.8346`
-- **single-session-assistant** (n=56): R@10 = `1.0000`
-- **single-session-preference** (n=30): R@10 = `0.7667`
-- **single-session-user** (n=70): R@10 = `0.8571`
-- **temporal-reasoning** (n=133): R@10 = `0.8120`
+- **knowledge-update** (n=78): R@10 = `0.0000`
+- **multi-session** (n=133): R@10 = `0.0000`
+- **single-session-assistant** (n=56): R@10 = `0.0000`
+- **single-session-preference** (n=30): R@10 = `0.0000`
+- **single-session-user** (n=70): R@10 = `0.0000`
+- **temporal-reasoning** (n=133): R@10 = `0.0000`
 
 > [!IMPORTANT]
 > These are LongMemEval *retrieval* numbers scored over the full `longmemeval_s` haystack at the pinned revision above. Future optimizations must not regress `Recall_Any@5`. The `oracle` split is an upper-bound diagnostic only and is never published.

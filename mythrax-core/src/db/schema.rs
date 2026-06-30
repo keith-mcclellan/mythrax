@@ -33,12 +33,15 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS files_modified ON episode TYPE option<array<string>>;
     DEFINE FIELD IF NOT EXISTS session_id ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS word_count ON episode TYPE option<int>;
+    DEFINE FIELD IF NOT EXISTS metrics ON episode TYPE option<record<episode_metrics>>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
     DEFINE INDEX IF NOT EXISTS episode_session ON episode FIELDS session_id;
+    DEFINE INDEX IF NOT EXISTS episode_vault_path ON episode FIELDS vault_path;
     DEFINE INDEX IF NOT EXISTS episode_scope_created ON episode FIELDS scope, created_at;
-
+    DEFINE ANALYZER IF NOT EXISTS ascii TOKENIZERS blank, punct FILTERS lowercase, ascii;
+    DEFINE INDEX IF NOT EXISTS episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER ascii;
 
 
     DEFINE TABLE IF NOT EXISTS wiki_node SCHEMAFULL;
@@ -113,6 +116,12 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS access_count ON metrics TYPE int DEFAULT 0;
     DEFINE FIELD IF NOT EXISTS last_accessed ON metrics TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS metrics_target ON metrics FIELDS target_id UNIQUE;
+
+    DEFINE TABLE IF NOT EXISTS episode_metrics SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS episode ON episode_metrics TYPE record<episode>;
+    DEFINE FIELD IF NOT EXISTS utility ON episode_metrics TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS last_retrieved_at ON episode_metrics TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS word_count ON episode_metrics TYPE option<int>;
 
     DEFINE TABLE IF NOT EXISTS relates_to SCHEMAFULL TYPE RELATION IN episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state OUT episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state;
     DEFINE FIELD IF NOT EXISTS relation ON relates_to TYPE option<string>;

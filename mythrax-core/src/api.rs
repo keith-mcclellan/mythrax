@@ -26,6 +26,7 @@ pub struct ApiState {
 pub fn create_router(state: Arc<ApiState>) -> Router {
     Router::new()
         .route("/v1/episodes", post(save_episode_handler))
+        .route("/v1/episodes/batch", post(save_episodes_batch_handler))
         .route("/v1/search", post(search_handler))
         .route("/v1/feedback", post(feedback_handler))
         .route("/v1/config/llm", get(get_llm_config_handler).post(post_llm_config_handler))
@@ -86,6 +87,33 @@ async fn save_episode_handler(
             tracing::error!("API failed to save episode bidirectional: {:?}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+async fn save_episodes_batch_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(payload): Json<Vec<EpisodeSave>>,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    if let Some(backend) = state.backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        match backend.save_episodes_batch(&payload).await {
+            Ok(_) => {
+                if let Some(ref tx) = state.dream_tx {
+                    let _ = tx.send(()).await;
+                }
+                Ok(Json(json!({ "status": "success" })))
+            }
+            Err(e) => {
+                tracing::error!("API failed to save episodes batch: {:?}", e);
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+        }
+    } else {
+        Err(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 

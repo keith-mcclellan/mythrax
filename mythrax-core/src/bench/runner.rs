@@ -532,11 +532,91 @@ async fn run_evaluation(
     let mut type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut type_recall_at10: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
 
+    unsafe {
+        std::env::set_var("MYTHRAX_BENCH", "1");
+    }
+
+    let db_path = std::path::Path::new("bench_data/mythrax_bench.db");
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let conn_str = format!("surrealkv://{}", db_path.to_string_lossy());
+
+    let shared_backend = SurrealBackend::new(&conn_str)
+        .await
+        .context("Failed to create shared SurrealKV database engine")?;
+    shared_backend.init().await.context("Failed to initialize database schema")?;
+    shared_backend.set_search_mode(mode).await;
+    if let Some(ref o) = param_overrides {
+        for (k, v) in o {
+            let _ = shared_backend.save_profile_key(k, v).await;
+        }
+    }
+    let shared_backend = std::sync::Arc::new(shared_backend);
+
+    // Calculate unique turn IDs expected for target questions
+    let mut expected_corpus_ids = std::collections::HashSet::new();
+    for q in target_questions {
+        for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+            if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+                for (turn_idx, _) in session_turns.iter().enumerate() {
+                    let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
+                    expected_corpus_ids.insert(corpus_id);
+                }
+            }
+        }
+    }
+    let expected_count = expected_corpus_ids.len();
+
+    // Query database to see if we already have the expected episodes
+    let current_count: usize = match shared_backend.db.query("SELECT VALUE count(id) FROM episode;").await {
+        Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    if current_count >= expected_count {
+        println!("Database already contains {} episodes (expected {}). Skipping ingestion phase!", current_count, expected_count);
+    } else {
+        println!("Ingesting all haystack sessions sequentially upfront...");
+        let mut ingested_corpus_ids = std::collections::HashSet::new();
+        let mut buffer = Vec::new();
+
+        for q in target_questions {
+            for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+                if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+                    for (turn_idx, turn) in session_turns.iter().enumerate() {
+                        let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
+                        if ingested_corpus_ids.insert(corpus_id.clone()) {
+                            let ep = EpisodeSave {
+                                title: format!("Session {} - Turn {}", session_id, turn_idx),
+                                content: format!("{}: {}", turn.role, turn.content),
+                                scope: Some("general".to_string()),
+                                vault_path: Some(corpus_id),
+                                session_id: Some(session_id.clone()),
+                                ..Default::default()
+                            };
+                            buffer.push(ep);
+                            if buffer.len() >= 1000 {
+                                let _ = shared_backend.save_episodes_batch(&buffer).await;
+                                buffer.clear();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !buffer.is_empty() {
+            let _ = shared_backend.save_episodes_batch(&buffer).await;
+        }
+        println!("Ingestion complete.");
+    }
+
     let total_q = target_questions.len();
     let mut join_set = tokio::task::JoinSet::new();
     let concurrency_limit = 8;
 
     for (q_idx, q) in target_questions.iter().enumerate() {
+        println!("Evaluating question {}/{}...", q_idx + 1, total_q);
         while join_set.len() >= concurrency_limit {
             if let Some(res) = join_set.join_next().await {
                 let record: QuestionResultRecord = res.context("Parallel evaluation task panicked")??;
@@ -557,60 +637,17 @@ async fn run_evaluation(
         let q = q.clone();
         let published = published;
         let note = note.to_string();
-        let mode = mode.to_string();
-        let overrides = param_overrides.clone();
-        let target_cache_path = target_cache_path.to_path_buf();
+        let backend = shared_backend.clone();
 
         join_set.spawn(async move {
-            let backend = SurrealBackend::new_in_memory()
-                .await
-                .context("Failed to create in-memory backend")?;
-            backend.init().await.context("Failed to initialize database schema")?;
-            backend.set_search_mode(&mode).await;
-            if let Some(ref o) = overrides {
-                for (k, v) in o {
-                    let _ = backend.save_profile_key(k, v).await;
-                }
-            }
-            let backend = std::sync::Arc::new(backend);
-
-            // Collect all texts to embed for this question
-            let mut texts_to_embed = Vec::new();
-            for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
-                if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
-                    for (turn_idx, turn) in session_turns.iter().enumerate() {
-                        let title = format!("Session {} - Turn {}", session_id, turn_idx);
-                        let content = format!("{}: {}", turn.role, turn.content);
-                        texts_to_embed.push(format!("{}: {}", title, content));
-                    }
-                }
-            }
-            
-            // Warm the embedding cache (embed_batch is cache-aware)
-            if !texts_to_embed.is_empty() {
-                let _ = backend.embed_batch(&texts_to_embed).await;
-            }
-
-            // Ingest episodes
             let mut correct_turn_ids = Vec::new();
             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
                 if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
                     for (turn_idx, turn) in session_turns.iter().enumerate() {
-                        let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
-                        let ep = EpisodeSave {
-                            title: format!("Session {} - Turn {}", session_id, turn_idx),
-                            content: format!("{}: {}", turn.role, turn.content),
-                            scope: Some("general".to_string()),
-                            vault_path: Some(corpus_id.clone()),
-                            session_id: Some(session_id.clone()),
-                            ..Default::default()
-                        };
                         if turn.has_answer {
+                            let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
                             correct_turn_ids.push(corpus_id);
                         }
-                        
-                        backend.save_episode(&ep).await
-                            .context("Failed to save episode turn during ingestion")?;
                     }
                 }
             }

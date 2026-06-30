@@ -228,6 +228,99 @@ impl SurrealBackend {
         Ok(id)
     }
 
+    /// Saves a batch of episodes in a single transaction.
+    pub async fn save_episodes_batch(&self, episodes: &[EpisodeSave]) -> Result<()> {
+        if self.is_client_mode() {
+            let _: serde_json::Value = self.daemon_post("/v1/episodes/batch", &episodes).await?;
+            return Ok(());
+        }
+
+        // 1. Generate embeddings in batch if embedder is present
+        let embeddings: Option<Vec<Vec<f32>>> = if let Some(_) = &self.embedder {
+            let texts: Vec<String> = episodes
+                .iter()
+                .map(|ep| format!("{}: {}", ep.title, ep.content))
+                .collect();
+            match self.embed_batch(&texts).await {
+                Ok(embeds) => Some(embeds),
+                Err(e) => {
+                    tracing::warn!("Embedding generation failed in save_episodes_batch: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // 2. Map episodes to JSON objects for SurrealQL
+        let mapped_json_array: Vec<serde_json::Value> = episodes
+            .iter()
+            .enumerate()
+            .map(|(i, ep)| {
+                let id_str = Uuid::new_v4().to_string();
+                let metrics_id_str = Uuid::new_v4().to_string();
+                let embedding = embeddings.as_ref().and_then(|es| es.get(i).cloned());
+                let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
+                let last_retrieved_at = chrono::Utc::now().to_rfc3339();
+
+                let mut ep_json = serde_json::json!({
+                    "id_str": id_str,
+                    "metrics_id_str": metrics_id_str,
+                    "title": ep.title,
+                    "content": ep.content,
+                    "scope": ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+                    "vault_path": ep.vault_path.clone().unwrap_or_default(),
+                    "utility": 50.0f32,
+                    "last_retrieved_at": last_retrieved_at,
+                    "word_count": word_count
+                });
+
+                let ep_obj = ep_json.as_object_mut().unwrap();
+                if let Some(emb) = embedding {
+                    ep_obj.insert("embedding".to_string(), serde_json::json!(emb));
+                }
+                if let Some(ref sess) = ep.session_id {
+                    ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
+                }
+
+                ep_json
+            })
+            .collect();
+
+        // 3. Record indexing writes for any vault_path present
+        for ep in episodes {
+            if let Some(ref vp) = ep.vault_path {
+                self.record_indexing_write(vp).await;
+            }
+        }
+
+        // 4. Execute batch transaction
+        let query = r#"
+            BEGIN TRANSACTION;
+            FOR $ep IN $episodes {
+                LET $ep_id = type::record('episode', $ep.id_str);
+                LET $met_id = type::record('episode_metrics', $ep.metrics_id_str);
+                
+                INSERT INTO episode (id, title, content, scope, vault_path, embedding, created_at, session_id, metrics)
+                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, time::now(), $ep.session_id, $met_id);
+                
+                INSERT INTO episode_metrics (id, episode, utility, last_retrieved_at, word_count)
+                VALUES ($met_id, $ep_id, $ep.utility, type::datetime($ep.last_retrieved_at), $ep.word_count);
+            };
+            COMMIT TRANSACTION;
+        "#;
+        run_write!(self, {
+            async {
+                let response = self.db.query(query)
+                    .bind(("episodes", mapped_json_array.clone()))
+                    .await?;
+                response.check().map_err(|e| anyhow::anyhow!("SurrealDB save_episodes_batch transaction failed: {}", e))
+            }.await
+        })?;
+
+        Ok(())
+    }
+
     pub async fn replay_wal_if_fresh(&self, wal_path: &std::path::Path, initialized_marker: &std::path::Path) -> Result<()> {
         if self.is_client_mode() {
             return Ok(());
@@ -2428,18 +2521,11 @@ impl StorageBackend for SurrealBackend {
                     let inner_map_lock = outer_write.entry(resolved_scope.clone())
                         .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
                         .clone();
-                    
                     drop(outer_write);
                     
-                    let mut inner_write = inner_map_lock.write().await;
+                    // Fetch misses from database WITHOUT holding any lock!
+                    let mut fetched_misses = Vec::new();
                     for token in missed_tokens {
-                        if let Some(entry) = inner_write.get(&token) {
-                            if entry.expires_at > now {
-                                global_df.insert(token.clone(), entry.count);
-                                continue;
-                            }
-                        }
-                        
                         let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
                         let count = match self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).bind(("token", token.as_str())).await {
                             Ok(mut res) => {
@@ -2448,7 +2534,12 @@ impl StorageBackend for SurrealBackend {
                             }
                             Err(_) => 0,
                         };
-                        
+                        fetched_misses.push((token, count));
+                    }
+
+                    // Write newly fetched entries back under write lock
+                    let mut inner_write = inner_map_lock.write().await;
+                    for (token, count) in fetched_misses {
                         if inner_write.len() < 1000 {
                             inner_write.insert(token.clone(), CacheEntry {
                                 count,
@@ -2467,7 +2558,7 @@ impl StorageBackend for SurrealBackend {
                         } else {
                             global_df.insert(token.clone(), count);
                         }
-                }
+                    }
                 }
 
                 let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
@@ -2774,97 +2865,116 @@ impl StorageBackend for SurrealBackend {
         merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
 
         // 5) Sentence-level TF-IDF Cosine Reranking (top-10 only)
-        let query_tokens = crate::retrieval::bm25::tokenize(cleaned_query.as_str());
-        let mut global_idf = std::collections::HashMap::new();
-        if !query_tokens.is_empty() {
-            let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
-            let total_n = match self.db.query(n_sql).bind(("scope", resolved_scope.as_str())).await {
-                Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
-                Err(_) => 0,
-            }.max(1);
-
-            let now = std::time::Instant::now();
-            let mut outer_write = self.term_counts_cache.write().await;
-            let inner_map_lock = outer_write.entry(resolved_scope.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
-                .clone();
-            drop(outer_write);
-
-            let mut inner_write = inner_map_lock.write().await;
-            for token in &query_tokens {
-                if let Some(entry) = inner_write.get(token) {
-                    if entry.expires_at > now {
-                        let df_t = entry.count;
-                        let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
-                        global_idf.insert(token.clone(), idf);
-                        continue;
-                    }
-                }
-                
-                let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
-                let count = match self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).bind(("token", token.as_str())).await {
-                    Ok(mut res) => {
-                        let cnt: Option<usize> = res.take(0).unwrap_or(None);
-                        cnt.unwrap_or(0)
-                    }
-                    Err(_) => 0,
-                };
-                
-                if inner_write.len() < 1000 {
-                    inner_write.insert(token.clone(), CacheEntry {
-                        count,
-                        expires_at: now + std::time::Duration::from_secs(60),
-                    });
-                    let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    if new_size > 10000 {
-                        drop(inner_write);
-                        let mut outer_clear = self.term_counts_cache.write().await;
-                        outer_clear.clear();
-                        self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
-                        break;
-                    }
-                }
-                
-                let idf = (((total_n as f32 - count as f32 + 0.5) / (count as f32 + 0.5)) + 1.0).ln();
-                global_idf.insert(token.clone(), idf);
-            }
-        }
-
         let gamma_rerank = if !is_hybrid {
             0.0f32
         } else {
             match self.get_profile_key("search.gamma_rerank").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.3f32).clamp(0.0f32, 1.0f32),
-                _ => 0.3f32,
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.10f32).clamp(0.0f32, 1.0f32),
+                _ => 0.10f32,
             }
         };
 
-        let rerank_pool_size = match self.get_profile_key("search.rerank_pool_size").await {
-            Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
-            _ => 25,
-        };
-        let pool_len = merged_candidates.len().min(rerank_pool_size);
-        let mut rerank_pool = merged_candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
-        
-        for c in &mut rerank_pool {
-            let content_lower = c.content.to_lowercase();
-            let sentences: Vec<&str> = content_lower.split(|ch| ch == '.' || ch == '\n').collect();
-            let mut max_sim = 0.0f32;
-            for sentence in sentences {
-                let sentence_trimmed = sentence.trim();
-                if !sentence_trimmed.is_empty() {
-                    let sim = sentence_cosine_similarity(&query_tokens, sentence_trimmed, &global_idf);
-                    if sim > max_sim {
-                        max_sim = sim;
+        if gamma_rerank > 0.0f32 {
+            let query_tokens = crate::retrieval::bm25::tokenize(cleaned_query.as_str());
+            let mut global_idf = std::collections::HashMap::new();
+            if !query_tokens.is_empty() {
+                let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
+                let total_n = match self.db.query(n_sql).bind(("scope", resolved_scope.as_str())).await {
+                    Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+                    Err(_) => 0,
+                }.max(1);
+
+                let now = std::time::Instant::now();
+                let mut outer_write = self.term_counts_cache.write().await;
+                let inner_map_lock = outer_write.entry(resolved_scope.clone())
+                    .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
+                    .clone();
+                drop(outer_write);
+
+                // 1. Read existing cache entries under read lock
+                let mut misses = Vec::new();
+                {
+                    let inner_read = inner_map_lock.read().await;
+                    for token in &query_tokens {
+                        if let Some(entry) = inner_read.get(token) {
+                            if entry.expires_at > now {
+                                let df_t = entry.count;
+                                let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
+                                global_idf.insert(token.clone(), idf);
+                                continue;
+                            }
+                        }
+                        misses.push(token.clone());
+                    }
+                }
+
+                // 2. Fetch misses from database WITHOUT holding any lock!
+                let mut fetched_misses = Vec::new();
+                for token in misses {
+                    let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
+                    let count = match self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).bind(("token", token.as_str())).await {
+                        Ok(mut res) => {
+                            let cnt: Option<usize> = res.take(0).unwrap_or(None);
+                            cnt.unwrap_or(0)
+                        }
+                        Err(_) => 0,
+                    };
+                    fetched_misses.push((token, count));
+                }
+
+                // 3. Write newly fetched entries back under write lock
+                if !fetched_misses.is_empty() {
+                    let mut inner_write = inner_map_lock.write().await;
+                    for (token, count) in fetched_misses {
+                        if inner_write.len() < 1000 {
+                            inner_write.insert(token.clone(), CacheEntry {
+                                count,
+                                expires_at: now + std::time::Duration::from_secs(60),
+                            });
+                            let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                            if new_size > 10000 {
+                                drop(inner_write);
+                                let mut outer_clear = self.term_counts_cache.write().await;
+                                outer_clear.clear();
+                                self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                                break;
+                            }
+                        }
+                        let idf = (((total_n as f32 - count as f32 + 0.5) / (count as f32 + 0.5)) + 1.0).ln();
+                        global_idf.insert(token, idf);
                     }
                 }
             }
-            c.similarity = c.similarity + gamma_rerank * max_sim;
-        }
 
-        merged_candidates.extend(rerank_pool);
-        merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-        candidates = merged_candidates;
+            let rerank_pool_size = match self.get_profile_key("search.rerank_pool_size").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
+                _ => 25,
+            };
+            let pool_len = merged_candidates.len().min(rerank_pool_size);
+            let mut rerank_pool = merged_candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
+            
+            for c in &mut rerank_pool {
+                let content_lower = c.content.to_lowercase();
+                let sentences: Vec<&str> = content_lower.split(|ch| ch == '.' || ch == '\n').collect();
+                let mut max_sim = 0.0f32;
+                for sentence in sentences {
+                    let sentence_trimmed = sentence.trim();
+                    if !sentence_trimmed.is_empty() {
+                        let sim = sentence_cosine_similarity(&query_tokens, sentence_trimmed, &global_idf);
+                        if sim > max_sim {
+                            max_sim = sim;
+                        }
+                    }
+                }
+                c.similarity = c.similarity + gamma_rerank * max_sim;
+            }
+
+            merged_candidates.extend(rerank_pool);
+            merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+            candidates = merged_candidates;
+        } else {
+            candidates = merged_candidates;
+        }
 
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit * 3);
@@ -2974,8 +3084,8 @@ impl StorageBackend for SurrealBackend {
                             global_anchor
                         };
                         let decay_lambda = match self.get_profile_key("search.decay_lambda").await {
-                            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.05f32).max(0.0f32),
-                            _ => 0.05f32,
+                            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.02f32).max(0.0f32),
+                            _ => 0.02f32,
                         };
                         calculate_temporal_decay(created, anchor, decay_lambda)
                     } else {
@@ -3777,8 +3887,10 @@ impl StorageBackend for SurrealBackend {
             .bind(("value", value))
             .await?.check()?;
 
-        // Dual-write to local JSON file
-        crate::store::save_stm_file(session_id, key, value)?;
+        // Dual-write to local JSON file unless running a benchmark
+        if std::env::var("MYTHRAX_BENCH").is_err() {
+            crate::store::save_stm_file(session_id, key, value)?;
+        }
         Ok(())
     }
 
@@ -5071,6 +5183,47 @@ files_modified: None,
         assert!(search_results.results[0].content.contains("redis"));
 
         backend.record_feedback(&ep_id, false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_save_episodes_batch() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let episodes = vec![
+            EpisodeSave {
+                title: "Batch episode 1".to_string(),
+                content: "First batch item content for testing.".to_string(),
+                scope: Some("batch-test".to_string()),
+                vault_path: Some("batch_1.md".to_string()),
+                session_id: Some("session_123".to_string()),
+                ..Default::default()
+            },
+            EpisodeSave {
+                title: "Batch episode 2".to_string(),
+                content: "Second batch item content for testing.".to_string(),
+                scope: Some("batch-test".to_string()),
+                vault_path: Some("batch_2.md".to_string()),
+                session_id: Some("session_123".to_string()),
+                ..Default::default()
+            },
+        ];
+
+        backend.save_episodes_batch(&episodes).await.unwrap();
+
+        // Query to check they were inserted correctly
+        let all_eps: Vec<serde_json::Value> = backend.db.select("episode").await.unwrap();
+        assert_eq!(all_eps.len(), 2);
+
+        // Verify the fields on the inserted episodes
+        let ep1 = all_eps.iter().find(|e| e.get("title").and_then(|v| v.as_str()) == Some("Batch episode 1")).unwrap();
+        assert_eq!(ep1.get("scope").and_then(|v| v.as_str()), Some("batch-test"));
+        assert_eq!(ep1.get("vault_path").and_then(|v| v.as_str()), Some("batch_1.md"));
+        assert_eq!(ep1.get("session_id").and_then(|v| v.as_str()), Some("session_123"));
+
+        // Verify that metrics were inserted
+        let all_metrics: Vec<serde_json::Value> = backend.db.select("episode_metrics").await.unwrap();
+        assert_eq!(all_metrics.len(), 2);
     }
 
     #[tokio::test]
