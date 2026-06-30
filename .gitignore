@@ -26,6 +26,8 @@ build/
 # Local database files
 data/
 *.db
+mythrax_bench.db/
+mythrax-core/bench_data/mythrax_bench.db/
 *.db-journal
 *.db-wal
 *.sqlite

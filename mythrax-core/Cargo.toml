@@ -39,9 +39,9 @@ hex = "0.4"
 mlx-rs = { version = "0.25.3", optional = true }
 safetensors = { version = "0.4.3", optional = true }
 
+tempfile = "3.8"
 
 [dev-dependencies]
-tempfile = "3.8"
 lopdf = "0.38.0"
 
 [[bin]]
