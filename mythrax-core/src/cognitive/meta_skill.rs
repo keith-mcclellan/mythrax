@@ -306,14 +306,15 @@ impl MetaSkillSynthesizer {
             file_content.push_str("No redundant or overlapping skills detected.\n");
         } else {
             for sug in &suggestions {
-                let sources = sug["source_skills"].as_array().unwrap();
-                let src_names: Vec<String> = sources.iter().map(|s| s.as_str().unwrap().to_string()).collect();
+                let empty_array = vec![];
+                let sources = sug["source_skills"].as_array().unwrap_or(&empty_array);
+                let src_names: Vec<String> = sources.iter().map(|s| s.as_str().unwrap_or("Unknown").to_string()).collect();
                 file_content.push_str(&format!(
                     "## Merge Candidate: {}\n- **Source Skills**: {}\n- **Semantic Similarity**: {:.2}\n- **Reason**: {}\n\n",
-                    sug["suggested_target_name"].as_str().unwrap(),
+                    sug["suggested_target_name"].as_str().unwrap_or("Unknown"),
                     src_names.join(", "),
-                    sug["similarity"].as_f64().unwrap(),
-                    sug["reason"].as_str().unwrap()
+                    sug["similarity"].as_f64().unwrap_or(0.0),
+                    sug["reason"].as_str().unwrap_or("No reason provided")
                 ));
             }
         }
