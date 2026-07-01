@@ -902,18 +902,24 @@ fn merge_json_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
         serde_json::json!({})
     };
     
-    let mcp_servers = data.as_object_mut()
-        .unwrap()
-        .entry("mcpServers".to_string())
-        .or_insert_with(|| serde_json::json!({}));
+    let mcp_servers = if let Some(obj) = data.as_object_mut() {
+        obj.entry("mcpServers".to_string())
+           .or_insert_with(|| serde_json::json!({}))
+    } else {
+        return Err(anyhow::anyhow!("Expected JSON object at root of MCP config"));
+    };
         
-    mcp_servers.as_object_mut().unwrap().insert(
-        "mythrax".to_string(),
-        serde_json::json!({
-            "command": exe_path,
-            "args": ["mcp"]
-        })
-    );
+    if let Some(servers_obj) = mcp_servers.as_object_mut() {
+        servers_obj.insert(
+            "mythrax".to_string(),
+            serde_json::json!({
+                "command": exe_path,
+                "args": ["mcp"]
+            })
+        );
+    } else {
+        return Err(anyhow::anyhow!("Expected 'mcpServers' to be a JSON object"));
+    }
     
     std::fs::write(path, serde_json::to_string_pretty(&data)?)?;
     Ok(())
@@ -930,25 +936,34 @@ fn merge_antigravity_permissions(path: &std::path::Path) -> Result<()> {
         serde_json::json!({})
     };
     
-    let user_settings = data.as_object_mut()
-        .unwrap()
-        .entry("userSettings".to_string())
-        .or_insert_with(|| serde_json::json!({}));
+    let user_settings = if let Some(obj) = data.as_object_mut() {
+        obj.entry("userSettings".to_string())
+           .or_insert_with(|| serde_json::json!({}))
+    } else {
+        return Err(anyhow::anyhow!("Expected JSON object at root of permissions config"));
+    };
         
-    let global_grants = user_settings.as_object_mut()
-        .unwrap()
-        .entry("globalPermissionGrants".to_string())
-        .or_insert_with(|| serde_json::json!({}));
+    let global_grants = if let Some(obj) = user_settings.as_object_mut() {
+        obj.entry("globalPermissionGrants".to_string())
+           .or_insert_with(|| serde_json::json!({}))
+    } else {
+        return Err(anyhow::anyhow!("Expected 'userSettings' to be a JSON object"));
+    };
         
-    let allow_list = global_grants.as_object_mut()
-        .unwrap()
-        .entry("allow".to_string())
-        .or_insert_with(|| serde_json::json!([]));
+    let allow_list = if let Some(obj) = global_grants.as_object_mut() {
+        obj.entry("allow".to_string())
+           .or_insert_with(|| serde_json::json!([]))
+    } else {
+        return Err(anyhow::anyhow!("Expected 'globalPermissionGrants' to be a JSON object"));
+    };
         
-    let allow_arr = allow_list.as_array_mut().unwrap();
-    let grant = "mcp(mythrax/*)".to_string();
-    if !allow_arr.iter().any(|v| v.as_str() == Some(&grant)) {
-        allow_arr.push(serde_json::Value::String(grant));
+    if let Some(allow_arr) = allow_list.as_array_mut() {
+        let grant = "mcp(mythrax/*)".to_string();
+        if !allow_arr.iter().any(|v| v.as_str() == Some(&grant)) {
+            allow_arr.push(serde_json::Value::String(grant));
+        }
+    } else {
+        return Err(anyhow::anyhow!("Expected 'allow' to be a JSON array"));
     }
     
     std::fs::write(path, serde_json::to_string_pretty(&data)?)?;
