@@ -2061,7 +2061,13 @@ impl StorageBackend for SurrealBackend {
         }
 
         let (vector_resp_res, keyword_resp_res) = if !is_hybrid {
-            if let Some(ref q_vec) = query_emb {
+            if mode == "keyword" {
+                let keyword_fut = self.db.query(&keyword_sql)
+                    .bind(("query", cleaned_query.as_str()))
+                    .bind(("target_scope", resolved_scope.as_str()))
+                    .bind(("search_all", search_all));
+                (None, Some(keyword_fut.await))
+            } else if let Some(ref q_vec) = query_emb {
                 let vector_fut = self.db.query(&vector_sql)
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all))
@@ -2491,7 +2497,13 @@ impl StorageBackend for SurrealBackend {
 
         let mut candidates;
         if !is_hybrid {
-            if let Some(v_resp) = vector_resp_res {
+            if mode == "keyword" {
+                if let Some(k_resp) = keyword_resp_res {
+                    candidates = parse_results(k_resp, false)?;
+                } else {
+                    candidates = Vec::new();
+                }
+            } else if let Some(v_resp) = vector_resp_res {
                 candidates = parse_results(v_resp, true)?;
             } else {
                 candidates = Vec::new();
