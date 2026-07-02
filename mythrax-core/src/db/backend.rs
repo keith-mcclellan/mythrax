@@ -252,7 +252,11 @@ impl SurrealBackend {
             None
         };
 
-        // 2. Map episodes to JSON objects for SurrealQL
+        // 2. Local session tracking to link followed_by temporal relationships in-memory/STM
+        let mut local_last_eps: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut relations = Vec::new();
+
+        // 3. Map episodes to JSON objects for SurrealQL
         let mapped_json_array: Vec<serde_json::Value> = episodes
             .iter()
             .enumerate()
@@ -262,6 +266,44 @@ impl SurrealBackend {
                 let embedding = embeddings.as_ref().and_then(|es| es.get(i).cloned());
                 let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
                 let last_retrieved_at = chrono::Utc::now().to_rfc3339();
+
+                // Reconstruct followed_by relationships using local cache and STM
+                if let Some(ref sess_id) = ep.session_id {
+                    let tracking_key = if let Some(ref t_id) = ep.task_id {
+                        format!("_last_episode_id_{}", t_id)
+                    } else {
+                        "_last_episode_id".to_string()
+                    };
+                    let map_key = format!("{}:{}", sess_id, tracking_key);
+
+                    if let Some(last_ep_id) = local_last_eps.get(&map_key).cloned() {
+                        let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(&last_ep_id).to_string();
+                        relations.push(serde_json::json!({
+                            "from_str": last_uuid,
+                            "to_str": id_str.clone(),
+                        }));
+                    } else {
+                        // Bounded check of STM database to bridge sequential batches
+                        let this_self = self.clone();
+                        let sess_id_clone = sess_id.clone();
+                        let tracking_key_clone = tracking_key.clone();
+                        // Run STM lookup blockingly in a local context (since map is called within a sync closure)
+                        if let Ok(stm_map) = tokio::task::block_in_place(move || {
+                            tokio::runtime::Handle::current().block_on(async move {
+                                this_self.get_stm(&sess_id_clone, Some(&tracking_key_clone)).await
+                            })
+                        }) {
+                            if let Some(last_ep_id) = stm_map.get(&tracking_key) {
+                                let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(last_ep_id).to_string();
+                                relations.push(serde_json::json!({
+                                    "from_str": last_uuid,
+                                    "to_str": id_str.clone(),
+                                }));
+                            }
+                        }
+                    }
+                    local_last_eps.insert(map_key, format!("episode:{}", id_str));
+                }
 
                 let mut ep_json = serde_json::json!({
                     "id_str": id_str,
@@ -287,25 +329,30 @@ impl SurrealBackend {
             })
             .collect();
 
-        // 3. Record indexing writes for any vault_path present
+        // 4. Record indexing writes for any vault_path present
         for ep in episodes {
             if let Some(ref vp) = ep.vault_path {
                 self.record_indexing_write(vp).await;
             }
         }
 
-        // 4. Execute batch transaction
+        // 5. Execute batch transaction in database
         let query = r#"
             BEGIN TRANSACTION;
             FOR $ep IN $episodes {
                 LET $ep_id = type::record('episode', $ep.id_str);
-                LET $met_id = type::record('episode_metrics', $ep.metrics_id_str);
+                LET $met_id = type::record('metrics', $ep.metrics_id_str);
                 
-                INSERT INTO episode (id, title, content, scope, vault_path, embedding, created_at, session_id, metrics)
-                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, time::now(), $ep.session_id, $met_id);
+                INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count)
+                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, type::datetime($ep.last_retrieved_at), $ep.session_id, $ep.word_count);
                 
-                INSERT INTO episode_metrics (id, episode, utility, last_retrieved_at, word_count)
-                VALUES ($met_id, $ep_id, $ep.utility, type::datetime($ep.last_retrieved_at), $ep.word_count);
+                INSERT INTO metrics (id, target_id, utility_score, access_count)
+                VALUES ($met_id, $ep_id, 50.0, 0);
+            };
+            FOR $rel IN $relations {
+                LET $from = type::record('episode', $rel.from_str);
+                LET $to = type::record('episode', $rel.to_str);
+                RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };
             };
             COMMIT TRANSACTION;
         "#;
@@ -313,10 +360,21 @@ impl SurrealBackend {
             async {
                 let response = self.db.query(query)
                     .bind(("episodes", mapped_json_array.clone()))
+                    .bind(("relations", relations.clone()))
                     .await?;
                 response.check().map_err(|e| anyhow::anyhow!("SurrealDB save_episodes_batch transaction failed: {}", e))
             }.await
         })?;
+
+        // 6. Update Short Term Memory (STM) in database with final batch states
+        for (map_key, final_ep_id) in local_last_eps {
+            let parts: Vec<&str> = map_key.splitn(2, ':').collect();
+            if parts.len() == 2 {
+                let sess_id = parts[0];
+                let tracking_key = parts[1];
+                let _ = self.save_stm(sess_id, tracking_key, &final_ep_id).await;
+            }
+        }
 
         Ok(())
     }
