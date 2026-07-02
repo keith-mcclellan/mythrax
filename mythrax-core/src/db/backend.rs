@@ -235,22 +235,31 @@ impl SurrealBackend {
             return Ok(());
         }
 
-        // 1. Generate embeddings in batch if embedder is present
-        let embeddings: Option<Vec<Vec<f32>>> = if let Some(_) = &self.embedder {
-            let texts: Vec<String> = episodes
-                .iter()
-                .map(|ep| format!("{}: {}", ep.title, ep.content))
-                .collect();
-            match self.embed_batch(&texts).await {
-                Ok(embeds) => Some(embeds),
-                Err(e) => {
-                    tracing::warn!("Embedding generation failed in save_episodes_batch: {}", e);
-                    None
+        // 1. Generate embeddings in batch if embedder is present, hitting cache first
+        let mut embeddings: Vec<Option<Vec<f32>>> = Vec::with_capacity(episodes.len());
+        let mut missing_indices = Vec::new();
+        let mut missing_texts = Vec::new();
+
+        for (idx, ep) in episodes.iter().enumerate() {
+            let text = format!("{}: {}", ep.title, ep.content);
+            if let Some(emb) = crate::embeddings::get_cached_embedding(&text) {
+                embeddings.push(Some(emb));
+            } else {
+                embeddings.push(None);
+                missing_indices.push(idx);
+                missing_texts.push(text);
+            }
+        }
+
+        if !missing_texts.is_empty() && self.embedder.is_some() {
+            if let Ok(generated) = self.embed_batch(&missing_texts).await {
+                for (midx, generated_emb) in missing_indices.into_iter().zip(generated.into_iter()) {
+                    let text = format!("{}: {}", episodes[midx].title, episodes[midx].content);
+                    crate::embeddings::cache_embedding(text, generated_emb.clone());
+                    embeddings[midx] = Some(generated_emb);
                 }
             }
-        } else {
-            None
-        };
+        }
 
         // 2. Local session tracking to link followed_by temporal relationships in-memory/STM
         let mut local_last_eps: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -263,7 +272,7 @@ impl SurrealBackend {
             .map(|(i, ep)| {
                 let id_str = Uuid::new_v4().to_string();
                 let metrics_id_str = Uuid::new_v4().to_string();
-                let embedding = embeddings.as_ref().and_then(|es| es.get(i).cloned());
+                let embedding = embeddings.get(i).cloned().flatten();
                 let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
                 let last_retrieved_at = chrono::Utc::now().to_rfc3339();
 
