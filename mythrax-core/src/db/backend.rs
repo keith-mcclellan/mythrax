@@ -344,7 +344,7 @@ impl SurrealBackend {
                 LET $met_id = type::record('metrics', $ep.metrics_id_str);
                 
                 INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count)
-                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, type::datetime($ep.last_retrieved_at), $ep.session_id, $ep.word_count);
+                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, $ep.last_retrieved_at, $ep.session_id, $ep.word_count);
                 
                 INSERT INTO metrics (id, target_id, utility_score, access_count)
                 VALUES ($met_id, $ep_id, 50.0, 0);
