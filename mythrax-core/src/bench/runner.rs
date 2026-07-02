@@ -537,87 +537,6 @@ async fn run_evaluation(
         std::env::set_var("MYTHRAX_BENCH", "1");
     }
 
-    let db_path = std::path::Path::new("bench_data/mythrax_bench.db");
-    if let Some(parent) = db_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let conn_str = format!("surrealkv://{}", db_path.to_string_lossy());
-
-    let shared_backend = SurrealBackend::new(&conn_str)
-        .await
-        .context("Failed to create shared SurrealKV database engine")?;
-    shared_backend.init().await.context("Failed to initialize database schema")?;
-    shared_backend.set_search_mode(mode).await;
-    if let Some(ref o) = param_overrides {
-        for (k, v) in o {
-            let _ = shared_backend.save_profile_key(k, v).await;
-        }
-    }
-    let shared_backend = std::sync::Arc::new(shared_backend);
-
-    // Calculate unique turn IDs expected for target questions
-    let mut expected_corpus_ids = std::collections::HashSet::new();
-    for q in target_questions {
-        for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
-            if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
-                for (turn_idx, _) in session_turns.iter().enumerate() {
-                    let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
-                    expected_corpus_ids.insert(corpus_id);
-                }
-            }
-        }
-    }
-    let expected_count = expected_corpus_ids.len();
-
-    // Query database to see if we already have the expected episodes
-    let current_count: usize = match shared_backend.db.query("SELECT count() FROM episode GROUP ALL;").await {
-        Ok(mut res) => {
-            let list: Vec<serde_json::Value> = res.take(0).unwrap_or_default();
-            list.first()
-                .and_then(|r| r.get("count"))
-                .and_then(|c| c.as_u64())
-                .unwrap_or(0) as usize
-        }
-        Err(_) => 0,
-    };
-
-    if current_count >= expected_count {
-        println!("Database already contains {} episodes (expected {}). Skipping ingestion phase!", current_count, expected_count);
-    } else {
-        println!("Ingesting all haystack sessions sequentially upfront...");
-        let mut ingested_corpus_ids = std::collections::HashSet::new();
-        let mut buffer = Vec::new();
-
-        for q in target_questions {
-            for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
-                if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
-                    for (turn_idx, turn) in session_turns.iter().enumerate() {
-                        let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
-                        if ingested_corpus_ids.insert(corpus_id.clone()) {
-                            let ep = EpisodeSave {
-                                title: format!("Session {} - Turn {}", session_id, turn_idx),
-                                content: format!("{}: {}", turn.role, turn.content),
-                                scope: Some("general".to_string()),
-                                vault_path: Some(corpus_id),
-                                session_id: Some(session_id.clone()),
-                                ..Default::default()
-                            };
-                            buffer.push(ep);
-                            if buffer.len() >= 1000 {
-                                let _ = shared_backend.save_episodes_batch(&buffer).await;
-                                buffer.clear();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if !buffer.is_empty() {
-            let _ = shared_backend.save_episodes_batch(&buffer).await;
-        }
-        println!("Ingestion complete.");
-    }
-
     let total_q = target_questions.len();
     let mut join_set = tokio::task::JoinSet::new();
     let concurrency_limit = 8;
@@ -644,9 +563,42 @@ async fn run_evaluation(
         let q = q.clone();
         let published = published;
         let note = note.to_string();
-        let backend = shared_backend.clone();
+        let mode = mode.to_string();
+        let param_overrides = param_overrides.clone();
 
         join_set.spawn(async move {
+            let backend = SurrealBackend::new_in_memory()
+                .await
+                .context("Failed to create in-memory backend")?;
+            backend.init().await.context("Failed to initialize database schema")?;
+            backend.set_search_mode(&mode).await;
+            if let Some(ref o) = param_overrides {
+                for (k, v) in o {
+                    let _ = backend.save_profile_key(k, v).await;
+                }
+            }
+
+            // Ingest only haystack sessions for this question
+            let mut episodes_to_ingest = Vec::new();
+            for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+                if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+                    for (turn_idx, turn) in session_turns.iter().enumerate() {
+                        let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
+                        let ep = EpisodeSave {
+                            title: format!("Session {} - Turn {}", session_id, turn_idx),
+                            content: format!("{}: {}", turn.role, turn.content),
+                            scope: Some("general".to_string()),
+                            vault_path: Some(corpus_id.clone()),
+                            session_id: Some(session_id.clone()),
+                            ..Default::default()
+                        };
+                        episodes_to_ingest.push(ep);
+                    }
+                }
+            }
+            backend.save_episodes_batch(&episodes_to_ingest).await
+                .context("Failed to batch ingest haystack turns")?;
+
             let mut correct_turn_ids = Vec::new();
             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
                 if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
