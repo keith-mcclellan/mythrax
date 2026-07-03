@@ -368,12 +368,12 @@ impl DreamCoordinator {
                         let d = cosine_distance(&sample[i], &sample[j]);
                         dists.push(d);
                     }
-                    dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     if dists.len() > 4 {
                         k_distances.push(dists[4]);
                     }
                 }
-                k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 find_elbow_point(&k_distances)
             } else {
                 let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
@@ -1256,20 +1256,22 @@ pub async fn save_wisdom_rule_with_deduplication(
                             Ok(saved_id) => {
                                 // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
                                 if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-                                    let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
-                                    let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
-                                    
-                                    let sql = "
-                                        LET $old_rec = type::record('wisdom', $old_uuid);
-                                        LET $new_rec = type::record('wisdom', $new_uuid);
-                                        UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
-                                        RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
-                                    ";
-                                    if let Err(e) = surreal_backend.db.query(sql)
-                                        .bind(("old_uuid", old_uuid))
-                                        .bind(("new_uuid", new_uuid))
-                                        .await {
-                                        tracing::error!("Failed to update superseded status or relate nodes: {}", e);
+                                    if let Some(matched_id) = &matched.id {
+                                        let old_uuid = matched_id.strip_prefix("wisdom:").unwrap_or(matched_id);
+                                        let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
+
+                                        let sql = "
+                                            LET $old_rec = type::record('wisdom', $old_uuid);
+                                            LET $new_rec = type::record('wisdom', $new_uuid);
+                                            UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
+                                            RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
+                                        ";
+                                        if let Err(e) = surreal_backend.db.query(sql)
+                                            .bind(("old_uuid", old_uuid))
+                                            .bind(("new_uuid", new_uuid))
+                                            .await {
+                                            tracing::error!("Failed to update superseded status or relate nodes: {}", e);
+                                        }
                                     }
                                 }
 

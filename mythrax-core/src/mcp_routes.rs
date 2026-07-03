@@ -2176,15 +2176,17 @@ files_modified: None,
         } else {
             0
         };
-        response_obj.as_object_mut().unwrap().insert(
-            "token_economics".to_string(),
-            json!({
-                "total_read": total_read,
-                "total_discovery": total_discovery,
-                "savings": savings,
-                "savings_percent": savings_percent
-            })
-        );
+        if let Some(obj) = response_obj.as_object_mut() {
+            obj.insert(
+                "token_economics".to_string(),
+                json!({
+                    "total_read": total_read,
+                    "total_discovery": total_discovery,
+                    "savings": savings,
+                    "savings_percent": savings_percent
+                })
+            );
+        }
     }
 
     Ok(response_obj)

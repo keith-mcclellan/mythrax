@@ -295,7 +295,13 @@ impl LocalEmbedder {
             }
         }
 
-        let final_embeddings = results.into_iter().map(|opt| opt.unwrap()).collect();
+        let mut final_embeddings = Vec::with_capacity(results.len());
+        for opt in results {
+            match opt {
+                Some(emb) => final_embeddings.push(emb),
+                None => return Err(anyhow::anyhow!("Missing embedding for some text in batch")),
+            }
+        }
         Ok(final_embeddings)
     }
 
@@ -555,7 +561,13 @@ impl LocalEmbedder {
             }
         }
 
-        let final_embeddings = results.into_iter().map(|opt| opt.unwrap()).collect();
+        let mut final_embeddings = Vec::with_capacity(results.len());
+        for opt in results {
+            match opt {
+                Some(emb) => final_embeddings.push(emb),
+                None => return Err(anyhow::anyhow!("Missing embedding for some text in batch")),
+            }
+        }
         Ok(final_embeddings)
     }
 
