@@ -70,6 +70,7 @@ pub struct SearchResult {
     pub similarity: f32,
     pub utility: f32,
     pub tier: String,
+    #[serde(default, skip_serializing)]
     pub embedding: Option<Vec<f32>>,
     pub vault_path: Option<String>,
     pub source_episode: Option<String>,

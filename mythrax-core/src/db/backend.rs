@@ -1903,6 +1903,18 @@ impl StorageBackend for SurrealBackend {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(15.0f32),
             _ => 15.0f32,
         };
+        let fusion_sigmoid_center = match self.get_profile_key("search.fusion_sigmoid_center").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
+            _ => 0.60f32,
+        };
+        let fusion_sigmoid_steepness = match self.get_profile_key("search.fusion_sigmoid_steepness").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(20.0f32),
+            _ => 20.0f32,
+        };
+        let mmr_lambda = match self.get_profile_key("search.mmr_lambda").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.70f32),
+            _ => 0.70f32,
+        };
         let w_imp_ep = match self.get_profile_key("search.weight_importance_episode").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.3f32),
             _ => 0.3f32,
@@ -2320,7 +2332,7 @@ impl StorageBackend for SurrealBackend {
                         similarity: blended_score,
                         utility: decayed_utility,
                         tier,
-                        embedding: None,
+                        embedding: ep.embedding.clone(),
                         vault_path: ep.vault_path.clone(),
                         source_episode: None,
                         discovery_tokens: ep.discovery_tokens,
@@ -2420,7 +2432,7 @@ impl StorageBackend for SurrealBackend {
                         similarity: blended_score,
                         utility: decayed_utility,
                         tier,
-                        embedding: None,
+                        embedding: node.embedding.clone(),
                         vault_path: node.vault_path.clone(),
                         source_episode: None,
                         discovery_tokens: None,
@@ -2511,7 +2523,7 @@ impl StorageBackend for SurrealBackend {
                         similarity: blended_score,
                         utility: decayed_utility,
                         tier,
-                        embedding: None,
+                        embedding: rule.embedding.clone(),
                         vault_path: rule.vault_path.clone(),
                         source_episode: None,
                         discovery_tokens: None,
@@ -2533,7 +2545,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.hybrid").await {
             val == "true"
         } else {
-            false
+            true
         });
 
         let is_boost_name_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_NAME") {
@@ -2541,7 +2553,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.person_name").await {
             val == "true"
         } else {
-            false
+            true
         });
 
         let is_boost_quote_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_QUOTE") {
@@ -2549,7 +2561,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.exact_quote").await {
             val == "true"
         } else {
-            false
+            true
         });
 
         let is_boost_temporal_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_TEMPORAL") {
@@ -2557,7 +2569,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.temporal_proximity").await {
             val == "true"
         } else {
-            false
+            true
         });
 
         let is_boost_overlap_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_OVERLAP") {
@@ -2565,7 +2577,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.keyword_overlap").await {
             val == "true"
         } else {
-            false
+            true
         });
 
         let gamma_rerank = if !is_hybrid {
@@ -2617,7 +2629,10 @@ impl StorageBackend for SurrealBackend {
                             .bind(("token", token_str.as_str()))
                             .await
                         {
-                            Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+                            Ok(mut res) => {
+                                let list: Vec<usize> = res.take(0).unwrap_or_default();
+                                list.first().cloned().unwrap_or(0)
+                            }
                             Err(_) => 0,
                         };
                         (token_str, count)
@@ -2633,8 +2648,9 @@ impl StorageBackend for SurrealBackend {
                 drop(outer_write);
 
                 let mut inner_write = inner_map_lock.write().await;
+                let mut cache_cleared = false;
                 for (token, count) in fetched_misses {
-                    if inner_write.len() < 1000 {
+                    if !cache_cleared && inner_write.len() < 1000 {
                         inner_write.insert(token.clone(), CacheEntry {
                             count,
                             expires_at: now + std::time::Duration::from_secs(60),
@@ -2643,21 +2659,27 @@ impl StorageBackend for SurrealBackend {
 
                         let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                         if new_size > 10000 {
-                            drop(inner_write);
-                            let mut outer_clear = self.term_counts_cache.write().await;
-                            outer_clear.clear();
-                            self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
-                            break;
+                            cache_cleared = true;
                         }
                     } else {
                         global_df.insert(token.clone(), count);
                     }
                 }
+
+                if cache_cleared {
+                    drop(inner_write);
+                    let mut outer_clear = self.term_counts_cache.write().await;
+                    outer_clear.clear();
+                    self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                }
             }
 
             let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
             total_n = match self.db.query(n_sql).bind(("scope", resolved_scope.as_str())).await {
-                Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+                Ok(mut res) => {
+                    let list: Vec<usize> = res.take(0).unwrap_or_default();
+                    list.first().cloned().unwrap_or(0)
+                }
                 Err(_) => 0,
             }.max(1);
         }
@@ -2685,11 +2707,20 @@ impl StorageBackend for SurrealBackend {
                     unique_map.insert(c.id.clone(), c);
                 }
                 for c in keyword_candidates {
-                    unique_map.entry(c.id.clone()).or_insert(c);
+                    unique_map.entry(c.id.clone())
+                        .and_modify(|existing| {
+                            existing.bm25_score = c.bm25_score;
+                        })
+                        .or_insert(c);
                 }
-                
+
                 let mut merged: Vec<SearchResult> = unique_map.into_values().collect();
-                
+                for c in &mut merged {
+                    if c.bm25_score.is_none() {
+                        c.bm25_score = Some(0.0);
+                    }
+                }
+
                 // global_df and total_n are already populated in the outer scope.
                 // Normalize database-side FTS scores (search::score(0))
                 let mut min_val = f32::MAX;
@@ -2739,11 +2770,11 @@ impl StorageBackend for SurrealBackend {
                     } else {
                         c.similarity
                     };
-                    
+
                     let fused = alpha * raw_sim + beta * bm25_norm;
                     let final_sim = if let (Some(orig_gate), Some(factor)) = (c.original_gate, c.factor_multiplier) {
                         let new_gate = if orig_gate != 1.0f32 {
-                            1.0f32 / (1.0f32 + (-20.0f32 * (fused - 0.60f32)).exp())
+                            1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - fusion_sigmoid_center)).exp())
                         } else {
                             1.0f32
                         };
@@ -3014,7 +3045,7 @@ impl StorageBackend for SurrealBackend {
         }
 
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.truncate(limit * 3);
+        candidates.truncate(limit * 5);
 
         // Apply Epic 4 distance-reduction boosts if enabled
         if is_boost_name_enabled || is_boost_quote_enabled || is_boost_temporal_enabled || is_boost_overlap_enabled {
@@ -3167,7 +3198,7 @@ impl StorageBackend for SurrealBackend {
         const RANK_POSITION_LADDER: [f32; 5] = [0.40, 0.25, 0.15, 0.08, 0.04];
         for (pos, c) in candidates.iter_mut().take(RANK_POSITION_LADDER.len()).enumerate() {
             let dist = 1.0 - c.similarity;
-            let effective_dist = (dist - RANK_POSITION_LADDER[pos]).clamp(0.0, 2.0);
+            let effective_dist = (dist - RANK_POSITION_LADDER[pos]).clamp(-2.0, 2.0);
             c.similarity = 1.0 - effective_dist;
         }
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
@@ -3187,6 +3218,50 @@ impl StorageBackend for SurrealBackend {
             final_results.push(item);
         }
         candidates = final_results;
+
+        // Apply MMR diversity selection if hybrid mode is active
+        if is_hybrid_enabled && !candidates.is_empty() {
+            let mut selected = Vec::new();
+            let mut remaining = candidates.clone();
+
+            // The first item (highest similarity) is always selected
+            if let Some(first) = remaining.first().cloned() {
+                selected.push(first);
+                remaining.remove(0);
+            }
+
+            while !remaining.is_empty() && selected.len() < limit {
+                let mut best_score = f32::MIN;
+                let mut best_idx = 0;
+
+                for (idx, item) in remaining.iter().enumerate() {
+                    let rel_score = item.similarity;
+                    let mut max_sim = 0.0f32;
+
+                    for sel_item in &selected {
+                        let sim_val = if let (Some(ref v1), Some(ref v2)) = (item.embedding.as_ref(), sel_item.embedding.as_ref()) {
+                            // Compute vector cosine similarity
+                            let dot: f32 = v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum();
+                            dot
+                        } else {
+                            0.0f32
+                        };
+                        if sim_val > max_sim {
+                            max_sim = sim_val;
+                        }
+                    }
+
+                    let mmr_score = mmr_lambda * rel_score - (1.0f32 - mmr_lambda) * max_sim;
+                    if mmr_score > best_score {
+                        best_score = mmr_score;
+                        best_idx = idx;
+                    }
+                }
+
+                selected.push(remaining.remove(best_idx));
+            }
+            candidates = selected;
+        }
 
         // Bounded verbatim hydration (Epic 4): cap injected verbatim content per
         // result so a single large episode cannot blow out the context window.
@@ -3618,12 +3693,12 @@ impl StorageBackend for SurrealBackend {
         struct ProfileRaw {
             value: String,
         }
-        let sql = "SELECT value FROM type::record('profile', $key);";
+        let sql = "SELECT `value` FROM `profile` WHERE id = type::record('profile', $key);";
         let mut response = self.db.query(sql)
             .bind(("key", key))
             .await?.check().context("SELECT profile failed")?;
-        let res: Option<ProfileRaw> = response.take(0)?;
-        Ok(res.map(|r| r.value))
+        let res: Vec<ProfileRaw> = response.take(0)?;
+        Ok(res.first().map(|r| r.value.clone()))
     }
 
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String> {
@@ -5395,6 +5470,11 @@ files_modified: None,
         let mut backend = SurrealBackend::new_in_memory().await.unwrap();
         backend.init().await.unwrap();
         backend.embedder = None;
+        backend.save_profile_key("retrieval.boost.person_name", "false").await.unwrap();
+        backend.save_profile_key("retrieval.boost.exact_quote", "false").await.unwrap();
+        backend.save_profile_key("retrieval.boost.temporal_proximity", "false").await.unwrap();
+        backend.save_profile_key("retrieval.boost.keyword_overlap", "false").await.unwrap();
+        backend.save_profile_key("retrieval.hybrid", "false").await.unwrap();
 
         // 1. Seed an episode containing 'concurrency'
         let episode = EpisodeSave {
