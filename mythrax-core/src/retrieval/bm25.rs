@@ -49,8 +49,8 @@ impl OkapiBM25 {
             df,
             n,
             avg_dl,
-            k1: 1.5,
-            b: 0.75,
+            k1: 1.2,
+            b: 0.60,
         }
     }
 
@@ -81,8 +81,8 @@ impl OkapiBM25 {
             df: global_df,
             n: global_n,
             avg_dl: global_avg_dl,
-            k1: 1.5,
-            b: 0.75,
+            k1: 1.2,
+            b: 0.60,
         }
     }
 
@@ -165,104 +165,16 @@ impl OkapiBM25 {
     }
 }
 
-fn has_vowel(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y'))
-}
-
-fn ends_double_consonant_except_lsz(s: &str) -> bool {
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
-    if len >= 2 {
-        let last = chars[len - 1];
-        let prev = chars[len - 2];
-        if last == prev {
-            let is_consonant = !matches!(last, 'a' | 'e' | 'i' | 'o' | 'u' | 'y');
-            is_consonant && !matches!(last, 'l' | 's' | 'z')
-        } else {
-            false
-        }
-    } else {
-        false
-    }
-}
-
-fn is_short_stem(s: &str) -> bool {
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
-    if len >= 3 {
-        let c1 = chars[len - 3];
-        let v = chars[len - 2];
-        let c2 = chars[len - 1];
-        let is_consonant = |c: char| !matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y');
-        is_consonant(c1) && !is_consonant(v) && is_consonant(c2) && !matches!(c2, 'w' | 'x' | 'y')
-    } else {
-        false
-    }
-}
+use std::sync::OnceLock;
+use rust_stemmers::{Algorithm, Stemmer};
 
 pub fn stem(word: &str) -> String {
-    if word.len() <= 3 || word.contains('-') {
+    if word.len() <= 2 || word.contains('-') {
         return word.to_string();
     }
-
-    if word.ends_with("ing") {
-        let stem_part = &word[..word.len() - 3];
-        if has_vowel(stem_part) {
-            if stem_part.ends_with("at") || stem_part.ends_with("bl") || stem_part.ends_with("iz") {
-                format!("{}e", stem_part)
-            } else if ends_double_consonant_except_lsz(stem_part) {
-                let chars: Vec<char> = stem_part.chars().collect();
-                chars[..chars.len() - 1].iter().collect()
-            } else if is_short_stem(stem_part) {
-                format!("{}e", stem_part)
-            } else {
-                stem_part.to_string()
-            }
-        } else {
-            word.to_string()
-        }
-    } else if word.ends_with("ed") {
-        let stem_part = &word[..word.len() - 2];
-        if has_vowel(stem_part) {
-            if stem_part.ends_with("at") || stem_part.ends_with("bl") || stem_part.ends_with("iz") {
-                format!("{}e", stem_part)
-            } else if ends_double_consonant_except_lsz(stem_part) {
-                let chars: Vec<char> = stem_part.chars().collect();
-                chars[..chars.len() - 1].iter().collect()
-            } else if is_short_stem(stem_part) {
-                format!("{}e", stem_part)
-            } else {
-                stem_part.to_string()
-            }
-        } else {
-            word.to_string()
-        }
-    } else if word.ends_with("sses") {
-        word[..word.len() - 2].to_string()
-    } else if word.ends_with("ies") {
-        format!("{}i", &word[..word.len() - 3])
-    } else if word.ends_with("es") {
-        let chars: Vec<char> = word.chars().collect();
-        if chars.len() >= 3 {
-            let prec = chars[chars.len() - 3];
-            if matches!(prec, 'h' | 'x' | 's' | 'z' | 'o') {
-                word[..word.len() - 2].to_string()
-            } else {
-                word[..word.len() - 1].to_string()
-            }
-        } else {
-            word.to_string()
-        }
-    } else if word.ends_with('s') && !word.ends_with("ss") {
-        let preceding = &word[..word.len() - 1];
-        if has_vowel(preceding) {
-            preceding.to_string()
-        } else {
-            word.to_string()
-        }
-    } else {
-        word.to_string()
-    }
+    static STEMMER: OnceLock<Stemmer> = OnceLock::new();
+    let stemmer = STEMMER.get_or_init(|| Stemmer::create(Algorithm::English));
+    stemmer.stem(word).to_string()
 }
 
 pub fn tokenize(text: &str) -> Vec<String> {
@@ -409,9 +321,71 @@ mod tests {
         assert_eq!(stem("running"), "run");
         assert_eq!(stem("wiring"), "wire");
         assert_eq!(stem("connected"), "connect");
-        assert_eq!(stem("values"), "value");
+        assert_eq!(stem("values"), "valu");
         assert_eq!(stem("boxes"), "box");
         assert_eq!(stem("flies"), "fli");
         assert_eq!(stem("caresses"), "caress");
+    }
+
+    #[test]
+    fn test_stemmer_alignment_corpus() {
+        let corpus = &[
+            ("optimization", "optim"),
+            ("management", "manag"),
+            ("reasoning", "reason"),
+            ("searchable", "searchabl"), // verified: snowball stems to searchabl
+            ("actively", "activ"),
+            ("connected", "connect"),
+            ("complexity", "complex"),
+            ("adaptive", "adapt"),
+            ("meaningful", "meaning"),
+            ("continuously", "continu"),
+            ("implementation", "implement"),
+            ("successful", "success"),
+            ("running", "run"),
+            ("caresses", "caress"),
+        ];
+        for (input, expected) in corpus {
+            assert_eq!(
+                stem(input), *expected,
+                "Snowball English mismatch: '{}' -> got '{}', expected '{}'",
+                input, stem(input), expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn db_snowball_matches_rust_stemmers() {
+        let db = surrealdb::engine::any::connect("mem://").await.unwrap();
+        db.use_ns("test").use_db("test").await.unwrap();
+        db.query("DEFINE ANALYZER snowball_en TOKENIZERS blank, punct FILTERS lowercase, snowball(english);").await.unwrap();
+        
+        let corpus = &[
+            "optimization",
+            "management",
+            "reasoning",
+            "searchable",
+            "actively",
+            "connected",
+            "complexity",
+            "adaptive",
+            "meaningful",
+            "continuously",
+            "implementation",
+            "successful",
+            "running",
+            "caresses",
+        ];
+        
+        for word in corpus {
+            let mut res = db.query("RETURN search::analyze('snowball_en', $word);")
+                .bind(("word", *word))
+                .await
+                .unwrap();
+            let db_tokens: Vec<String> = res.take(0).unwrap();
+            let db_stem = db_tokens.first().cloned().unwrap_or_default();
+            let rust_stem = stem(word);
+            assert_eq!(db_stem, rust_stem, "Mismatch for '{}'", word);
+        }
     }
 }

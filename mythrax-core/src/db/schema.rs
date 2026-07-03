@@ -41,7 +41,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS episode_vault_path ON episode FIELDS vault_path;
     DEFINE INDEX IF NOT EXISTS episode_scope_created ON episode FIELDS scope, created_at;
     DEFINE ANALYZER IF NOT EXISTS ascii TOKENIZERS blank, punct FILTERS lowercase, ascii;
-    DEFINE INDEX IF NOT EXISTS episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER ascii;
+    DEFINE ANALYZER IF NOT EXISTS snowball_en TOKENIZERS blank, punct FILTERS lowercase, snowball(english);
+    DEFINE INDEX OVERWRITE episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER snowball_en BM25(1.2, 0.60);
 
 
     DEFINE TABLE IF NOT EXISTS wiki_node SCHEMAFULL;
