@@ -2065,21 +2065,25 @@ impl StorageBackend for SurrealBackend {
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                                <-followed_by<-episode.* AS prev_episodes,
-                               ->followed_by->episode.* AS next_episodes
-                        FROM episode 
-                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
-                        ",
+                               ->followed_by->episode.* AS next_episodes,
+                               search::score(0) AS bm25_score
+                         FROM episode 
+                         WHERE content @0@ $query
+                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                         ORDER BY bm25_score DESC;
+                         ",
                         traversal = traversal,
                         related_targets = related_targets
                     ));
                 } else {
                     keyword_sql.push_str("
                         SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
+                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
+                               search::score(0) AS bm25_score
                         FROM episode 
-                        WHERE (string::contains(title, $query) OR string::contains(content, $query)) 
-                          AND (scope IN [$target_scope, 'general'] OR $search_all = true);
+                        WHERE content @0@ $query
+                          AND (scope IN [$target_scope, 'general'] OR $search_all = true)
+                        ORDER BY bm25_score DESC;
                     ");
                 }
             }
