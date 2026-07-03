@@ -3121,8 +3121,8 @@ impl StorageBackend for SurrealBackend {
                             global_anchor
                         };
                         let decay_lambda = match self.get_profile_key("search.decay_lambda").await {
-                            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.02f32).max(0.0f32),
-                            _ => 0.02f32,
+                            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.01f32).max(0.0f32),
+                            _ => 0.01f32,
                         };
                         calculate_temporal_decay(created, anchor, decay_lambda)
                     } else {
