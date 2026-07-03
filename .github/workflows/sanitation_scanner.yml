@@ -1,0 +1,45 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Sanitation Scanner
+        run: |
+          python3 scripts/sanitation_scanner.py
+
+      - name: Locate Pull Request for Push Event
+        if: github.event_name == 'push'
+        id: find_pr
+        uses: jwalton/gh-find-current-pr@v1
+
+      - name: Post Scorecard to PR (Pull Request Event)
+        if: github.event_name == 'pull_request'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: sanitation_scorecard.md
+
+      - name: Post Scorecard to PR (Push Event)
+        if: github.event_name == 'push' && steps.find_pr.outputs.number
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ steps.find_pr.outputs.number }}
+          body-path: sanitation_scorecard.md

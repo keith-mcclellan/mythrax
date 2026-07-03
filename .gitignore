@@ -68,3 +68,5 @@ config.json
 /mythrax-core/bench_data/
 embedding_cache.bin
 
+/mock_pr_comment.md
+/sanitation_scorecard.md
