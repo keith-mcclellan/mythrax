@@ -1068,6 +1068,7 @@ struct SearchRaw {
     session_id: Option<String>,
     word_count: Option<u32>,
     scope: Option<String>,
+    bm25_score: Option<f32>,
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -2330,6 +2331,7 @@ impl StorageBackend for SurrealBackend {
                         created_at: ep.created_at,
                         session_id: ep.session_id.clone(),
                         word_count: ep.word_count,
+                        bm25_score: ep.bm25_score,
                     });
                 }
             }
@@ -2689,49 +2691,15 @@ impl StorageBackend for SurrealBackend {
                 let mut merged: Vec<SearchResult> = unique_map.into_values().collect();
                 
                 // global_df and total_n are already populated in the outer scope.
-                let now = std::time::Instant::now();
-
-                let mut avg_dl = 0.0f32;
-                {
-                    let avg_read = self.avg_dl_cache.read().await;
-                    if let Some(&(val, expires)) = avg_read.get(&resolved_scope) {
-                        if expires > now {
-                            avg_dl = val;
-                        }
-                    }
+                // Normalize database-side FTS scores (search::score(0))
+                let mut min_val = f32::MAX;
+                let mut max_val = f32::MIN;
+                for c in &merged {
+                    let s = c.bm25_score.unwrap_or(0.0);
+                    if s < min_val { min_val = s; }
+                    if s > max_val { max_val = s; }
                 }
-                if avg_dl == 0.0f32 {
-                    let mut avg_write = self.avg_dl_cache.write().await;
-                    if let Some(&(val, expires)) = avg_write.get(&resolved_scope) {
-                        if expires > now {
-                            avg_dl = val;
-                        }
-                    }
-                    if avg_dl == 0.0f32 {
-                        let mean_sql = "SELECT VALUE math::mean(word_count) FROM episode WHERE scope = $scope OR scope = 'general';";
-                        let mean_val = match self.db.query(mean_sql).bind(("scope", resolved_scope.as_str())).await {
-                            Ok(mut res) => res.take::<Option<f32>>(0).unwrap_or(None).unwrap_or(0.0),
-                            Err(_) => 0.0,
-                        };
-                        avg_dl = mean_val.max(1.0);
-                        avg_write.insert(resolved_scope.clone(), (avg_dl, now + std::time::Duration::from_secs(60)));
-                    }
-                }
-
-                let corpus: Vec<(String, String)> = merged.iter().map(|c| (c.id.clone(), format!("{} {}", c.title, c.content))).collect();
-                let bm25_k1 = match self.get_profile_key("retrieval.bm25.k1").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.2f32),
-                    _ => 1.2f32,
-                };
-                let bm25_b = match self.get_profile_key("retrieval.bm25.b").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
-                    _ => 0.60f32,
-                };
-                let bm25 = crate::retrieval::bm25::OkapiBM25::with_global_stats(&corpus, global_df.clone(), total_n, avg_dl)
-                    .with_k1(bm25_k1)
-                    .with_b(bm25_b);
-                let bm25_scores = bm25.score_normalized(cleaned_query.as_str());
-                let bm25_map: std::collections::HashMap<String, f32> = bm25_scores.into_iter().collect();
+                let denom = max_val - min_val;
 
                 let mut sum_idf = 0.0f32;
                 let mut query_token_count = 0;
@@ -2755,7 +2723,14 @@ impl StorageBackend for SurrealBackend {
                 let alpha = 1.0f32 - beta;
 
                 for c in &mut merged {
-                    let bm25_norm = *bm25_map.get(&c.id).unwrap_or(&0.0);
+                    let raw_bm25 = c.bm25_score.unwrap_or(0.0);
+                    let bm25_norm = if denom > 1e-6 {
+                        (raw_bm25 - min_val) / denom
+                    } else if max_val > 1e-6 {
+                        1.0
+                    } else {
+                        0.0
+                    };
                     let raw_sim = if let Some(r_sim) = c.raw_vector_sim {
                         r_sim
                     } else if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), c.embedding.as_ref()) {
@@ -2946,19 +2921,20 @@ impl StorageBackend for SurrealBackend {
                                                              content: raw.content.clone(),
                                                              similarity: neighbor_score,
                                                              utility: raw.utility.unwrap_or(50.0) as f32,
-                                                            tier: "episode".to_string(),
-                                                            embedding: None,
-                                                            vault_path: raw.vault_path.clone(),
-                                                            source_episode: None,
-                                                            discovery_tokens: raw.discovery_tokens,
-                                                            related_nodes: None,
-                                                            raw_vector_sim: None,
-                                                            original_gate: None,
-                                                            factor_multiplier: None,
-                                                            created_at: raw.created_at,
-                                                            session_id: raw.session_id.clone(),
-                                                            word_count: raw.word_count,
-                                                        };
+                                                             tier: "episode".to_string(),
+                                                             embedding: None,
+                                                             vault_path: raw.vault_path.clone(),
+                                                             source_episode: None,
+                                                             discovery_tokens: raw.discovery_tokens,
+                                                             related_nodes: None,
+                                                             raw_vector_sim: None,
+                                                             original_gate: None,
+                                                             factor_multiplier: None,
+                                                             created_at: raw.created_at,
+                                                             session_id: raw.session_id.clone(),
+                                                             word_count: raw.word_count,
+                                                             ..Default::default()
+                                                         };
                                                         neighbor_candidates.push(neighbor_cand);
                                                     }
                                                 }

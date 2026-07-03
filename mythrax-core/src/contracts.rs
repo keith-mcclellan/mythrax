@@ -88,6 +88,8 @@ pub struct SearchResult {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub word_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_score: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
