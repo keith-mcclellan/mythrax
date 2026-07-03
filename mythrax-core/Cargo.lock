@@ -3167,6 +3167,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rlimit",
  "rusqlite",
+ "rust-stemmers",
  "safetensors",
  "serde",
  "serde_json",

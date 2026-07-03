@@ -344,8 +344,8 @@ async fn main() -> Result<()> {
     } else {
         println!("Loaded embedding cache from {:?}", target_cache_path);
         if args.mode == "tune" {
-            let lambdas = vec!["0.02", "0.05", "0.08"];
-            let gammas = vec!["0.10", "0.20", "0.30", "0.40"];
+            let lambdas = vec!["0.01", "0.02", "0.05", "0.08", "0.12"];
+            let gammas = vec!["0.05", "0.10", "0.20", "0.30", "0.40"];
             let mut best_score = -1.0;
             let mut best_params = (String::new(), String::new());
 
