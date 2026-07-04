@@ -94,6 +94,7 @@ pub async fn mine_transcript(
                 // We mine user turns, tool outputs, computer outputs, and tool_results
                 let normalized_role = r.to_lowercase();
                 if normalized_role == "user"
+                    || normalized_role == "assistant"
                     || normalized_role == "tool"
                     || normalized_role == "tool_result"
                     || normalized_role == "computer"
@@ -103,6 +104,9 @@ pub async fn mine_transcript(
                     // captured rather than serialized as a JSON blob or dropped.
                     let extracted = extract_text(&c);
                     if extracted.trim().is_empty() {
+                        continue;
+                    }
+                    if normalized_role == "assistant" && extracted.trim().chars().count() <= 20 {
                         continue;
                     }
                     let title = format!("Verbatim {} Turn ({})", r, session);
