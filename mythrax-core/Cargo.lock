@@ -3147,7 +3147,7 @@ dependencies = [
 
 [[package]]
 name = "mythrax-core"
-version = "2.3.4"
+version = "2.5.1"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -3167,6 +3167,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rlimit",
  "rusqlite",
+ "rust-stemmers",
  "safetensors",
  "serde",
  "serde_json",

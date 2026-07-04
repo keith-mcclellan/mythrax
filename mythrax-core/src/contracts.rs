@@ -70,6 +70,7 @@ pub struct SearchResult {
     pub similarity: f32,
     pub utility: f32,
     pub tier: String,
+    #[serde(default, skip_serializing)]
     pub embedding: Option<Vec<f32>>,
     pub vault_path: Option<String>,
     pub source_episode: Option<String>,
@@ -88,6 +89,8 @@ pub struct SearchResult {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub word_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_score: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]

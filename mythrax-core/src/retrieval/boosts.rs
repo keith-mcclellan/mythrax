@@ -40,5 +40,5 @@ pub fn apply_boosts(base_dist: f32, sig: &BoostSignals, w: &BoostWeights) -> f32
     total_boost += sig.keyword_overlap * w.keyword_overlap;
     total_boost += sig.symbolic_hit * w.symbolic_hit * base_dist;
     
-    (base_dist - total_boost).clamp(0.0, 2.0)
+    (base_dist - total_boost).clamp(-2.0, 2.0)
 }

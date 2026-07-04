@@ -49,8 +49,8 @@ impl OkapiBM25 {
             df,
             n,
             avg_dl,
-            k1: 1.5,
-            b: 0.75,
+            k1: 1.2,
+            b: 0.60,
         }
     }
 
@@ -81,8 +81,8 @@ impl OkapiBM25 {
             df: global_df,
             n: global_n,
             avg_dl: global_avg_dl,
-            k1: 1.5,
-            b: 0.75,
+            k1: 1.2,
+            b: 0.60,
         }
     }
 
@@ -165,13 +165,25 @@ impl OkapiBM25 {
     }
 }
 
+use std::sync::OnceLock;
+use rust_stemmers::{Algorithm, Stemmer};
+
+pub fn stem(word: &str) -> String {
+    if word.len() <= 2 || word.contains('-') {
+        return word.to_string();
+    }
+    static STEMMER: OnceLock<Stemmer> = OnceLock::new();
+    let stemmer = STEMMER.get_or_init(|| Stemmer::create(Algorithm::English));
+    stemmer.stem(word).to_string()
+}
+
 pub fn tokenize(text: &str) -> Vec<String> {
     let lowercase = text.to_lowercase();
     lowercase
         .split(|c: char| !c.is_alphanumeric() && c != '-')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty() && !is_stop_word(s))
-        .map(|s| s.to_string())
+        .map(|s| stem(s))
         .collect()
 }
 
@@ -298,4 +310,82 @@ fn is_stop_word(w: &str) -> bool {
             | "yourself"
             | "yourselves"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stemmer_rules() {
+        assert_eq!(stem("running"), "run");
+        assert_eq!(stem("wiring"), "wire");
+        assert_eq!(stem("connected"), "connect");
+        assert_eq!(stem("values"), "valu");
+        assert_eq!(stem("boxes"), "box");
+        assert_eq!(stem("flies"), "fli");
+        assert_eq!(stem("caresses"), "caress");
+    }
+
+    #[test]
+    fn test_stemmer_alignment_corpus() {
+        let corpus = &[
+            ("optimization", "optim"),
+            ("management", "manag"),
+            ("reasoning", "reason"),
+            ("searchable", "searchabl"), // verified: snowball stems to searchabl
+            ("actively", "activ"),
+            ("connected", "connect"),
+            ("complexity", "complex"),
+            ("adaptive", "adapt"),
+            ("meaningful", "meaning"),
+            ("continuously", "continu"),
+            ("implementation", "implement"),
+            ("successful", "success"),
+            ("running", "run"),
+            ("caresses", "caress"),
+        ];
+        for (input, expected) in corpus {
+            assert_eq!(
+                stem(input), *expected,
+                "Snowball English mismatch: '{}' -> got '{}', expected '{}'",
+                input, stem(input), expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn db_snowball_matches_rust_stemmers() {
+        let db = surrealdb::engine::any::connect("mem://").await.unwrap();
+        db.use_ns("test").use_db("test").await.unwrap();
+        db.query("DEFINE ANALYZER snowball_en TOKENIZERS blank, punct FILTERS lowercase, snowball(english);").await.unwrap();
+        
+        let corpus = &[
+            "optimization",
+            "management",
+            "reasoning",
+            "searchable",
+            "actively",
+            "connected",
+            "complexity",
+            "adaptive",
+            "meaningful",
+            "continuously",
+            "implementation",
+            "successful",
+            "running",
+            "caresses",
+        ];
+        
+        for word in corpus {
+            let mut res = db.query("RETURN search::analyze('snowball_en', $word);")
+                .bind(("word", *word))
+                .await
+                .unwrap();
+            let db_tokens: Vec<String> = res.take(0).unwrap();
+            let db_stem = db_tokens.first().cloned().unwrap_or_default();
+            let rust_stem = stem(word);
+            assert_eq!(db_stem, rust_stem, "Mismatch for '{}'", word);
+        }
+    }
 }

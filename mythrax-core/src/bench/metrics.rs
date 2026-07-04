@@ -57,35 +57,46 @@ pub fn ndcg(
     k: usize,
 ) -> f32 {
     let k = std::cmp::min(k, rankings.len());
-    if k == 0 || correct_ids.is_empty() {
+    if k == 0 || correct_ids.is_empty() || corpus_ids.is_empty() {
         return 0.0;
     }
 
+    let get_relevance = |c_id: &str| -> f32 {
+        if correct_ids.iter().any(|id| id == c_id) {
+            3.0
+        } else {
+            let c_session = session_id_from_corpus_id(c_id);
+            let same_session = correct_ids.iter().any(|id| {
+                session_id_from_corpus_id(id) == c_session
+            });
+            if same_session {
+                2.0
+            } else {
+                0.0
+            }
+        }
+    };
+
     // Compute DCG@k
     let mut dcg = 0.0f32;
-    let correct_set: std::collections::HashSet<&String> = correct_ids.iter().collect();
-
     for i in 0..k {
         let idx = rankings[i];
         if let Some(corpus_id) = corpus_ids.get(idx) {
-            if correct_set.contains(corpus_id) {
-                let rel = 1.0f32;
-                let discount = ((i + 2) as f32).log2();
-                dcg += rel / discount;
-            }
+            let rel = get_relevance(corpus_id);
+            let discount = ((i + 2) as f32).log2();
+            dcg += rel / discount;
         }
     }
 
     // Compute IDCG@k (Ideal DCG)
-    // The ideal case is where all relevant documents are ranked at the very top.
-    // Total number of relevant documents is correct_ids.len()
-    let num_relevant = correct_ids.len();
-    let mut idcg = 0.0f32;
-    let ideal_limit = std::cmp::min(num_relevant, k);
+    let mut all_relevances: Vec<f32> = corpus_ids.iter().map(|id| get_relevance(id)).collect();
+    all_relevances.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
 
+    let mut idcg = 0.0f32;
+    let ideal_limit = std::cmp::min(all_relevances.len(), k);
     for i in 0..ideal_limit {
         let discount = ((i + 2) as f32).log2();
-        idcg += 1.0f32 / discount;
+        idcg += all_relevances[i] / discount;
     }
 
     if idcg == 0.0 {

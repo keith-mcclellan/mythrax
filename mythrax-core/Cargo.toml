@@ -1,6 +1,6 @@
 [package]
 name = "mythrax-core"
-version = "2.3.4"
+version = "2.5.1"
 edition = "2024"
 
 [dependencies]
@@ -20,6 +20,7 @@ tracing-appender = "0.2"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 bytes = "1.5"
 futures-util = { version = "0.3", features = ["alloc"] }
+rust-stemmers = "1.2"
 url = "2.5"
 uuid = { version = "1.6", features = ["v4"] }
 clap = { version = "4.4", features = ["derive"] }
@@ -39,9 +40,9 @@ hex = "0.4"
 mlx-rs = { version = "0.25.3", optional = true }
 safetensors = { version = "0.4.3", optional = true }
 
+tempfile = "3.8"
 
 [dev-dependencies]
-tempfile = "3.8"
 lopdf = "0.38.0"
 
 [[bin]]

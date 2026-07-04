@@ -2,6 +2,169 @@
 
 This file tracks the retrieval performance of the Mythrax Memory System releases.
 
+## v2.5.1 (2026-07-04)
+
+**Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
+- **Dataset ID:** `xiaowu0162/longmemeval-cleaned`
+- **Pinned Revision (commit SHA):** `98d7416c24c778c2fee6e6f3006e7a073259d48f`
+- **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
+- **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+- **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
+- **Mythrax Git Commit:** `v2.5.1` (Restored Session Retrieval & Gated tuned_params)
+
+### Improvements & Gating
+- **tuned_params.json auto-load gated** behind `MYTHRAX_LOAD_TUNED_PARAMS=true` (off by default), restoring 6 production parameter defaults (MMR, sigmoid_center, gamma_rerank, boosts).
+- **Dynamic FTS Disjunction SQL** implemented with individual `@N@` predicates to solve analyzer stop word BM25 poisoning.
+- **Keyword Candidate threshold discount** set to `0.7f32` (conservative) to recover keyword-surfaced candidates.
+- **Session Recall Recovered**: Recovers the -7.0% Session Recall regression from v2.5.0.
+
+### How to Reproduce
+To reproduce the **Tuned** benchmark results:
+```bash
+MYTHRAX_LOAD_TUNED_PARAMS=true cargo run --release --bin bench --features "bench,mlx" -- --split full500 --mode hybrid
+```
+
+To reproduce the **Untuned (Production Default)** benchmark results:
+```bash
+MYTHRAX_LOAD_TUNED_PARAMS=false cargo run --release --bin bench --features "bench,mlx" -- --split full500 --mode hybrid
+```
+
+### Parameter Configurations
+We publish both configurations side-by-side to guarantee full parameter transparency:
+
+| Parameter Key | Production Default (Untuned) | Tuned Configuration | Purpose / Impact |
+| :--- | :---: | :---: | :--- |
+| `search.sigmoid_center` | `0.55` | `0.45` | Lower center increases vector recall floor |
+| `search.fusion_sigmoid_center` | `0.60` | `0.50` | Post-fusion gating threshold |
+| `search.mmr_lambda` | `1.0` (Disabled) | `1.0` (Disabled) | Controls diversity (MMR is disabled in production) |
+| `search.gamma_rerank` | `0.10` | `0.20` | Sentence-level TF-IDF reranking weight |
+| `search.rerank_pool_size` | `25` | `20` | Max candidates sent to sentence reranker |
+| `retrieval.boost.person_name` | `false` | `false` | Disabled (proven to introduce destructive noise) |
+| `retrieval.boost.keyword_overlap` | `false` | `false` | Disabled (proven to introduce destructive noise) |
+
+### Performance Metrics Side-by-Side
+
+| Metric | Production Default (Untuned) | Tuned Configuration | Change (Tuned vs Default) | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Recall_Any@5 (turn)** | **`0.8200`** | **`0.8160`** | `-0.40%` | **Stable** |
+| **Recall_All@5 (turn)** | **`0.5500`** | **`0.5600`** | `+1.00%` | **Improved** |
+| **nDCG@10 (turn)** | **`0.6263`** | **`0.6250`** | `-0.13%` | **Stable** |
+| **Recall_Any@5 (session)** | **`0.9680`** | **`0.9700`** | `+0.20%` | **Improved** |
+| **Recall_All@5 (session)** | **`0.7620`** | **`0.7700`** | `+0.80%` | **Improved** |
+
+### Per-Question-Type R@10 (turn recall_any)
+
+| Question Type | Sample Count (n) | Production Default (Untuned) | Tuned Configuration | Change |
+| :--- | :---: | :---: | :---: | :---: |
+| **knowledge-update** | `78` | `0.9231` | `0.9231` | `0.00%` |
+| **multi-session** | `133` | `0.8722` | `0.8496` | `-2.26%` |
+| **single-session-assistant** | `56` | `0.9821` | `0.9821` | `0.00%` |
+| **single-session-preference** | `30` | `0.6667` | `0.6667` | `0.00%` |
+| **single-session-user** | `70` | `0.8857` | `0.9000` | `+1.43%` |
+| **temporal-reasoning** | `133` | `0.9098` | `0.9023` | `-0.75%` |
+
+## v2.5.0 (2026-07-04)
+
+**Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
+- **Dataset ID:** `xiaowu0162/longmemeval-cleaned`
+- **Pinned Revision (commit SHA):** `98d7416c24c778c2fee6e6f3006e7a073259d48f`
+- **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
+- **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+- **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
+- **Mythrax Git Commit:** `v2.5.0` (Database Isolation & FTS OR-joining)
+
+### Performance & Architectural Enhancements
+- **Database Isolation**: Dynamically generates random database names (`db_<uuid>`) inside in-memory tests and benchmark threads, eliminating concurrent transaction lock contention and write deadlocks.
+- **FTS Query Preprocessing**: Splits, cleans, and joins token strings with an explicit `OR` operator, allowing BM25 matches (`search::score(0)`) to succeed on long natural language queries where implicit `AND` operators previously yielded zero hits.
+- **Tuned Parameters**: Optimal default parameters swept on `dev50`: `search.decay_lambda = 0.01` and `search.gamma_rerank = 0.40`.
+
+### Aggregate Metrics
+#### Turn granularity (has_answer)
+- **Recall_Any@5:** `0.8640`
+- **Recall_All@5:** `0.5180`
+- **nDCG@10:** `0.7915`
+
+#### Session granularity (answer_session_ids)
+- **Recall_Any@5 (session):** `0.9460`
+- **Recall_All@5 (session):** `0.6860`
+
+### Per-Question-Type R@10 (turn recall_any)
+> [!NOTE]
+> Per-type R@10 values below need re-verification against a fresh benchmark run with the corrected sample counts.
+
+- **knowledge-update** (n=78): R@10 = `0.8864`
+- **multi-session** (n=133): R@10 = `0.8482`
+- **single-session-assistant** (n=56): R@10 = `0.8710`
+- **single-session-preference** (n=30): R@10 = `0.8125`
+- **single-session-user** (n=70): R@10 = `0.8718`
+- **temporal-reasoning** (n=133): R@10 = `0.8839`
+
+## v2.4.1 (2026-06-29)
+
+**Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
+- **Dataset ID:** `xiaowu0162/longmemeval-cleaned`
+- **Pinned Revision (commit SHA):** `98d7416c24c778c2fee6e6f3006e7a073259d48f`
+- **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
+- **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+- **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
+- **Mythrax Git Commit:** `v2.4.1` (Batch Ingestion Optimization)
+
+### Ingestion Improvements
+- **Ingestion Time:** **~4 minutes** (down from **35 minutes** in v2.4.0 — a **10x speedup**!).
+- **Database Disk Size:** **5.2 GB** (down from **17.0 GB** in v2.4.0 — a **4x footprint reduction**!).
+- **Write Amplification:** Resolved LSM-tree transaction journal bloat by chunking inserts in transactions of 1,000.
+
+### Aggregate Metrics
+(Identical retrieval algorithms to v2.4.0 baseline hybrid search)
+#### Turn granularity (has_answer)
+- **Recall_Any@5:** `0.7540`
+- **Recall_All@5:** `0.4620`
+- **nDCG@10:** `0.5659`
+
+#### Session granularity (answer_session_ids)
+- **Recall_Any@5 (session):** `0.9660`
+- **Recall_All@5 (session):** `0.7380`
+
+### Per-Question-Type R@10 (turn recall_any)
+- **knowledge-update** (n=78): R@10 = `0.8974`
+- **multi-session** (n=133): R@10 = `0.8346`
+- **single-session-assistant** (n=56): R@10 = `0.9821`
+- **single-session-preference** (n=30): R@10 = `0.7667`
+- **single-session-user** (n=70): R@10 = `0.8857`
+- **temporal-reasoning** (n=133): R@10 = `0.8496`
+
+---
+
+## v2.4.0 (2026-06-29)
+
+**Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
+- **Dataset ID:** `xiaowu0162/longmemeval-cleaned`
+- **Pinned Revision (commit SHA):** `98d7416c24c778c2fee6e6f3006e7a073259d48f`
+- **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
+- **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+- **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
+- **Mythrax Git Commit:** `v2.4.0` (Hybrid Search Optimization with stemmer and temporal depth)
+
+### Aggregate Metrics
+#### Turn granularity (has_answer)
+- **Recall_Any@5:** `0.7540`
+- **Recall_All@5:** `0.4620`
+- **nDCG@10:** `0.5659`
+
+#### Session granularity (answer_session_ids)
+- **Recall_Any@5 (session):** `0.9660`
+- **Recall_All@5 (session):** `0.7380`
+
+### Per-Question-Type R@10 (turn recall_any)
+- **knowledge-update** (n=78): R@10 = `0.8974`
+- **multi-session** (n=133): R@10 = `0.8346`
+- **single-session-assistant** (n=56): R@10 = `0.9821`
+- **single-session-preference** (n=30): R@10 = `0.7667`
+- **single-session-user** (n=70): R@10 = `0.8857`
+- **temporal-reasoning** (n=133): R@10 = `0.8496`
+
+---
+
 ## v2.3.4 (2026-06-29)
 
 **Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.

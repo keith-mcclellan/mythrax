@@ -260,9 +260,22 @@ Exposed via `POST /v1/hooks/precompact` on the core daemon:
 }
 ```
 
+### 9.3 Stop Hook (Block-and-Save Stop Cadence)
+- **Purpose**: Fires when the host agent's execution loop terminates. It reads the final conversation transcript from standard input and sends it to the daemon's stop endpoint (`POST /v1/hooks/stop`). The daemon checks if the stop cadence criteria are met, and if so, safely persists the session's episodic memories verbatim to the Obsidian vault and SurrealDB/SurrealKV.
+- **Hook Script**: `/Users/keith/Documents/mythrax/hooks/mythrax_save_hook.sh` (ensure it is executable with `chmod +x`).
+- **Google Antigravity Configuration (hooks.json)**:
+  Configure inside `~/.gemini/config/hooks.json` under `mythrax-compliance` to trigger on stop events:
+  ```json
+  "Stop": [
+    {
+      "command": "/Users/keith/Documents/mythrax/hooks/mythrax_save_hook.sh",
+      "type": "shell"
+    }
+  ]
+  ```
 
-### 9.3 Installing the Hooks
-Both hooks are registered automatically during initialization.
+### 9.4 Installing the Hooks
+Both Pre-Invocation and Pre-Compaction hooks are registered automatically during initialization, while the Stop shell hook can be added manually or during bootstrap setup.
 
 1. **Automatic Installation**:
    When you run the bootstrap command:
