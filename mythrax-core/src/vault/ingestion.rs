@@ -1186,8 +1186,7 @@ fn split_by_chars(text: &str, max_chars: usize) -> Vec<String> {
     let mut count = 0;
     for c in text.chars() {
         if count >= max_chars {
-            chunks.push(current.clone());
-            current.clear();
+            chunks.push(std::mem::replace(&mut current, String::with_capacity(max_chars)));
             count = 0;
         }
         current.push(c);
@@ -1212,8 +1211,7 @@ fn group_sub_chunks(sub_chunks: Vec<String>, delimiter: &str, max_chars: usize) 
         let chunk_len = chunk.chars().count();
         if chunk_len > max_chars {
             if !current_group.is_empty() {
-                grouped.push(current_group.clone());
-                current_group.clear();
+                grouped.push(std::mem::replace(&mut current_group, String::with_capacity(max_chars)));
                 current_len = 0;
             }
             grouped.push(chunk);
