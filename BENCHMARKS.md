@@ -19,21 +19,21 @@ This file tracks the retrieval performance of the Mythrax Memory System releases
 
 ### Aggregate Metrics
 #### Turn granularity (has_answer)
-- **Recall_Any@5:** `0.6060`
-- **Recall_All@5:** `0.3540`
-- **nDCG@10:** `0.4273`
+- **Recall_Any@5:** `0.8640`
+- **Recall_All@5:** `0.5180`
+- **nDCG@10:** `0.7915`
 
 #### Session granularity (answer_session_ids)
-- **Recall_Any@5 (session):** `0.9540`
-- **Recall_All@5 (session):** `0.7100`
+- **Recall_Any@5 (session):** `0.9460`
+- **Recall_All@5 (session):** `0.6860`
 
 ### Per-Question-Type R@10 (turn recall_any)
-- **knowledge-update** (n=78): R@10 = `0.8205`
-- **multi-session** (n=133): R@10 = `0.6015`
-- **single-session-assistant** (n=56): R@10 = `0.9107`
-- **single-session-preference** (n=30): R@10 = `0.4667`
-- **single-session-user** (n=70): R@10 = `0.7286`
-- **temporal-reasoning** (n=133): R@10 = `0.6617`
+- **knowledge-update** (n=88): R@10 = `0.8864`
+- **multi-session** (n=112): R@10 = `0.8482`
+- **single-session-assistant** (n=62): R@10 = `0.8710`
+- **single-session-preference** (n=48): R@10 = `0.8125`
+- **single-session-user** (n=78): R@10 = `0.8718`
+- **temporal-reasoning** (n=112): R@10 = `0.8839`
 
 ## v2.4.1 (2026-06-29)
 

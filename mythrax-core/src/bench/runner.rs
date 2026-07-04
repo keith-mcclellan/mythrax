@@ -344,39 +344,161 @@ async fn main() -> Result<()> {
     } else {
         println!("Loaded embedding cache from {:?}", target_cache_path);
         if args.mode == "tune" {
-            let lambdas = vec!["0.01", "0.02", "0.05", "0.08", "0.12"];
-            let gammas = vec!["0.05", "0.10", "0.20", "0.30", "0.40"];
-            let mut best_score = -1.0;
-            let mut best_params = (String::new(), String::new());
-
-            println!("Starting 5-fold cross-validation grid search parameter sweep on dev split...");
-            for lambda in &lambdas {
-                for gamma in &gammas {
-                    let mut overrides = std::collections::HashMap::new();
-                    overrides.insert("search.decay_lambda".to_string(), lambda.to_string());
-                    overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
-
-                    let (avg_r_any, avg_r_all, avg_ndcg, _, _, avg_lat, _, _) = run_evaluation(
-                        &target_questions[..10],
+            // Decoupled coordinate sweep
+            let tune_questions = if target_questions.len() >= 10 {
+                &target_questions[..10]
+            } else {
+                &target_questions
+            };
+            
+            let mut locked_overrides = std::collections::HashMap::new();
+            
+            // Phase A: Core Fusion
+            println!("--- Phase A: Core Fusion Sweep ---");
+            let mut best_score_a = -1.0;
+            let mut winner_a = (0.55f32, 0.60f32, 0.10f32);
+            
+            let sigmoid_centers = vec![0.45f32, 0.55f32];
+            let fusion_sigmoid_centers = vec![0.50f32, 0.60f32];
+            let gammas = vec![0.05f32, 0.10f32, 0.20f32];
+            
+            for sc in &sigmoid_centers {
+                for fsc in &fusion_sigmoid_centers {
+                    for gamma in &gammas {
+                        let mut overrides = locked_overrides.clone();
+                        overrides.insert("search.sigmoid_center".to_string(), sc.to_string());
+                        overrides.insert("search.fusion_sigmoid_center".to_string(), fsc.to_string());
+                        overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
+                        
+                        let (r_any, r_all, ndcg, _, _, lat, _, _) = run_evaluation(
+                            tune_questions,
+                            "hybrid",
+                            Some(overrides),
+                            &target_cache_path,
+                            published,
+                            &note,
+                        ).await?;
+                        
+                        let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
+                        println!("A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
+                            sc, fsc, gamma, score, r_any, ndcg, lat);
+                            
+                        if score > best_score_a {
+                            best_score_a = score;
+                            winner_a = (*sc, *fsc, *gamma);
+                        }
+                    }
+                }
+            }
+            
+            println!("Winner Phase A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} (Score: {:.4})",
+                winner_a.0, winner_a.1, winner_a.2, best_score_a);
+            
+            locked_overrides.insert("search.sigmoid_center".to_string(), winner_a.0.to_string());
+            locked_overrides.insert("search.fusion_sigmoid_center".to_string(), winner_a.1.to_string());
+            locked_overrides.insert("search.gamma_rerank".to_string(), winner_a.2.to_string());
+            
+            // Phase B: MMR & Reranking
+            println!("--- Phase B: MMR & Reranking Sweep ---");
+            let mut best_score_b = -1.0;
+            let mut winner_b = (1.00f32, 50, 0.40f32, 0.30f32);
+            
+            let mmr_lambdas = vec![0.60f32, 0.80f32, 1.00f32];
+            let rerank_pool_sizes = vec![25, 50];
+            let w_person_names = vec![0.20f32, 0.40f32];
+            let w_keyword_overlaps = vec![0.15f32, 0.30f32];
+            
+            for mmr in &mmr_lambdas {
+                for pool in &rerank_pool_sizes {
+                    for w_pn in &w_person_names {
+                        for w_ko in &w_keyword_overlaps {
+                            let mut overrides = locked_overrides.clone();
+                            overrides.insert("search.mmr_lambda".to_string(), mmr.to_string());
+                            overrides.insert("search.rerank_pool_size".to_string(), pool.to_string());
+                            overrides.insert("retrieval.boost.person_name".to_string(), "true".to_string());
+                            overrides.insert("retrieval.boost.keyword_overlap".to_string(), "true".to_string());
+                            overrides.insert("retrieval.boost.weight.person_name".to_string(), w_pn.to_string());
+                            overrides.insert("retrieval.boost.weight.keyword_overlap".to_string(), w_ko.to_string());
+                            
+                            let (r_any, r_all, ndcg, _, _, lat, _, _) = run_evaluation(
+                                tune_questions,
+                                "hybrid",
+                                Some(overrides),
+                                &target_cache_path,
+                                published,
+                                &note,
+                            ).await?;
+                            
+                            let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
+                            println!("B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
+                                mmr, pool, w_pn, w_ko, score, r_any, ndcg, lat);
+                                
+                            if score > best_score_b {
+                                best_score_b = score;
+                                winner_b = (*mmr, *pool, *w_pn, *w_ko);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            println!("Winner Phase B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} (Score: {:.4})",
+                winner_b.0, winner_b.1, winner_b.2, winner_b.3, best_score_b);
+                
+            locked_overrides.insert("search.mmr_lambda".to_string(), winner_b.0.to_string());
+            locked_overrides.insert("search.rerank_pool_size".to_string(), winner_b.1.to_string());
+            locked_overrides.insert("retrieval.boost.person_name".to_string(), "true".to_string());
+            locked_overrides.insert("retrieval.boost.keyword_overlap".to_string(), "true".to_string());
+            locked_overrides.insert("retrieval.boost.weight.person_name".to_string(), winner_b.2.to_string());
+            locked_overrides.insert("retrieval.boost.weight.keyword_overlap".to_string(), winner_b.3.to_string());
+            
+            // Phase C: Validation & Fine-Tuning
+            println!("--- Phase C: Validation & Fine-Tuning Sweep ---");
+            let mut best_score_c = -1.0;
+            let mut winner_c = (1.0f32, 0.50f32);
+            
+            let ladder_scales = vec![0.5f32, 1.0f32];
+            let utility_thresholds = vec![0.45f32, 0.55f32];
+            
+            for ls in &ladder_scales {
+                for ut in &utility_thresholds {
+                    let mut overrides = locked_overrides.clone();
+                    overrides.insert("search.ladder_scale".to_string(), ls.to_string());
+                    overrides.insert("search.utility_threshold".to_string(), ut.to_string());
+                    
+                    let (r_any, r_all, ndcg, _, _, lat, _, _) = run_evaluation(
+                        tune_questions,
                         "hybrid",
                         Some(overrides),
                         &target_cache_path,
                         published,
                         &note,
                     ).await?;
-
-                    println!("Params: decay_lambda={}, gamma_rerank={} => Recall_Any@5={:.4}, Recall_All@5={:.4}, nDCG@10={:.4}, Latency={:.2}ms",
-                             lambda, gamma, avg_r_any, avg_r_all, avg_ndcg, avg_lat);
-
-                    let score = avg_r_any + avg_ndcg;
-                    if score > best_score {
-                        best_score = score;
-                        best_params = (lambda.to_string(), gamma.to_string());
+                    
+                    let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
+                    println!("C: ladder_scale={}, utility_threshold={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
+                        ls, ut, score, r_any, ndcg, lat);
+                        
+                    if score > best_score_c {
+                        best_score_c = score;
+                        winner_c = (*ls, *ut);
                     }
                 }
             }
-            println!("Best Parameters found: decay_lambda={}, gamma_rerank={} (Combined Score: {:.4})",
-                     best_params.0, best_params.1, best_score);
+            
+            println!("Winner Phase C: ladder_scale={}, utility_threshold={} (Score: {:.4})",
+                winner_c.0, winner_c.1, best_score_c);
+                
+            locked_overrides.insert("search.ladder_scale".to_string(), winner_c.0.to_string());
+            locked_overrides.insert("search.utility_threshold".to_string(), winner_c.1.to_string());
+            
+            let output_dir = std::path::Path::new("bench_data");
+            let _ = std::fs::create_dir_all(output_dir);
+            let tuned_params_path = output_dir.join("tuned_params.json");
+            
+            let serialized = serde_json::to_string_pretty(&locked_overrides)?;
+            std::fs::write(&tuned_params_path, serialized)?;
+            println!("Best tuned parameters saved to {:?}", tuned_params_path);
         } else {
             let (avg_recall_any_turn, avg_recall_all_turn, avg_ndcg_turn, avg_recall_any_session, avg_recall_all_session, avg_latency, p95_latency, records) = run_evaluation(
                 &target_questions,

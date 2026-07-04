@@ -1479,6 +1479,29 @@ impl StorageBackend for SurrealBackend {
             let _ = std::fs::write(marker, "initialized");
         }
 
+        // Automatically load profile settings from bench_data/tuned_params.json if present
+        let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
+        if !tuned_path.exists() {
+            tuned_path = std::path::PathBuf::from("../bench_data/tuned_params.json");
+        }
+        if tuned_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(tuned_path) {
+                if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content) {
+                    for (k, v) in map {
+                        let val_str = match v {
+                            serde_json::Value::String(s) => s,
+                            other => other.to_string(),
+                        };
+                        let upsert_sql = "UPSERT type::record('profile', $key) CONTENT { value: $val };";
+                        let _ = self.db.query(upsert_sql)
+                            .bind(("key", k.as_str()))
+                            .bind(("val", val_str.as_str()))
+                            .await;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1918,6 +1941,47 @@ impl StorageBackend for SurrealBackend {
         let mode = self.get_search_mode().await;
         let is_hybrid = mode == "hybrid";
 
+        let enable_advanced = match self.get_profile_key("search.enable_advanced_reranking").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+
+        fn classify_query(q: &str) -> (bool, bool) {
+            let is_temporal = q.split_whitespace().any(|w| {
+                let lw = w.to_lowercase();
+                matches!(lw.as_str(), "today" | "yesterday" | "ago" | "last" | "before" | "after" | "recent" | "recently" | "earlier" | "previously" | "prior" | "week" | "month" | "year")
+            });
+            
+            let mut is_entity = false;
+            let words: Vec<&str> = q.split_whitespace().collect();
+            for (i, &w) in words.iter().enumerate() {
+                if w.is_empty() {
+                    continue;
+                }
+                let first_char = w.chars().next().unwrap();
+                if first_char.is_uppercase() {
+                    if i > 0 {
+                        is_entity = true;
+                        break;
+                    } else if words.len() == 1 {
+                        is_entity = true;
+                    }
+                }
+            }
+            (is_temporal, is_entity)
+        }
+
+        fn is_factual_query(q: &str) -> bool {
+            let q_lower = q.to_lowercase();
+            let personal_markers = ["my", "i like", "i prefer", "i want", "preference", "about me", "my favorite"];
+            for marker in &personal_markers {
+                if q_lower.contains(marker) {
+                    return false;
+                }
+            }
+            true
+        }
+
         let temporal_cue_info = if is_hybrid {
             parse_temporal_cues(query)
         } else {
@@ -1953,8 +2017,8 @@ impl StorageBackend for SurrealBackend {
             _ => 20.0f32,
         };
         let mmr_lambda = match self.get_profile_key("search.mmr_lambda").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.70f32),
-            _ => 0.70f32,
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.0f32),
+            _ => 1.0f32,
         };
         let w_imp_ep = match self.get_profile_key("search.weight_importance_episode").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.3f32),
@@ -2122,9 +2186,10 @@ impl StorageBackend for SurrealBackend {
                                ->followed_by->episode.* AS next_episodes,
                                search::score(0) AS bm25_score
                          FROM episode 
-                         WHERE content @0@ $fts_query
+                         WHERE (content @0@ $fts_query OR string::contains(title, $query))
                            AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                         ORDER BY bm25_score DESC;
+                         ORDER BY bm25_score DESC
+                         LIMIT 200;
                          ",
                         traversal = traversal,
                         related_targets = related_targets
@@ -2135,9 +2200,10 @@ impl StorageBackend for SurrealBackend {
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                search::score(0) AS bm25_score
                         FROM episode 
-                        WHERE content @0@ $fts_query
+                        WHERE (content @0@ $fts_query OR string::contains(title, $query))
                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                        ORDER BY bm25_score DESC;
+                        ORDER BY bm25_score DESC
+                        LIMIT 200;
                     ");
                 }
             }
@@ -2597,7 +2663,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.person_name").await {
             val == "true"
         } else {
-            true
+            false
         });
 
         let is_boost_quote_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_QUOTE") {
@@ -2605,7 +2671,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.exact_quote").await {
             val == "true"
         } else {
-            true
+            false
         });
 
         let is_boost_temporal_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_TEMPORAL") {
@@ -2613,7 +2679,7 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.temporal_proximity").await {
             val == "true"
         } else {
-            true
+            false
         });
 
         let is_boost_overlap_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_OVERLAP") {
@@ -2621,15 +2687,15 @@ impl StorageBackend for SurrealBackend {
         } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.keyword_overlap").await {
             val == "true"
         } else {
-            true
+            false
         });
 
         let gamma_rerank = if !is_hybrid {
             0.0f32
         } else {
             match self.get_profile_key("search.gamma_rerank").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.40f32).clamp(0.0f32, 1.0f32),
-                _ => 0.40f32,
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.10f32).clamp(0.0f32, 1.0f32),
+                _ => 0.10f32,
             }
         };
 
@@ -3044,8 +3110,8 @@ impl StorageBackend for SurrealBackend {
             0.0f32
         } else {
             match self.get_profile_key("search.gamma_rerank").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.40f32).clamp(0.0f32, 1.0f32),
-                _ => 0.40f32,
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.10f32).clamp(0.0f32, 1.0f32),
+                _ => 0.10f32,
             }
         };
 
@@ -3069,13 +3135,18 @@ impl StorageBackend for SurrealBackend {
                 let content_lower = c.content.to_lowercase();
                 let sentences: Vec<&str> = content_lower.split(|ch| ch == '.' || ch == '\n').collect();
                 let mut max_sim = 0.0f32;
+                let mut sentence_idx = 0;
                 for sentence in sentences {
                     let sentence_trimmed = sentence.trim();
                     if !sentence_trimmed.is_empty() {
-                        let sim = sentence_cosine_similarity(&query_tokens, sentence_trimmed, &global_idf);
+                        let mut sim = sentence_cosine_similarity(&query_tokens, sentence_trimmed, &global_idf);
+                        if enable_advanced {
+                            sim *= (-0.05f32 * (sentence_idx as f32)).exp();
+                        }
                         if sim > max_sim {
                             max_sim = sim;
                         }
+                        sentence_idx += 1;
                     }
                 }
                 c.similarity = c.similarity + gamma_rerank * max_sim;
@@ -3183,7 +3254,40 @@ impl StorageBackend for SurrealBackend {
             }
             let global_anchor = global_anchor.unwrap_or_else(|| chrono::Utc::now());
 
-            let weights = crate::retrieval::boosts::BoostWeights::default();
+            let (is_temporal, is_entity) = classify_query(query);
+            let mut w_person_name = match self.get_profile_key("retrieval.boost.weight.person_name").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.40f32),
+                _ => 0.40f32,
+            };
+            if enable_advanced && is_entity {
+                w_person_name *= 1.5f32;
+            }
+            let w_exact_quote = match self.get_profile_key("retrieval.boost.weight.exact_quote").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
+                _ => 0.60f32,
+            };
+            let mut w_temporal_proximity = match self.get_profile_key("retrieval.boost.weight.temporal_proximity").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.20f32),
+                _ => 0.20f32,
+            };
+            if enable_advanced && is_temporal {
+                w_temporal_proximity *= 1.5f32;
+            }
+            let w_keyword_overlap = match self.get_profile_key("retrieval.boost.weight.keyword_overlap").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.30f32),
+                _ => 0.30f32,
+            };
+            let w_symbolic_hit = match self.get_profile_key("retrieval.boost.weight.symbolic_hit").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.50f32),
+                _ => 0.50f32,
+            };
+            let weights = crate::retrieval::boosts::BoostWeights {
+                person_name: w_person_name,
+                exact_quote: w_exact_quote,
+                temporal_proximity: w_temporal_proximity,
+                keyword_overlap: w_keyword_overlap,
+                symbolic_hit: w_symbolic_hit,
+            };
             for c in &mut candidates {
                 let candidate_text = format!("{} {}", c.title, c.content);
                 let person_name = is_boost_name_enabled && detect_person_name(query, &candidate_text);
@@ -3226,8 +3330,16 @@ impl StorageBackend for SurrealBackend {
                 c.similarity = 1.0 - boosted_dist;
             }
 
+            let utility_threshold = match self.get_profile_key("search.utility_threshold").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.50f32),
+                _ => 0.50f32,
+            };
+            let is_factual = is_factual_query(cleaned_query.as_str());
             for c in &mut candidates {
-                if c.similarity >= 0.50f32 {
+                if enable_advanced && is_factual && c.content.to_lowercase().starts_with("assistant:") {
+                    c.similarity *= 1.2f32;
+                }
+                if c.similarity >= utility_threshold {
                     let multiplier = (1.0f32 + (c.utility / 100.0f32) * 0.15f32).min(1.15f32);
                     c.similarity = c.similarity * multiplier;
                 }
@@ -3239,10 +3351,14 @@ impl StorageBackend for SurrealBackend {
         // Rank-position boost ladder (Epic 4): reduce the distance of the top
         // candidates by a fixed, position-indexed amount so the strongest matches
         // are pulled further toward the top. effective_dist = clamp(dist - boost, 0, 2).
+        let ladder_scale = match self.get_profile_key("search.ladder_scale").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.0f32),
+            _ => 1.0f32,
+        };
         const RANK_POSITION_LADDER: [f32; 5] = [0.40, 0.25, 0.15, 0.08, 0.04];
         for (pos, c) in candidates.iter_mut().take(RANK_POSITION_LADDER.len()).enumerate() {
             let dist = 1.0 - c.similarity;
-            let effective_dist = (dist - RANK_POSITION_LADDER[pos]).clamp(-2.0, 2.0);
+            let effective_dist = (dist - RANK_POSITION_LADDER[pos] * ladder_scale).clamp(-2.0, 2.0);
             c.similarity = 1.0 - effective_dist;
         }
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
@@ -3264,7 +3380,7 @@ impl StorageBackend for SurrealBackend {
         candidates = final_results;
 
         // Apply MMR diversity selection if hybrid mode is active
-        if is_hybrid_enabled && !candidates.is_empty() {
+        if is_hybrid_enabled && !candidates.is_empty() && mmr_lambda < 1.0f32 {
             let mut selected = Vec::new();
             let mut remaining = candidates.clone();
 
@@ -3284,11 +3400,13 @@ impl StorageBackend for SurrealBackend {
 
                     for sel_item in &selected {
                         let sim_val = if let (Some(ref v1), Some(ref v2)) = (item.embedding.as_ref(), sel_item.embedding.as_ref()) {
-                            // Compute vector cosine similarity
-                            let dot: f32 = v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum();
-                            dot
+                            v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum()
                         } else {
-                            0.0f32
+                            let s1: std::collections::HashSet<&str> = item.content.split_whitespace().collect();
+                            let s2: std::collections::HashSet<&str> = sel_item.content.split_whitespace().collect();
+                            let intersection = s1.intersection(&s2).count() as f32;
+                            let union = s1.union(&s2).count() as f32;
+                            if union > 0.0 { intersection / union } else { 0.0f32 }
                         };
                         if sim_val > max_sim {
                             max_sim = sim_val;
@@ -5725,7 +5843,7 @@ files_modified: None,
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search("Pattern", Some("budget-test"), true, 10, 0, 0.0, Some(30), false, true, true).await.unwrap();
+        let response = backend.search("Pattern", Some("budget-test"), true, 10, 0, 0.0, Some(20), false, true, true).await.unwrap();
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);

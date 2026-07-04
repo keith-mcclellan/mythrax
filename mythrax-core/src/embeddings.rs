@@ -125,6 +125,9 @@ pub struct LocalEmbedder {
 #[cfg(not(feature = "mlx"))]
 impl LocalEmbedder {
     pub fn get_global() -> Result<Arc<Self>> {
+        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
+            anyhow::bail!("Embedder mocked in test mode");
+        }
         let res = GLOBAL_EMBEDDER.get_or_init(|| {
             Self::new().map(Arc::new).map_err(|e| e.to_string())
         });
@@ -429,6 +432,9 @@ unsafe impl Sync for LocalEmbedder {}
 #[cfg(feature = "mlx")]
 impl LocalEmbedder {
     pub fn get_global() -> Result<Arc<Self>> {
+        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
+            anyhow::bail!("Embedder mocked in test mode");
+        }
         let res = GLOBAL_EMBEDDER.get_or_init(|| {
             Self::new().map(Arc::new).map_err(|e| e.to_string())
         });
