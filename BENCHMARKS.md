@@ -19,30 +19,49 @@ This file tracks the retrieval performance of the Mythrax Memory System releases
 - **Session Recall Recovered**: Recovers the -7.0% Session Recall regression from v2.5.0.
 
 ### How to Reproduce
-To reproduce these exact benchmark results, run the official benchmark binary with the tuned parameters loaded:
+To reproduce the **Tuned** benchmark results:
 ```bash
 MYTHRAX_LOAD_TUNED_PARAMS=true cargo run --release --bin bench --features "bench,mlx" -- --split full500 --mode hybrid
 ```
-> [!NOTE]
-> The workspace environment automatically handles Xcode Metal compiling path bindings via `.cargo/config.toml` injection.
 
-### Aggregate Metrics
-#### Turn granularity (has_answer)
-- **Recall_Any@5:** `0.8160`
-- **Recall_All@5:** `0.5600`
-- **nDCG@10:** `0.6250`
+To reproduce the **Untuned (Production Default)** benchmark results:
+```bash
+MYTHRAX_LOAD_TUNED_PARAMS=false cargo run --release --bin bench --features "bench,mlx" -- --split full500 --mode hybrid
+```
 
-#### Session granularity (answer_session_ids)
-- **Recall_Any@5 (session):** `0.9700`
-- **Recall_All@5 (session):** `0.7700`
+### Parameter Configurations
+We publish both configurations side-by-side to guarantee full parameter transparency:
+
+| Parameter Key | Production Default (Untuned) | Tuned Configuration | Purpose / Impact |
+| :--- | :---: | :---: | :--- |
+| `search.sigmoid_center` | `0.55` | `0.45` | Lower center increases vector recall floor |
+| `search.fusion_sigmoid_center` | `0.60` | `0.50` | Post-fusion gating threshold |
+| `search.mmr_lambda` | `1.0` (Disabled) | `1.0` (Disabled) | Controls diversity (MMR is disabled in production) |
+| `search.gamma_rerank` | `0.10` | `0.20` | Sentence-level TF-IDF reranking weight |
+| `search.rerank_pool_size` | `25` | `20` | Max candidates sent to sentence reranker |
+| `retrieval.boost.person_name` | `false` | `false` | Disabled (proven to introduce destructive noise) |
+| `retrieval.boost.keyword_overlap` | `false` | `false` | Disabled (proven to introduce destructive noise) |
+
+### Performance Metrics Side-by-Side
+
+| Metric | Production Default (Untuned) | Tuned Configuration | Change (Tuned vs Default) | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Recall_Any@5 (turn)** | **`0.8200`** | **`0.8160`** | `-0.40%` | **Stable** |
+| **Recall_All@5 (turn)** | **`0.5500`** | **`0.5600`** | `+1.00%` | **Improved** |
+| **nDCG@10 (turn)** | **`0.6263`** | **`0.6250`** | `-0.13%` | **Stable** |
+| **Recall_Any@5 (session)** | **`0.9680`** | **`0.9700`** | `+0.20%` | **Improved** |
+| **Recall_All@5 (session)** | **`0.7620`** | **`0.7700`** | `+0.80%` | **Improved** |
 
 ### Per-Question-Type R@10 (turn recall_any)
-- **knowledge-update** (n=78): R@10 = `0.9231`
-- **multi-session** (n=133): R@10 = `0.8496`
-- **single-session-assistant** (n=56): R@10 = `0.9821`
-- **single-session-preference** (n=30): R@10 = `0.6667`
-- **single-session-user** (n=70): R@10 = `0.9000`
-- **temporal-reasoning** (n=133): R@10 = `0.9023`
+
+| Question Type | Sample Count (n) | Production Default (Untuned) | Tuned Configuration | Change |
+| :--- | :---: | :---: | :---: | :---: |
+| **knowledge-update** | `78` | `0.9231` | `0.9231` | `0.00%` |
+| **multi-session** | `133` | `0.8722` | `0.8496` | `-2.26%` |
+| **single-session-assistant** | `56` | `0.9821` | `0.9821` | `0.00%` |
+| **single-session-preference** | `30` | `0.6667` | `0.6667` | `0.00%` |
+| **single-session-user** | `70` | `0.8857` | `0.9000` | `+1.43%` |
+| **temporal-reasoning** | `133` | `0.9098` | `0.9023` | `-0.75%` |
 
 ## v2.5.0 (2026-07-04)
 
