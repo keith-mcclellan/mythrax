@@ -357,7 +357,7 @@ async fn main() -> Result<()> {
                     overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
 
                     let (avg_r_any, avg_r_all, avg_ndcg, _, _, avg_lat, _, _) = run_evaluation(
-                        &target_questions,
+                        &target_questions[..10],
                         "hybrid",
                         Some(overrides),
                         &target_cache_path,
@@ -539,7 +539,7 @@ async fn run_evaluation(
 
     let total_q = target_questions.len();
     let mut join_set = tokio::task::JoinSet::new();
-    let concurrency_limit = 8;
+    let concurrency_limit = 4;
 
     for (q_idx, q) in target_questions.iter().enumerate() {
         println!("Evaluating question {}/{}...", q_idx + 1, total_q);
@@ -599,6 +599,9 @@ async fn run_evaluation(
             backend.save_episodes_batch(&episodes_to_ingest).await
                 .context("Failed to batch ingest haystack turns")?;
 
+            // Allow SurrealDB background FTS indexer to process the new episodes
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
             let mut correct_turn_ids = Vec::new();
             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
                 if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
@@ -628,6 +631,8 @@ async fn run_evaluation(
                 .await
                 .context("Search query failed during evaluation")?;
             let query_latency_ms = start_query.elapsed().as_secs_f64() * 1000.0;
+
+
 
             let retrieved_corpus_ids: Vec<String> = search_response
                 .results

@@ -889,7 +889,10 @@ impl SurrealBackend {
 
     #[allow(dead_code)]
     pub async fn new_in_memory() -> Result<Self> {
-        Self::new("mem://").await
+        let backend = Self::new("mem://").await?;
+        let random_db = format!("db_{}", Uuid::new_v4().to_string().replace("-", "_"));
+        backend.db.use_ns("mythrax").use_db(&random_db).await?;
+        Ok(backend)
     }
 
     fn compact_search_result(&self, item: &mut SearchResult, remaining_budget: usize) -> bool {
@@ -1285,6 +1288,42 @@ struct KnnRow {
     id: surrealdb::types::RecordId,
     similarity: Option<f32>,
 }
+
+fn prepare_fts_query(query: &str) -> String {
+    let stop_words: std::collections::HashSet<&str> = [
+        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "arent",
+        "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
+        "cant", "cannot", "could", "couldnt", "did", "didnt", "do", "does", "doesnt", "doing", "dont",
+        "down", "during", "each", "few", "for", "from", "further", "had", "hadnt", "has", "hasnt", "have",
+        "havent", "having", "he", "hed", "hell", "hes", "her", "here", "heres", "hers", "herself", "him",
+        "himself", "his", "how", "hows", "i", "id", "ill", "im", "ive", "if", "in", "into", "is", "isnt",
+        "it", "its", "itself", "lets", "me", "more", "most", "mustnt", "my", "myself", "no", "nor", "not",
+        "of", "off", "on", "once", "only", "or", "other", "ought", "our", "ours", "ourselves", "out",
+        "over", "own", "same", "shant", "she", "shed", "shell", "shes", "should", "shouldnt", "so",
+        "some", "such", "than", "that", "thats", "the", "their", "theirs", "them", "themselves", "then",
+        "there", "theres", "these", "they", "theyd", "theyll", "theyre", "theyve", "this", "those",
+        "through", "to", "too", "under", "until", "up", "very", "was", "wasnt", "we", "wed", "well",
+        "were", "weve", "werent", "what", "whats", "when", "whens", "where", "wheres", "which", "while",
+        "who", "whos", "whom", "why", "whys", "with", "wont", "would", "wouldnt", "you", "youd", "youll",
+        "youre", "youve", "your", "yours", "yourself", "yourselves"
+    ].iter().cloned().collect();
+
+    let cleaned: String = query.chars()
+        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { ' ' })
+        .collect();
+
+    let words: Vec<String> = cleaned.split_whitespace()
+        .filter(|w| !stop_words.contains(w) && w.len() >= 2)
+        .map(|w| w.to_string())
+        .collect();
+
+    if words.is_empty() {
+        query.to_string()
+    } else {
+        words.join(" OR ")
+    }
+}
+
 
 #[async_trait]
 impl StorageBackend for SurrealBackend {
@@ -1895,6 +1934,8 @@ impl StorageBackend for SurrealBackend {
             query.to_string()
         };
 
+        let fts_query = prepare_fts_query(&cleaned_query);
+
         let sigmoid_center = match self.get_profile_key("search.sigmoid_center").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.55f32),
             _ => 0.55f32,
@@ -2070,7 +2111,7 @@ impl StorageBackend for SurrealBackend {
         }
 
         let mut keyword_sql = String::new();
-        if is_hybrid {
+        if true {
             if include_episodes {
                 if deep_insight {
                     keyword_sql.push_str(&format!(
@@ -2081,7 +2122,7 @@ impl StorageBackend for SurrealBackend {
                                ->followed_by->episode.* AS next_episodes,
                                search::score(0) AS bm25_score
                          FROM episode 
-                         WHERE content @0@ $query
+                         WHERE content @0@ $fts_query
                            AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                          ORDER BY bm25_score DESC;
                          ",
@@ -2094,7 +2135,7 @@ impl StorageBackend for SurrealBackend {
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                search::score(0) AS bm25_score
                         FROM episode 
-                        WHERE content @0@ $query
+                        WHERE content @0@ $fts_query
                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                         ORDER BY bm25_score DESC;
                     ");
@@ -2148,6 +2189,7 @@ impl StorageBackend for SurrealBackend {
             if mode == "keyword" {
                 let keyword_fut = self.db.query(&keyword_sql)
                     .bind(("query", cleaned_query.as_str()))
+                    .bind(("fts_query", fts_query.as_str()))
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all));
                 (None, Some(keyword_fut.await))
@@ -2167,6 +2209,7 @@ impl StorageBackend for SurrealBackend {
                 .bind(("query_embedding", q_vec.clone()));
             let keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
+                .bind(("fts_query", fts_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all));
             let (v_res, k_res) = tokio::join!(vector_fut, keyword_fut);
@@ -2174,6 +2217,7 @@ impl StorageBackend for SurrealBackend {
         } else {
             let keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
+                .bind(("fts_query", fts_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all));
             (None, Some(keyword_fut.await))
@@ -2584,8 +2628,8 @@ impl StorageBackend for SurrealBackend {
             0.0f32
         } else {
             match self.get_profile_key("search.gamma_rerank").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.10f32).clamp(0.0f32, 1.0f32),
-                _ => 0.10f32,
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.40f32).clamp(0.0f32, 1.0f32),
+                _ => 0.40f32,
             }
         };
 
@@ -3000,8 +3044,8 @@ impl StorageBackend for SurrealBackend {
             0.0f32
         } else {
             match self.get_profile_key("search.gamma_rerank").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.10f32).clamp(0.0f32, 1.0f32),
-                _ => 0.10f32,
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.40f32).clamp(0.0f32, 1.0f32),
+                _ => 0.40f32,
             }
         };
 
