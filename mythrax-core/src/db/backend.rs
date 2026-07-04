@@ -2821,7 +2821,16 @@ impl StorageBackend for SurrealBackend {
             }
         } else if let Some(v_resp) = vector_resp_res {
             let vector_candidates = parse_results(v_resp, true)?;
-            let keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
+                val.parse::<usize>().unwrap_or(16)
+            } else {
+                match self.get_profile_key("search.fts_cap").await {
+                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(16),
+                    _ => 16,
+                }
+            };
+            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            keyword_candidates.truncate(fts_cap);
             
             if is_hybrid_enabled {
                 let mut unique_map = std::collections::HashMap::new();
@@ -2911,7 +2920,17 @@ impl StorageBackend for SurrealBackend {
                 candidates = reciprocal_rank_fusion(vector_candidates, keyword_candidates, 60);
             }
         } else {
-            candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
+                val.parse::<usize>().unwrap_or(16)
+            } else {
+                match self.get_profile_key("search.fts_cap").await {
+                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(16),
+                    _ => 16,
+                }
+            };
+            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            keyword_candidates.truncate(fts_cap);
+            candidates = keyword_candidates;
         }
 
         let is_session_isolation_enabled = if let Ok(val) = std::env::var("MYTHRAX_SESSION_ISOLATION") {
