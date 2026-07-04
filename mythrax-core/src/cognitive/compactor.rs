@@ -497,6 +497,7 @@ impl Compactor {
                         if let Some(ref ep_id) = ep.id {
                             let query_sql = "UPDATE type::record('episode', $id) MERGE {
                                 archived: true,
+                                archived_at: time::now(),
                                 utility: 1.0,
                                 importance: 1.0
                             };";
@@ -556,6 +557,7 @@ impl Compactor {
 
                         let query_sql = "UPDATE type::record('episode', $id) MERGE {
                             archived: true,
+                            archived_at: time::now(),
                             utility: 1.0,
                             importance: 1.0,
                             vault_path: $new_vp

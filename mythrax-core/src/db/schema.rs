@@ -26,6 +26,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS importance ON episode TYPE float DEFAULT 5.0;
     DEFINE FIELD IF NOT EXISTS created_at ON episode TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS archived ON episode TYPE bool DEFAULT false;
+    DEFINE FIELD IF NOT EXISTS archived_at ON episode TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS discovery_tokens ON episode TYPE option<int>;
     DEFINE FIELD IF NOT EXISTS facts ON episode TYPE option<array<string>>;
     DEFINE FIELD IF NOT EXISTS concepts ON episode TYPE option<array<string>>;

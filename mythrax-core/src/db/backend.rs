@@ -1067,6 +1067,7 @@ struct SearchRaw {
     importance: Option<f64>,
     created_at: Option<chrono::DateTime<chrono::Utc>>,
     archived: Option<bool>,
+    archived_at: Option<chrono::DateTime<chrono::Utc>>,
     discovery_tokens: Option<u32>,
     session_id: Option<String>,
     word_count: Option<u32>,
@@ -1121,6 +1122,7 @@ struct EpisodeRaw {
     last_retrieved_at: Option<String>,
     utility: Option<f32>,
     archived: Option<bool>,
+    archived_at: Option<chrono::DateTime<chrono::Utc>>,
     discovery_tokens: Option<u32>,
     facts: Option<Vec<String>>,
     concepts: Option<Vec<String>>,
@@ -2118,7 +2120,7 @@ impl StorageBackend for SurrealBackend {
             if include_episodes {
                 if deep_insight {
                     vector_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                                <-followed_by<-episode.* AS prev_episodes,
@@ -2132,7 +2134,7 @@ impl StorageBackend for SurrealBackend {
                     ));
                 } else {
                     vector_sql.push_str("
-                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
@@ -2189,7 +2191,7 @@ impl StorageBackend for SurrealBackend {
             if include_episodes {
                 if deep_insight {
                     keyword_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                                <-followed_by<-episode.* AS prev_episodes,
@@ -2208,7 +2210,7 @@ impl StorageBackend for SurrealBackend {
                     ));
                 } else {
                     keyword_sql.push_str(&format!("
-                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {fts_score_expr} AS bm25_score
                         FROM episode 
@@ -2326,6 +2328,25 @@ impl StorageBackend for SurrealBackend {
                 (Vec::new(), wns, wrs)
             };
 
+            let compute_archived_demotion = |ep: &SearchRaw| -> f32 {
+                if ep.archived.unwrap_or(false) {
+                    if let Some(archived_at) = ep.archived_at.as_ref() {
+                        let elapsed = chrono::Utc::now().signed_duration_since(*archived_at);
+                        let hours = elapsed.num_seconds() as f32 / 3600.0f32;
+                        if hours <= 24.0 {
+                            0.85f32
+                        } else {
+                            let decay_ratio = ((hours - 24.0) / 144.0f32).clamp(0.0f32, 1.0f32);
+                            0.85f32 - 0.45f32 * decay_ratio
+                        }
+                    } else {
+                        0.4f32
+                    }
+                } else {
+                    1.0f32
+                }
+            };
+
             let mut list = Vec::new();
 
             for ep in episodes {
@@ -2439,17 +2460,13 @@ impl StorageBackend for SurrealBackend {
                     let norm = w_imp_ep + w_rec_ep;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
                     let mut f = ((w_imp_ep * importance_component + w_rec_ep * recency_component) / divisor) * get_tier_boost("episode");
-                    if ep.archived.unwrap_or(false) {
-                        f *= 0.4f32;
-                    }
+                    f *= compute_archived_demotion(&ep);
                     (g, f)
                 } else {
                     let u_old = ep.utility.unwrap_or(50.0) as f32;
                     let decayed_utility = u_old * (-0.05f32 * delta_t).exp();
                     let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("episode");
-                    if ep.archived.unwrap_or(false) {
-                        f *= 0.4f32;
-                    }
+                    f *= compute_archived_demotion(&ep);
                     (1.0f32, f)
                 };
 
@@ -3031,7 +3048,7 @@ impl StorageBackend for SurrealBackend {
                         }
                         
                         if !neighbor_ids_to_fetch.is_empty() {
-                            let fetch_sql = "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, scope,
+                            let fetch_sql = "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, scope,
                                                    (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                                             FROM episode
                                             WHERE id IN $neighbor_ids;";
@@ -3558,6 +3575,7 @@ impl StorageBackend for SurrealBackend {
             last_retrieved_at: raw.last_retrieved_at,
             utility: raw.utility,
             archived: raw.archived,
+            archived_at: raw.archived_at.map(|t| t.to_rfc3339()),
             discovery_tokens: raw.discovery_tokens,
             facts: raw.facts,
             concepts: raw.concepts,
@@ -3594,6 +3612,7 @@ impl StorageBackend for SurrealBackend {
             last_retrieved_at: raw.last_retrieved_at,
             utility: raw.utility,
             archived: raw.archived,
+            archived_at: raw.archived_at.map(|t| t.to_rfc3339()),
             discovery_tokens: raw.discovery_tokens,
             facts: raw.facts,
             concepts: raw.concepts,
@@ -4272,6 +4291,7 @@ impl StorageBackend for SurrealBackend {
                             last_retrieved_at: raw.last_retrieved_at,
                             utility: raw.utility,
                             archived: raw.archived,
+                            archived_at: raw.archived_at.map(|t| t.to_rfc3339()),
                             discovery_tokens: raw.discovery_tokens,
                             facts: raw.facts,
                             concepts: raw.concepts,

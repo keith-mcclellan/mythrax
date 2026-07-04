@@ -42,6 +42,7 @@ pub struct Episode {
     pub files_modified: Option<Vec<String>>,
     pub session_id: Option<String>,
     pub word_count: Option<u32>,
+    pub archived_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
