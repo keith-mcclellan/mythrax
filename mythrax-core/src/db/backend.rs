@@ -2822,11 +2822,11 @@ impl StorageBackend for SurrealBackend {
         } else if let Some(v_resp) = vector_resp_res {
             let vector_candidates = parse_results(v_resp, true)?;
             let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
-                val.parse::<usize>().unwrap_or(16)
+                val.parse::<usize>().unwrap_or(200)
             } else {
                 match self.get_profile_key("search.fts_cap").await {
-                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(16),
-                    _ => 16,
+                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(200),
+                    _ => 200,
                 }
             };
             let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
@@ -2921,11 +2921,11 @@ impl StorageBackend for SurrealBackend {
             }
         } else {
             let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
-                val.parse::<usize>().unwrap_or(16)
+                val.parse::<usize>().unwrap_or(200)
             } else {
                 match self.get_profile_key("search.fts_cap").await {
-                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(16),
-                    _ => 16,
+                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(200),
+                    _ => 200,
                 }
             };
             let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
