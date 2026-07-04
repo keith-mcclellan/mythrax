@@ -68,3 +68,4 @@ config.json
 /mythrax-core/bench_data/
 embedding_cache.bin
 
+scorecard.md
