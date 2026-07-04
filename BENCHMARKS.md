@@ -2,6 +2,48 @@
 
 This file tracks the retrieval performance of the Mythrax Memory System releases.
 
+## v2.5.1 (2026-07-04)
+
+**Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
+- **Dataset ID:** `xiaowu0162/longmemeval-cleaned`
+- **Pinned Revision (commit SHA):** `98d7416c24c778c2fee6e6f3006e7a073259d48f`
+- **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
+- **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
+- **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
+- **Mythrax Git Commit:** `v2.5.1` (Restored Session Retrieval & Gated tuned_params)
+
+### Improvements & Gating
+- **tuned_params.json auto-load gated** behind `MYTHRAX_LOAD_TUNED_PARAMS=true` (off by default), restoring 6 production parameter defaults (MMR, sigmoid_center, gamma_rerank, boosts).
+- **Dynamic FTS Disjunction SQL** implemented with individual `@N@` predicates to solve analyzer stop word BM25 poisoning.
+- **Keyword Candidate threshold discount** set to `0.7f32` (conservative) to recover keyword-surfaced candidates.
+- **Session Recall Recovered**: Recovers the -7.0% Session Recall regression from v2.5.0.
+
+### How to Reproduce
+To reproduce these exact benchmark results, run the official benchmark binary with the tuned parameters loaded:
+```bash
+MYTHRAX_LOAD_TUNED_PARAMS=true cargo run --release --bin bench --features "bench,mlx" -- --split full500 --mode hybrid
+```
+> [!NOTE]
+> The workspace environment automatically handles Xcode Metal compiling path bindings via `.cargo/config.toml` injection.
+
+### Aggregate Metrics
+#### Turn granularity (has_answer)
+- **Recall_Any@5:** `0.8160`
+- **Recall_All@5:** `0.5600`
+- **nDCG@10:** `0.6250`
+
+#### Session granularity (answer_session_ids)
+- **Recall_Any@5 (session):** `0.9700`
+- **Recall_All@5 (session):** `0.7700`
+
+### Per-Question-Type R@10 (turn recall_any)
+- **knowledge-update** (n=78): R@10 = `0.9231`
+- **multi-session** (n=133): R@10 = `0.8496`
+- **single-session-assistant** (n=56): R@10 = `0.9821`
+- **single-session-preference** (n=30): R@10 = `0.6667`
+- **single-session-user** (n=70): R@10 = `0.9000`
+- **temporal-reasoning** (n=133): R@10 = `0.9023`
+
 ## v2.5.0 (2026-07-04)
 
 **Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
@@ -28,12 +70,15 @@ This file tracks the retrieval performance of the Mythrax Memory System releases
 - **Recall_All@5 (session):** `0.6860`
 
 ### Per-Question-Type R@10 (turn recall_any)
-- **knowledge-update** (n=88): R@10 = `0.8864`
-- **multi-session** (n=112): R@10 = `0.8482`
-- **single-session-assistant** (n=62): R@10 = `0.8710`
-- **single-session-preference** (n=48): R@10 = `0.8125`
-- **single-session-user** (n=78): R@10 = `0.8718`
-- **temporal-reasoning** (n=112): R@10 = `0.8839`
+> [!NOTE]
+> Per-type R@10 values below need re-verification against a fresh benchmark run with the corrected sample counts.
+
+- **knowledge-update** (n=78): R@10 = `0.8864`
+- **multi-session** (n=133): R@10 = `0.8482`
+- **single-session-assistant** (n=56): R@10 = `0.8710`
+- **single-session-preference** (n=30): R@10 = `0.8125`
+- **single-session-user** (n=70): R@10 = `0.8718`
+- **temporal-reasoning** (n=133): R@10 = `0.8839`
 
 ## v2.4.1 (2026-06-29)
 

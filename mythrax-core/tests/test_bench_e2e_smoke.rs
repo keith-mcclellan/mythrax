@@ -29,7 +29,7 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
         (
             "sess_c_turn_0",
             "Bitemporal Knowledge Graphs",
-            "as-of queries over a complete audit trail of when data was recorded.",
+            "bitemporal as-of queries over a complete audit trail of when data was recorded.",
         ),
     ];
     for (corpus_id, title, content) in &fixtures {

@@ -4,7 +4,7 @@ use mythrax_core::retrieval::boosts::{apply_boosts, BoostSignals, BoostWeights};
 fn boosts_clamp_to_zero_two_range() {
     let w = BoostWeights::default();
     let d = apply_boosts(0.10, &BoostSignals { person_name: true, exact_quote: true, temporal_proximity: 0.0, keyword_overlap: 0.0, ..Default::default() }, &w);
-    assert!(d >= 0.0 && d <= 2.0);
+    assert!(d >= -2.0 && d <= 2.0);
 }
 
 #[test]

@@ -1289,7 +1289,7 @@ struct KnnRow {
     similarity: Option<f32>,
 }
 
-fn prepare_fts_query(query: &str) -> String {
+fn prepare_fts_query(query: &str) -> Vec<String> {
     let stop_words: std::collections::HashSet<&str> = [
         "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "arent",
         "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
@@ -1318,9 +1318,19 @@ fn prepare_fts_query(query: &str) -> String {
         .collect();
 
     if words.is_empty() {
-        query.to_string()
+        // Fallback: use the raw cleaned query as a single token
+        let fallback = query.chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>();
+        let fallback = fallback.trim().to_string();
+        if fallback.is_empty() {
+            vec![]
+        } else {
+            vec![fallback]
+        }
     } else {
-        words.join(" OR ")
+        // Cap at 8 FTS predicates to avoid SQL explosion
+        words.into_iter().take(8).collect()
     }
 }
 
@@ -1480,23 +1490,33 @@ impl StorageBackend for SurrealBackend {
         }
 
         // Automatically load profile settings from bench_data/tuned_params.json if present
-        let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
-        if !tuned_path.exists() {
-            tuned_path = std::path::PathBuf::from("../bench_data/tuned_params.json");
-        }
-        if tuned_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(tuned_path) {
-                if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content) {
-                    for (k, v) in map {
-                        let val_str = match v {
-                            serde_json::Value::String(s) => s,
-                            other => other.to_string(),
-                        };
-                        let upsert_sql = "UPSERT type::record('profile', $key) CONTENT { value: $val };";
-                        let _ = self.db.query(upsert_sql)
-                            .bind(("key", k.as_str()))
-                            .bind(("val", val_str.as_str()))
-                            .await;
+        // Gated behind MYTHRAX_LOAD_TUNED_PARAMS=true to prevent benchmark-tuned params from
+        // silently overriding production defaults (MMR, sigmoid, boosts, etc.)
+        let load_tuned = std::env::var("MYTHRAX_LOAD_TUNED_PARAMS")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        if load_tuned {
+            let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
+            if !tuned_path.exists() {
+                tuned_path = std::path::PathBuf::from("../bench_data/tuned_params.json");
+            }
+            if tuned_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(tuned_path) {
+                    if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content) {
+                        for (k, v) in map {
+                            let val_str = match v {
+                                serde_json::Value::String(s) => s,
+                                other => other.to_string(),
+                            };
+                            let upsert_sql = "UPSERT type::record('profile', $key) CONTENT { key: $key, value: $val };";
+                            let res = self.db.query(upsert_sql)
+                                .bind(("key", k.as_str()))
+                                .bind(("val", val_str.as_str()))
+                                .await;
+                            if let Ok(mut r) = res {
+                                let _ = r.check();
+                            }
+                        }
                     }
                 }
             }
@@ -1998,7 +2018,23 @@ impl StorageBackend for SurrealBackend {
             query.to_string()
         };
 
-        let fts_query = prepare_fts_query(&cleaned_query);
+        let fts_words = prepare_fts_query(&cleaned_query);
+
+        // Build dynamic FTS disjunction: each word gets its own @N@ predicate
+        let (fts_where_clause, fts_score_expr) = if fts_words.is_empty() {
+            ("string::contains(title, $query)".to_string(), "0.0".to_string())
+        } else {
+            let where_parts: Vec<String> = fts_words.iter().enumerate()
+                .map(|(i, _)| format!("content @{}@ $fts_word_{}", i, i))
+                .collect();
+            let score_parts: Vec<String> = fts_words.iter().enumerate()
+                .map(|(i, _)| format!("(search::score({}) ?? 0.0)", i))
+                .collect();
+            (
+                format!("({} OR string::contains(title, $query))", where_parts.join(" OR ")),
+                score_parts.join(" + ")
+            )
+        };
 
         let sigmoid_center = match self.get_profile_key("search.sigmoid_center").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.55f32),
@@ -2175,7 +2211,7 @@ impl StorageBackend for SurrealBackend {
         }
 
         let mut keyword_sql = String::new();
-        if true {
+        if is_hybrid || mode == "keyword" {
             if include_episodes {
                 if deep_insight {
                     keyword_sql.push_str(&format!(
@@ -2184,27 +2220,32 @@ impl StorageBackend for SurrealBackend {
                                {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                                <-followed_by<-episode.* AS prev_episodes,
                                ->followed_by->episode.* AS next_episodes,
-                               search::score(0) AS bm25_score
+                               {fts_score_expr} AS bm25_score
                          FROM episode 
-                         WHERE (content @0@ $fts_query OR string::contains(title, $query))
+                         WHERE {fts_where_clause}
                            AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                          ORDER BY bm25_score DESC
                          LIMIT 200;
                          ",
                         traversal = traversal,
-                        related_targets = related_targets
+                        related_targets = related_targets,
+                        fts_where_clause = fts_where_clause,
+                        fts_score_expr = fts_score_expr
                     ));
                 } else {
-                    keyword_sql.push_str("
+                    keyword_sql.push_str(&format!("
                         SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, discovery_tokens, session_id, word_count,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                               search::score(0) AS bm25_score
+                               {fts_score_expr} AS bm25_score
                         FROM episode 
-                        WHERE (content @0@ $fts_query OR string::contains(title, $query))
+                        WHERE {fts_where_clause}
                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                         ORDER BY bm25_score DESC
                         LIMIT 200;
-                    ");
+                    ",
+                        fts_where_clause = fts_where_clause,
+                        fts_score_expr = fts_score_expr
+                    ));
                 }
             }
 
@@ -2253,11 +2294,14 @@ impl StorageBackend for SurrealBackend {
 
         let (vector_resp_res, keyword_resp_res) = if !is_hybrid {
             if mode == "keyword" {
-                let keyword_fut = self.db.query(&keyword_sql)
+                let mut keyword_fut = self.db.query(&keyword_sql)
                     .bind(("query", cleaned_query.as_str()))
-                    .bind(("fts_query", fts_query.as_str()))
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all));
+                for (i, word) in fts_words.iter().enumerate() {
+                    let key = format!("fts_word_{}", i);
+                    keyword_fut = keyword_fut.bind((key, word.clone()));
+                }
                 (None, Some(keyword_fut.await))
             } else if let Some(ref q_vec) = query_emb {
                 let vector_fut = self.db.query(&vector_sql)
@@ -2273,19 +2317,25 @@ impl StorageBackend for SurrealBackend {
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
                 .bind(("query_embedding", q_vec.clone()));
-            let keyword_fut = self.db.query(&keyword_sql)
+            let mut keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
-                .bind(("fts_query", fts_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all));
+            for (i, word) in fts_words.iter().enumerate() {
+                let key = format!("fts_word_{}", i);
+                keyword_fut = keyword_fut.bind((key, word.clone()));
+            }
             let (v_res, k_res) = tokio::join!(vector_fut, keyword_fut);
             (Some(v_res), Some(k_res))
         } else {
-            let keyword_fut = self.db.query(&keyword_sql)
+            let mut keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
-                .bind(("fts_query", fts_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all));
+            for (i, word) in fts_words.iter().enumerate() {
+                let key = format!("fts_word_{}", i);
+                keyword_fut = keyword_fut.bind((key, word.clone()));
+            }
             (None, Some(keyword_fut.await))
         };
 
@@ -2433,7 +2483,7 @@ impl StorageBackend for SurrealBackend {
                 let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * (-0.05f32 * delta_t).exp();
                 let tier = "episode".to_string();
 
-                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
+                let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
                 if blended_score >= pass_threshold {
                     list.push(SearchResult {
                         id: format_record_id(&ep.id),
@@ -2533,7 +2583,7 @@ impl StorageBackend for SurrealBackend {
                 let decayed_utility = utility_val * (-0.05f32 * delta_t).exp();
                 let tier = "insight".to_string();
 
-                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
+                let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
                 if blended_score >= pass_threshold {
                     list.push(SearchResult {
                         id: format_record_id(&node.id),
@@ -2624,7 +2674,7 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
 
-                let pass_threshold = if use_new_formula && is_vector { threshold * 0.5f32 } else { threshold };
+                let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
                 if blended_score >= pass_threshold {
                     list.push(SearchResult {
                         id: format_record_id(&rule.id),
@@ -2658,13 +2708,8 @@ impl StorageBackend for SurrealBackend {
             true
         });
 
-        let is_boost_name_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_NAME") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.person_name").await {
-            val == "true"
-        } else {
-            false
-        });
+        // FAILED - permanently disabled due to severe recall regressions in tuning sweeps
+        let is_boost_name_enabled = false;
 
         let is_boost_quote_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_QUOTE") {
             val == "true"
@@ -2682,13 +2727,8 @@ impl StorageBackend for SurrealBackend {
             false
         });
 
-        let is_boost_overlap_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_OVERLAP") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.keyword_overlap").await {
-            val == "true"
-        } else {
-            false
-        });
+        // FAILED - permanently disabled due to severe recall regressions in tuning sweeps
+        let is_boost_overlap_enabled = false;
 
         let gamma_rerank = if !is_hybrid {
             0.0f32
@@ -3128,7 +3168,8 @@ impl StorageBackend for SurrealBackend {
                 Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
                 _ => 25,
             };
-            let pool_len = merged_candidates.len().min(rerank_pool_size);
+            let effective_pool = rerank_pool_size.max(20);
+            let pool_len = merged_candidates.len().min(effective_pool);
             let mut rerank_pool = merged_candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
             
             for c in &mut rerank_pool {

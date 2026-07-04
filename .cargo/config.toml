@@ -1,3 +1,6 @@
 [alias]
 t = "nextest run"
 test = "nextest run"
+
+[env]
+DEVELOPER_DIR = { value = "/Applications/Xcode.app/Contents/Developer", force = true }

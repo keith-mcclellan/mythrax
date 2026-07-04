@@ -345,10 +345,37 @@ async fn main() -> Result<()> {
         println!("Loaded embedding cache from {:?}", target_cache_path);
         if args.mode == "tune" {
             // Decoupled coordinate sweep
-            let tune_questions = if target_questions.len() >= 10 {
-                &target_questions[..10]
-            } else {
-                &target_questions
+            let tune_questions = &target_questions;
+            
+            let format_metrics = |r_any: f32, r_all: f32, ndcg: f32, r_any_sess: f32, r_all_sess: f32, records: &[QuestionResultRecord]| -> String {
+                let mut type_counts = std::collections::HashMap::new();
+                let mut type_recall_at10 = std::collections::HashMap::new();
+                for record in records {
+                    *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
+                    *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
+                }
+                let get_per_type = |t_name: &str| -> f32 {
+                    let count = *type_counts.get(t_name).unwrap_or(&0);
+                    if count > 0 {
+                        *type_recall_at10.get(t_name).unwrap_or(&0.0) / count as f32
+                    } else {
+                        0.0
+                    }
+                };
+                format!(
+                    "Turn R@5={:.4}, Turn nDCG={:.4}, Sess R_any={:.4}, Sess R_all={:.4}, \
+                     R@10[assist={:.4}, update={:.4}, temp={:.4}, pref={:.4}, multi={:.4}, user={:.4}]",
+                    r_any,
+                    ndcg,
+                    r_any_sess,
+                    r_all_sess,
+                    get_per_type("single-session-assistant"),
+                    get_per_type("knowledge-update"),
+                    get_per_type("temporal-reasoning"),
+                    get_per_type("single-session-preference"),
+                    get_per_type("multi-session"),
+                    get_per_type("single-session-user")
+                )
             };
             
             let mut locked_overrides = std::collections::HashMap::new();
@@ -370,7 +397,7 @@ async fn main() -> Result<()> {
                         overrides.insert("search.fusion_sigmoid_center".to_string(), fsc.to_string());
                         overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
                         
-                        let (r_any, r_all, ndcg, _, _, lat, _, _) = run_evaluation(
+                        let (r_any, r_all, ndcg, r_any_sess, r_all_sess, lat, _, records) = run_evaluation(
                             tune_questions,
                             "hybrid",
                             Some(overrides),
@@ -380,8 +407,9 @@ async fn main() -> Result<()> {
                         ).await?;
                         
                         let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
-                        println!("A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
-                            sc, fsc, gamma, score, r_any, ndcg, lat);
+                        let detail = format_metrics(r_any, r_all, ndcg, r_any_sess, r_all_sess, &records);
+                        println!("A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} => score={:.4} ({} Lat={:.2}ms)",
+                            sc, fsc, gamma, score, detail, lat);
                             
                         if score > best_score_a {
                             best_score_a = score;
@@ -403,8 +431,8 @@ async fn main() -> Result<()> {
             let mut best_score_b = -1.0;
             let mut winner_b = (1.00f32, 50, 0.40f32, 0.30f32);
             
-            let mmr_lambdas = vec![0.60f32, 0.80f32, 1.00f32];
-            let rerank_pool_sizes = vec![25, 50];
+            let mmr_lambdas = vec![1.00f32];
+            let rerank_pool_sizes = vec![15, 20];
             let w_person_names = vec![0.20f32, 0.40f32];
             let w_keyword_overlaps = vec![0.15f32, 0.30f32];
             
@@ -420,7 +448,7 @@ async fn main() -> Result<()> {
                             overrides.insert("retrieval.boost.weight.person_name".to_string(), w_pn.to_string());
                             overrides.insert("retrieval.boost.weight.keyword_overlap".to_string(), w_ko.to_string());
                             
-                            let (r_any, r_all, ndcg, _, _, lat, _, _) = run_evaluation(
+                            let (r_any, r_all, ndcg, r_any_sess, r_all_sess, lat, _, records) = run_evaluation(
                                 tune_questions,
                                 "hybrid",
                                 Some(overrides),
@@ -430,8 +458,9 @@ async fn main() -> Result<()> {
                             ).await?;
                             
                             let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
-                            println!("B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
-                                mmr, pool, w_pn, w_ko, score, r_any, ndcg, lat);
+                            let detail = format_metrics(r_any, r_all, ndcg, r_any_sess, r_all_sess, &records);
+                            println!("B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} => score={:.4} ({} Lat={:.2}ms)",
+                                mmr, pool, w_pn, w_ko, score, detail, lat);
                                 
                             if score > best_score_b {
                                 best_score_b = score;
