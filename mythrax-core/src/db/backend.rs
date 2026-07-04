@@ -3256,25 +3256,6 @@ impl StorageBackend for SurrealBackend {
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit * 5);
 
-
-
-        candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-
-        // Rank-position boost ladder (Epic 4): reduce the distance of the top
-        // candidates by a fixed, position-indexed amount so the strongest matches
-        // are pulled further toward the top. effective_dist = clamp(dist - boost, 0, 2).
-        let ladder_scale = match self.get_profile_key("search.ladder_scale").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.0f32),
-            _ => 1.0f32,
-        };
-        const RANK_POSITION_LADDER: [f32; 5] = [0.40, 0.25, 0.15, 0.08, 0.04];
-        for (pos, c) in candidates.iter_mut().take(RANK_POSITION_LADDER.len()).enumerate() {
-            let dist = 1.0 - c.similarity;
-            let effective_dist = (dist - RANK_POSITION_LADDER[pos] * ladder_scale).clamp(-2.0, 2.0);
-            c.similarity = 1.0 - effective_dist;
-        }
-        candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-
         let mut final_results = Vec::new();
         let mut seen_related_ids = std::collections::HashSet::new();
 

@@ -7,7 +7,6 @@ use std::sync::Arc;
 async fn test_archived_demotion_logic() -> Result<()> {
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
-    backend.save_profile_key("search.ladder_scale", "0.0").await?;
 
     // Create 7 episodes with the same content so their raw vector similarity is identical
     let content = "Database index compression algorithms and HNSW graphs.";

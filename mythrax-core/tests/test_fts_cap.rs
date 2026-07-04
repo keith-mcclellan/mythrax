@@ -7,7 +7,6 @@ async fn test_fts_cap_behavior() -> Result<()> {
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
     backend.set_search_mode("hybrid").await;
-    backend.save_profile_key("search.ladder_scale", "0.0").await?;
 
     // We insert 3 documents with the keyword "architecture"
     let content_arch = "This is a document about microservice architecture and service mesh design.";
