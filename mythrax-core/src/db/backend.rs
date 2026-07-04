@@ -140,6 +140,7 @@ pub trait StorageBackend: Send + Sync {
         valid_to: Option<chrono::DateTime<chrono::Utc>>,
         confidence: Option<f32>,
     ) -> Result<()>;
+    async fn relate_followed_by(&self, from_id: &str, to_id: &str) -> Result<()>;
     async fn invalidate_edge(&self, from_id: &str, to_id: &str, ended: Option<chrono::DateTime<chrono::Utc>>) -> Result<()>;
     async fn query_edges_as_of(&self, node_id: &str, as_of: chrono::DateTime<chrono::Utc>) -> Result<Vec<String>>;
     async fn get_related_node_ids(&self, from_id: &str) -> Result<Vec<String>>;
@@ -3044,6 +3045,68 @@ impl StorageBackend for SurrealBackend {
                                         }
                                     }
                                 }
+                                if cue_type == TemporalCueType::Procedural {
+                                    if depth >= 1 {
+                                        if let Some(ref preds) = rel.preds_1 {
+                                            if let Some(pred_id) = preds.first() {
+                                                let pred_str = format_record_id(pred_id);
+                                                neighbor_ids_to_fetch.push(pred_id.clone());
+                                                neighbor_to_primary.entry(pred_str)
+                                                    .or_default()
+                                                    .push((c.id.clone(), c.similarity * 0.5f32));
+                                            }
+                                        }
+                                        if let Some(ref succs) = rel.succs_1 {
+                                            if let Some(succ_id) = succs.first() {
+                                                let succ_str = format_record_id(succ_id);
+                                                neighbor_ids_to_fetch.push(succ_id.clone());
+                                                neighbor_to_primary.entry(succ_str)
+                                                    .or_default()
+                                                    .push((c.id.clone(), c.similarity * 0.5f32));
+                                            }
+                                        }
+                                    }
+                                    if depth >= 2 {
+                                        if let Some(ref preds) = rel.preds_2 {
+                                            if let Some(pred_id) = preds.first() {
+                                                let pred_str = format_record_id(pred_id);
+                                                neighbor_ids_to_fetch.push(pred_id.clone());
+                                                neighbor_to_primary.entry(pred_str)
+                                                    .or_default()
+                                                    .push((c.id.clone(), c.similarity * 0.25f32));
+                                            }
+                                        }
+                                        if let Some(ref succs) = rel.succs_2 {
+                                            if let Some(succ_id) = succs.first() {
+                                                let succ_str = format_record_id(succ_id);
+                                                neighbor_ids_to_fetch.push(succ_id.clone());
+                                                neighbor_to_primary.entry(succ_str)
+                                                    .or_default()
+                                                    .push((c.id.clone(), c.similarity * 0.25f32));
+                                            }
+                                        }
+                                    }
+                                    if depth >= 3 {
+                                        if let Some(ref preds) = rel.preds_3 {
+                                            if let Some(pred_id) = preds.first() {
+                                                let pred_str = format_record_id(pred_id);
+                                                neighbor_ids_to_fetch.push(pred_id.clone());
+                                                neighbor_to_primary.entry(pred_str)
+                                                    .or_default()
+                                                    .push((c.id.clone(), c.similarity * 0.125f32));
+                                            }
+                                        }
+                                        if let Some(ref succs) = rel.succs_3 {
+                                            if let Some(succ_id) = succs.first() {
+                                                let succ_str = format_record_id(succ_id);
+                                                neighbor_ids_to_fetch.push(succ_id.clone());
+                                                neighbor_to_primary.entry(succ_str)
+                                                    .or_default()
+                                                    .push((c.id.clone(), c.similarity * 0.125f32));
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         
@@ -3850,6 +3913,18 @@ impl StorageBackend for SurrealBackend {
             .bind(("confidence", confidence.unwrap_or(1.0)))
             .await?
             .check().context("Failed to relate nodes")?;
+        Ok(())
+     }
+
+    async fn relate_followed_by(&self, from_id: &str, to_id: &str) -> Result<()> {
+        let from_thing = parse_record_id(from_id)?;
+        let to_thing = parse_record_id(to_id)?;
+        let sql = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
+        self.db.query(sql)
+            .bind(("from", from_thing))
+            .bind(("to", to_thing))
+            .await?
+            .check().context("Failed to relate followed_by")?;
         Ok(())
     }
 
@@ -5084,6 +5159,7 @@ pub enum TemporalCueType {
     Preceding,
     Succeeding,
     Relative,
+    Procedural,
 }
 
 pub fn parse_temporal_cues(query: &str) -> Option<(TemporalCueType, f32)> {
@@ -5092,6 +5168,7 @@ pub fn parse_temporal_cues(query: &str) -> Option<(TemporalCueType, f32)> {
     static PRECEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static SUCCEEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static RELATIVE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static PROCEDURAL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
     let deep_preceding_re = DEEP_PRECEDING_RE.get_or_init(|| {
         regex::Regex::new(r"\b(long|far|much|way)\s+(before|preceding|previously|prior|earlier|ago|last)\b").unwrap()
@@ -5108,9 +5185,15 @@ pub fn parse_temporal_cues(query: &str) -> Option<(TemporalCueType, f32)> {
     let relative_re = RELATIVE_RE.get_or_init(|| {
         regex::Regex::new(r"\b(recent|recently|latest|newest|today|now)\b").unwrap()
     });
+    let procedural_re = PROCEDURAL_RE.get_or_init(|| {
+        regex::Regex::new(r"(?s)^\s*\b(what|how|why|which|where|when|did|have)\b.*\b(do|done|took|take|taken|happen|run|execute|call|step|try|attempt)\b").unwrap()
+    });
 
     let query_lower = query.to_lowercase();
 
+    if procedural_re.is_match(&query_lower) {
+        return Some((TemporalCueType::Procedural, 3.0));
+    }
     if deep_preceding_re.is_match(&query_lower) {
         return Some((TemporalCueType::Preceding, 3.0));
     }
@@ -5902,6 +5985,32 @@ files_modified: None,
 
         let result_none = parse_temporal_cues("just a normal sentence");
         assert_eq!(result_none, None);
+
+        // Procedural cue test cases (interrogative action cues)
+        let result_what_did = parse_temporal_cues("What did I do before?");
+        assert_eq!(result_what_did, Some((TemporalCueType::Procedural, 3.0)));
+
+        let result_how_run = parse_temporal_cues("How did I run the script?");
+        assert_eq!(result_how_run, Some((TemporalCueType::Procedural, 3.0)));
+
+        let result_which_steps = parse_temporal_cues("Which steps did we take?");
+        assert_eq!(result_which_steps, Some((TemporalCueType::Procedural, 3.0)));
+
+        let result_taken = parse_temporal_cues("What troubleshooting steps have already been taken?");
+        assert_eq!(result_taken, Some((TemporalCueType::Procedural, 3.0)));
+
+        let result_done = parse_temporal_cues("What did we have done?");
+        assert_eq!(result_done, Some((TemporalCueType::Procedural, 3.0)));
+
+        // Strictness / False positive protection cases
+        let result_why_fail = parse_temporal_cues("Why did the test fail?");
+        assert_eq!(result_why_fail, None);
+
+        let result_normal_did = parse_temporal_cues("I did run the server.");
+        assert_eq!(result_normal_did, None);
+
+        let result_what_is = parse_temporal_cues("What is the status of the server?");
+        assert_eq!(result_what_is, None);
     }
 
     #[test]

@@ -79,6 +79,7 @@ pub async fn mine_transcript(
         .context(format!("Failed to open transcript file at {}", transcript_path))?;
     let reader = BufReader::new(file);
     let mut saved_count = 0;
+    let mut prev_saved_id: Option<String> = None;
 
     for line in reader.lines() {
         let line_str = match line {
@@ -129,9 +130,16 @@ files_modified: None,
                     let store_arc = Arc::new(crate::store::MarkdownStore {
                         vault_root: store.vault_root.clone(),
                     });
-                    save_episode_bidirectional(&ep, backend, &store_arc, ignore)
+                    let saved_id = save_episode_bidirectional(&ep, backend, &store_arc, ignore)
                         .await
                         .context("Failed to save episode bidirectionally during transcript mining")?;
+                    
+                    if let Some(ref prev_id) = prev_saved_id {
+                        if let Err(e) = backend.relate_followed_by(prev_id, &saved_id).await {
+                            tracing::warn!("Failed to link mined sequential episodes: {:?}", e);
+                        }
+                    }
+                    prev_saved_id = Some(saved_id);
                     
                     saved_count += 1;
                 }
