@@ -152,6 +152,8 @@ fn expected_sha_for(filename: &str) -> Option<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // SAFETY: Environment variables are set here at the very beginning of the program,
+    // before any other threads are spawned, making it safe from data races.
     unsafe { 
         std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); 
         std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false");

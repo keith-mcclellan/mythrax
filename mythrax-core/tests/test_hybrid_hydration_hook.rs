@@ -15,7 +15,7 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
 
     let state = ApiState {
         backend: std::sync::Arc::new(backend),
-        auth_token: "secret-api-token".to_string(),
+        auth_token: "test_token_123".to_string(),
         store: std::sync::Arc::new(store),
         ignore_list: std::sync::Arc::new(Default::default()),
         dream_tx: None,

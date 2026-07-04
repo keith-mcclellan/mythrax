@@ -151,7 +151,7 @@ async fn test_token_economics_savings() {
 
     let state = ApiState {
         backend: Arc::new(backend),
-        auth_token: "secret".to_string(),
+        auth_token: "test_token_123".to_string(),
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
@@ -211,7 +211,7 @@ async fn test_zero_discovery_no_divide_by_zero() {
 
     let state = ApiState {
         backend: Arc::new(backend),
-        auth_token: "secret".to_string(),
+        auth_token: "test_token_123".to_string(),
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,

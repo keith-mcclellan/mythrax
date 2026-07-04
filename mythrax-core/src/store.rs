@@ -237,7 +237,7 @@ mod tests {
         let store = MarkdownStore::new(tmp.path()).unwrap();
 
         let rel_path = "episodes/test_episode.md";
-        let content = "title: Test\napi_key: 'secret'\nThis is my episode body.";
+        let content = "title: Test\napi_key: 'test-api-key-123'\nThis is my episode body.";
         store.write_file(rel_path, content).unwrap();
 
         let dest = tmp.path().join(rel_path);
@@ -250,18 +250,24 @@ mod tests {
 
     #[test]
     fn test_find_vault_root() {
+        // SAFETY: Modifying env vars in tests can be racy if run concurrently.
+        // However, standard cargo tests run in isolated processes or we rely on thread locality
+        // for simple vars. We must be careful not to rely on this in multi-threaded contexts.
         unsafe {
             std::env::set_var("MYTHRAX_VAULT_ROOT", "/tmp/vault_test_env");
         }
         assert_eq!(find_vault_root(), PathBuf::from("/tmp/vault_test_env"));
+        // SAFETY: Safe as long as no other thread is reading this variable concurrently.
         unsafe {
             std::env::remove_var("MYTHRAX_VAULT_ROOT");
         }
 
+        // SAFETY: Modifying env vars in a test context.
         unsafe {
             std::env::set_var("MYTHRAX_WORKSPACE_ROOT", "/tmp/workspace_test_env");
         }
         assert_eq!(find_vault_root(), PathBuf::from("/tmp/workspace_test_env"));
+        // SAFETY: Modifying env vars in a test context.
         unsafe {
             std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
         }

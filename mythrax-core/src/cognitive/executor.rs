@@ -78,52 +78,51 @@ impl ArborExecutor {
         }
 
         // Spawns a subprocess to execute the test suite in the temp directory.
-        // If shell operators (pipe, redirect, chain) are detected, we use sh -c.
-        // Otherwise we split respecting quotes and execute natively without shell wrapping.
+        // To prevent command injection, we do not fallback to shell evaluation (e.g. `sh -c`).
+        // Shell operators like `|`, `>`, `<`, etc., are explicitly not supported natively through this API
+        // without a safe parser. If they are needed, the user must provide a wrapper script.
         let has_shell_operators = test_command.contains('&') || test_command.contains('|') || test_command.contains('>') || test_command.contains('<') || test_command.contains(';');
 
-        let mut cmd = if has_shell_operators {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(test_command);
-            c
-        } else {
-            let mut args = Vec::new();
-            let mut current_arg = String::new();
-            let mut in_quotes = false;
-            let mut quote_char = '\0';
-            for c in test_command.chars() {
-                match c {
-                    '"' | '\'' if !in_quotes => {
-                        in_quotes = true;
-                        quote_char = c;
-                    }
-                    '"' | '\'' if in_quotes && c == quote_char => {
-                        in_quotes = false;
-                        quote_char = '\0';
-                    }
-                    ' ' | '\t' if !in_quotes => {
-                        if !current_arg.is_empty() {
-                            args.push(current_arg.clone());
-                            current_arg.clear();
-                        }
-                    }
-                    _ => {
-                        current_arg.push(c);
+        if has_shell_operators {
+            return Err(anyhow!("Shell operators are not allowed in test commands to prevent injection vulnerabilities. Please wrap complex commands in a script."));
+        }
+
+        let mut args = Vec::new();
+        let mut current_arg = String::new();
+        let mut in_quotes = false;
+        let mut quote_char = '\0';
+        for c in test_command.chars() {
+            match c {
+                '"' | '\'' if !in_quotes => {
+                    in_quotes = true;
+                    quote_char = c;
+                }
+                '"' | '\'' if in_quotes && c == quote_char => {
+                    in_quotes = false;
+                    quote_char = '\0';
+                }
+                ' ' | '\t' if !in_quotes => {
+                    if !current_arg.is_empty() {
+                        args.push(current_arg.clone());
+                        current_arg.clear();
                     }
                 }
+                _ => {
+                    current_arg.push(c);
+                }
             }
-            if !current_arg.is_empty() {
-                args.push(current_arg);
-            }
-            if args.is_empty() {
-                return Err(anyhow!("Empty test command"));
-            }
-            let mut c = Command::new(&args[0]);
-            if args.len() > 1 {
-                c.args(&args[1..]);
-            }
-            c
-        };
+        }
+        if !current_arg.is_empty() {
+            args.push(current_arg);
+        }
+
+        if args.is_empty() {
+            return Err(anyhow!("Empty test command"));
+        }
+        let mut cmd = Command::new(&args[0]);
+        if args.len() > 1 {
+            cmd.args(&args[1..]);
+        }
         cmd.current_dir(&worktree_path);
 
         // T6: Set unique CARGO_TARGET_DIR and offline env vars

@@ -1,0 +1,28 @@
+name: Mythrax Security Audit
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *' # Nightly
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed for git history scanning
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run Security Audit Script
+        run: python3 scripts/security_audit.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

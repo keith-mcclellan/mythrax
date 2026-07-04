@@ -290,6 +290,8 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     if let Some(root_uri_str) = params.get("rootUri").and_then(|v| v.as_str()) {
                         if let Ok(url) = url::Url::parse(root_uri_str) {
                             if let Ok(path) = url.to_file_path() {
+                                // SAFETY: Setting environment variables in a multi-threaded context is highly dangerous and can cause crashes.
+                                // This is currently a known technical debt that should be addressed by passing context explicitly.
                                 unsafe {
                                     std::env::set_var("MYTHRAX_WORKSPACE_ROOT", path);
                                 }

@@ -545,7 +545,7 @@ mod tests {
 
         let state = Arc::new(ApiState {
             backend,
-            auth_token: "secret-token".to_string(),
+            auth_token: "test-auth-token-123".to_string(),
             store,
             ignore_list,
             dream_tx: None,
@@ -573,7 +573,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri("/v1/config/llm")
-                    .header("X-Mythrax-Token", "secret-token")
+                    .header("X-Mythrax-Token", "test-auth-token-123")
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -591,7 +591,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/v1/nodes")
-                    .header("X-Mythrax-Token", "secret-token")
+                    .header("X-Mythrax-Token", "test-auth-token-123")
                     .header("Content-Type", "application/json")
                     .body(axum::body::Body::from(serde_json::to_vec(&request_body).unwrap()))
                     .unwrap(),
@@ -607,7 +607,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri("/v1/mcp/tools")
-                    .header("X-Mythrax-Token", "secret-token")
+                    .header("X-Mythrax-Token", "test-auth-token-123")
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -642,7 +642,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/v1/mcp/call")
-                    .header("X-Mythrax-Token", "secret-token")
+                    .header("X-Mythrax-Token", "test-auth-token-123")
                     .header("Content-Type", "application/json")
                     .body(axum::body::Body::from(serde_json::to_vec(&call_payload).unwrap()))
                     .unwrap(),
@@ -676,7 +676,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/v1/mcp/call")
-                    .header("X-Mythrax-Token", "secret-token")
+                    .header("X-Mythrax-Token", "test-auth-token-123")
                     .header("Content-Type", "application/json")
                     .body(axum::body::Body::from(serde_json::to_vec(&bad_payload).unwrap()))
                     .unwrap(),

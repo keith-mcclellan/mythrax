@@ -279,6 +279,8 @@ mod tests {
         std::fs::write(skill_c_dir.join("SKILL.md"), skill_c_content).unwrap();
 
         // Set HOME to our temp dir and set MOCK_LLM
+        // SAFETY: Env var modification is dangerous in multi-threaded tests but this test
+        // typically runs in isolation or sets values that don't cause conflicting segfaults in this specific context.
         unsafe {
             env::set_var("HOME", tmp_home.path().to_str().unwrap());
             env::set_var("MYTHRAX_MOCK_LLM", "true");
@@ -315,6 +317,7 @@ mod tests {
 
         // Initialize a new isolated DB for the second check
         // We must restore HOME temporarily to load the embedder, then swap it back
+        // SAFETY: Env var modification in tests.
         unsafe {
             if let Some(ref home) = original_home {
                 env::set_var("HOME", home);
@@ -324,6 +327,7 @@ mod tests {
         }
         let db2 = SurrealBackend::new_in_memory().await.unwrap();
         db2.init().await.unwrap();
+        // SAFETY: Env var modification in tests.
         unsafe {
             env::set_var("HOME", tmp_home.path().to_str().unwrap());
         }
@@ -340,6 +344,7 @@ mod tests {
         assert_eq!(rules2.len(), 0, "Expected no rules from outlier-only skills");
 
         // Restore original env vars
+        // SAFETY: Restoring env vars to avoid bleeding state to other tests.
         unsafe {
             if let Some(home) = original_home {
                 env::set_var("HOME", home);

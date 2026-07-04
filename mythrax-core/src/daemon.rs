@@ -515,7 +515,9 @@ pub mod monitor {
         #[cfg(target_os = "macos")]
         {
             let c_path = CString::new(canonical_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?)?;
+            // SAFETY: `std::mem::zeroed()` is safe here because `libc::statfs` is a C struct composed of primitive integers.
             let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+            // SAFETY: `statfs` is safe as `c_path` is a valid null-terminated string and `buf` is correctly allocated.
             let res = unsafe { libc::statfs(c_path.as_ptr(), &mut buf) };
             if res != 0 {
                 return Err(anyhow::anyhow!("Failed to get filesystem stats"));
@@ -533,7 +535,9 @@ pub mod monitor {
         #[cfg(target_os = "linux")]
         {
             let c_path = CString::new(canonical_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?)?;
+            // SAFETY: `std::mem::zeroed()` is safe for `libc::statfs` (all primitive fields).
             let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+            // SAFETY: `statfs` is safe as `c_path` is null-terminated and `buf` outlives the call.
             let res = unsafe { libc::statfs(c_path.as_ptr(), &mut buf) };
             if res != 0 {
                 return Err(anyhow::anyhow!("Failed to get filesystem stats"));

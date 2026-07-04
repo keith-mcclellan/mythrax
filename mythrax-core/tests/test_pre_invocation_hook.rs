@@ -48,7 +48,7 @@ async fn test_soft_thresholding_and_hook_injection() {
     // Construct ApiState with necessary dependencies
     let state = ApiState {
         backend: Arc::new(backend),
-        auth_token: "secret-token".to_string(),
+        auth_token: "test_token_123".to_string(),
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,

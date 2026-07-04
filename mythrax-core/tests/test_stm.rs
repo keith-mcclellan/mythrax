@@ -596,7 +596,7 @@ async fn test_api_save_forged_assets() -> Result<()> {
 
     let state = std::sync::Arc::new(ApiState {
         backend: backend.clone(),
-        auth_token: "secret-api-token".to_string(),
+        auth_token: "test_token_123".to_string(),
         store,
         ignore_list,
         dream_tx: None,
@@ -646,7 +646,7 @@ async fn test_api_save_forged_assets() -> Result<()> {
             Request::builder()
                 .method("POST")
                 .uri("/v1/forge/save")
-                .header("X-Mythrax-Token", "secret-api-token")
+                .header("X-Mythrax-Token", "test_token_123")
                 .header("Content-Type", "application/json")
                 .body(axum::body::Body::from(serde_json::to_vec(&batch).unwrap()))
                 .unwrap(),

@@ -35,7 +35,7 @@ async fn setup_test_state() -> Result<(ApiState, std::sync::Arc<SurrealBackend>,
 
     let state = ApiState {
         backend: backend.clone(),
-        auth_token: "secret".to_string(),
+        auth_token: "test_token_123".to_string(),
         store,
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,

@@ -271,6 +271,9 @@ pub static SUSPEND_BACKGROUND_TASKS: std::sync::atomic::AtomicBool = std::sync::
 
 #[cfg(unix)]
 fn is_process_alive(pid: i32) -> bool {
+    // SAFETY: Calling `kill` with signal 0 simply checks for the existence
+    // of the process and does not send any signal. It is safe because we only
+    // pass a generic pid and evaluate the integer return code.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
