@@ -1516,7 +1516,7 @@ impl StorageBackend for SurrealBackend {
                                 .bind(("key", k.as_str()))
                                 .bind(("val", val_str.as_str()))
                                 .await;
-                            if let Ok(mut r) = res {
+                            if let Ok(r) = res {
                                 let _ = r.check();
                             }
                         }
