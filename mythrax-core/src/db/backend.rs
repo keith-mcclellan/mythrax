@@ -1943,6 +1943,18 @@ impl StorageBackend for SurrealBackend {
         include_episodes: bool,
         include_artifacts: bool,
     ) -> Result<SearchResponse> {
+        /*
+         * Active Search Pipeline Stages (v2.5.2):
+         * Stage 1: Query Prep (normalization & temporal cue parsing)
+         * Stage 2: Per-result Sigmoid Gating (pre-fusion similarity quality threshold)
+         * Stage 3: Parallel Vector / FTS (BM25) Retrieval & Fusion (Reciprocal Rank Fusion or Score Blending)
+         * Stage 4: Post-fusion Sigmoid Gating (fused score quality threshold)
+         * Stage 5: Session Isolation & Context Filter scoping
+         * Stage 6: Temporal Neighbor Expansion (traverses followed_by edges if cues detected)
+         * Stage 7: Sub-sentence/Segment cosine/TF-IDF Reranking
+         * Stage 8: Rank-Position Ladder Boost (position-based score adjustment)
+         * Stage 9: Bounded Verbatim Hydration and Limit/Offset clipping
+         */
         if self.is_client_mode() {
             let payload = serde_json::json!({
                 "query": query,
@@ -1966,41 +1978,6 @@ impl StorageBackend for SurrealBackend {
             _ => false,
         };
 
-        fn classify_query(q: &str) -> (bool, bool) {
-            let is_temporal = q.split_whitespace().any(|w| {
-                let lw = w.to_lowercase();
-                matches!(lw.as_str(), "today" | "yesterday" | "ago" | "last" | "before" | "after" | "recent" | "recently" | "earlier" | "previously" | "prior" | "week" | "month" | "year")
-            });
-            
-            let mut is_entity = false;
-            let words: Vec<&str> = q.split_whitespace().collect();
-            for (i, &w) in words.iter().enumerate() {
-                if w.is_empty() {
-                    continue;
-                }
-                let first_char = w.chars().next().unwrap();
-                if first_char.is_uppercase() {
-                    if i > 0 {
-                        is_entity = true;
-                        break;
-                    } else if words.len() == 1 {
-                        is_entity = true;
-                    }
-                }
-            }
-            (is_temporal, is_entity)
-        }
-
-        fn is_factual_query(q: &str) -> bool {
-            let q_lower = q.to_lowercase();
-            let personal_markers = ["my", "i like", "i prefer", "i want", "preference", "about me", "my favorite"];
-            for marker in &personal_markers {
-                if q_lower.contains(marker) {
-                    return false;
-                }
-            }
-            true
-        }
 
         let temporal_cue_info = if is_hybrid {
             parse_temporal_cues(query)
@@ -2052,10 +2029,7 @@ impl StorageBackend for SurrealBackend {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(20.0f32),
             _ => 20.0f32,
         };
-        let mmr_lambda = match self.get_profile_key("search.mmr_lambda").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(1.0f32),
-            _ => 1.0f32,
-        };
+
         let w_imp_ep = match self.get_profile_key("search.weight_importance_episode").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.3f32),
             _ => 0.3f32,
@@ -2708,27 +2682,7 @@ impl StorageBackend for SurrealBackend {
             true
         });
 
-        // FAILED - permanently disabled due to severe recall regressions in tuning sweeps
-        let is_boost_name_enabled = false;
 
-        let is_boost_quote_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_QUOTE") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.exact_quote").await {
-            val == "true"
-        } else {
-            false
-        });
-
-        let is_boost_temporal_enabled = is_hybrid && (if let Ok(val) = std::env::var("MYTHRAX_BOOST_TEMPORAL") {
-            val == "true"
-        } else if let Ok(Some(val)) = self.get_profile_key("retrieval.boost.temporal_proximity").await {
-            val == "true"
-        } else {
-            false
-        });
-
-        // FAILED - permanently disabled due to severe recall regressions in tuning sweeps
-        let is_boost_overlap_enabled = false;
 
         let gamma_rerank = if !is_hybrid {
             0.0f32
@@ -3203,189 +3157,7 @@ impl StorageBackend for SurrealBackend {
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(limit * 5);
 
-        // Apply Epic 4 distance-reduction boosts if enabled
-        if is_boost_name_enabled || is_boost_quote_enabled || is_boost_temporal_enabled || is_boost_overlap_enabled {
-            fn detect_person_name(query: &str, candidate_text: &str) -> bool {
-                // Generic heuristic: a capitalized query token (a proper-noun candidate)
-                // that also appears in the candidate text. No hardcoded name list — a
-                // baked-in roster would game specific benchmark authors/entities.
-                let candidate_lower = candidate_text.to_lowercase();
-                let words: Vec<&str> = query.split_whitespace().collect();
-                for word in words {
-                    if word.is_empty() { continue; }
-                    let first_char = word.chars().next().unwrap();
-                    if first_char.is_uppercase() {
-                        let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
-                        if clean_word.len() > 1 {
-                            if candidate_lower.contains(&clean_word) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            }
 
-            fn detect_quoted_phrase(query: &str, candidate_text: &str) -> bool {
-                let candidate_lower = candidate_text.to_lowercase();
-                let mut start = None;
-                for (idx, c) in query.char_indices() {
-                    if c == '"' {
-                        if let Some(s) = start {
-                            let phrase = &query[s+1..idx];
-                            if !phrase.is_empty() && candidate_lower.contains(&phrase.to_lowercase()) {
-                                return true;
-                            }
-                            start = None;
-                        } else {
-                            start = Some(idx);
-                        }
-                    }
-                }
-                false
-            }
-
-            fn compute_keyword_overlap(query: &str, candidate_text: &str) -> f32 {
-                let q_tokens: std::collections::HashSet<String> = crate::retrieval::bm25::tokenize(query).into_iter().collect();
-                if q_tokens.is_empty() { return 0.0; }
-                let c_tokens: std::collections::HashSet<String> = crate::retrieval::bm25::tokenize(candidate_text).into_iter().collect();
-                let intersection = q_tokens.intersection(&c_tokens).count();
-                intersection as f32 / q_tokens.len() as f32
-            }
-
-            let anchors = self.resolve_query_anchors(query, query_emb.as_ref()).await;
-            let mut symbolic_confidences = std::collections::HashMap::new();
-            let as_of = Some(chrono::Utc::now());
-            for (seed_id, seed_conf) in anchors {
-                if let Ok(hits) = self.query_symbolic_scored(&seed_id, None, Some(3), as_of).await {
-                    for hit in hits {
-                        let path_conf_eff = seed_conf * hit.path_confidence;
-                        symbolic_confidences
-                            .entry(hit.node_id)
-                            .and_modify(|c| *c = f32::max(*c, path_conf_eff))
-                            .or_insert(path_conf_eff);
-                    }
-                }
-            }
-
-            let mut session_anchors = std::collections::HashMap::new();
-            let mut global_anchor = None;
-            if is_boost_temporal_enabled {
-                let max_sql = "SELECT session_id, created_at FROM episode WHERE scope = $scope OR scope = 'general';";
-                if let Ok(mut res) = self.db.query(max_sql).bind(("scope", resolved_scope.as_str())).await {
-                    #[derive(serde::Deserialize, SurrealValue)]
-                    struct EpTime {
-                        session_id: Option<String>,
-                        created_at: chrono::DateTime<chrono::Utc>,
-                    }
-                    if let Ok(episodes) = res.take::<Vec<EpTime>>(0) {
-                        for ep in episodes {
-                            if let Some(ref s_id) = ep.session_id {
-                                session_anchors.entry(s_id.clone())
-                                    .and_modify(|t| if ep.created_at > *t { *t = ep.created_at; })
-                                    .or_insert(ep.created_at);
-                            }
-                            global_anchor = match global_anchor {
-                                Some(t) => Some(std::cmp::max(t, ep.created_at)),
-                                None => Some(ep.created_at),
-                            };
-                        }
-                    }
-                }
-            }
-            let global_anchor = global_anchor.unwrap_or_else(|| chrono::Utc::now());
-
-            let (is_temporal, is_entity) = classify_query(query);
-            let mut w_person_name = match self.get_profile_key("retrieval.boost.weight.person_name").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.40f32),
-                _ => 0.40f32,
-            };
-            if enable_advanced && is_entity {
-                w_person_name *= 1.5f32;
-            }
-            let w_exact_quote = match self.get_profile_key("retrieval.boost.weight.exact_quote").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.60f32),
-                _ => 0.60f32,
-            };
-            let mut w_temporal_proximity = match self.get_profile_key("retrieval.boost.weight.temporal_proximity").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.20f32),
-                _ => 0.20f32,
-            };
-            if enable_advanced && is_temporal {
-                w_temporal_proximity *= 1.5f32;
-            }
-            let w_keyword_overlap = match self.get_profile_key("retrieval.boost.weight.keyword_overlap").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.30f32),
-                _ => 0.30f32,
-            };
-            let w_symbolic_hit = match self.get_profile_key("retrieval.boost.weight.symbolic_hit").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.50f32),
-                _ => 0.50f32,
-            };
-            let weights = crate::retrieval::boosts::BoostWeights {
-                person_name: w_person_name,
-                exact_quote: w_exact_quote,
-                temporal_proximity: w_temporal_proximity,
-                keyword_overlap: w_keyword_overlap,
-                symbolic_hit: w_symbolic_hit,
-            };
-            for c in &mut candidates {
-                let candidate_text = format!("{} {}", c.title, c.content);
-                let person_name = is_boost_name_enabled && detect_person_name(query, &candidate_text);
-                let exact_quote = is_boost_quote_enabled && detect_quoted_phrase(query, &candidate_text);
-                let temporal_proximity = if is_boost_temporal_enabled {
-                    if let Some(created) = c.created_at {
-                        let anchor = if let Some(ref s_id) = c.session_id {
-                            session_anchors.get(s_id).copied().unwrap_or(global_anchor)
-                        } else {
-                            global_anchor
-                        };
-                        let decay_lambda = match self.get_profile_key("search.decay_lambda").await {
-                            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.01f32).max(0.0f32),
-                            _ => 0.01f32,
-                        };
-                        calculate_temporal_decay(created, anchor, decay_lambda)
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                };
-                let keyword_overlap = if is_boost_overlap_enabled {
-                    compute_keyword_overlap(query, &candidate_text)
-                } else {
-                    0.0
-                };
-                let sym_conf = *symbolic_confidences.get(&c.id).unwrap_or(&0.0f32);
-                
-                let signals = crate::retrieval::boosts::BoostSignals {
-                    person_name,
-                    exact_quote,
-                    temporal_proximity,
-                    keyword_overlap,
-                    symbolic_hit: sym_conf,
-                };
-                
-                let base_dist = 1.0 - c.similarity;
-                let boosted_dist = crate::retrieval::boosts::apply_boosts(base_dist, &signals, &weights);
-                c.similarity = 1.0 - boosted_dist;
-            }
-
-            let utility_threshold = match self.get_profile_key("search.utility_threshold").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.50f32),
-                _ => 0.50f32,
-            };
-            let is_factual = is_factual_query(cleaned_query.as_str());
-            for c in &mut candidates {
-                if enable_advanced && is_factual && c.content.to_lowercase().starts_with("assistant:") {
-                    c.similarity *= 1.2f32;
-                }
-                if c.similarity >= utility_threshold {
-                    let multiplier = (1.0f32 + (c.utility / 100.0f32) * 0.15f32).min(1.15f32);
-                    c.similarity = c.similarity * multiplier;
-                }
-            }
-        }
 
         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -3420,51 +3192,7 @@ impl StorageBackend for SurrealBackend {
         }
         candidates = final_results;
 
-        // Apply MMR diversity selection if hybrid mode is active
-        if is_hybrid_enabled && !candidates.is_empty() && mmr_lambda < 1.0f32 {
-            let mut selected = Vec::new();
-            let mut remaining = candidates.clone();
 
-            // The first item (highest similarity) is always selected
-            if let Some(first) = remaining.first().cloned() {
-                selected.push(first);
-                remaining.remove(0);
-            }
-
-            while !remaining.is_empty() && selected.len() < limit {
-                let mut best_score = f32::MIN;
-                let mut best_idx = 0;
-
-                for (idx, item) in remaining.iter().enumerate() {
-                    let rel_score = item.similarity;
-                    let mut max_sim = 0.0f32;
-
-                    for sel_item in &selected {
-                        let sim_val = if let (Some(ref v1), Some(ref v2)) = (item.embedding.as_ref(), sel_item.embedding.as_ref()) {
-                            v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum()
-                        } else {
-                            let s1: std::collections::HashSet<&str> = item.content.split_whitespace().collect();
-                            let s2: std::collections::HashSet<&str> = sel_item.content.split_whitespace().collect();
-                            let intersection = s1.intersection(&s2).count() as f32;
-                            let union = s1.union(&s2).count() as f32;
-                            if union > 0.0 { intersection / union } else { 0.0f32 }
-                        };
-                        if sim_val > max_sim {
-                            max_sim = sim_val;
-                        }
-                    }
-
-                    let mmr_score = mmr_lambda * rel_score - (1.0f32 - mmr_lambda) * max_sim;
-                    if mmr_score > best_score {
-                        best_score = mmr_score;
-                        best_idx = idx;
-                    }
-                }
-
-                selected.push(remaining.remove(best_idx));
-            }
-            candidates = selected;
-        }
 
         // Bounded verbatim hydration (Epic 4): cap injected verbatim content per
         // result so a single large episode cannot blow out the context window.
