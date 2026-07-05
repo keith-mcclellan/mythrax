@@ -1,0 +1,35 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 6 # Fetch current + previous 5 commits for trajectory
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Run Sanitation Scanner
+      id: scan
+      run: |
+        python scripts/sanitation_scanner.py > sanitation_scorecard.md
+
+    - name: Comment PR
+      if: github.event_name == 'pull_request'
+      uses: thollander/actions-comment-pull-request@v2
+      with:
+        filePath: sanitation_scorecard.md
