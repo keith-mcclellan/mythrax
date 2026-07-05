@@ -35,12 +35,16 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS session_id ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS word_count ON episode TYPE option<int>;
     DEFINE FIELD IF NOT EXISTS metrics ON episode TYPE option<record<episode_metrics>>;
+    DEFINE FIELD IF NOT EXISTS node_type ON episode TYPE string DEFAULT 'agent_thought';
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
     DEFINE INDEX IF NOT EXISTS episode_session ON episode FIELDS session_id;
     DEFINE INDEX IF NOT EXISTS episode_vault_path ON episode FIELDS vault_path;
     DEFINE INDEX IF NOT EXISTS episode_scope_created ON episode FIELDS scope, created_at;
+    DEFINE INDEX IF NOT EXISTS episode_node_type ON episode FIELDS node_type;
+    DEFINE INDEX IF NOT EXISTS episode_processed_in_dream ON episode FIELDS processed_in_dream;
+    DEFINE INDEX IF NOT EXISTS episode_created_at ON episode FIELDS created_at;
     DEFINE ANALYZER IF NOT EXISTS ascii TOKENIZERS blank, punct FILTERS lowercase, ascii;
     DEFINE ANALYZER IF NOT EXISTS snowball_en TOKENIZERS blank, punct FILTERS lowercase, snowball(english);
     DEFINE INDEX OVERWRITE episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER snowball_en BM25(1.2, 0.60);
@@ -96,6 +100,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS status ON handoff TYPE string DEFAULT 'PENDING';
     DEFINE FIELD IF NOT EXISTS created_at ON handoff TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS embedding ON handoff TYPE option<array<float>>;
+    DEFINE FIELD IF NOT EXISTS include_tool_execution ON handoff TYPE option<bool>;
     DEFINE INDEX IF NOT EXISTS handoff_scope ON handoff FIELDS scope;
     DEFINE INDEX IF NOT EXISTS handoff_parent ON handoff FIELDS parent_conversation_id;
     DEFINE INDEX IF NOT EXISTS handoff_subagent ON handoff FIELDS subagent_conversation_id;

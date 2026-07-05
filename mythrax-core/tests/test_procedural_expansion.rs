@@ -75,13 +75,16 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     let resp = backend.search(
         query,
         Some("general"),
-        true, // deep_insight = true to trigger expansion hydration
+        true,
+        // deep_insight = true to trigger expansion hydration
         10,
         0,
         0.0,
         None,
         false,
         true,
+        true,
+        None,
         true,
     ).await?;
 

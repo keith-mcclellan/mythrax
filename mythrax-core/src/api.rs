@@ -137,8 +137,10 @@ async fn search_handler(
     let allow_downward = payload.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
     let include_episodes = payload.get("include_episodes").and_then(|v| v.as_bool()).unwrap_or(false);
     let include_artifacts = payload.get("include_artifacts").and_then(|v| v.as_bool()).unwrap_or(false);
+    let session_id = payload.get("session_id").and_then(|v| v.as_str());
+    let include_archived = payload.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
 
-    match state.backend.search(query, scope, deep_insight, limit, offset, threshold, token_budget, allow_downward, include_episodes, include_artifacts).await {
+    match state.backend.search(query, scope, deep_insight, limit, offset, threshold, token_budget, allow_downward, include_episodes, include_artifacts, session_id, include_archived).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => {
             tracing::error!("Search failed: {:?}", e);

@@ -2,6 +2,7 @@ use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
 use crate::contracts::{Episode, WisdomRule, WikiNode};
+use surrealdb_types::SurrealValue;
 use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
@@ -1351,6 +1352,204 @@ fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
     
     // Fallback to exact character boundary truncation
     candidate
+}
+
+pub async fn traverse_adjacent_logs(
+    db: &dyn crate::db::StorageBackend,
+    start_nodes: &[String],
+    max_depth: usize,
+    max_nodes: usize,
+    max_tokens: usize,
+    session_id: Option<&str>,
+    include_types: Option<&[&str]>,
+) -> Result<Vec<crate::contracts::Episode>> {
+    let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() else {
+        anyhow::bail!("traverse_adjacent_logs is only supported on SurrealBackend");
+    };
+
+    use std::collections::HashSet;
+    let mut visited = HashSet::new();
+    let mut results = Vec::new();
+    let mut current_level = Vec::new();
+
+    for node_id in start_nodes {
+        if !node_id.is_empty() {
+            visited.insert(node_id.clone());
+            current_level.push(node_id.clone());
+        }
+    }
+
+    let char_cap = max_tokens * 4;
+    let mut accumulated_chars = 0;
+
+    for _depth in 0..=max_depth {
+        if current_level.is_empty() || results.len() >= max_nodes || accumulated_chars >= char_cap {
+            break;
+        }
+
+        // Convert string IDs to RecordIds
+        let mut record_ids = Vec::new();
+        for id_str in &current_level {
+            if let Ok(rid) = crate::db::backend::parse_record_id(id_str) {
+                record_ids.push(rid);
+            }
+        }
+
+        if record_ids.is_empty() {
+            break;
+        }
+
+        // Query adjacent nodes
+        let sql = "SELECT id, title, content, scope, vault_path, embedding, processed_in_dream, source_episode, last_retrieved_at, utility, archived, archived_at, discovery_tokens, facts, concepts, files_read, files_modified, session_id, word_count, node_type,
+                  <-followed_by<-episode AS followed_by_in,
+                  ->followed_by->episode AS followed_by_out,
+                  <-relates_to<-episode AS relates_to_in,
+                  ->relates_to->episode AS relates_to_out
+           FROM episode WHERE id IN $ids;";
+
+        let mut query_res = surreal.db.query(sql).bind(("ids", record_ids)).await?;
+        
+        #[derive(serde::Serialize, serde::Deserialize, Debug, SurrealValue)]
+        struct TraversalNode {
+            id: surrealdb::types::RecordId,
+            title: String,
+            content: String,
+            scope: Option<String>,
+            vault_path: Option<String>,
+            embedding: Option<Vec<f32>>,
+            processed_in_dream: Option<bool>,
+            source_episode: Option<String>,
+            last_retrieved_at: Option<String>,
+            utility: Option<f32>,
+            archived: Option<bool>,
+            archived_at: Option<String>,
+            discovery_tokens: Option<u32>,
+            facts: Option<Vec<String>>,
+            concepts: Option<Vec<String>>,
+            files_read: Option<Vec<String>>,
+            files_modified: Option<Vec<String>>,
+            session_id: Option<String>,
+            word_count: Option<u32>,
+            node_type: Option<String>,
+            
+            #[serde(default)]
+            followed_by_in: Vec<surrealdb::types::RecordId>,
+            #[serde(default)]
+            followed_by_out: Vec<surrealdb::types::RecordId>,
+            #[serde(default)]
+            relates_to_in: Vec<surrealdb::types::RecordId>,
+            #[serde(default)]
+            relates_to_out: Vec<surrealdb::types::RecordId>,
+        }
+
+        let nodes: Vec<TraversalNode> = query_res.take(0)?;
+        let mut next_level = Vec::new();
+
+        for node in nodes {
+            if results.len() >= max_nodes || accumulated_chars >= char_cap {
+                break;
+            }
+
+            // Session isolation check
+            if let Some(target_sess) = session_id {
+                if let Some(ref node_sess) = node.session_id {
+                    if node_sess != target_sess {
+                        continue;
+                    }
+                }
+            }
+
+            // Include types check
+            if let Some(types) = include_types {
+                if let Some(ref ntype) = node.node_type {
+                    if !types.contains(&ntype.as_str()) {
+                        continue;
+                    }
+                } else {
+                    continue; // Skip if node_type is None and we filter
+                }
+            }
+
+            let node_id_str = crate::db::backend::format_record_id(&node.id);
+            let node_char_count = node.content.chars().count();
+
+            if accumulated_chars + node_char_count > char_cap {
+                // Truncate this node using truncate_to_boundary
+                let remaining = char_cap - accumulated_chars;
+                let truncated_content = truncate_to_boundary(&node.content, remaining).to_string();
+                results.push(crate::contracts::Episode {
+                    id: Some(node_id_str),
+                    title: node.title,
+                    content: truncated_content,
+                    source: None,
+                    scope: node.scope,
+                    vault_path: node.vault_path,
+                    embedding: node.embedding,
+                    processed_in_dream: node.processed_in_dream,
+                    source_episode: node.source_episode,
+                    last_retrieved_at: node.last_retrieved_at,
+                    utility: node.utility,
+                    archived: node.archived,
+                    discovery_tokens: node.discovery_tokens,
+                    facts: node.facts,
+                    concepts: node.concepts,
+                    files_read: node.files_read,
+                    files_modified: node.files_modified,
+                    session_id: node.session_id,
+                    word_count: node.word_count,
+                    archived_at: node.archived_at,
+                    node_type: node.node_type,
+                });
+                accumulated_chars = char_cap;
+                break;
+            } else {
+                accumulated_chars += node_char_count;
+                results.push(crate::contracts::Episode {
+                    id: Some(node_id_str),
+                    title: node.title,
+                    content: node.content,
+                    source: None,
+                    scope: node.scope,
+                    vault_path: node.vault_path,
+                    embedding: node.embedding,
+                    processed_in_dream: node.processed_in_dream,
+                    source_episode: node.source_episode,
+                    last_retrieved_at: node.last_retrieved_at,
+                    utility: node.utility,
+                    archived: node.archived,
+                    discovery_tokens: node.discovery_tokens,
+                    facts: node.facts,
+                    concepts: node.concepts,
+                    files_read: node.files_read,
+                    files_modified: node.files_modified,
+                    session_id: node.session_id,
+                    word_count: node.word_count,
+                    archived_at: node.archived_at,
+                    node_type: node.node_type,
+                });
+            }
+
+            // Collect unique adjacent node IDs for the next level traversal
+            let mut add_adjacent = |adj_list: Vec<surrealdb::types::RecordId>| {
+                for adj_id in adj_list {
+                    let adj_str = crate::db::backend::format_record_id(&adj_id);
+                    if !visited.contains(&adj_str) {
+                        visited.insert(adj_str.clone());
+                        next_level.push(adj_str);
+                    }
+                }
+            };
+
+            add_adjacent(node.followed_by_in);
+            add_adjacent(node.followed_by_out);
+            add_adjacent(node.relates_to_in);
+            add_adjacent(node.relates_to_out);
+        }
+
+        current_level = next_level;
+    }
+
+    Ok(results)
 }
 
 #[cfg(test)]

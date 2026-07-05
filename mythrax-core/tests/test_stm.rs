@@ -182,6 +182,7 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
         summary: "handoff 1".to_string(),
         handoff_file_path: h1_file.to_string_lossy().to_string(),
         scope: None,
+        include_tool_execution: None,
     }).await?;
     backend.save_stm("sess1", "k", "v").await?;
 
@@ -195,6 +196,7 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
         summary: "handoff 2".to_string(),
         handoff_file_path: h2_file.to_string_lossy().to_string(),
         scope: None,
+        include_tool_execution: None,
     }).await?;
     backend.save_stm("sess2", "k", "v").await?;
 
@@ -208,6 +210,7 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
         summary: "handoff 3".to_string(),
         handoff_file_path: h3_file.to_string_lossy().to_string(),
         scope: None,
+        include_tool_execution: None,
     }).await?;
     backend.save_stm("sess3", "k", "v").await?;
 
@@ -221,6 +224,7 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
         summary: "handoff 4".to_string(),
         handoff_file_path: h4_file.to_string_lossy().to_string(),
         scope: None,
+        include_tool_execution: None,
     }).await?;
     backend.save_stm("sess4", "k", "v").await?;
 
@@ -772,6 +776,7 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
         summary: "Build a new hook feature".to_string(),
         handoff_file_path: "handoff_test.md".to_string(),
         scope: Some("general".to_string()),
+        include_tool_execution: None,
     };
     backend.save_handoff(&handoff).await?;
 

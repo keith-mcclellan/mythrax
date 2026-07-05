@@ -43,6 +43,7 @@ pub struct Episode {
     pub session_id: Option<String>,
     pub word_count: Option<u32>,
     pub archived_at: Option<String>,
+    pub node_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -60,6 +61,7 @@ pub struct EpisodeSave {
     pub concepts: Option<Vec<String>>,
     pub files_read: Option<Vec<String>>,
     pub files_modified: Option<Vec<String>>,
+    pub node_type: Option<String>,
 }
 
 
@@ -163,6 +165,7 @@ pub struct HandoffSave {
     pub summary: String,
     pub handoff_file_path: String,
     pub scope: Option<String>,
+    pub include_tool_execution: Option<bool>,
 }
 
 /// Full hydrated Handoff — reserved for agent-tracking API; construction deferred.
@@ -178,6 +181,7 @@ pub struct Handoff {
     pub status: Option<String>,
     pub created_at: Option<String>,
     pub embedding: Option<Vec<f32>>,
+    pub include_tool_execution: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]

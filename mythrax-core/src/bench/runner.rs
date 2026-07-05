@@ -731,16 +731,32 @@ async fn run_evaluation(
 
             // Ingest only haystack sessions for this question
             let mut episodes_to_ingest = Vec::new();
+            let mut session_user_inputs = std::collections::HashSet::new();
             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
                 if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
                     for (turn_idx, turn) in session_turns.iter().enumerate() {
                         let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
+                        let role_lower = turn.role.to_lowercase();
+                        let node_type = match role_lower.as_str() {
+                            "user" => {
+                                if session_user_inputs.insert(session_id.clone()) {
+                                    "user_input".to_string()
+                                } else {
+                                    "user_feedback".to_string()
+                                }
+                            }
+                            "assistant" => "agent_thought".to_string(),
+                            "system" => "system_log".to_string(),
+                            "tool" | "computer" | "tool_result" => "tool_execution".to_string(),
+                            _ => "agent_thought".to_string(),
+                        };
                         let ep = EpisodeSave {
                             title: format!("Session {} - Turn {}", session_id, turn_idx),
                             content: format!("{}: {}", turn.role, turn.content),
                             scope: Some("general".to_string()),
                             vault_path: Some(corpus_id.clone()),
                             session_id: Some(session_id.clone()),
+                            node_type: Some(node_type),
                             ..Default::default()
                         };
                         episodes_to_ingest.push(ep);
@@ -778,6 +794,8 @@ async fn run_evaluation(
                     false,       // allow_downward
                     true,        // include_episodes
                     true,        // include_artifacts
+                    None,        // session_id
+                    true,        // include_archived
                 )
                 .await
                 .context("Search query failed during evaluation")?;

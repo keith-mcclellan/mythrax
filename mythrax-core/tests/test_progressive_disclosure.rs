@@ -69,6 +69,7 @@ async fn test_search_index_omits_content() -> Result<()> {
             concepts: None,
             files_read: None,
             files_modified: None,
+            node_type: None,
         };
         backend.save_episode(&ep).await?;
     }
@@ -126,6 +127,7 @@ async fn test_get_full_hydrates() -> Result<()> {
         concepts: None,
         files_read: None,
         files_modified: None,
+        node_type: None,
     };
     let ep_id = backend.save_episode(&ep).await?;
 
@@ -182,6 +184,7 @@ async fn test_timeline_orders_neighbors() -> Result<()> {
             concepts: None,
             files_read: None,
             files_modified: None,
+            node_type: None,
         };
         let id = backend.save_episode(&ep).await?;
         ids.push(id);
@@ -260,6 +263,7 @@ async fn test_index_then_full_token_savings() -> Result<()> {
             concepts: None,
             files_read: None,
             files_modified: None,
+            node_type: None,
         };
         let id = backend.save_episode(&ep).await?;
         ids.push(id);

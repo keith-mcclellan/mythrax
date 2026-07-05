@@ -24,6 +24,7 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
         concepts: None,
         files_read: None,
         files_modified: None,
+        node_type: None,
     };
     
     // Ep 2: strong semantic match for "artificial intelligence", but no mention of "basement pipes"
@@ -41,6 +42,7 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
         concepts: None,
         files_read: None,
         files_modified: None,
+        node_type: None,
     };
     
     let id1 = backend.save_episode(&ep1).await?;
@@ -50,11 +52,11 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
     // Query: "basement pipes"
     // With hybrid OFF, the vector search is performed.
     backend.save_profile_key("retrieval.hybrid", "false").await?;
-    let _res_off = backend.search("basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
+    let _res_off = backend.search("basement pipes",  Some("general"),  false,  5,  0,  0.0,  None,  false,  true,  true, None, true).await?;
     
     // 2. Search with hybrid ON
     backend.save_profile_key("retrieval.hybrid", "true").await?;
-    let res_on = backend.search("basement pipes", Some("general"), false, 5, 0, 0.0, None, false, true, true).await?;
+    let res_on = backend.search("basement pipes",  Some("general"),  false,  5,  0,  0.0,  None,  false,  true,  true, None, true).await?;
     
     // If hybrid is ON, the lexical match (Ep 1) should rank highly (and be returned as a high-scoring result)
     // because of its 100% lexical term overlap.

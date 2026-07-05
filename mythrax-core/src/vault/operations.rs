@@ -228,7 +228,9 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
             None,
             false,
             true,
-            false
+            false,
+            None,
+            true,
         ).await?;
 
         let found = search_res.results.iter().any(|r| r.id == ep_id);

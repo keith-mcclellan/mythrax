@@ -115,6 +115,8 @@ pub trait StorageBackend: Send + Sync {
         allow_downward: bool,
         include_episodes: bool,
         include_artifacts: bool,
+        session_id: Option<&str>,
+        include_archived: bool,
     ) -> Result<SearchResponse>;
     async fn get_wisdom(&self, query: &str, tier: Option<&str>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
@@ -334,6 +336,8 @@ impl SurrealBackend {
                 if let Some(ref sess) = ep.session_id {
                     ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
                 }
+                let node_type_val = ep.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
+                ep_obj.insert("node_type".to_string(), serde_json::json!(node_type_val));
 
                 ep_json
             })
@@ -353,8 +357,8 @@ impl SurrealBackend {
                 LET $ep_id = type::record('episode', $ep.id_str);
                 LET $met_id = type::record('metrics', $ep.metrics_id_str);
                 
-                INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count)
-                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, $ep.last_retrieved_at, $ep.session_id, $ep.word_count);
+                INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count, node_type)
+                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, $ep.last_retrieved_at, $ep.session_id, $ep.word_count, $ep.node_type);
                 
                 INSERT INTO metrics (id, target_id, utility_score, access_count)
                 VALUES ($met_id, $ep_id, 50.0, 0);
@@ -1131,6 +1135,7 @@ struct EpisodeRaw {
     files_modified: Option<Vec<String>>,
     session_id: Option<String>,
     word_count: Option<u32>,
+    node_type: Option<String>,
 }
 
 /// Full hydrated Handoff contract — returned by queries; construction deferred pending
@@ -1146,6 +1151,7 @@ struct HandoffRaw {
     scope: Option<String>,
     status: Option<String>,
     created_at: Option<serde_json::Value>,
+    include_tool_execution: Option<bool>,
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -1385,6 +1391,8 @@ impl StorageBackend for SurrealBackend {
             false,
             true,
             false,
+            None,
+            true,
         ).await?;
 
         let ep_ids: Vec<String> = unfiltered.results.iter()
@@ -1466,6 +1474,11 @@ impl StorageBackend for SurrealBackend {
         }
         self.db.query(INIT_SCHEMA).await?
             .check().context("Applying schemas failed")?;
+
+        // Migration: Backfill legacy episodes where node_type is None
+        let migration_sql = "UPDATE episode SET node_type = 'agent_thought' WHERE node_type = NONE;";
+        let _ = self.db.query(migration_sql).await?
+            .check().context("Failed to run legacy episode node_type migration")?;
 
         // Initialize default configuration if config:settings does not exist
         let check_sql = "SELECT * FROM config:settings;";
@@ -1573,7 +1586,8 @@ impl StorageBackend for SurrealBackend {
                     files_read: $files_read,
                     files_modified: $files_modified,
                     session_id: $session_id,
-                    word_count: $word_count
+                    word_count: $word_count,
+                    node_type: $node_type
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -1600,7 +1614,8 @@ impl StorageBackend for SurrealBackend {
                     files_read: $files_read,
                     files_modified: $files_modified,
                     session_id: $session_id,
-                    word_count: $word_count
+                    word_count: $word_count,
+                    node_type: $node_type
                 };
                 
                 CREATE $met CONTENT {
@@ -1616,8 +1631,9 @@ impl StorageBackend for SurrealBackend {
         let metrics_uuid = Uuid::new_v4().to_string();
         let scope_val = episode.scope.clone().unwrap_or_else(|| "general".to_string());
         let vp_val = episode.vault_path.clone().unwrap_or_default();
+        let node_type_val = episode.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
 
-        let embedding_val = if let Some(ref _embedder) = self.embedder {
+        let embedding_val = if self.embedder.is_some() {
             let text_to_embed = format!("{}: {}", episode.title, episode.content);
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
@@ -1651,6 +1667,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("files_modified", episode.files_modified.clone().unwrap_or_default()))
             .bind(("session_id", episode.session_id.clone()))
             .bind(("word_count", word_count))
+            .bind(("node_type", node_type_val))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -1945,6 +1962,8 @@ impl StorageBackend for SurrealBackend {
         allow_downward: bool,
         include_episodes: bool,
         include_artifacts: bool,
+        session_id: Option<&str>,
+        include_archived: bool,
     ) -> Result<SearchResponse> {
         /*
          * Active Search Pipeline Stages (v2.5.2):
@@ -1970,6 +1989,8 @@ impl StorageBackend for SurrealBackend {
                 "allow_downward": allow_downward,
                 "include_episodes": include_episodes,
                 "include_artifacts": include_artifacts,
+                "session_id": session_id,
+                "include_archived": include_archived,
             });
             return self.daemon_post("/v1/search", &payload).await;
         }
@@ -2057,12 +2078,25 @@ impl StorageBackend for SurrealBackend {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.1f32),
             _ => 0.1f32,
         };
+        let demotion_mult = match self.get_profile_key("search.archived_demotion_multiplier").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.4f32),
+            _ => 0.4f32,
+        };
+        let bypass_threshold = match self.get_profile_key("search.archived_bypass_threshold").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.80f32),
+            _ => 0.80f32,
+        };
 
         let resolved_scope = match scope {
             Some(s) if !s.is_empty() && s != "all" => s.to_string(),
             _ => self.resolve_active_scope(),
         };
         let search_all = scope == Some("all");
+
+        let exclude_execution_logs = match self.get_profile_key("search.exclude_execution_logs").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
 
         let (use_new_formula, is_sigmoid_gated_search_test) = {
             #[cfg(any(test, feature = "test-mock"))]
@@ -2128,6 +2162,9 @@ impl StorageBackend for SurrealBackend {
                                ->followed_by->episode.* AS next_episodes
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                          AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
+                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                          AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (embedding <|100, 100|> $query_embedding);
                         ",
                         traversal = traversal,
@@ -2139,6 +2176,9 @@ impl StorageBackend for SurrealBackend {
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                          AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
+                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                          AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (embedding <|100, 100|> $query_embedding);
                     ");
                 }
@@ -2200,6 +2240,9 @@ impl StorageBackend for SurrealBackend {
                                {fts_score_expr} AS bm25_score
                          FROM episode 
                          WHERE {fts_where_clause}
+                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
+                           AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                           AND ($include_archived = true OR archived = false OR archived = NONE)
                            AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                          ORDER BY bm25_score DESC
                          LIMIT 200;
@@ -2216,6 +2259,9 @@ impl StorageBackend for SurrealBackend {
                                {fts_score_expr} AS bm25_score
                         FROM episode 
                         WHERE {fts_where_clause}
+                          AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
+                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                          AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                         ORDER BY bm25_score DESC
                         LIMIT 200;
@@ -2274,7 +2320,10 @@ impl StorageBackend for SurrealBackend {
                 let mut keyword_fut = self.db.query(&keyword_sql)
                     .bind(("query", cleaned_query.as_str()))
                     .bind(("target_scope", resolved_scope.as_str()))
-                    .bind(("search_all", search_all));
+                    .bind(("search_all", search_all))
+                    .bind(("session_id", session_id))
+                    .bind(("include_archived", include_archived))
+                    .bind(("exclude_execution_logs", exclude_execution_logs));
                 for (i, word) in fts_words.iter().enumerate() {
                     let key = format!("fts_word_{}", i);
                     keyword_fut = keyword_fut.bind((key, word.clone()));
@@ -2284,7 +2333,10 @@ impl StorageBackend for SurrealBackend {
                 let vector_fut = self.db.query(&vector_sql)
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all))
-                    .bind(("query_embedding", q_vec.clone()));
+                    .bind(("query_embedding", q_vec.clone()))
+                    .bind(("session_id", session_id))
+                    .bind(("include_archived", include_archived))
+                    .bind(("exclude_execution_logs", exclude_execution_logs));
                 (Some(vector_fut.await), None)
             } else {
                 (None, None)
@@ -2293,11 +2345,17 @@ impl StorageBackend for SurrealBackend {
             let vector_fut = self.db.query(&vector_sql)
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
-                .bind(("query_embedding", q_vec.clone()));
+                .bind(("query_embedding", q_vec.clone()))
+                .bind(("session_id", session_id))
+                .bind(("include_archived", include_archived))
+                .bind(("exclude_execution_logs", exclude_execution_logs));
             let mut keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
-                .bind(("search_all", search_all));
+                .bind(("search_all", search_all))
+                .bind(("session_id", session_id))
+                .bind(("include_archived", include_archived))
+                .bind(("exclude_execution_logs", exclude_execution_logs));
             for (i, word) in fts_words.iter().enumerate() {
                 let key = format!("fts_word_{}", i);
                 keyword_fut = keyword_fut.bind((key, word.clone()));
@@ -2308,7 +2366,10 @@ impl StorageBackend for SurrealBackend {
             let mut keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
-                .bind(("search_all", search_all));
+                .bind(("search_all", search_all))
+                .bind(("session_id", session_id))
+                .bind(("include_archived", include_archived))
+                .bind(("exclude_execution_logs", exclude_execution_logs));
             for (i, word) in fts_words.iter().enumerate() {
                 let key = format!("fts_word_{}", i);
                 keyword_fut = keyword_fut.bind((key, word.clone()));
@@ -2329,19 +2390,17 @@ impl StorageBackend for SurrealBackend {
                 (Vec::new(), wns, wrs)
             };
 
-            let compute_archived_demotion = |ep: &SearchRaw| -> f32 {
+            let compute_archived_demotion = |ep: &SearchRaw, similarity: f32| -> f32 {
                 if ep.archived.unwrap_or(false) {
-                    if let Some(archived_at) = ep.archived_at.as_ref() {
-                        let elapsed = chrono::Utc::now().signed_duration_since(*archived_at);
-                        let hours = elapsed.num_seconds() as f32 / 3600.0f32;
-                        if hours <= 24.0 {
-                            0.85f32
-                        } else {
-                            let decay_ratio = ((hours - 24.0) / 144.0f32).clamp(0.0f32, 1.0f32);
-                            0.85f32 - 0.45f32 * decay_ratio
-                        }
+                    let is_same_session = if let (Some(ref curr_sess), Some(ref ep_sess)) = (session_id, ep.session_id.as_ref()) {
+                        curr_sess == ep_sess
                     } else {
-                        0.4f32
+                        false
+                    };
+                    if is_same_session && similarity >= bypass_threshold {
+                        1.0f32
+                    } else {
+                        demotion_mult
                     }
                 } else {
                     1.0f32
@@ -2461,13 +2520,13 @@ impl StorageBackend for SurrealBackend {
                     let norm = w_imp_ep + w_rec_ep;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
                     let mut f = ((w_imp_ep * importance_component + w_rec_ep * recency_component) / divisor) * get_tier_boost("episode");
-                    f *= compute_archived_demotion(&ep);
+                    f *= compute_archived_demotion(&ep, similarity);
                     (g, f)
                 } else {
                     let u_old = ep.utility.unwrap_or(50.0) as f32;
                     let decayed_utility = u_old * (-0.05f32 * delta_t).exp();
                     let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("episode");
-                    f *= compute_archived_demotion(&ep);
+                    f *= compute_archived_demotion(&ep, similarity);
                     (1.0f32, f)
                 };
 
@@ -3646,6 +3705,7 @@ impl StorageBackend for SurrealBackend {
             files_modified: raw.files_modified,
             session_id: raw.session_id,
             word_count: raw.word_count,
+            node_type: raw.node_type,
         }).collect();
         Ok(episodes)
     }
@@ -3683,6 +3743,7 @@ impl StorageBackend for SurrealBackend {
             files_modified: raw.files_modified,
             session_id: raw.session_id,
             word_count: raw.word_count,
+            node_type: raw.node_type,
         }).collect();
         Ok(episodes)
     }
@@ -3733,7 +3794,8 @@ impl StorageBackend for SurrealBackend {
                 handoff_file_path: $path,
                 scope: $target_scope,
                 status: 'PENDING',
-                created_at: time::now()
+                created_at: time::now(),
+                include_tool_execution: $include_tool_execution
             };
             COMMIT TRANSACTION;
         ";
@@ -3744,6 +3806,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("summary", handoff.summary.as_str()))
             .bind(("path", handoff.handoff_file_path.as_str()))
             .bind(("target_scope", handoff.scope.as_deref().unwrap_or("general")))
+            .bind(("include_tool_execution", handoff.include_tool_execution.unwrap_or(false)))
             .await?.check()?;
 
         // Copy all STM entries from parent to subagent session
@@ -4238,7 +4301,8 @@ impl StorageBackend for SurrealBackend {
                 handoff_file_path, 
                 scope, 
                 status, 
-                created_at 
+                created_at,
+                include_tool_execution
             FROM handoff 
             WHERE (status = 'COMPLETED' OR status = 'FAILED') 
               AND created_at < time::now() - <duration> $duration;
@@ -4374,6 +4438,7 @@ impl StorageBackend for SurrealBackend {
                             files_modified: raw.files_modified,
                             session_id: raw.session_id,
                             word_count: raw.word_count,
+                            node_type: raw.node_type,
                         };
                         episodes.push(ep);
                     }
@@ -5312,6 +5377,7 @@ facts: None,
 concepts: None,
 files_read: None,
 files_modified: None,
+node_type: None,
 };
 
         let ep_id = backend.save_episode(&episode).await.unwrap();
@@ -5324,7 +5390,7 @@ files_modified: None,
         let all_eps: Vec<serde_json::Value> = backend.db.select("episode").await.unwrap();
         println!("DEBUG: All episodes in DB: {:?}", all_eps);
 
-        let search_results = backend.search("redis", Some("testing"), false, 2, 0, 0.55, None, false, true, true).await.unwrap();
+        let search_results = backend.search("redis",  Some("testing"),  false,  2,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
         assert_eq!(search_results.results.len(), 1);
         assert!(search_results.results[0].content.contains("redis"));
 
@@ -5391,6 +5457,7 @@ facts: None,
 concepts: None,
 files_read: None,
 files_modified: None,
+node_type: None,
 };
 
         let ep_id = backend.save_episode(&episode).await.unwrap();
@@ -5418,14 +5485,14 @@ files_modified: None,
             .check().unwrap();
 
         // Perform search WITH deep_insight = true
-        let results_deep = backend.search("Redis", Some("deep-test"), true, 10, 0, 0.55, None, true, true, true).await.unwrap();
+        let results_deep = backend.search("Redis",  Some("deep-test"),  true,  10,  0,  0.55,  None,  true,  true,  true, None, true).await.unwrap();
         assert_eq!(results_deep.results.len(), 1);
         assert!(results_deep.results[0].content.contains("dropping connections"));
         assert!(results_deep.results[0].content.contains("Redis Connection Pooling Guidelines"));
         assert!(results_deep.results[0].content.contains("Set max connections to 50"));
 
         // Perform search WITHOUT deep_insight = true
-        let results_normal = backend.search("failure", Some("deep-test"), false, 10, 0, 0.55, None, false, true, true).await.unwrap();
+        let results_normal = backend.search("failure",  Some("deep-test"),  false,  10,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
         assert_eq!(results_normal.results.len(), 1);
         assert!(results_normal.results[0].content.contains("dropping connections"));
         assert!(!results_normal.results[0].content.contains("Redis Connection Pooling Guidelines"));
@@ -5451,6 +5518,7 @@ facts: None,
 concepts: None,
 files_read: None,
 files_modified: None,
+node_type: None,
 };
         let ep_id = backend.save_episode(&episode).await.unwrap();
 
@@ -5525,6 +5593,7 @@ facts: None,
 concepts: None,
 files_read: None,
 files_modified: None,
+node_type: None,
 };
         let _ = backend.save_episode(&episode).await.unwrap();
 
@@ -5561,7 +5630,7 @@ files_modified: None,
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
         // Execute text search (query_emb will be None, similarity defaults to 1.0)
-        let response = backend.search("Concurrency", Some("ranking-test"), false, 10, 0, 0.0, None, false, true, true).await.unwrap();
+        let response = backend.search("Concurrency",  Some("ranking-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
 
         println!("DEBUG RESULTS: {:?}", response.results);
         assert_eq!(response.results.len(), 3);
@@ -5595,12 +5664,13 @@ files_modified: None,
             source_episode: None,
             session_id: None,
             task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-}).await.unwrap();
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+            node_type: None,
+        }).await.unwrap();
 
         backend.save_stm(parent_id, "distilled_context_nodes", &format!("[\"{}\"]", ep_id)).await.unwrap();
 
@@ -5611,6 +5681,7 @@ files_modified: None,
             summary: "Testing handoff".to_string(),
             handoff_file_path: "some/path.md".to_string(),
             scope: Some("testing".to_string()),
+            include_tool_execution: None,
         };
         let handoff_id = backend.save_handoff(&handoff).await.unwrap();
 
@@ -5637,12 +5708,13 @@ files_modified: None,
             source_episode: None,
             session_id: None,
             task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-}).await.unwrap();
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+            node_type: None,
+        }).await.unwrap();
 
         let node = WikiNode {
             id: None,
@@ -5657,14 +5729,14 @@ files_modified: None,
         // Relate Episode -> relates_to -> WikiNode (Upward)
         backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
 
-        let results_upward = backend.search("Parent Insight", Some("directional-test"), true, 10, 0, 0.85, None, false, true, true).await.unwrap();
+        let results_upward = backend.search("Parent Insight",  Some("directional-test"),  true,  10,  0,  0.85,  None,  false,  true,  true, None, true).await.unwrap();
         println!("DEBUG: results_upward: {:#?}", results_upward.results);
         assert_eq!(results_upward.results.len(), 1);
         let content_upward = &results_upward.results[0].content;
         assert!(!content_upward.contains("Child Episode"));
 
         // 3. Search with allow_downward = true
-        let results_downward = backend.search("Parent Insight", Some("directional-test"), true, 10, 0, 0.85, None, true, true, true).await.unwrap();
+        let results_downward = backend.search("Parent Insight",  Some("directional-test"),  true,  10,  0,  0.85,  None,  true,  true,  true, None, true).await.unwrap();
         assert_eq!(results_downward.results.len(), 1);
         let content_downward = &results_downward.results[0].content;
         assert!(content_downward.contains("Child Episode"));
@@ -5711,11 +5783,12 @@ facts: None,
 concepts: None,
 files_read: None,
 files_modified: None,
+node_type: None,
 };
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search("Pattern", Some("budget-test"), true, 10, 0, 0.0, Some(20), false, true, true).await.unwrap();
+        let response = backend.search("Pattern",  Some("budget-test"),  true,  10,  0,  0.0,  Some(20),  false,  true,  true, None, true).await.unwrap();
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
@@ -5778,7 +5851,7 @@ files_modified: None,
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 
         // Search with large budget - full content should include the "Why" explanation
-        let res_large = backend.search("Avoid", Some("compaction-test"), false, 10, 0, 0.0, Some(1000), false, true, true).await.unwrap();
+        let res_large = backend.search("Avoid",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(1000),  false,  true,  true, None, true).await.unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("**Why**:"));
 
@@ -5788,7 +5861,7 @@ files_modified: None,
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with tight budget - should strip "**Why**:" and fit under budget
-        let res_small = backend.search("Avoid", Some("compaction-test"), false, 10, 0, 0.0, Some(tokens_compacted + 5), false, true, true).await.unwrap();
+        let res_small = backend.search("Avoid",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(tokens_compacted + 5),  false,  true,  true, None, true).await.unwrap();
         assert_eq!(res_small.results.len(), 1);
         assert!(!res_small.results[0].content.contains("**Why**:"));
         assert!(res_small.results[0].content.contains("**Action to Avoid**:"));
@@ -5812,7 +5885,7 @@ files_modified: None,
         backend.save_wiki_node(&node1).await.unwrap();
 
         // Search with large budget - full content
-        let res_large = backend.search("Multi-Paragraph", Some("compaction-test"), false, 10, 0, 0.0, Some(1000), false, true, true).await.unwrap();
+        let res_large = backend.search("Multi-Paragraph",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(1000),  false,  true,  true, None, true).await.unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("Second paragraph"));
 
@@ -5822,7 +5895,7 @@ files_modified: None,
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with small budget -> first paragraph + suffix
-        let res_small = backend.search("Multi-Paragraph", Some("compaction-test"), false, 10, 0, 0.0, Some(tokens_compacted + 5), false, true, true).await.unwrap();
+        let res_small = backend.search("Multi-Paragraph",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(tokens_compacted + 5),  false,  true,  true, None, true).await.unwrap();
         assert_eq!(res_small.results.len(), 1);
         assert!(res_small.results[0].content.contains("First paragraph here."));
         assert!(!res_small.results[0].content.contains("Second paragraph"));
@@ -5846,7 +5919,7 @@ files_modified: None,
         let tokens_truncated = backend.count_text_tokens(&text_truncated);
 
         // Search with tight budget -> character-truncated
-        let res_trunc = backend.search("Single-Paragraph", Some("compaction-test-single-para"), false, 10, 0, 0.0, Some(tokens_truncated + 5), false, true, true).await.unwrap();
+        let res_trunc = backend.search("Single-Paragraph",  Some("compaction-test-single-para"),  false,  10,  0,  0.0,  Some(tokens_truncated + 5),  false,  true,  true, None, true).await.unwrap();
         assert_eq!(res_trunc.results.len(), 1);
         assert!(res_trunc.results[0].content.contains("... [Truncated (Inner-Node Compaction)]"));
         assert!(res_trunc.results[0].content.len() < node2.content.len());
@@ -5872,15 +5945,16 @@ facts: None,
 concepts: None,
 files_read: None,
 files_modified: None,
+node_type: None,
 };
         backend.save_episode(&ep).await.unwrap();
 
         // Search with include_episodes = false (default behavior) -> should NOT find the episode
-        let res_default = backend.search("Secret", Some("exclusion-test"), false, 10, 0, 0.0, None, false, false, true).await.unwrap();
+        let res_default = backend.search("Secret",  Some("exclusion-test"),  false,  10,  0,  0.0,  None,  false,  false,  true, None, true).await.unwrap();
         assert_eq!(res_default.results.len(), 0);
 
         // Search with include_episodes = true -> should find the episode
-        let res_include = backend.search("Secret", Some("exclusion-test"), false, 10, 0, 0.0, None, false, true, true).await.unwrap();
+        let res_include = backend.search("Secret",  Some("exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert_eq!(res_include.results[0].title, "Test Episode");
     }
@@ -5900,12 +5974,13 @@ files_modified: None,
             source_episode: None,
             session_id: None,
             task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-}).await.unwrap();
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+            node_type: None,
+        }).await.unwrap();
 
         let node = WikiNode {
             id: None,
@@ -5921,12 +5996,12 @@ files_modified: None,
         backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = true -> child episode should be traversed and included
-        let res_include = backend.search("Parent Insight", Some("graph-exclusion-test"), true, 10, 0, 0.85, None, true, true, true).await.unwrap();
+        let res_include = backend.search("Parent Insight",  Some("graph-exclusion-test"),  true,  10,  0,  0.85,  None,  true,  true,  true, None, true).await.unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert!(res_include.results[0].content.contains("Child Episode"));
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = false -> child episode should NOT be traversed
-        let res_exclude = backend.search("Parent Insight", Some("graph-exclusion-test"), true, 10, 0, 0.85, None, true, false, true).await.unwrap();
+        let res_exclude = backend.search("Parent Insight",  Some("graph-exclusion-test"),  true,  10,  0,  0.85,  None,  true,  false,  true, None, true).await.unwrap();
         assert_eq!(res_exclude.results.len(), 1);
         assert!(!res_exclude.results[0].content.contains("Child Episode"));
     }
@@ -5959,12 +6034,12 @@ files_modified: None,
         backend.save_wiki_node(&normal_node).await.unwrap();
 
         // 3. Search with include_artifacts = false -> should find only Normal Node
-        let res_default = backend.search("secret", Some("artifact-exclusion-test"), false, 10, 0, 0.0, None, false, true, false).await.unwrap();
+        let res_default = backend.search("secret",  Some("artifact-exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await.unwrap();
         assert_eq!(res_default.results.len(), 1);
         assert_eq!(res_default.results[0].title, "Normal Node");
 
         // 4. Search with include_artifacts = true -> should find both
-        let res_include = backend.search("secret", Some("artifact-exclusion-test"), false, 10, 0, 0.0, None, false, true, true).await.unwrap();
+        let res_include = backend.search("secret",  Some("artifact-exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
         assert_eq!(res_include.results.len(), 2);
         
         let titles: Vec<String> = res_include.results.iter().map(|r| r.title.clone()).collect();
@@ -6065,6 +6140,7 @@ files_modified: None,
             concepts: None,
             files_read: None,
             files_modified: None,
+            node_type: None,
         };
         let ep1_id = backend.save_episode(&ep1).await.unwrap();
 
@@ -6082,6 +6158,7 @@ files_modified: None,
             concepts: None,
             files_read: None,
             files_modified: None,
+            node_type: None,
         };
         let ep2_id = backend.save_episode(&ep2).await.unwrap();
 
@@ -6106,21 +6183,22 @@ files_modified: None,
             concepts: None,
             files_read: None,
             files_modified: None,
+            node_type: None,
         };
         let ep3_id = backend.save_episode(&ep3).await.unwrap();
 
         let response = backend.search(
-            "second step before",
-            Some("general"),
-            false,
-            10,
-            0,
-            0.0,
-            None,
-            false,
-            true,
+            "second step before", 
+            Some("general"), 
+            false, 
+            10, 
+            0, 
+            0.0, 
+            None, 
+            false, 
+            true, 
             false
-        ).await.unwrap();
+        , None, true).await.unwrap();
 
         let results = response.results;
         

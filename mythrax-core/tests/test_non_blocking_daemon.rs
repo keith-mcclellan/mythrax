@@ -99,7 +99,7 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
 
     // Verify all 10 episodes were successfully recovered
     for i in 0..10 {
-        let search_res = recovered_backend.search(&format!("Concurrent Episode {}", i), None, false, 10, 0, 0.0, None, false, true, false).await.unwrap();
+        let search_res = recovered_backend.search(&format!("Concurrent Episode {}", i),  None,  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await.unwrap();
         assert!(!search_res.results.is_empty(), "Episode {} must be recovered successfully", i);
     }
 }

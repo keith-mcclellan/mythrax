@@ -229,7 +229,7 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
         .await?;
 
     // 3. Run a search. This will calculate decay on-the-fly and return it
-    let search_res = backend.search("Decay", Some("decay-test"), false, 10, 0, 0.0, None, false, true, false).await?;
+    let search_res = backend.search("Decay",  Some("decay-test"),  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await?;
     assert_eq!(search_res.results.len(), 1);
     let returned_utility = search_res.results[0].utility;
     // Decay: 50.0 * e^(-0.05 * 10) = 50.0 * e^(-0.5) = 50.0 * 0.6065 = 30.32

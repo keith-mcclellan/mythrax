@@ -21,6 +21,7 @@ async fn test_concept_prefilter_narrows_candidates() {
         concepts: Some(vec!["security".to_string()]),
         files_read: None,
         files_modified: None,
+        node_type: None,
     };
     backend.save_episode(&ep_close).await.unwrap();
 
@@ -39,6 +40,7 @@ async fn test_concept_prefilter_narrows_candidates() {
         concepts: Some(vec!["oauth".to_string(), "security".to_string()]),
         files_read: None,
         files_modified: None,
+        node_type: None,
     };
     let target_id = backend.save_episode(&ep_target).await.unwrap();
 
@@ -57,6 +59,7 @@ async fn test_concept_prefilter_narrows_candidates() {
         concepts: Some(vec!["database".to_string()]),
         files_read: None,
         files_modified: None,
+        node_type: None,
     };
     backend.save_episode(&ep_unrelated).await.unwrap();
 
@@ -93,6 +96,7 @@ async fn test_files_modified_filter() {
         concepts: None,
         files_read: None,
         files_modified: Some(vec!["api.rs".to_string()]),
+        node_type: None,
     };
     let id1 = backend.save_episode(&ep1).await.unwrap();
 
@@ -110,6 +114,7 @@ async fn test_files_modified_filter() {
         concepts: None,
         files_read: None,
         files_modified: Some(vec!["test_temporal_edges.rs".to_string()]),
+        node_type: None,
     };
     backend.save_episode(&ep2).await.unwrap();
 
@@ -146,6 +151,7 @@ async fn test_structured_filter_never_empties_floor() {
         concepts: Some(vec!["general".to_string()]),
         files_read: None,
         files_modified: None,
+        node_type: None,
     };
     let id = backend.save_episode(&ep).await.unwrap();
 

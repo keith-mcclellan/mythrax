@@ -50,7 +50,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         .await?.check()?;
 
     // 3. Search for "Rust database locks"
-    let resp = backend.search("Rust database locks", Some("general"), false, 10, 0, 0.0, None, false, true, true).await?;
+    let resp = backend.search("Rust database locks",  Some("general"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
     
     // Assertions
     let results = resp.results;
@@ -95,7 +95,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         .await?.check()?;
 
     // Search for wisdom
-    let resp_r = backend.search("avoid_concurrency", Some("general"), false, 10, 0, 0.0, None, false, true, true).await?;
+    let resp_r = backend.search("avoid_concurrency",  Some("general"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
     let r_results = resp_r.results;
     let match_rule = r_results.iter().find(|r| r.id == id_r);
     assert!(match_rule.is_some(), "Wisdom rule must be retrieved despite being 30 days old due to decay immunity");

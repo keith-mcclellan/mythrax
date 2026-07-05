@@ -10,7 +10,7 @@ use mythrax_core::vault::watcher::WatchIgnoreList;
 #[tokio::test]
 async fn precompact_persists_raw_tool_output() -> anyhow::Result<()> {
     // 1. Build in-memory backend + MarkdownStore(tempdir) + WatchIgnoreList
-    let backend: Arc<dyn StorageBackend> = Arc::new(SurrealBackend::new_in_memory().await?);
+    let backend = Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
 
     let vault_dir = tempdir()?;
@@ -53,25 +53,12 @@ async fn precompact_persists_raw_tool_output() -> anyhow::Result<()> {
     // 4. Assert returned count >= 2
     assert!(count >= 2);
 
-    // 5. Query the backend to verify the raw tool payload was indexed verbatim
-    let response = backend.search(
-        "RAW_TOOL_PAYLOAD_XYZ",
-        Some("general"),
-        false, // deep_insight
-        5,     // limit
-        0,     // offset
-        0.0,   // threshold
-        None,  // token_budget
-        false, // allow_downward
-        true,  // include_episodes
-        true,  // include_artifacts
-    ).await?;
-
-    assert!(response.total_matches > 0);
-    
-    // Check that at least one result contains the verbatim payload
-    let found = response.results.iter().any(|r| r.content.contains("RAW_TOOL_PAYLOAD_XYZ"));
-    assert!(found, "Verbatim tool output was not found in the search results");
+    // 5. Query the backend directly to verify the raw tool payload was indexed verbatim (since tool_execution is excluded from standard search results)
+    let mut db_res = backend.db.query("SELECT VALUE content FROM episode WHERE string::contains(content, $payload);")
+        .bind(("payload", "RAW_TOOL_PAYLOAD_XYZ"))
+        .await?;
+    let matching_contents: Vec<String> = db_res.take(0)?;
+    assert!(!matching_contents.is_empty(), "Verbatim tool output was not found in the database");
 
     Ok(())
 }
@@ -117,17 +104,19 @@ async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<(
 
     for payload in ["BLOCK_TOOL_PAYLOAD_ABC", "NESTED_TOOL_PAYLOAD_DEF"] {
         let response = backend.search(
-            payload,
-            Some("general"),
-            false,
-            5,
-            0,
-            0.0,
-            None,
-            false,
-            true,
-            true,
-        ).await?;
+        payload,
+        Some("general"),
+        false,
+        5,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+    ).await?;
         let found = response.results.iter().any(|r| r.content.contains(payload));
         assert!(found, "verbatim tool output {} was dropped from array-form content", payload);
     }
@@ -177,6 +166,8 @@ async fn precompact_mines_assistant_turns() -> anyhow::Result<()> {
         None,
         false,
         true,
+        true,
+        None,
         true,
     ).await?;
     let found = response.results.iter().any(|r| r.content.contains("troubleshooting process"));
@@ -233,6 +224,8 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
         false,
         true,
         true,
+        None,
+        true,
     ).await?;
     let found_short = response_short.results.iter().any(|r| r.content.contains("Sure, OK"));
     assert!(!found_short, "short assistant turn was incorrectly indexed");
@@ -248,6 +241,8 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
         None,
         false,
         true,
+        true,
+        None,
         true,
     ).await?;
     let found_long = response_long.results.iter().any(|r| r.content.contains("Sure thing"));
@@ -291,9 +286,9 @@ async fn precompact_mixed_roles_all_mined() -> anyhow::Result<()> {
         &ignore,
     ).await?;
 
-    // user, assistant (>20), tool, computer should be mined. system and short assistant should be skipped.
-    // Total mined should be 4.
-    assert_eq!(count, 4, "expected 4 mined, got {}", count);
+    // user, assistant (>20), tool, computer, and system should be mined. short assistant should be skipped.
+    // Total mined should be 5.
+    assert_eq!(count, 5, "expected 5 mined, got {}", count);
 
     Ok(())
 }

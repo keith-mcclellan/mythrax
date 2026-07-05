@@ -70,6 +70,8 @@ async fn test_fts_cap_behavior() -> Result<()> {
         false,
         true,
         true,
+        None,
+        true,
     ).await?;
 
     println!("Search Results count (Cap 2): {}", resp_cap_2.results.len());
@@ -113,6 +115,8 @@ async fn test_fts_cap_behavior() -> Result<()> {
         None,
         false,
         true,
+        true,
+        None,
         true,
     ).await?;
 
