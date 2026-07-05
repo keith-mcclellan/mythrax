@@ -1,12 +1,12 @@
+use anyhow::Result;
 use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
-use anyhow::Result;
 use tempfile::tempdir;
 
-use mythrax_core::db::{SurrealBackend, StorageBackend, parse_record_id};
-use mythrax_core::contracts::{EpisodeSave, WisdomRule, WikiNode};
 use mythrax_core::cognitive::compactor::Compactor;
+use mythrax_core::contracts::{EpisodeSave, WikiNode, WisdomRule};
+use mythrax_core::db::{StorageBackend, SurrealBackend, parse_record_id};
 use mythrax_core::store::MarkdownStore;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -97,7 +97,10 @@ Rule body"#;
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Verify the file was promoted to .mythrax-shared/wisdom/proposed/
-    let shared_proposed_dir = workspace_root.join(".mythrax-shared").join("wisdom").join("proposed");
+    let shared_proposed_dir = workspace_root
+        .join(".mythrax-shared")
+        .join("wisdom")
+        .join("proposed");
     assert!(shared_proposed_dir.exists());
     let promoted_file = shared_proposed_dir.join("rule_1.md");
     assert!(promoted_file.exists());
@@ -214,7 +217,11 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
 
     // 1. Initial utility should be 50.0
     let sql = "SELECT utility, last_retrieved_at FROM episode WHERE id = $id;";
-    let mut response = backend.db.query(sql).bind(("id", parse_record_id(&ep_id)?)).await?;
+    let mut response = backend
+        .db
+        .query(sql)
+        .bind(("id", parse_record_id(&ep_id)?))
+        .await?;
     let records: Vec<serde_json::Value> = response.take(0)?;
     assert_eq!(records.len(), 1);
     let initial_utility = records[0]["utility"].as_f64().unwrap();
@@ -223,13 +230,28 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
     // 2. Artificially back-date last_retrieved_at to 10 days ago to trigger decay
     let ten_days_ago = (chrono::Utc::now() - chrono::Duration::days(10)).to_rfc3339();
     let update_sql = "UPDATE $id MERGE { last_retrieved_at: $time };";
-    let _ = backend.db.query(update_sql)
+    let _ = backend
+        .db
+        .query(update_sql)
         .bind(("id", parse_record_id(&ep_id)?))
         .bind(("time", ten_days_ago))
         .await?;
 
     // 3. Run a search. This will calculate decay on-the-fly and return it
-    let search_res = backend.search("Decay", Some("decay-test"), false, 10, 0, 0.0, None, false, true, false).await?;
+    let search_res = backend
+        .search(
+            "Decay",
+            Some("decay-test"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            false,
+        )
+        .await?;
     assert_eq!(search_res.results.len(), 1);
     let returned_utility = search_res.results[0].utility;
     // Decay: 50.0 * e^(-0.05 * 10) = 50.0 * e^(-0.5) = 50.0 * 0.6065 = 30.32
@@ -241,7 +263,11 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
     backend.reinforce_episode(&ep_id).await?;
-    let mut response2 = backend.db.query(sql).bind(("id", parse_record_id(&ep_id)?)).await?;
+    let mut response2 = backend
+        .db
+        .query(sql)
+        .bind(("id", parse_record_id(&ep_id)?))
+        .await?;
     let records2: Vec<serde_json::Value> = response2.take(0)?;
     let reinforced_utility = records2[0]["utility"].as_f64().unwrap();
     assert_eq!(reinforced_utility, 50.0);
@@ -295,14 +321,20 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
 
     // Force utility to 4.0 in the DB
     let update_sql = "UPDATE $id MERGE { utility: 4.0 };";
-    let _ = backend.db.query(update_sql).bind(("id", parse_record_id(&ep_id)?)).await?;
+    let _ = backend
+        .db
+        .query(update_sql)
+        .bind(("id", parse_record_id(&ep_id)?))
+        .await?;
 
     // Verify it exists in the active records
     let active_eps = backend.get_all_episodes().await?;
     assert_eq!(active_eps.len(), 1);
 
     // Run compaction/sleep cycle
-    compactor.compact_scope(&backend, &store, "archive-test", backend.embedder.clone()).await?;
+    compactor
+        .compact_scope(&backend, &store, "archive-test", backend.embedder.clone())
+        .await?;
 
     // 1. Verify active record is marked archived in DB
     let active_eps_after = backend.get_all_episodes().await?;
@@ -338,8 +370,6 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
 
-
-
     // Test Citations Footnotes in MCP
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
@@ -362,11 +392,17 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
     let mut ep_val = serde_json::to_value(&ep)?;
     ep_val["action"] = serde_json::json!("save");
     let ep_id = mcp.call_tool("write", ep_val).await?;
-    
+
     // Test Auditor Self-Healing Calibration directly in-memory against the seeded episode
     mythrax_core::cli::run_auditor(&backend_arc).await.unwrap();
 
-    let ep_id_str = ep_id["content"][0]["text"].as_str().unwrap().split("episode:").last().unwrap().trim_matches('"');
+    let ep_id_str = ep_id["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .split("episode:")
+        .last()
+        .unwrap()
+        .trim_matches('"');
     let full_ep_id = format!("episode:{}", ep_id_str);
 
     // Call search_memories with a session_id via read tool
@@ -433,7 +469,9 @@ async fn test_wisdom_rule_supersession_lifecycle() -> Result<()> {
     backend.init().await?;
 
     if backend.embed("test").await.is_err() {
-        println!("Skipping test_wisdom_rule_supersession_lifecycle: model files not present in ~/.mythrax/models/");
+        println!(
+            "Skipping test_wisdom_rule_supersession_lifecycle: model files not present in ~/.mythrax/models/"
+        );
         return Ok(());
     }
 
@@ -502,11 +540,16 @@ Old rule body"#;
 
     // Call save_wisdom_rule_with_deduplication
     // This should trigger the merge, save a new merged rule, and mark the old rule as superseded!
-    let new_rule_id = mythrax_core::cognitive::synthesis::save_wisdom_rule_with_deduplication(&backend, &store, &new_rule).await?;
+    let new_rule_id = mythrax_core::cognitive::synthesis::save_wisdom_rule_with_deduplication(
+        &backend, &store, &new_rule,
+    )
+    .await?;
     assert!(new_rule_id.starts_with("wisdom:"));
 
     // 3. Verify old rule status is updated to "superseded" in SurrealDB
-    let mut resp = backend.db.query("SELECT status, superseded_at FROM type::record('wisdom', $id);")
+    let mut resp = backend
+        .db
+        .query("SELECT status, superseded_at FROM type::record('wisdom', $id);")
         .bind(("id", parse_record_id(&old_rule_id)?))
         .await?;
     let status_check: Option<serde_json::Value> = resp.take(0)?;
@@ -516,11 +559,13 @@ Old rule body"#;
     assert!(!status_val["superseded_at"].is_null());
 
     // 4. Verify superseded_by edge is correctly written
-    let mut edge_resp = backend.db.query("SELECT * FROM superseded_by;")
-        .await?;
+    let mut edge_resp = backend.db.query("SELECT * FROM superseded_by;").await?;
     let edges: Vec<serde_json::Value> = edge_resp.take(0)?;
     assert_eq!(edges.len(), 1);
-    assert_eq!(edges[0]["reason"].as_str().unwrap(), "Consolidated during dreaming compaction");
+    assert_eq!(
+        edges[0]["reason"].as_str().unwrap(),
+        "Consolidated during dreaming compaction"
+    );
 
     // 5. Verify the old file is preserved and moved to wisdom/superseded_archive/
     let old_file_path = vault_root.join(old_rule_vault_path);
@@ -543,12 +588,19 @@ Old rule body"#;
     // Let's search for "test_pattern" and verify it's the only active one!
     let search_res_merged = backend.get_wisdom("test_pattern", None, 10, 0, 0.0).await?;
     assert_eq!(search_res_merged.results.len(), 1);
-    assert_eq!(search_res_merged.results[0].id.as_ref().unwrap(), &new_rule_id);
+    assert_eq!(
+        search_res_merged.results[0].id.as_ref().unwrap(),
+        &new_rule_id
+    );
 
     // Let's also check that get_wisdom for the old "TestPattern" does not return the superseded rule
     let search_res_old = backend.get_wisdom("TestPattern", None, 10, 0, 0.0).await?;
     for result in search_res_old.results {
-        assert_ne!(result.id.as_ref().unwrap(), &old_rule_id, "Superseded rule should not be returned by search");
+        assert_ne!(
+            result.id.as_ref().unwrap(),
+            &old_rule_id,
+            "Superseded rule should not be returned by search"
+        );
     }
 
     // Verify diagnose_error_internal ignores the old rule
@@ -576,7 +628,10 @@ async fn test_history_pruning_lifecycle() -> Result<()> {
     backend.init().await?;
     let compactor = Compactor::new();
 
-    let _ = backend.db.query("INSERT INTO profile { key: 'compaction.history_pruning_days', value: '5' };").await?;
+    let _ = backend
+        .db
+        .query("INSERT INTO profile { key: 'compaction.history_pruning_days', value: '5' };")
+        .await?;
 
     let node1 = WikiNode {
         id: None,
@@ -593,7 +648,10 @@ async fn test_history_pruning_lifecycle() -> Result<()> {
     updated_node1.content = "Updated content 1".to_string();
     backend.save_wiki_node(&updated_node1).await?;
 
-    let _ = backend.db.query("UPDATE wiki_node_history SET changed_at = time::now() - 10d;").await?;
+    let _ = backend
+        .db
+        .query("UPDATE wiki_node_history SET changed_at = time::now() - 10d;")
+        .await?;
 
     let node2 = WikiNode {
         id: None,

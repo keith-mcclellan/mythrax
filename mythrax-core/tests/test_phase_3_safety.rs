@@ -1,11 +1,11 @@
+use anyhow::Result;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use std::fs;
 use std::sync::Arc;
-use anyhow::Result;
 use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 // Removed unused imports
-use mythrax_core::cognitive::paging;
 use mythrax_core::cognitive::compactor::Compactor;
+use mythrax_core::cognitive::paging;
 
 use std::sync::Mutex;
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -20,7 +20,7 @@ async fn test_dual_durability_journaling() -> Result<()> {
     let tmp = tempdir()?;
     let vault_root = tmp.path().join("vault");
     fs::create_dir_all(&vault_root)?;
-    
+
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
 
@@ -37,26 +37,44 @@ async fn test_dual_durability_journaling() -> Result<()> {
     backend.init().await?;
 
     // Call save_stm to seed some STM data
-    backend.save_stm("test-session", "_active_anchors", "[\"Anchor 1\"]").await?;
+    backend
+        .save_stm("test-session", "_active_anchors", "[\"Anchor 1\"]")
+        .await?;
 
     // Execute journal_state
-    backend.journal_state(&vault_root, Some("test-session")).await?;
+    backend
+        .journal_state(&vault_root, Some("test-session"))
+        .await?;
 
     // Verify it saved in SurrealDB session_state table
-    let mut resp = backend.db.query("SELECT * FROM type::record('session_state', 'test-session');").await?;
+    let mut resp = backend
+        .db
+        .query("SELECT * FROM type::record('session_state', 'test-session');")
+        .await?;
     let state_opt: Option<serde_json::Value> = resp.take(0)?;
     assert!(state_opt.is_some());
     let state = state_opt.unwrap();
     assert_eq!(state["task_checklist"].as_str().unwrap(), task_md_content);
-    assert_eq!(state["active_stm"]["_active_anchors"].as_str().unwrap(), "[\"Anchor 1\"]");
+    assert_eq!(
+        state["active_stm"]["_active_anchors"].as_str().unwrap(),
+        "[\"Anchor 1\"]"
+    );
 
     // Verify it wrote the backup file
     let journal_path = vault_root.join(".mythrax/session_journal.json");
     assert!(journal_path.exists());
     let backup_content = fs::read_to_string(journal_path)?;
     let backup_json: serde_json::Value = serde_json::from_str(&backup_content)?;
-    assert_eq!(backup_json["task_checklist"].as_str().unwrap(), task_md_content);
-    assert_eq!(backup_json["active_stm"]["_active_anchors"].as_str().unwrap(), "[\"Anchor 1\"]");
+    assert_eq!(
+        backup_json["task_checklist"].as_str().unwrap(),
+        task_md_content
+    );
+    assert_eq!(
+        backup_json["active_stm"]["_active_anchors"]
+            .as_str()
+            .unwrap(),
+        "[\"Anchor 1\"]"
+    );
 
     Ok(())
 }
@@ -134,7 +152,10 @@ def my_func():
     assert!(paged.contains("=== Symbol Page Map ==="));
 
     // Verify archived in SurrealDB symbol_archive
-    let mut resp = backend.db.query("SELECT * FROM type::record('symbol_archive', 'page_struct_backendstruct');").await?;
+    let mut resp = backend
+        .db
+        .query("SELECT * FROM type::record('symbol_archive', 'page_struct_backendstruct');")
+        .await?;
     let sym_opt: Option<serde_json::Value> = resp.take(0)?;
     assert!(sym_opt.is_some());
     let sym_val = sym_opt.unwrap();
@@ -178,7 +199,10 @@ async fn test_checkpointing_daemon_and_delta_compaction() -> Result<()> {
     backend.db.query("UPSERT config:settings CONTENT { active_provider: 'local', model: 'mock', cloud_provider: 'mock' };").await?;
 
     // Create a checkpoint
-    let response = backend.db.query("
+    let response = backend
+        .db
+        .query(
+            "
         UPSERT checkpoint_node:ch1 CONTENT {
             project_type: 'rust',
             exit_code: 0,
@@ -186,10 +210,15 @@ async fn test_checkpointing_daemon_and_delta_compaction() -> Result<()> {
             git_diff: 'diff --git a/src/lib.rs b/src/lib.rs\n+pub fn new() {}',
             timestamp: time::now()
         };
-    ").await?;
+    ",
+        )
+        .await?;
     response.check()?;
 
-    let response2 = backend.db.query("
+    let response2 = backend
+        .db
+        .query(
+            "
         UPSERT checkpoint_node:ch2 CONTENT {
             project_type: 'rust',
             exit_code: 0,
@@ -197,7 +226,9 @@ async fn test_checkpointing_daemon_and_delta_compaction() -> Result<()> {
             git_diff: 'diff --git a/src/main.rs b/src/main.rs\n+fn main() {}',
             timestamp: time::now() - 1h
         };
-    ").await?;
+    ",
+        )
+        .await?;
     response2.check()?;
 
     // Verify checkpoints returned by get_checkpoints
@@ -214,9 +245,12 @@ async fn test_checkpointing_daemon_and_delta_compaction() -> Result<()> {
 
 #[tokio::test]
 async fn test_auto_trigger_paging_in_compaction() -> Result<()> {
-    let _lock = match TEST_MUTEX.lock() { Ok(guard) => guard, Err(p) => p.into_inner() };
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
     let tmp = tempdir()?;
-    
+
     let workspace_root = tmp.path().join("workspace");
     let vault_root = tmp.path().join("vault");
     std::fs::create_dir_all(&workspace_root)?;
@@ -261,16 +295,21 @@ This is a test insight that references `page_fn_test_fn`.
 
     // Run compactor
     let compactor = Compactor::new();
-    compactor.compact_scope(&backend, &store, "test_scope", backend.embedder.clone()).await?;
+    compactor
+        .compact_scope(&backend, &store, "test_scope", backend.embedder.clone())
+        .await?;
 
     // Assert that the workspace source file was NOT modified on disk
     let current_content = std::fs::read_to_string(&main_rs_path)?;
-    assert_eq!(current_content, original_content, "Source file should not be modified by compaction");
+    assert_eq!(
+        current_content, original_content,
+        "Source file should not be modified by compaction"
+    );
 
     // Find the compaction summary file
     let compaction_dir = vault_root.join("wiki/compaction");
     let mut found_compaction_file = None;
-    
+
     if let Ok(entries) = std::fs::read_dir(&compaction_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -284,33 +323,55 @@ This is a test insight that references `page_fn_test_fn`.
         }
     }
 
-    assert!(found_compaction_file.is_some(), "Compaction summary file containing paged symbol reference not found");
+    assert!(
+        found_compaction_file.is_some(),
+        "Compaction summary file containing paged symbol reference not found"
+    );
 
     // Query SurrealDB symbol_archive
-    let mut resp = backend.db.query("SELECT * FROM type::record('symbol_archive', 'page_fn_test_fn');").await?;
+    let mut resp = backend
+        .db
+        .query("SELECT * FROM type::record('symbol_archive', 'page_fn_test_fn');")
+        .await?;
     let sym_opt: Option<serde_json::Value> = resp.take(0)?;
-    assert!(sym_opt.is_some(), "Symbol archive entry for page_fn_test_fn should exist");
+    assert!(
+        sym_opt.is_some(),
+        "Symbol archive entry for page_fn_test_fn should exist"
+    );
 
     // Retrieve all wiki nodes and restore paged content
     let nodes = backend.get_all_wiki_nodes().await?;
-    
+
     let mut restored_found = false;
     for node in nodes {
-        if node.content.contains("[Paged Symbol: Reference page_fn_test_fn]") {
-            let restored_content = paging::intercept_and_restore_symbols(&backend, &node.content).await;
-            
+        if node
+            .content
+            .contains("[Paged Symbol: Reference page_fn_test_fn]")
+        {
+            let restored_content =
+                paging::intercept_and_restore_symbols(&backend, &node.content).await;
+
             // Assert that the restored content contains the original function definition
-            assert!(restored_content.contains("pub fn test_fn() {}"), "Restored content should contain the original function");
-            
+            assert!(
+                restored_content.contains("pub fn test_fn() {}"),
+                "Restored content should contain the original function"
+            );
+
             // Assert that the paged placeholder is removed
-            assert!(!restored_content.contains("[Paged Symbol:"), "Restored content should not contain paged placeholders");
-            
+            assert!(
+                !restored_content.contains("[Paged Symbol:"),
+                "Restored content should not contain paged placeholders"
+            );
+
             restored_found = true;
             break;
         }
     }
 
-    assert!(restored_found, "A wiki node with paged symbol reference was not found or restored correctly");
+    assert!(
+        restored_found,
+        "A wiki node with paged symbol reference was not found or restored correctly"
+    );
 
     Ok(())
 }

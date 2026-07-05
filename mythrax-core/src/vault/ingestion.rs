@@ -1,13 +1,15 @@
 use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
 use anyhow::Result;
+use regex::Regex;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
-use regex::Regex;
 
 fn ingest_cursor(path: &Path) -> Result<String> {
     let conn = rusqlite::Connection::open(path)?;
-    let mut stmt = conn.prepare("SELECT key, value FROM ItemTable WHERE key LIKE 'composer:%' OR key LIKE 'chat:%';")?;
+    let mut stmt = conn.prepare(
+        "SELECT key, value FROM ItemTable WHERE key LIKE 'composer:%' OR key LIKE 'chat:%';",
+    )?;
     let mut rows = stmt.query([])?;
     let mut result = String::new();
     while let Some(row) = rows.next()? {
@@ -15,7 +17,10 @@ fn ingest_cursor(path: &Path) -> Result<String> {
         let value: String = row.get(1)?;
         result.push_str(&format!("### Key: {}\n", key));
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&value) {
-            result.push_str(&format!("```json\n{}\n```\n\n", serde_json::to_string_pretty(&json_val)?));
+            result.push_str(&format!(
+                "```json\n{}\n```\n\n",
+                serde_json::to_string_pretty(&json_val)?
+            ));
         } else {
             result.push_str(&format!("{}\n\n", value));
         }
@@ -74,9 +79,10 @@ fn parse_antigravity_log(path: &Path) -> Result<String> {
                     markdown.push_str(&format!("## User Request\n{}\n\n", content));
                 }
             } else if step_type == "PLANNER_RESPONSE"
-                && let Some(content) = obj["content"].as_str() {
-                    markdown.push_str(&format!("## Planner Response\n{}\n\n", content));
-                }
+                && let Some(content) = obj["content"].as_str()
+            {
+                markdown.push_str(&format!("## Planner Response\n{}\n\n", content));
+            }
         }
     }
     if markdown.is_empty() {
@@ -183,10 +189,12 @@ fn parse_generic_jsonl(path: &Path) -> Result<String> {
     for line_res in reader.lines() {
         let line = line_res?;
         if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
-            let role = obj["role"].as_str()
+            let role = obj["role"]
+                .as_str()
                 .or_else(|| obj["speaker"].as_str())
                 .unwrap_or("unknown");
-            let content = obj["content"].as_str()
+            let content = obj["content"]
+                .as_str()
                 .or_else(|| obj["text"].as_str())
                 .or_else(|| obj["message"].as_str())
                 .unwrap_or("");
@@ -233,7 +241,7 @@ fn parse_codex_log(path: &Path) -> Result<String> {
             return Ok(markdown);
         }
     }
-    
+
     let mut markdown = String::new();
     let mut current_role = String::new();
     let mut current_content = String::new();
@@ -241,21 +249,23 @@ fn parse_codex_log(path: &Path) -> Result<String> {
         let trimmed = line.trim();
         if trimmed.starts_with("role =") || trimmed.starts_with("role=") {
             if let Some(idx) = trimmed.find('"')
-                && let Some(end_idx) = trimmed[idx+1..].find('"') {
-                    current_role = trimmed[idx+1..idx+1+end_idx].to_string();
-                }
+                && let Some(end_idx) = trimmed[idx + 1..].find('"')
+            {
+                current_role = trimmed[idx + 1..idx + 1 + end_idx].to_string();
+            }
         } else if (trimmed.starts_with("content =") || trimmed.starts_with("content="))
             && let Some(idx) = trimmed.find('"')
-                && let Some(end_idx) = trimmed[idx+1..].find('"') {
-                    current_content = trimmed[idx+1..idx+1+end_idx].to_string();
-                }
+            && let Some(end_idx) = trimmed[idx + 1..].find('"')
+        {
+            current_content = trimmed[idx + 1..idx + 1 + end_idx].to_string();
+        }
         if !current_role.is_empty() && !current_content.is_empty() {
             markdown.push_str(&format!("**{}**: {}\n\n", current_role, current_content));
             current_role.clear();
             current_content.clear();
         }
     }
-    
+
     if markdown.is_empty() {
         if content.trim().is_empty() {
             anyhow::bail!("Codex log file is empty");
@@ -269,30 +279,62 @@ fn parse_codex_log(path: &Path) -> Result<String> {
 fn quarantine_file(file_path: &Path, source_dir: &Path, error_msg: &str) -> String {
     let quarantine_dir = source_dir.join("quarantine");
     let _ = std::fs::create_dir_all(&quarantine_dir);
-    let filename = file_path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("unknown_file"));
+    let filename = file_path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("unknown_file"));
     let dest_path = quarantine_dir.join(filename);
     let move_res = std::fs::rename(file_path, &dest_path);
-    if move_res.is_err()
-        && std::fs::copy(file_path, &dest_path).is_ok() {
-            let _ = std::fs::remove_file(file_path);
-        }
+    if move_res.is_err() && std::fs::copy(file_path, &dest_path).is_ok() {
+        let _ = std::fs::remove_file(file_path);
+    }
     format!("Failed to parse {}: {}", file_path.display(), error_msg)
 }
 
 pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
-    let components: Vec<&str> = path.components()
+    let components: Vec<&str> = path
+        .components()
         .filter_map(|c| c.as_os_str().to_str())
         .collect();
 
     // Common generic directory names to skip
     let skip_names = [
-        "brain", "antigravity", ".gemini", "episodes", "wiki", "wisdom", 
-        "general", "archive", "users", "keith", "documents", "repos", 
-        "workspace", "workspaces", "projects", ".system_generated", 
-        "logs", "messages", "quarantine", "tempmediastorage", "target", 
-        "src", "release", "debug",
-        "git", "refs", "ref", "github", "lib", "bin", "tests", "test",
-        "deps", "build", "dist", "node_modules", "vendor"
+        "brain",
+        "antigravity",
+        ".gemini",
+        "episodes",
+        "wiki",
+        "wisdom",
+        "general",
+        "archive",
+        "users",
+        "keith",
+        "documents",
+        "repos",
+        "workspace",
+        "workspaces",
+        "projects",
+        ".system_generated",
+        "logs",
+        "messages",
+        "quarantine",
+        "tempmediastorage",
+        "target",
+        "src",
+        "release",
+        "debug",
+        "git",
+        "refs",
+        "ref",
+        "github",
+        "lib",
+        "bin",
+        "tests",
+        "test",
+        "deps",
+        "build",
+        "dist",
+        "node_modules",
+        "vendor",
     ];
 
     // Check from right to left (deepest directory first)
@@ -309,7 +351,9 @@ pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
 
         let lower = comp_str.to_lowercase();
         // Skip generic names, source, or anything containing "session"
-        if skip_names.iter().any(|&s| s == *comp_str || s == lower.as_str())
+        if skip_names
+            .iter()
+            .any(|&s| s == *comp_str || s == lower.as_str())
             || lower.contains("session")
             || lower == "source"
         {
@@ -335,12 +379,13 @@ pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
 
 pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(log_path).ok()?;
-    
+
     // Regex to match paths like /Documents/<scope>, /repos/<scope>, etc.
-    let re = Regex::new(r#"/(?:Documents|repos|workspace|workspaces|projects)/([^/\s"',\\]+)"#).ok()?;
-    
+    let re =
+        Regex::new(r#"/(?:Documents|repos|workspace|workspaces|projects)/([^/\s"',\\]+)"#).ok()?;
+
     let mut scopes: Vec<String> = Vec::new();
-    
+
     for cap in re.captures_iter(&content) {
         if let Some(scope_match) = cap.get(1) {
             let scope = scope_match.as_str();
@@ -352,7 +397,7 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
                 .collect::<String>()
                 .trim_matches('.')
                 .to_string();
-            
+
             if !normalized.is_empty() {
                 scopes.push(normalized);
             }
@@ -366,7 +411,7 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
     // If "mythrax" is the only match, return it.
     // Otherwise, prefer non-"mythrax" scopes.
     let non_mythrax: Vec<&String> = scopes.iter().filter(|s| **s != "mythrax").collect();
-    
+
     if non_mythrax.is_empty() {
         scopes.first().map(|s| (*s).clone())
     } else {
@@ -386,7 +431,8 @@ pub async fn bulk_ingest_vault(
 
     let store = MarkdownStore::new(vault_root)?;
 
-    let existing_titles: std::collections::HashSet<String> = db.get_all_episodes()
+    let existing_titles: std::collections::HashSet<String> = db
+        .get_all_episodes()
         .await
         .unwrap_or_default()
         .into_iter()
@@ -401,9 +447,10 @@ pub async fn bulk_ingest_vault(
                     let path = entry.path();
                     if let Some(ext) = path.extension().and_then(|s| s.to_str())
                         && exts.contains(&ext.to_lowercase().as_str())
-                            && !path.components().any(|c| c.as_os_str() == "quarantine") {
-                                files.push(path);
-                            }
+                        && !path.components().any(|c| c.as_os_str() == "quarantine")
+                    {
+                        files.push(path);
+                    }
                 }
             }
         }
@@ -418,12 +465,12 @@ pub async fn bulk_ingest_vault(
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                         let path = entry.path();
                         let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                        
+
                         // Skip if directory starts with '.'
                         if dir_name.starts_with('.') {
                             continue;
                         }
-                        
+
                         // Skip case-insensitive matches for: quarantine, tempmediastorage, git, refs, ref
                         let lower_name = dir_name.to_lowercase();
                         if lower_name == "quarantine"
@@ -434,13 +481,15 @@ pub async fn bulk_ingest_vault(
                         {
                             continue;
                         }
-                        
+
                         let logs_dir = path.join(".system_generated/logs");
-                        let log_exists = logs_dir.join("transcript.jsonl").exists() || logs_dir.join("transcript_full.jsonl").exists();
-                        
+                        let log_exists = logs_dir.join("transcript.jsonl").exists()
+                            || logs_dir.join("transcript_full.jsonl").exists();
+
                         let has_md = if let Ok(sub_entries) = std::fs::read_dir(&path) {
                             sub_entries.flatten().any(|se| {
-                                se.path().extension()
+                                se.path()
+                                    .extension()
                                     .and_then(|ext| ext.to_str())
                                     .map(|ext| ext.eq_ignore_ascii_case("md"))
                                     .unwrap_or(false)
@@ -462,25 +511,28 @@ pub async fn bulk_ingest_vault(
                 let title = format!("antigravity_{}", dir_name);
                 let part1_title = format!("{}_part1", title);
                 if existing_titles.contains(&title) || existing_titles.contains(&part1_title) {
-                    tracing::info!("processing episode {} of {} complete (skipped - already exists)", index + 1, total_dirs);
+                    tracing::info!(
+                        "processing episode {} of {} complete (skipped - already exists)",
+                        index + 1,
+                        total_dirs
+                    );
                     continue;
                 }
 
                 // Dynamically resolve scope for each conversation folder
                 let relative_path = path.strip_prefix(source_dir).unwrap_or(&path);
-                let resolved_scope = resolve_scope_from_path(relative_path)
-                    .unwrap_or_else(|| {
-                        let logs_dir = path.join(".system_generated/logs");
-                        let mut log_path = logs_dir.join("transcript.jsonl");
-                        if !log_path.exists() {
-                            log_path = logs_dir.join("transcript_full.jsonl");
-                        }
-                        if log_path.exists() {
-                            extract_scope_from_log(&log_path).unwrap_or_else(|| scope.to_string())
-                        } else {
-                            scope.to_string()
-                        }
-                    });
+                let resolved_scope = resolve_scope_from_path(relative_path).unwrap_or_else(|| {
+                    let logs_dir = path.join(".system_generated/logs");
+                    let mut log_path = logs_dir.join("transcript.jsonl");
+                    if !log_path.exists() {
+                        log_path = logs_dir.join("transcript_full.jsonl");
+                    }
+                    if log_path.exists() {
+                        extract_scope_from_log(&log_path).unwrap_or_else(|| scope.to_string())
+                    } else {
+                        scope.to_string()
+                    }
+                });
 
                 // 1. Pre-scan markdown artifacts in the conversation folder
                 let mut pre_scanned_artifacts = Vec::new();
@@ -488,12 +540,14 @@ pub async fn bulk_ingest_vault(
                     for file_entry in file_entries.flatten() {
                         let fpath = file_entry.path();
                         if fpath.is_file() {
-                            let is_md = fpath.extension()
+                            let is_md = fpath
+                                .extension()
                                 .and_then(|e| e.to_str())
                                 .map(|e| e.eq_ignore_ascii_case("md"))
                                 .unwrap_or(false);
                             if is_md {
-                                let file_stem = fpath.file_stem()
+                                let file_stem = fpath
+                                    .file_stem()
                                     .unwrap_or_default()
                                     .to_string_lossy()
                                     .to_string();
@@ -520,7 +574,12 @@ pub async fn bulk_ingest_vault(
                             format!("{}/{}", resolved_scope, file_stem)
                         };
                         let wiki_rel = if total_art_chunks > 1 {
-                            format!("wiki/{}/{}_part{}.md", resolved_scope, file_stem, art_idx + 1)
+                            format!(
+                                "wiki/{}/{}_part{}.md",
+                                resolved_scope,
+                                file_stem,
+                                art_idx + 1
+                            )
                         } else {
                             format!("wiki/{}/{}.md", resolved_scope, file_stem)
                         };
@@ -539,7 +598,7 @@ pub async fn bulk_ingest_vault(
                 if !log_path.exists() {
                     log_path = logs_dir.join("transcript_full.jsonl");
                 }
-                
+
                 let parsed_content = if log_path.exists() {
                     match parse_antigravity_log(&log_path) {
                         Ok(content) => content,
@@ -560,7 +619,8 @@ pub async fn bulk_ingest_vault(
                 let total_chunks = chunks.len();
                 let mut generated_parts = Vec::new();
 
-                let parent_relative_path = format!("episodes/antigravity_{}_{}.md", dir_name, uuid_suffix);
+                let parent_relative_path =
+                    format!("episodes/antigravity_{}_{}.md", dir_name, uuid_suffix);
                 let parent_title = format!("antigravity_{}", dir_name);
                 let mut parent_saved_id = String::new();
 
@@ -569,15 +629,23 @@ pub async fn bulk_ingest_vault(
                     let mut parent_parts_list = String::new();
                     parent_parts_list.push_str("\n\n## Parts\n");
                     for chunk_idx in 0..total_chunks {
-                        let part_path = format!("episodes/antigravity_{}_part{}_{}", dir_name, chunk_idx + 1, uuid_suffix);
+                        let part_path = format!(
+                            "episodes/antigravity_{}_part{}_{}",
+                            dir_name,
+                            chunk_idx + 1,
+                            uuid_suffix
+                        );
                         parent_parts_list.push_str(&format!("- [[{}]]\n", part_path));
                     }
                     let parent_content = format!(
                         "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n# {}\n{}",
                         parent_title, resolved_scope, parent_title, parent_parts_list
                     );
-                    
-                    if store.write_file(&parent_relative_path, &parent_content).is_ok() {
+
+                    if store
+                        .write_file(&parent_relative_path, &parent_content)
+                        .is_ok()
+                    {
                         let parent_ep_save = crate::contracts::EpisodeSave {
                             title: parent_title.clone(),
                             content: parent_content,
@@ -587,12 +655,12 @@ pub async fn bulk_ingest_vault(
                             source_episode: None,
                             session_id: None,
                             task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                            discovery_tokens: None,
+                            facts: None,
+                            concepts: None,
+                            files_read: None,
+                            files_modified: None,
+                        };
                         if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
                             success_count += 1;
                             parent_saved_id = ep_id;
@@ -606,9 +674,14 @@ files_modified: None,
                     } else {
                         format!("antigravity_{}", dir_name)
                     };
-                    
+
                     let relative_path = if total_chunks > 1 {
-                        format!("episodes/antigravity_{}_part{}_{}.md", dir_name, chunk_idx + 1, uuid_suffix)
+                        format!(
+                            "episodes/antigravity_{}_part{}_{}.md",
+                            dir_name,
+                            chunk_idx + 1,
+                            uuid_suffix
+                        )
                     } else {
                         format!("episodes/antigravity_{}_{}.md", dir_name, uuid_suffix)
                     };
@@ -625,29 +698,44 @@ files_modified: None,
                     let mut nav_callout = String::new();
                     if total_chunks > 1 {
                         nav_callout.push_str("\n\n> [!INFO]- Navigation\n");
-                        let parent_target = parent_relative_path.strip_suffix(".md").unwrap_or(&parent_relative_path);
+                        let parent_target = parent_relative_path
+                            .strip_suffix(".md")
+                            .unwrap_or(&parent_relative_path);
                         nav_callout.push_str(&format!("> Parent: [[{}]]\n", parent_target));
-                        
+
                         let prev_str = if chunk_idx > 0 {
-                            let prev_path = format!("episodes/antigravity_{}_part{}_{}", dir_name, chunk_idx, uuid_suffix);
+                            let prev_path = format!(
+                                "episodes/antigravity_{}_part{}_{}",
+                                dir_name, chunk_idx, uuid_suffix
+                            );
                             format!("[[{}]]", prev_path)
                         } else {
                             "None".to_string()
                         };
-                        
+
                         let next_str = if chunk_idx + 1 < total_chunks {
-                            let next_path = format!("episodes/antigravity_{}_part{}_{}", dir_name, chunk_idx + 2, uuid_suffix);
+                            let next_path = format!(
+                                "episodes/antigravity_{}_part{}_{}",
+                                dir_name,
+                                chunk_idx + 2,
+                                uuid_suffix
+                            );
                             format!("[[{}]]", next_path)
                         } else {
                             "None".to_string()
                         };
-                        
-                        nav_callout.push_str(&format!("> Prev: {} | Next: {}\n", prev_str, next_str));
+
+                        nav_callout
+                            .push_str(&format!("> Prev: {} | Next: {}\n", prev_str, next_str));
                     }
 
                     let note_content = format!(
                         "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n{}{}{}",
-                        part_title, resolved_scope, chunk_text, linked_artifacts_section, nav_callout
+                        part_title,
+                        resolved_scope,
+                        chunk_text,
+                        linked_artifacts_section,
+                        nav_callout
                     );
 
                     if store.write_file(&relative_path, &note_content).is_ok() {
@@ -660,12 +748,12 @@ files_modified: None,
                             source_episode: None,
                             session_id: None,
                             task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                            discovery_tokens: None,
+                            facts: None,
+                            concepts: None,
+                            files_read: None,
+                            files_modified: None,
+                        };
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;
                             generated_parts.push((part_title, relative_path, episode_saved_id));
@@ -680,7 +768,9 @@ files_modified: None,
                             for (_, _, part_saved_id) in &generated_parts {
                                 if let Ok(child_thing) = crate::db::parse_record_id(part_saved_id) {
                                     let query_parent = "RELATE $child_thing -> relates_to -> $parent_thing UNIQUE CONTENT { relation: 'parent', created_at: time::now() };";
-                                    let _ = surreal.db.query(query_parent)
+                                    let _ = surreal
+                                        .db
+                                        .query(query_parent)
                                         .bind(("child_thing", child_thing))
                                         .bind(("parent_thing", parent_thing.clone()))
                                         .await;
@@ -695,13 +785,17 @@ files_modified: None,
                             crate::db::parse_record_id(&generated_parts[i + 1].2),
                         ) {
                             let query_next = "RELATE $part_n -> relates_to -> $part_n_plus_1 UNIQUE CONTENT { relation: 'next', created_at: time::now() };";
-                            let _ = surreal.db.query(query_next)
+                            let _ = surreal
+                                .db
+                                .query(query_next)
                                 .bind(("part_n", part_n.clone()))
                                 .bind(("part_n_plus_1", part_n_plus_1.clone()))
                                 .await;
 
                             let query_prev = "RELATE $part_n_plus_1 -> relates_to -> $part_n UNIQUE CONTENT { relation: 'prev', created_at: time::now() };";
-                            let _ = surreal.db.query(query_prev)
+                            let _ = surreal
+                                .db
+                                .query(query_prev)
                                 .bind(("part_n_plus_1", part_n_plus_1))
                                 .bind(("part_n", part_n))
                                 .await;
@@ -724,7 +818,7 @@ files_modified: None,
                         backlink_footer.push_str(&links.join(" | "));
                         backlink_footer.push('\n');
                     }
-                    
+
                     let artifact_content = format!("{}{}", chunk_text, backlink_footer);
                     let _ = store.write_file(&wiki_rel, &artifact_content);
 
@@ -740,13 +834,19 @@ files_modified: None,
                     if let Ok(wiki_node_id) = db.save_wiki_node(&node).await {
                         success_count += 1;
                         for (_, _, ep_saved_id) in &generated_parts {
-                            let _ = db.relate_nodes(ep_saved_id, &wiki_node_id, None, None, None).await;
+                            let _ = db
+                                .relate_nodes(ep_saved_id, &wiki_node_id, None, None, None)
+                                .await;
                         }
                     }
                 }
 
                 // Log a clean progress message at INFO level
-                tracing::info!("processing episode {} of {} complete", index + 1, total_dirs);
+                tracing::info!(
+                    "processing episode {} of {} complete",
+                    index + 1,
+                    total_dirs
+                );
             }
         }
         "claude" => {
@@ -762,8 +862,9 @@ files_modified: None,
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                         let title = format!("claude_{}", file_stem);
                         let uuid = uuid::Uuid::new_v4().to_string();
-                        let relative_path = format!("episodes/claude_{}_{}.md", file_stem, &uuid[..8]);
-                        
+                        let relative_path =
+                            format!("episodes/claude_{}_{}.md", file_stem, &uuid[..8]);
+
                         let note_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"claude\"\n---\n\n{}",
                             title, scope, content
@@ -778,12 +879,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -822,12 +923,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -855,8 +956,9 @@ files_modified: None,
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                         let title = format!("codex_{}", file_stem);
                         let uuid = uuid::Uuid::new_v4().to_string();
-                        let relative_path = format!("episodes/codex_{}_{}.md", file_stem, &uuid[..8]);
-                        
+                        let relative_path =
+                            format!("episodes/codex_{}_{}.md", file_stem, &uuid[..8]);
+
                         let note_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"codex\"\n---\n\n{}",
                             title, scope, content
@@ -871,12 +973,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -902,8 +1004,9 @@ files_modified: None,
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                         let title = format!("opencode_{}", file_stem);
                         let uuid = uuid::Uuid::new_v4().to_string();
-                        let relative_path = format!("episodes/opencode_{}_{}.md", file_stem, &uuid[..8]);
-                        
+                        let relative_path =
+                            format!("episodes/opencode_{}_{}.md", file_stem, &uuid[..8]);
+
                         let note_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"opencode\"\n---\n\n{}",
                             title, scope, content
@@ -918,12 +1021,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -949,8 +1052,9 @@ files_modified: None,
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                         let title = format!("openclaw_{}", file_stem);
                         let uuid = uuid::Uuid::new_v4().to_string();
-                        let relative_path = format!("episodes/openclaw_{}_{}.md", file_stem, &uuid[..8]);
-                        
+                        let relative_path =
+                            format!("episodes/openclaw_{}_{}.md", file_stem, &uuid[..8]);
+
                         let note_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"openclaw\"\n---\n\n{}",
                             title, scope, content
@@ -965,12 +1069,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1009,12 +1113,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1042,8 +1146,9 @@ files_modified: None,
                         let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                         let title = format!("generic_{}", file_stem);
                         let uuid = uuid::Uuid::new_v4().to_string();
-                        let relative_path = format!("episodes/generic_{}_{}.md", file_stem, &uuid[..8]);
-                        
+                        let relative_path =
+                            format!("episodes/generic_{}_{}.md", file_stem, &uuid[..8]);
+
                         let note_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"generic_jsonl\"\n---\n\n{}",
                             title, scope, content
@@ -1058,12 +1163,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1090,7 +1195,7 @@ files_modified: None,
                         let title = file_stem.to_string();
                         let uuid = uuid::Uuid::new_v4().to_string();
                         let relative_path = format!("episodes/{}_{}.md", file_stem, &uuid[..8]);
-                        
+
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
                                 title,
@@ -1101,12 +1206,12 @@ files_modified: None,
                                 source_episode: None,
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                            };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1182,12 +1287,18 @@ fn split_by_words(text: &str) -> Vec<String> {
 
 fn split_by_chars(text: &str, max_chars: usize) -> Vec<String> {
     let mut chunks = Vec::new();
-    let mut current = String::new();
+    // ⚡ Bolt Optimization: Use String::with_capacity to pre-allocate memory
+    let mut current = String::with_capacity(max_chars * 4); // max 4 bytes per char
     let mut count = 0;
     for c in text.chars() {
         if count >= max_chars {
-            chunks.push(current.clone());
-            current.clear();
+            // ⚡ Bolt Optimization: Use std::mem::replace instead of .clone() followed by .clear()
+            // This prevents an unnecessary heap allocation of the cloned string, and avoids
+            // replacing the current string with a zero-capacity default buffer from .clear().
+            chunks.push(std::mem::replace(
+                &mut current,
+                String::with_capacity(max_chars * 4),
+            ));
             count = 0;
         }
         current.push(c);
@@ -1201,7 +1312,8 @@ fn split_by_chars(text: &str, max_chars: usize) -> Vec<String> {
 
 fn group_sub_chunks(sub_chunks: Vec<String>, delimiter: &str, max_chars: usize) -> Vec<String> {
     let mut grouped = Vec::new();
-    let mut current_group = String::new();
+    // ⚡ Bolt Optimization: Pre-allocate capacity
+    let mut current_group = String::with_capacity(max_chars * 4);
     let mut current_len = 0;
 
     for chunk in sub_chunks {
@@ -1212,8 +1324,12 @@ fn group_sub_chunks(sub_chunks: Vec<String>, delimiter: &str, max_chars: usize) 
         let chunk_len = chunk.chars().count();
         if chunk_len > max_chars {
             if !current_group.is_empty() {
-                grouped.push(current_group.clone());
-                current_group.clear();
+                // ⚡ Bolt Optimization: Use std::mem::replace instead of .clone().clear()
+                // Avoids unnecessary clone allocation and capacity loss.
+                grouped.push(std::mem::replace(
+                    &mut current_group,
+                    String::with_capacity(max_chars * 4),
+                ));
                 current_len = 0;
             }
             grouped.push(chunk);
@@ -1234,9 +1350,15 @@ fn group_sub_chunks(sub_chunks: Vec<String>, delimiter: &str, max_chars: usize) 
             current_len = needed_len;
         } else {
             if !current_group.is_empty() {
-                grouped.push(current_group.clone());
+                // ⚡ Bolt Optimization: Use std::mem::replace instead of clone
+                // Note: we replace current_group with the chunk directly rather than an empty string,
+                // but if we were resetting we'd use with_capacity.
+                // However, since we reassign current_group = chunk below, we should use replace
+                // to push the old string to grouped and start a new one.
+                grouped.push(std::mem::replace(&mut current_group, chunk));
+            } else {
+                current_group = chunk;
             }
-            current_group = chunk;
             current_len = chunk_len;
         }
     }
@@ -1288,12 +1410,12 @@ fn extract_frontmatter(text: &str) -> (Option<String>, &str) {
     if !text.starts_with("---") {
         return (None, text);
     }
-    
+
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() || lines[0].trim() != "---" {
         return (None, text);
     }
-    
+
     let mut closing_line_idx = None;
     for (idx, line) in lines.iter().enumerate().skip(1) {
         if line.trim() == "---" {
@@ -1301,10 +1423,10 @@ fn extract_frontmatter(text: &str) -> (Option<String>, &str) {
             break;
         }
     }
-    
+
     if let Some(idx) = closing_line_idx {
         let fm = lines[0..=idx].join("\n") + "\n";
-        
+
         let mut byte_offset = 0;
         for i in 0..=idx {
             if let Some(line_pos) = text[byte_offset..].find(lines[i]) {
@@ -1317,7 +1439,7 @@ fn extract_frontmatter(text: &str) -> (Option<String>, &str) {
         } else if body.starts_with("\r\n") {
             body = &body[2..];
         }
-        
+
         (Some(fm), body)
     } else {
         (None, text)
@@ -1327,16 +1449,16 @@ fn extract_frontmatter(text: &str) -> (Option<String>, &str) {
 pub fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
     let normalized = content.replace("\r\n", "\n");
     let (frontmatter, remaining) = extract_frontmatter(&normalized);
-    
+
     if remaining.trim().is_empty() {
         if let Some(fm) = frontmatter {
             return vec![fm];
         }
         return vec![];
     }
-    
+
     let chunks = split_recursive(remaining, 0, limit);
-    
+
     let mut final_chunks = Vec::new();
     for chunk in chunks {
         let mut final_chunk = String::new();
@@ -1349,7 +1471,7 @@ pub fn chunk_parsed_content(content: &str, limit: usize) -> Vec<String> {
         final_chunk.push_str(&chunk);
         final_chunks.push(final_chunk);
     }
-    
+
     final_chunks
 }
 

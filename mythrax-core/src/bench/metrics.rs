@@ -50,12 +50,7 @@ pub fn evaluate_retrieval(
     }
 }
 
-pub fn ndcg(
-    rankings: &[usize],
-    correct_ids: &[String],
-    corpus_ids: &[String],
-    k: usize,
-) -> f32 {
+pub fn ndcg(rankings: &[usize], correct_ids: &[String], corpus_ids: &[String], k: usize) -> f32 {
     let k = std::cmp::min(k, rankings.len());
     if k == 0 || correct_ids.is_empty() || corpus_ids.is_empty() {
         return 0.0;
@@ -66,14 +61,10 @@ pub fn ndcg(
             3.0
         } else {
             let c_session = session_id_from_corpus_id(c_id);
-            let same_session = correct_ids.iter().any(|id| {
-                session_id_from_corpus_id(id) == c_session
-            });
-            if same_session {
-                2.0
-            } else {
-                0.0
-            }
+            let same_session = correct_ids
+                .iter()
+                .any(|id| session_id_from_corpus_id(id) == c_session);
+            if same_session { 2.0 } else { 0.0 }
         }
     };
 
@@ -99,11 +90,7 @@ pub fn ndcg(
         idcg += all_relevances[i] / discount;
     }
 
-    if idcg == 0.0 {
-        0.0
-    } else {
-        dcg / idcg
-    }
+    if idcg == 0.0 { 0.0 } else { dcg / idcg }
 }
 
 pub fn session_id_from_corpus_id(id: &str) -> &str {

@@ -29,7 +29,8 @@ mod tests {
 
     #[test]
     fn test_secret_filter() {
-        let content = "My config:\napi_key: 'sk-12345'\nsecret = \"supersecretpassword\"\nnormal_field: 42";
+        let content =
+            "My config:\napi_key: 'sk-12345'\nsecret = \"supersecretpassword\"\nnormal_field: 42";
         let cleaned = SecretFilter::clean(content);
         assert!(cleaned.contains("[REDACTED]"));
         assert!(!cleaned.contains("sk-12345"));

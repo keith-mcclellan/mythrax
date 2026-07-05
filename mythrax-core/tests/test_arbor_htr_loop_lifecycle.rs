@@ -1,13 +1,13 @@
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use anyhow::Result;
-use surrealdb::engine::local::{Db, Mem};
 use surrealdb::Surreal;
+use surrealdb::engine::local::{Db, Mem};
 use tempfile::TempDir;
 
-use mythrax_core::contracts::HypothesisNode;
 use mythrax_core::cognitive::arbor::{ArborCoordinator, ArborLlmClient};
+use mythrax_core::contracts::HypothesisNode;
 
 pub struct MockLLMClient;
 
@@ -51,15 +51,25 @@ impl ArborLlmClient for MockLLMClient {
         ]"#.to_string())
     }
 
-    async fn evaluate_run(&self, _db: &dyn mythrax_core::db::StorageBackend, _run_logs: &str) -> Result<String> {
+    async fn evaluate_run(
+        &self,
+        _db: &dyn mythrax_core::db::StorageBackend,
+        _run_logs: &str,
+    ) -> Result<String> {
         Ok(r#"{
             "success": true,
             "score": 99.0,
             "insight": "Sieve of Eratosthenes resolves trial division bottleneck"
-        }"#.to_string())
+        }"#
+        .to_string())
     }
 
-    async fn abstract_insights(&self, _db: &dyn mythrax_core::db::StorageBackend, _parent_insight: Option<&str>, _child_insight: &str) -> Result<String> {
+    async fn abstract_insights(
+        &self,
+        _db: &dyn mythrax_core::db::StorageBackend,
+        _parent_insight: Option<&str>,
+        _child_insight: &str,
+    ) -> Result<String> {
         Ok("Sieve of Eratosthenes resolves trial division bottleneck".to_string())
     }
 }
@@ -165,15 +175,16 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         "math-testing".to_string(),
         "python3 test_prime.py".to_string(),
         vec!["prime_calc.py".to_string()],
-    ).await;
+    )
+    .await;
 
     // ----- Step A: Initialization & Base Assessment -----
-    coordinator.init_root("Base implementation of prime checker".to_string(), None).await?;
+    coordinator
+        .init_root("Base implementation of prime checker".to_string(), None)
+        .await?;
 
     // Assertion 1: ROOT node exists in SurrealDB
-    let root_node: Option<HypothesisNode> = db
-        .select(("hypothesis_node", "ROOT"))
-        .await?;
+    let root_node: Option<HypothesisNode> = db.select(("hypothesis_node", "ROOT")).await?;
     assert!(
         root_node.is_some(),
         "Step A assertion failed: ROOT node not found in SurrealDB"
@@ -199,9 +210,7 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
     coordinator.trigger_ideation("ROOT").await?;
 
     // Assertion 1: Node 1 and Node 2 exist in SurrealDB with 'pending' status
-    let node_1: Option<HypothesisNode> = db
-        .select(("hypothesis_node", "1"))
-        .await?;
+    let node_1: Option<HypothesisNode> = db.select(("hypothesis_node", "1")).await?;
     assert!(
         node_1.is_some(),
         "Step B assertion failed: Hypothesis Node 1 not found in SurrealDB"
@@ -210,9 +219,7 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
     assert_eq!(n1.status, "pending");
     assert_eq!(n1.parent_id.as_deref(), Some("ROOT"));
 
-    let node_2: Option<HypothesisNode> = db
-        .select(("hypothesis_node", "2"))
-        .await?;
+    let node_2: Option<HypothesisNode> = db.select(("hypothesis_node", "2")).await?;
     assert!(
         node_2.is_some(),
         "Step B assertion failed: Hypothesis Node 2 not found in SurrealDB"
@@ -289,8 +296,8 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
     );
     let insight_text = root_updated.insight.unwrap();
     assert!(
-        insight_text.contains("Sieve of Eratosthenes resolves trial division bottleneck") ||
-        insight_text.contains("Incremental indexing optimizations"),
+        insight_text.contains("Sieve of Eratosthenes resolves trial division bottleneck")
+            || insight_text.contains("Incremental indexing optimizations"),
         "Step D assertion failed: ROOT node's insight did not contain expected critic output"
     );
 

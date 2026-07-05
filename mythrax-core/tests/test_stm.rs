@@ -1,8 +1,8 @@
-use std::fs;
 use anyhow::Result;
+use mythrax_core::contracts::{ForgedConcept, ForgedRule, ForgedSectionBatch, HandoffSave};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use std::fs;
 use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{HandoffSave, ForgedSectionBatch, ForgedConcept, ForgedRule};
 
 use std::sync::Mutex;
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -85,13 +85,21 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
         "value": "bearer my-secret-token"
     });
     if let Some(obj) = params.as_object_mut() {
-        obj.insert("action".to_string(), serde_json::Value::String("put_short_term".to_string()));
+        obj.insert(
+            "action".to_string(),
+            serde_json::Value::String("put_short_term".to_string()),
+        );
     }
-    
-    mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "write",
-        "arguments": params
-    })).await?;
+
+    mcp_server
+        .handle_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "write",
+                "arguments": params
+            }),
+        )
+        .await?;
 
     // Verify it is saved in SurrealDB
     let db_val = backend.get_stm("sess_x", Some("secret_data")).await?;
@@ -100,7 +108,7 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
     // Verify it is written to disk
     let stm_file_path = workspace_root.join(".handoffs").join("stm_sess_x.json");
     assert!(stm_file_path.exists());
-    
+
     let file_content = fs::read_to_string(&stm_file_path)?;
     // The secret should be filtered by SecretFilter
     assert!(!file_content.contains("my-secret-token"));
@@ -111,12 +119,20 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
         "key": "secret_data"
     });
     if let Some(obj) = get_args.as_object_mut() {
-        obj.insert("action".to_string(), serde_json::Value::String("get_short_term".to_string()));
+        obj.insert(
+            "action".to_string(),
+            serde_json::Value::String("get_short_term".to_string()),
+        );
     }
-    let get_resp = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "read",
-        "arguments": get_args
-    })).await?;
+    let get_resp = mcp_server
+        .handle_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "read",
+                "arguments": get_args
+            }),
+        )
+        .await?;
     let text = get_resp["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("bearer my-secret-token"));
 
@@ -125,12 +141,20 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
         "session_id": "sess_x"
     });
     if let Some(obj) = clear_args.as_object_mut() {
-        obj.insert("action".to_string(), serde_json::Value::String("clear_short_term".to_string()));
+        obj.insert(
+            "action".to_string(),
+            serde_json::Value::String("clear_short_term".to_string()),
+        );
     }
-    mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "write",
-        "arguments": clear_args
-    })).await?;
+    mcp_server
+        .handle_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "write",
+                "arguments": clear_args
+            }),
+        )
+        .await?;
 
     // Verify DB is cleared
     let db_val_cleared = backend.get_stm("sess_x", None).await?;
@@ -176,52 +200,60 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
     let h1_stm = handoffs_dir.join("stm_sess1.json");
     fs::write(&h1_file, "mock handoff 1")?;
     fs::write(&h1_stm, "{}")?;
-    let id1 = backend.save_handoff(&HandoffSave {
-        parent_conversation_id: "sess1".to_string(),
-        subagent_conversation_id: "sub1".to_string(),
-        summary: "handoff 1".to_string(),
-        handoff_file_path: h1_file.to_string_lossy().to_string(),
-        scope: None,
-    }).await?;
+    let id1 = backend
+        .save_handoff(&HandoffSave {
+            parent_conversation_id: "sess1".to_string(),
+            subagent_conversation_id: "sub1".to_string(),
+            summary: "handoff 1".to_string(),
+            handoff_file_path: h1_file.to_string_lossy().to_string(),
+            scope: None,
+        })
+        .await?;
     backend.save_stm("sess1", "k", "v").await?;
 
     let h2_file = handoffs_dir.join("handoff_task2.md");
     let h2_stm = handoffs_dir.join("stm_sess2.json");
     fs::write(&h2_file, "mock handoff 2")?;
     fs::write(&h2_stm, "{}")?;
-    let id2 = backend.save_handoff(&HandoffSave {
-        parent_conversation_id: "sess2".to_string(),
-        subagent_conversation_id: "sub2".to_string(),
-        summary: "handoff 2".to_string(),
-        handoff_file_path: h2_file.to_string_lossy().to_string(),
-        scope: None,
-    }).await?;
+    let id2 = backend
+        .save_handoff(&HandoffSave {
+            parent_conversation_id: "sess2".to_string(),
+            subagent_conversation_id: "sub2".to_string(),
+            summary: "handoff 2".to_string(),
+            handoff_file_path: h2_file.to_string_lossy().to_string(),
+            scope: None,
+        })
+        .await?;
     backend.save_stm("sess2", "k", "v").await?;
 
     let h3_file = handoffs_dir.join("handoff_task3.md");
     let h3_stm = handoffs_dir.join("stm_sess3.json");
     fs::write(&h3_file, "mock handoff 3")?;
     fs::write(&h3_stm, "{}")?;
-    let id3 = backend.save_handoff(&HandoffSave {
-        parent_conversation_id: "sess3".to_string(),
-        subagent_conversation_id: "sub3".to_string(),
-        summary: "handoff 3".to_string(),
-        handoff_file_path: h3_file.to_string_lossy().to_string(),
-        scope: None,
-    }).await?;
+    let id3 = backend
+        .save_handoff(&HandoffSave {
+            parent_conversation_id: "sess3".to_string(),
+            subagent_conversation_id: "sub3".to_string(),
+            summary: "handoff 3".to_string(),
+            handoff_file_path: h3_file.to_string_lossy().to_string(),
+            scope: None,
+        })
+        .await?;
     backend.save_stm("sess3", "k", "v").await?;
 
     let h4_file = handoffs_dir.join("handoff_task4.md");
     let h4_stm = handoffs_dir.join("stm_sess4.json");
     fs::write(&h4_file, "mock handoff 4")?;
     fs::write(&h4_stm, "{}")?;
-    let id4 = backend.save_handoff(&HandoffSave {
-        parent_conversation_id: "sess4".to_string(),
-        subagent_conversation_id: "sub4".to_string(),
-        summary: "handoff 4".to_string(),
-        handoff_file_path: h4_file.to_string_lossy().to_string(),
-        scope: None,
-    }).await?;
+    let id4 = backend
+        .save_handoff(&HandoffSave {
+            parent_conversation_id: "sess4".to_string(),
+            subagent_conversation_id: "sub4".to_string(),
+            summary: "handoff 4".to_string(),
+            handoff_file_path: h4_file.to_string_lossy().to_string(),
+            scope: None,
+        })
+        .await?;
     backend.save_stm("sess4", "k", "v").await?;
 
     // Update their status and created_at manually via SurrealDB query
@@ -230,17 +262,22 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
     let rec3 = mythrax_core::db::parse_record_id(&id3)?;
     let rec4 = mythrax_core::db::parse_record_id(&id4)?;
 
-    backend.db.query("
+    backend
+        .db
+        .query(
+            "
         UPDATE $r1 SET status = 'COMPLETED', created_at = time::now() - 8d;
         UPDATE $r2 SET status = 'FAILED', created_at = time::now() - 8d;
         UPDATE $r3 SET status = 'PENDING', created_at = time::now() - 8d;
         UPDATE $r4 SET status = 'COMPLETED', created_at = time::now() - 1d;
-    ")
-    .bind(("r1", rec1))
-    .bind(("r2", rec2))
-    .bind(("r3", rec3))
-    .bind(("r4", rec4))
-    .await?.check()?;
+    ",
+        )
+        .bind(("r1", rec1))
+        .bind(("r2", rec2))
+        .bind(("r3", rec3))
+        .bind(("r4", rec4))
+        .await?
+        .check()?;
 
     // Perform cleanup with 7 days threshold (matches 8d age in test setup)
     backend.delete_stale_handoffs(7).await?;
@@ -259,15 +296,47 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
 
     // Assert DB entries
     // H1 and H2 should be deleted from DB
-    let h1_in_db: Option<serde_json::Value> = backend.db.select(("handoff", mythrax_core::db::backend::record_key_to_string(&mythrax_core::db::parse_record_id(&id1)?.key))).await?;
+    let h1_in_db: Option<serde_json::Value> = backend
+        .db
+        .select((
+            "handoff",
+            mythrax_core::db::backend::record_key_to_string(
+                &mythrax_core::db::parse_record_id(&id1)?.key,
+            ),
+        ))
+        .await?;
     assert!(h1_in_db.is_none());
-    let h2_in_db: Option<serde_json::Value> = backend.db.select(("handoff", mythrax_core::db::backend::record_key_to_string(&mythrax_core::db::parse_record_id(&id2)?.key))).await?;
+    let h2_in_db: Option<serde_json::Value> = backend
+        .db
+        .select((
+            "handoff",
+            mythrax_core::db::backend::record_key_to_string(
+                &mythrax_core::db::parse_record_id(&id2)?.key,
+            ),
+        ))
+        .await?;
     assert!(h2_in_db.is_none());
 
     // H3 and H4 should still exist in DB
-    let h3_in_db: Option<serde_json::Value> = backend.db.select(("handoff", mythrax_core::db::backend::record_key_to_string(&mythrax_core::db::parse_record_id(&id3)?.key))).await?;
+    let h3_in_db: Option<serde_json::Value> = backend
+        .db
+        .select((
+            "handoff",
+            mythrax_core::db::backend::record_key_to_string(
+                &mythrax_core::db::parse_record_id(&id3)?.key,
+            ),
+        ))
+        .await?;
     assert!(h3_in_db.is_some());
-    let h4_in_db: Option<serde_json::Value> = backend.db.select(("handoff", mythrax_core::db::backend::record_key_to_string(&mythrax_core::db::parse_record_id(&id4)?.key))).await?;
+    let h4_in_db: Option<serde_json::Value> = backend
+        .db
+        .select((
+            "handoff",
+            mythrax_core::db::backend::record_key_to_string(
+                &mythrax_core::db::parse_record_id(&id4)?.key,
+            ),
+        ))
+        .await?;
     assert!(h4_in_db.is_some());
 
     // Stale STM entries in DB should be deleted
@@ -375,20 +444,37 @@ async fn test_save_forged_section_lifecycle() -> Result<()> {
 
     // 2. Verify database records are inserted and relations exist
     // Fetch episode
-    let mut ep_resp = backend.db.query("SELECT * FROM episode WHERE source = 'forge' LIMIT 1;").await?;
+    let mut ep_resp = backend
+        .db
+        .query("SELECT * FROM episode WHERE source = 'forge' LIMIT 1;")
+        .await?;
     let episodes: Vec<serde_json::Value> = ep_resp.take(0)?;
     assert_eq!(episodes.len(), 1);
     let ep = &episodes[0];
-    assert_eq!(ep["title"].as_str().unwrap(), "My System Playbook! - Chunk 0");
-    assert!(ep["content"].as_str().unwrap().contains("api_key: \"[REDACTED]\""));
+    assert_eq!(
+        ep["title"].as_str().unwrap(),
+        "My System Playbook! - Chunk 0"
+    );
+    assert!(
+        ep["content"]
+            .as_str()
+            .unwrap()
+            .contains("api_key: \"[REDACTED]\"")
+    );
 
     // Fetch wiki node
-    let mut wiki_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'API Secret Management' LIMIT 1;").await?;
+    let mut wiki_resp = backend
+        .db
+        .query("SELECT * FROM wiki_node WHERE name = 'API Secret Management' LIMIT 1;")
+        .await?;
     let wiki_nodes: Vec<serde_json::Value> = wiki_resp.take(0)?;
     assert_eq!(wiki_nodes.len(), 1);
 
     // Fetch wisdom
-    let mut wisdom_resp = backend.db.query("SELECT * FROM wisdom WHERE target_pattern = 'Avoid Hardcoded API Keys' LIMIT 1;").await?;
+    let mut wisdom_resp = backend
+        .db
+        .query("SELECT * FROM wisdom WHERE target_pattern = 'Avoid Hardcoded API Keys' LIMIT 1;")
+        .await?;
     let wisdom_rules: Vec<serde_json::Value> = wisdom_resp.take(0)?;
     assert_eq!(wisdom_rules.len(), 1);
     assert_eq!(wisdom_rules[0]["tier"].as_str().unwrap(), "forge");
@@ -398,14 +484,18 @@ async fn test_save_forged_section_lifecycle() -> Result<()> {
     let wiki_id = wiki_nodes[0]["id"].as_str().unwrap();
     let wisdom_id = wisdom_rules[0]["id"].as_str().unwrap();
 
-    let mut rel_resp1 = backend.db.query("SELECT * FROM relates_to WHERE in = $wiki_id AND out = $ep_id;")
+    let mut rel_resp1 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $wiki_id AND out = $ep_id;")
         .bind(("ep_id", mythrax_core::db::parse_record_id(ep_id)?))
         .bind(("wiki_id", mythrax_core::db::parse_record_id(wiki_id)?))
         .await?;
     let rels1: Vec<serde_json::Value> = rel_resp1.take(0)?;
     assert_eq!(rels1.len(), 1);
 
-    let mut rel_resp2 = backend.db.query("SELECT * FROM relates_to WHERE in = $wisdom_id AND out = $wiki_id;")
+    let mut rel_resp2 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $wisdom_id AND out = $wiki_id;")
         .bind(("wisdom_id", mythrax_core::db::parse_record_id(wisdom_id)?))
         .bind(("wiki_id", mythrax_core::db::parse_record_id(wiki_id)?))
         .await?;
@@ -444,20 +534,16 @@ async fn test_save_forged_section_rollback() -> Result<()> {
         scope: "production".to_string(),
         chunk_index: 0,
         chunk_text: "Some chunk text".to_string(),
-        concepts: vec![
-            ForgedConcept {
-                name: "Rollback Concept".to_string(),
-                content: "Rollback content".to_string(),
-            }
-        ],
-        rules: vec![
-            ForgedRule {
-                target_pattern: "Rollback Rule".to_string(),
-                action_to_avoid: "avoid".to_string(),
-                causal_explanation: "why".to_string(),
-                prescribed_remedy: "remedy".to_string(),
-            }
-        ],
+        concepts: vec![ForgedConcept {
+            name: "Rollback Concept".to_string(),
+            content: "Rollback content".to_string(),
+        }],
+        rules: vec![ForgedRule {
+            target_pattern: "Rollback Rule".to_string(),
+            action_to_avoid: "avoid".to_string(),
+            causal_explanation: "why".to_string(),
+            prescribed_remedy: "remedy".to_string(),
+        }],
     };
 
     // Break SurrealDB so the transaction fails
@@ -510,10 +596,15 @@ async fn test_mcp_forge_tools() -> Result<()> {
     let mcp_server = mythrax_core::mcp::McpServer::new_local(backend.clone(), store);
 
     // 1. Call get_forge_instructions
-    let inst_resp = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "get_forge_instructions",
-        "arguments": {}
-    })).await?;
+    let inst_resp = mcp_server
+        .handle_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "get_forge_instructions",
+                "arguments": {}
+            }),
+        )
+        .await?;
 
     let inst_text = inst_resp["content"][0]["text"].as_str().unwrap();
     assert!(inst_text.contains("Wisdom Rules Extraction"));
@@ -543,13 +634,21 @@ async fn test_mcp_forge_tools() -> Result<()> {
 
     let mut write_args = batch.clone();
     if let Some(obj) = write_args.as_object_mut() {
-        obj.insert("action".to_string(), serde_json::Value::String("save_forged_assets".to_string()));
+        obj.insert(
+            "action".to_string(),
+            serde_json::Value::String("save_forged_assets".to_string()),
+        );
     }
 
-    let save_resp = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "write",
-        "arguments": write_args
-    })).await?;
+    let save_resp = mcp_server
+        .handle_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "write",
+                "arguments": write_args
+            }),
+        )
+        .await?;
 
     let save_text = save_resp["content"][0]["text"].as_str().unwrap();
     assert!(save_text.contains("Successfully saved forged assets"));
@@ -559,7 +658,10 @@ async fn test_mcp_forge_tools() -> Result<()> {
     assert!(chunk_path.exists());
 
     // Verify DB entry
-    let mut ep_resp = backend.db.query("SELECT * FROM episode WHERE source = 'forge' LIMIT 1;").await?;
+    let mut ep_resp = backend
+        .db
+        .query("SELECT * FROM episode WHERE source = 'forge' LIMIT 1;")
+        .await?;
     let episodes: Vec<serde_json::Value> = ep_resp.take(0)?;
     assert_eq!(episodes.len(), 1);
 
@@ -569,9 +671,9 @@ async fn test_mcp_forge_tools() -> Result<()> {
 #[tokio::test]
 async fn test_api_save_forged_assets() -> Result<()> {
     use axum::http::Request;
-    use tower::util::ServiceExt;
     use mythrax_core::api::{ApiState, create_router};
     use mythrax_core::vault::watcher::WatchIgnoreList;
+    use tower::util::ServiceExt;
 
     let _lock = match TEST_MUTEX.lock() {
         Ok(guard) => guard,
@@ -626,7 +728,8 @@ async fn test_api_save_forged_assets() -> Result<()> {
     });
 
     // 1. Test Unauthorized
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -688,10 +791,12 @@ async fn test_stm_continuous_pruning() -> Result<()> {
     let old_stm_file = handoffs_dir.join("stm_old_sess.json");
     fs::write(&old_handoff_file, "old handoff content")?;
     fs::write(&old_stm_file, "{}")?;
-    
+
     // Set modification time of old stm file to 4 days ago using std::fs::File::set_modified
     let file = fs::OpenOptions::new().write(true).open(&old_stm_file)?;
-    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(4 * 24 * 3600))?;
+    file.set_modified(
+        std::time::SystemTime::now() - std::time::Duration::from_secs(4 * 24 * 3600),
+    )?;
     drop(file);
 
     // Create a fresh stm file (2 hours old)
@@ -728,14 +833,24 @@ async fn test_stm_continuous_pruning() -> Result<()> {
 
     // Assertions
     assert!(!old_stm_file.exists(), "Old STM file should be pruned");
-    assert!(fresh_stm_file.exists(), "Fresh STM file should be preserved");
+    assert!(
+        fresh_stm_file.exists(),
+        "Fresh STM file should be preserved"
+    );
 
     // Check DB
     let old_stm_map = backend.get_stm("old_sess", None).await?;
-    assert!(old_stm_map.is_empty(), "Old STM record in DB should be pruned");
+    assert!(
+        old_stm_map.is_empty(),
+        "Old STM record in DB should be pruned"
+    );
 
     let fresh_stm_map = backend.get_stm("fresh_sess", None).await?;
-    assert_eq!(fresh_stm_map.get("k2").unwrap(), "v2", "Fresh STM record in DB should be preserved");
+    assert_eq!(
+        fresh_stm_map.get("k2").unwrap(),
+        "v2",
+        "Fresh STM record in DB should be preserved"
+    );
 
     Ok(())
 }
@@ -797,7 +912,13 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
     let saved_id = backend.save_wisdom_rule(&rule).await?;
 
     // 3. Add distilled context nodes to STM
-    backend.save_stm("subagent_456", "distilled_context_nodes", &format!("[\"{}\"]", saved_id)).await?;
+    backend
+        .save_stm(
+            "subagent_456",
+            "distilled_context_nodes",
+            &format!("[\"{}\"]", saved_id),
+        )
+        .await?;
 
     // 4. Call pre_invocation_hook via MCP consolidated manage tool
     let args = serde_json::json!({
@@ -805,15 +926,32 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
         "session_id": "subagent_456",
         "query": "test query"
     });
-    let resp = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "manage",
-        "arguments": args
-    })).await?;
+    let resp = mcp_server
+        .handle_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "manage",
+                "arguments": args
+            }),
+        )
+        .await?;
 
     let text = resp["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("Handoff Metadata"), "Expected Handoff Metadata in: {}", text);
-    assert!(text.contains("Test Pattern"), "Expected Test Pattern in: {}", text);
-    assert!(text.contains("Avoiding test"), "Expected Avoiding test in: {}", text);
+    assert!(
+        text.contains("Handoff Metadata"),
+        "Expected Handoff Metadata in: {}",
+        text
+    );
+    assert!(
+        text.contains("Test Pattern"),
+        "Expected Test Pattern in: {}",
+        text
+    );
+    assert!(
+        text.contains("Avoiding test"),
+        "Expected Avoiding test in: {}",
+        text
+    );
 
     // 5. Test root agent path (when no handoff active)
     let args_root = serde_json::json!({
@@ -822,13 +960,26 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
         "query": "test query",
         "workspace_path": workspace_root.to_str().unwrap()
     });
-    let resp_root = mcp_server.handle_request("tools/call", serde_json::json!({
-        "name": "manage",
-        "arguments": args_root
-    })).await?;
+    let resp_root = mcp_server
+        .handle_request(
+            "tools/call",
+            serde_json::json!({
+                "name": "manage",
+                "arguments": args_root
+            }),
+        )
+        .await?;
     let text_root = resp_root["content"][0]["text"].as_str().unwrap();
-    assert!(text_root.contains("Retrieved Semantic Context"), "Expected Retrieved Semantic Context in: {}", text_root);
-    assert!(text_root.contains("Pinned Deep-Search Instruction"), "Expected Pinned Deep-Search Instruction in: {}", text_root);
+    assert!(
+        text_root.contains("Retrieved Semantic Context"),
+        "Expected Retrieved Semantic Context in: {}",
+        text_root
+    );
+    assert!(
+        text_root.contains("Pinned Deep-Search Instruction"),
+        "Expected Pinned Deep-Search Instruction in: {}",
+        text_root
+    );
 
     Ok(())
 }

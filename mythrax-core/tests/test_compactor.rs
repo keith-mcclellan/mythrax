@@ -1,10 +1,10 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend, parse_record_id};
-use mythrax_core::contracts::WikiNode;
 use mythrax_core::cognitive::compactor::Compactor;
+use mythrax_core::contracts::WikiNode;
+use mythrax_core::db::{StorageBackend, SurrealBackend, parse_record_id};
 use mythrax_core::store::MarkdownStore;
+use std::fs;
+use tempfile::tempdir;
 
 use std::sync::Mutex;
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -111,23 +111,34 @@ Insight Three content."#;
     let mut emb3 = vec![0.0; 768];
     emb3[1] = 1.0;
 
-    backend.db.query("UPDATE $id SET embedding = $emb;")
+    backend
+        .db
+        .query("UPDATE $id SET embedding = $emb;")
         .bind(("id", rid1))
         .bind(("emb", emb1))
-        .await?.check()?;
+        .await?
+        .check()?;
 
-    backend.db.query("UPDATE $id SET embedding = $emb;")
+    backend
+        .db
+        .query("UPDATE $id SET embedding = $emb;")
         .bind(("id", rid2))
         .bind(("emb", emb2))
-        .await?.check()?;
+        .await?
+        .check()?;
 
-    backend.db.query("UPDATE $id SET embedding = $emb;")
+    backend
+        .db
+        .query("UPDATE $id SET embedding = $emb;")
         .bind(("id", rid3))
         .bind(("emb", emb3))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     // Execute compaction
-    compactor.compact_scope(&backend, &store, "scope1", backend.embedder.clone()).await?;
+    compactor
+        .compact_scope(&backend, &store, "scope1", backend.embedder.clone())
+        .await?;
 
     // Verify compactions on disk
     let compaction_dir = vault_root.join("wiki/compaction");
@@ -152,10 +163,16 @@ Insight Three content."#;
     for (name, content) in &files {
         if content.contains("cluster_id: 0") {
             found_cluster = true;
-            assert!(name.contains("insight_one"), "Cluster compaction filename should contain slug of first insight");
+            assert!(
+                name.contains("insight_one"),
+                "Cluster compaction filename should contain slug of first insight"
+            );
         } else if content.contains("cluster_id: \"miscellaneous\"") {
             found_misc = true;
-            assert!(name.contains("miscellaneous"), "Miscellaneous compaction filename should contain miscellaneous");
+            assert!(
+                name.contains("miscellaneous"),
+                "Miscellaneous compaction filename should contain miscellaneous"
+            );
         }
     }
 
@@ -169,36 +186,56 @@ Insight Three content."#;
     // We should have 5 wiki nodes total (3 insights + 2 compactions)
     assert_eq!(nodes.len(), 5);
 
-    let cluster_compaction_node = nodes.iter()
+    let cluster_compaction_node = nodes
+        .iter()
         .find(|n| n["name"].as_str().unwrap().contains("Cluster 0"))
         .expect("Cluster 0 node not found");
-    let misc_compaction_node = nodes.iter()
+    let misc_compaction_node = nodes
+        .iter()
         .find(|n| n["name"].as_str().unwrap().contains("Miscellaneous"))
         .expect("Miscellaneous compaction node not found");
 
     let cluster_node_id = cluster_compaction_node["id"].as_str().unwrap();
     let misc_node_id = misc_compaction_node["id"].as_str().unwrap();
 
-    let mut rel_resp1 = backend.db.query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
+    let mut rel_resp1 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
         .bind(("ins_id", parse_record_id(&id1)?))
         .bind(("comp_id", parse_record_id(cluster_node_id)?))
         .await?;
     let rels1: Vec<serde_json::Value> = rel_resp1.take(0)?;
-    assert_eq!(rels1.len(), 1, "Relation between Insight One and Cluster Compaction missing");
+    assert_eq!(
+        rels1.len(),
+        1,
+        "Relation between Insight One and Cluster Compaction missing"
+    );
 
-    let mut rel_resp2 = backend.db.query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
+    let mut rel_resp2 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
         .bind(("ins_id", parse_record_id(&id2)?))
         .bind(("comp_id", parse_record_id(cluster_node_id)?))
         .await?;
     let rels2: Vec<serde_json::Value> = rel_resp2.take(0)?;
-    assert_eq!(rels2.len(), 1, "Relation between Insight Two and Cluster Compaction missing");
+    assert_eq!(
+        rels2.len(),
+        1,
+        "Relation between Insight Two and Cluster Compaction missing"
+    );
 
-    let mut rel_resp3 = backend.db.query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
+    let mut rel_resp3 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
         .bind(("ins_id", parse_record_id(&id3)?))
         .bind(("comp_id", parse_record_id(misc_node_id)?))
         .await?;
     let rels3: Vec<serde_json::Value> = rel_resp3.take(0)?;
-    assert_eq!(rels3.len(), 1, "Relation between Insight Three and Miscellaneous Compaction missing");
+    assert_eq!(
+        rels3.len(),
+        1,
+        "Relation between Insight Three and Miscellaneous Compaction missing"
+    );
 
     Ok(())
 }
@@ -298,28 +335,41 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
     emb4[2] = 0.198997;
 
     // Update the embeddings of these 4 episodes in SurrealDB
-    backend.db.query("UPDATE $id SET embedding = $emb;")
+    backend
+        .db
+        .query("UPDATE $id SET embedding = $emb;")
         .bind(("id", parse_record_id(&id1)?))
         .bind(("emb", emb1))
-        .await?.check()?;
-    backend.db.query("UPDATE $id SET embedding = $emb;")
+        .await?
+        .check()?;
+    backend
+        .db
+        .query("UPDATE $id SET embedding = $emb;")
         .bind(("id", parse_record_id(&id2)?))
         .bind(("emb", emb2))
-        .await?.check()?;
-    backend.db.query("UPDATE $id SET embedding = $emb;")
+        .await?
+        .check()?;
+    backend
+        .db
+        .query("UPDATE $id SET embedding = $emb;")
         .bind(("id", parse_record_id(&id3)?))
         .bind(("emb", emb3))
-        .await?.check()?;
-    backend.db.query("UPDATE $id SET embedding = $emb;")
+        .await?
+        .check()?;
+    backend
+        .db
+        .query("UPDATE $id SET embedding = $emb;")
         .bind(("id", parse_record_id(&id4)?))
         .bind(("emb", emb4))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     // Write an existing insight to disk
     let insight_dir = vault_root.join("wiki/scope1/insights");
     fs::create_dir_all(&insight_dir)?;
     let insight_path = insight_dir.join("drifting_insight.md");
-    let insight_content = format!(r#"---
+    let insight_content = format!(
+        r#"---
 title: "Drifting Insight"
 scope: "scope1"
 source_episodes:
@@ -329,7 +379,9 @@ source_episodes:
   - "{}"
 ---
 Insight content
-"#, id1, id2, id3, id4);
+"#,
+        id1, id2, id3, id4
+    );
     fs::write(&insight_path, insight_content)?;
 
     // Save this insight as a WikiNode in SurrealDB
@@ -343,7 +395,10 @@ Insight content
     };
     let _old_node_id = backend.save_wiki_node(&old_node).await?;
 
-    let mut initial_nodes_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';").await?;
+    let mut initial_nodes_resp = backend
+        .db
+        .query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';")
+        .await?;
     let initial_nodes: Vec<serde_json::Value> = initial_nodes_resp.take(0)?;
     println!("DEBUG TEST: initial drifting nodes: {:?}", initial_nodes);
 
@@ -352,28 +407,47 @@ Insight content
         .run_dream(&backend, &store, Some("deep"), backend.embedder.clone())
         .await?;
 
-    let mut after_nodes_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';").await?;
+    let mut after_nodes_resp = backend
+        .db
+        .query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';")
+        .await?;
     let after_nodes: Vec<serde_json::Value> = after_nodes_resp.take(0)?;
     println!("DEBUG TEST: after drifting nodes: {:?}", after_nodes);
 
     // Assertions to verify the split behavior
 
     // 1. The old insight file on disk is deleted.
-    assert!(!insight_path.exists(), "Old insight file should be deleted.");
+    assert!(
+        !insight_path.exists(),
+        "Old insight file should be deleted."
+    );
 
     // 2. The old insight WikiNode is deleted from the DB
-    let mut response = backend.db.query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';").await?;
+    let mut response = backend
+        .db
+        .query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';")
+        .await?;
     let old_nodes: Vec<serde_json::Value> = response.take(0)?;
-    assert_eq!(old_nodes.len(), 0, "Old insight WikiNode should be deleted from DB");
+    assert_eq!(
+        old_nodes.len(),
+        0,
+        "Old insight WikiNode should be deleted from DB"
+    );
 
     // 3. Check the database: two new split insight nodes are created by the drift check
     // (They will be created under "Split Analysis ..." because of mock LLM behavior when parsing fails, or from the JSON response).
     // Let's query all wiki nodes in scope1 except the old one.
-    let mut response = backend.db.query("SELECT id, name FROM wiki_node WHERE scope = 'scope1' AND name != 'Drifting Insight';").await?;
+    let mut response = backend
+        .db
+        .query(
+            "SELECT id, name FROM wiki_node WHERE scope = 'scope1' AND name != 'Drifting Insight';",
+        )
+        .await?;
     let new_nodes: Vec<serde_json::Value> = response.take(0)?;
-    
+
     // We should have split insights generated. Let's make sure we find them.
-    let split_nodes: Vec<_> = new_nodes.iter()
+    let split_nodes: Vec<_> = new_nodes
+        .iter()
         .filter(|n| n["name"].as_str().unwrap().contains("Split Analysis"))
         .collect();
     assert_eq!(split_nodes.len(), 2, "Expected exactly two split insights");
@@ -384,13 +458,17 @@ Insight content
     let split_id1 = split_nodes[0]["id"].as_str().unwrap();
     let split_id2 = split_nodes[1]["id"].as_str().unwrap();
 
-    let mut rel_resp1 = backend.db.query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
+    let mut rel_resp1 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
         .bind(("ep_id", parse_record_id(&id1)?))
         .bind(("split_id", parse_record_id(split_id1)?))
         .await?;
     let rels1: Vec<serde_json::Value> = rel_resp1.take(0)?;
 
-    let mut rel_resp2 = backend.db.query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
+    let mut rel_resp2 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
         .bind(("ep_id", parse_record_id(&id1)?))
         .bind(("split_id", parse_record_id(split_id2)?))
         .await?;
@@ -405,27 +483,45 @@ Insight content
     };
 
     // Verify first cluster split relationships
-    let mut check1 = backend.db.query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
+    let mut check1 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
         .bind(("ep_id", parse_record_id(&id2)?))
         .bind(("split_id", parse_record_id(first_cluster_split_id)?))
         .await?;
     let check1_rels: Vec<serde_json::Value> = check1.take(0)?;
-    assert_eq!(check1_rels.len(), 1, "Episode 2 should relate to first cluster split insight");
+    assert_eq!(
+        check1_rels.len(),
+        1,
+        "Episode 2 should relate to first cluster split insight"
+    );
 
     // Verify second cluster split relationships
-    let mut check2 = backend.db.query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
+    let mut check2 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
         .bind(("ep_id", parse_record_id(&id3)?))
         .bind(("split_id", parse_record_id(second_cluster_split_id)?))
         .await?;
     let check2_rels: Vec<serde_json::Value> = check2.take(0)?;
-    assert_eq!(check2_rels.len(), 1, "Episode 3 should relate to second cluster split insight");
+    assert_eq!(
+        check2_rels.len(),
+        1,
+        "Episode 3 should relate to second cluster split insight"
+    );
 
-    let mut check3 = backend.db.query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
+    let mut check3 = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE in = $ep_id AND out = $split_id;")
         .bind(("ep_id", parse_record_id(&id4)?))
         .bind(("split_id", parse_record_id(second_cluster_split_id)?))
         .await?;
     let check3_rels: Vec<serde_json::Value> = check3.take(0)?;
-    assert_eq!(check3_rels.len(), 1, "Episode 4 should relate to second cluster split insight");
+    assert_eq!(
+        check3_rels.len(),
+        1,
+        "Episode 4 should relate to second cluster split insight"
+    );
 
     Ok(())
 }
@@ -496,10 +592,9 @@ async fn test_wisdom_rule_deduplication_skills_anchor() -> Result<()> {
 
     // Call save_wisdom_rule_with_deduplication
     let saved_id = mythrax_core::cognitive::synthesis::save_wisdom_rule_with_deduplication(
-        &backend,
-        &store,
-        &new_rule,
-    ).await?;
+        &backend, &store, &new_rule,
+    )
+    .await?;
 
     // Assert it returned skills_id
     assert_eq!(saved_id, skills_id);
@@ -509,10 +604,19 @@ async fn test_wisdom_rule_deduplication_skills_anchor() -> Result<()> {
     assert!(!new_file_path.exists());
 
     // Assert the skills rule now relates to the episode "ep2"
-    let mut response = backend.db.query("SELECT * FROM relates_to WHERE out = $skills_id;").bind(("skills_id", parse_record_id(&skills_id)?)).await?;
+    let mut response = backend
+        .db
+        .query("SELECT * FROM relates_to WHERE out = $skills_id;")
+        .bind(("skills_id", parse_record_id(&skills_id)?))
+        .await?;
     let rels: Vec<serde_json::Value> = response.take(0)?;
-    let ep2_related = rels.iter().any(|r| r["in"].as_str().unwrap().contains("ep2"));
-    assert!(ep2_related, "Episode 2 should be related to the skills rule");
+    let ep2_related = rels
+        .iter()
+        .any(|r| r["in"].as_str().unwrap().contains("ep2"));
+    assert!(
+        ep2_related,
+        "Episode 2 should be related to the skills rule"
+    );
 
     Ok(())
 }
@@ -583,26 +687,40 @@ async fn test_wisdom_rule_deduplication_dynamic() -> Result<()> {
 
     // Call save_wisdom_rule_with_deduplication
     let saved_id = mythrax_core::cognitive::synthesis::save_wisdom_rule_with_deduplication(
-        &backend,
-        &store,
-        &new_rule,
-    ).await?;
+        &backend, &store, &new_rule,
+    )
+    .await?;
 
     // The old rule's file should no longer exist at its original path, but the archived rule file SHOULD exist
     let old_file_path = vault_root.join("wisdom/dynamic/rule1.md");
-    assert!(!old_file_path.exists(), "Old rule file should be removed from active directory");
+    assert!(
+        !old_file_path.exists(),
+        "Old rule file should be removed from active directory"
+    );
 
     let archived_file_path = vault_root.join("wisdom/superseded_archive/rule1.md");
-    assert!(archived_file_path.exists(), "Archived rule file should exist in superseded_archive");
+    assert!(
+        archived_file_path.exists(),
+        "Archived rule file should exist in superseded_archive"
+    );
 
     // The old rule record in SurrealDB should NOT be deleted, but its status should be updated to "superseded"
-    let mut response = backend.db.query("SELECT * FROM wisdom WHERE vault_path = 'wisdom/dynamic/rule1.md';").await?;
+    let mut response = backend
+        .db
+        .query("SELECT * FROM wisdom WHERE vault_path = 'wisdom/dynamic/rule1.md';")
+        .await?;
     let old_db_rules: Vec<serde_json::Value> = response.take(0)?;
-    assert!(!old_db_rules.is_empty(), "Old rule record should still exist in database");
-    
+    assert!(
+        !old_db_rules.is_empty(),
+        "Old rule record should still exist in database"
+    );
+
     if let Some(rule) = old_db_rules.first() {
         let status = rule.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        assert_eq!(status, "superseded", "Old rule status should be updated to 'superseded'");
+        assert_eq!(
+            status, "superseded",
+            "Old rule status should be updated to 'superseded'"
+        );
     }
 
     // The new rule file should exist

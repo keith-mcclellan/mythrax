@@ -1,9 +1,9 @@
-use mythrax_core::mcp_routes::{handle_pre_invocation_hook, CHARS_PER_TOKEN};
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::api::ApiState;
 use mythrax_core::contracts::EpisodeSave;
-use tempfile::tempdir;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use mythrax_core::mcp_routes::{CHARS_PER_TOKEN, handle_pre_invocation_hook};
 use std::sync::Arc;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_episode_save_roundtrips_discovery_tokens() {
@@ -47,11 +47,17 @@ async fn test_episode_save_roundtrips_discovery_tokens() {
     let id_none = backend.save_episode(&ep_none).await.unwrap();
 
     let all = backend.get_all_episodes().await.unwrap();
-    
-    let some_retrieved = all.iter().find(|e| e.id.as_ref().unwrap() == &id_some).unwrap();
+
+    let some_retrieved = all
+        .iter()
+        .find(|e| e.id.as_ref().unwrap() == &id_some)
+        .unwrap();
     assert_eq!(some_retrieved.discovery_tokens, Some(1234));
 
-    let none_retrieved = all.iter().find(|e| e.id.as_ref().unwrap() == &id_none).unwrap();
+    let none_retrieved = all
+        .iter()
+        .find(|e| e.id.as_ref().unwrap() == &id_none)
+        .unwrap();
     assert_eq!(none_retrieved.discovery_tokens, None);
 }
 
@@ -64,7 +70,7 @@ fn test_read_token_estimate_matches_formula() {
     let title = "Hello"; // len 5
     let content = "World!"; // len 6
     // total len = 11. ceil(11/4) = 3 tokens.
-    
+
     let calc_tokens = |t: &str, c: &str| -> u32 {
         let len = t.len() + c.len();
         ((len + CHARS_PER_TOKEN - 1) / CHARS_PER_TOKEN) as u32
@@ -136,10 +142,16 @@ async fn test_token_economics_savings() {
     // Put distilled_context_nodes in STM to hydrate exactly ep1 and ep2 (sum of read tokens = 200, discovery = 1500)
     let node_ids = vec![id1, id2];
     let node_ids_json = serde_json::to_string(&node_ids).unwrap();
-    backend.save_stm("test_session", "distilled_context_nodes", &node_ids_json).await.unwrap();
+    backend
+        .save_stm("test_session", "distilled_context_nodes", &node_ids_json)
+        .await
+        .unwrap();
 
     // Insert a pending handoff so that subagent path is triggered in handle_pre_invocation_hook
-    backend.db.query("INSERT INTO handoff {
+    backend
+        .db
+        .query(
+            "INSERT INTO handoff {
         parent_conversation_id: 'parent_123',
         subagent_conversation_id: 'test_session',
         summary: 'handoff summary',
@@ -147,12 +159,17 @@ async fn test_token_economics_savings() {
         scope: 'general',
         status: 'PENDING',
         created_at: time::now()
-    };").await.unwrap();
+    };",
+        )
+        .await
+        .unwrap();
 
     let state = ApiState {
         backend: Arc::new(backend),
         auth_token: "secret".to_string(),
-        store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
+        store: Arc::new(
+            mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap(),
+        ),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
     };
@@ -163,7 +180,7 @@ async fn test_token_economics_savings() {
     });
 
     let result = handle_pre_invocation_hook(&state, payload).await.unwrap();
-    
+
     let econ = &result["token_economics"];
     assert_eq!(econ["total_read"].as_u64().unwrap(), 200);
     assert_eq!(econ["total_discovery"].as_u64().unwrap(), 1500);
@@ -197,9 +214,19 @@ async fn test_zero_discovery_no_divide_by_zero() {
 
     let node_ids = vec![id];
     let node_ids_json = serde_json::to_string(&node_ids).unwrap();
-    backend.save_stm("test_session_zero", "distilled_context_nodes", &node_ids_json).await.unwrap();
+    backend
+        .save_stm(
+            "test_session_zero",
+            "distilled_context_nodes",
+            &node_ids_json,
+        )
+        .await
+        .unwrap();
 
-    backend.db.query("INSERT INTO handoff {
+    backend
+        .db
+        .query(
+            "INSERT INTO handoff {
         parent_conversation_id: 'parent_123',
         subagent_conversation_id: 'test_session_zero',
         summary: 'handoff summary',
@@ -207,12 +234,17 @@ async fn test_zero_discovery_no_divide_by_zero() {
         scope: 'general',
         status: 'PENDING',
         created_at: time::now()
-    };").await.unwrap();
+    };",
+        )
+        .await
+        .unwrap();
 
     let state = ApiState {
         backend: Arc::new(backend),
         auth_token: "secret".to_string(),
-        store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
+        store: Arc::new(
+            mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap(),
+        ),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
     };
@@ -223,7 +255,7 @@ async fn test_zero_discovery_no_divide_by_zero() {
     });
 
     let result = handle_pre_invocation_hook(&state, payload).await.unwrap();
-    
+
     let econ = &result["token_economics"];
     assert_eq!(econ["total_discovery"].as_u64().unwrap(), 0);
     assert_eq!(econ["savings_percent"].as_u64().unwrap(), 0);

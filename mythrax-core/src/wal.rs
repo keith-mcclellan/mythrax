@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use serde::{Serialize, Deserialize};
-use std::fs::{OpenOptions, File};
-use std::io::{Write, BufRead, BufReader};
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WalEntry {
@@ -62,7 +62,7 @@ impl WriteAheadLog {
             .append(true)
             .open(&self.wal_path)
             .context("Failed to open WAL file")?;
-        
+
         let json_line = serde_json::to_string(entry)?;
         writeln!(file, "{}", json_line)?;
         file.sync_all()?;
@@ -76,9 +76,9 @@ impl WriteAheadLog {
 
         let file = File::open(&self.wal_path)?;
         let reader = BufReader::new(file);
-        
+
         let mut entries = std::collections::HashMap::new();
-        
+
         for line in reader.lines() {
             let line = line?;
             if line.trim().is_empty() {

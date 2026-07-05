@@ -1,7 +1,7 @@
+use crate::db::StorageBackend;
+use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use anyhow::{Result, anyhow};
-use crate::db::StorageBackend;
 
 pub struct ArborExecutor {
     repo_path: PathBuf,
@@ -30,7 +30,7 @@ impl ArborExecutor {
 
         // git worktree add -b worktree-node-<id> /tmp/worktree-node-<id> <commit_sha>
         let branch_name = format!("worktree-node-{}", node_id);
-        
+
         // Check if branch already exists and delete it to avoid conflict
         let _ = Command::new("git")
             .args(["branch", "-D", &branch_name])
@@ -52,17 +52,15 @@ impl ArborExecutor {
         if !status.success() {
             // Fallback: try checking it out as a detached head
             let status2 = Command::new("git")
-                .args([
-                    "worktree",
-                    "add",
-                    "--detach",
-                    &worktree_dir,
-                    commit_sha,
-                ])
+                .args(["worktree", "add", "--detach", &worktree_dir, commit_sha])
                 .current_dir(&self.repo_path)
                 .status()?;
             if !status2.success() {
-                return Err(anyhow!("Failed to add git worktree at {} for commit {}", worktree_dir, commit_sha));
+                return Err(anyhow!(
+                    "Failed to add git worktree at {} for commit {}",
+                    worktree_dir,
+                    commit_sha
+                ));
             }
         }
 
@@ -80,7 +78,11 @@ impl ArborExecutor {
         // Spawns a subprocess to execute the test suite in the temp directory.
         // If shell operators (pipe, redirect, chain) are detected, we use sh -c.
         // Otherwise we split respecting quotes and execute natively without shell wrapping.
-        let has_shell_operators = test_command.contains('&') || test_command.contains('|') || test_command.contains('>') || test_command.contains('<') || test_command.contains(';');
+        let has_shell_operators = test_command.contains('&')
+            || test_command.contains('|')
+            || test_command.contains('>')
+            || test_command.contains('<')
+            || test_command.contains(';');
 
         let mut cmd = if has_shell_operators {
             let mut c = Command::new("sh");
@@ -139,7 +141,9 @@ impl ArborExecutor {
         let mut combined_logs = format!("{}\n{}", stdout, stderr);
 
         if !success {
-            if let Ok(Some((explanation, remedy))) = backend.diagnose_error_internal(&stderr, &stdout).await {
+            if let Ok(Some((explanation, remedy))) =
+                backend.diagnose_error_internal(&stderr, &stdout).await
+            {
                 combined_logs.push_str(&format!(
                     "\n---\n[MYTHRAX AUTO-DIAGNOSTIC]: A matching failure was resolved in the database.\n- Causal Explanation: {}\n- Prescribed Remedy: {}\n---\n",
                     explanation, remedy

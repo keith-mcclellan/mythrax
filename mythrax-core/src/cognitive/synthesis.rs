@@ -1,10 +1,10 @@
+use crate::contracts::{Episode, WikiNode, WisdomRule};
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
-use crate::contracts::{Episode, WisdomRule, WikiNode};
 use anyhow::Result;
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 
 fn dot_product(u: &[f32], v: &[f32]) -> f32 {
     u.iter().zip(v.iter()).map(|(a, b)| a * b).sum()
@@ -14,11 +14,7 @@ pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
     1.0 - dot_product(u, v)
 }
 
-pub fn dbscan(
-    embeddings: &[&[f32]],
-    eps: f32,
-    min_samples: usize,
-) -> Vec<Option<usize>> {
+pub fn dbscan(embeddings: &[&[f32]], eps: f32, min_samples: usize) -> Vec<Option<usize>> {
     let n = embeddings.len();
     let mut labels = vec![None; n];
     let mut cluster_id = 0;
@@ -137,15 +133,17 @@ pub fn load_insights(vault_root: &Path) -> Vec<InsightNote> {
                 let scope = entry.file_name().to_string_lossy().to_string();
                 let insights_dir = entry.path().join("insights");
                 if insights_dir.exists()
-                    && let Ok(files) = std::fs::read_dir(&insights_dir) {
-                        for file in files.flatten() {
-                            if file.path().extension().map(|s| s == "md").unwrap_or(false)
-                                && let Ok(content) = std::fs::read_to_string(file.path())
-                                    && let Ok(note) = parse_insight_note(&content, &file.path(), &scope) {
-                                        insights.push(note);
-                                    }
+                    && let Ok(files) = std::fs::read_dir(&insights_dir)
+                {
+                    for file in files.flatten() {
+                        if file.path().extension().map(|s| s == "md").unwrap_or(false)
+                            && let Ok(content) = std::fs::read_to_string(file.path())
+                            && let Ok(note) = parse_insight_note(&content, &file.path(), &scope)
+                        {
+                            insights.push(note);
                         }
                     }
+                }
             }
         }
     }
@@ -178,23 +176,21 @@ fn parse_insight_note(content: &str, path: &Path, scope: &str) -> Result<Insight
     })
 }
 
-fn calculate_centroid(
-    source_episodes: &[String],
-    all_episodes: &[Episode],
-) -> Option<Vec<f32>> {
+fn calculate_centroid(source_episodes: &[String], all_episodes: &[Episode]) -> Option<Vec<f32>> {
     let mut sum = Vec::new();
     let mut count = 0;
     for ep_id in source_episodes {
         if let Some(ep) = all_episodes.iter().find(|e| e.id.as_ref() == Some(ep_id))
-            && let Some(ref emb) = ep.embedding {
-                if sum.is_empty() {
-                    sum = vec![0.0; emb.len()];
-                }
-                for (i, val) in emb.iter().enumerate() {
-                    sum[i] += val;
-                }
-                count += 1;
+            && let Some(ref emb) = ep.embedding
+        {
+            if sum.is_empty() {
+                sum = vec![0.0; emb.len()];
             }
+            for (i, val) in emb.iter().enumerate() {
+                sum[i] += val;
+            }
+            count += 1;
+        }
     }
     if count > 0 {
         for val in &mut sum {
@@ -242,21 +238,22 @@ impl DreamCoordinator {
         let mut file_min_samples = None;
 
         if settings_path.exists()
-            && let Ok(content) = std::fs::read_to_string(&settings_path) {
-                let yaml_str = if content.starts_with("---") {
-                    let parts: Vec<&str> = content.split("---").collect();
-                    if parts.len() >= 3 { parts[1] } else { &content }
-                } else {
-                    &content
-                };
-                if let Ok(settings) = serde_yaml::from_str::<DreamSettings>(yaml_str) {
-                    if let Some(m) = settings.mode {
-                        active_mode = m;
-                    }
-                    file_eps = settings.eps;
-                    file_min_samples = settings.min_samples;
+            && let Ok(content) = std::fs::read_to_string(&settings_path)
+        {
+            let yaml_str = if content.starts_with("---") {
+                let parts: Vec<&str> = content.split("---").collect();
+                if parts.len() >= 3 { parts[1] } else { &content }
+            } else {
+                &content
+            };
+            if let Ok(settings) = serde_yaml::from_str::<DreamSettings>(yaml_str) {
+                if let Some(m) = settings.mode {
+                    active_mode = m;
                 }
+                file_eps = settings.eps;
+                file_min_samples = settings.min_samples;
             }
+        }
 
         if let Some(mo) = mode_override {
             active_mode = mo.to_string();
@@ -271,17 +268,23 @@ impl DreamCoordinator {
                 if let Ok(Some(last_activity)) = db.get_session_last_activity(&session_id).await {
                     if now - last_activity > idle_threshold {
                         // Retrieve the _last_swept_at key for this session
-                        let stm_map = db.get_stm(&session_id, Some("_last_swept_at")).await.unwrap_or_default();
+                        let stm_map = db
+                            .get_stm(&session_id, Some("_last_swept_at"))
+                            .await
+                            .unwrap_or_default();
                         let last_swept_at_str = stm_map.get("_last_swept_at");
-                        
+
                         let needs_mine = match last_swept_at_str {
                             Some(swept_str) => {
-                                if let Ok(swept_time) = chrono::DateTime::parse_from_rfc3339(swept_str) {
+                                if let Ok(swept_time) =
+                                    chrono::DateTime::parse_from_rfc3339(swept_str)
+                                {
                                     let swept_utc = swept_time.with_timezone(&chrono::Utc);
                                     // Check modification time of file
                                     if let Ok(metadata) = std::fs::metadata(&path) {
                                         if let Ok(modified_time) = metadata.modified() {
-                                            let modified_utc: chrono::DateTime<chrono::Utc> = modified_time.into();
+                                            let modified_utc: chrono::DateTime<chrono::Utc> =
+                                                modified_time.into();
                                             modified_utc > swept_utc
                                         } else {
                                             true
@@ -302,8 +305,18 @@ impl DreamCoordinator {
                             // Check file exists before mining
                             if std::path::Path::new(&path).exists() {
                                 let ignore_list = crate::vault::watcher::WatchIgnoreList::default();
-                                if let Ok(_) = crate::hooks::precompact::mine_transcript(&session_id, &path, db, store, &ignore_list).await {
-                                    let _ = db.save_stm(&session_id, "_last_swept_at", &now.to_rfc3339()).await;
+                                if let Ok(_) = crate::hooks::precompact::mine_transcript(
+                                    &session_id,
+                                    &path,
+                                    db,
+                                    store,
+                                    &ignore_list,
+                                )
+                                .await
+                                {
+                                    let _ = db
+                                        .save_stm(&session_id, "_last_swept_at", &now.to_rfc3339())
+                                        .await;
                                 }
                             } else {
                                 // Clear STM path registry if file is missing/deleted
@@ -376,7 +389,8 @@ impl DreamCoordinator {
                 k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 find_elbow_point(&k_distances)
             } else {
-                let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
+                let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await
+                {
                     Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
                     _ => None,
                 };
@@ -442,7 +456,9 @@ impl DreamCoordinator {
                         if let Some(ref ep_id) = ep.id {
                             if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
                                 if !related_ids.is_empty() {
-                                    if let Ok(mem_nodes_resp) = db.get_memory_nodes(&related_ids).await {
+                                    if let Ok(mem_nodes_resp) =
+                                        db.get_memory_nodes(&related_ids).await
+                                    {
                                         let mut artifacts_text = String::new();
                                         for node in mem_nodes_resp.wiki_nodes {
                                             artifacts_text.push_str(&format!(
@@ -458,11 +474,15 @@ impl DreamCoordinator {
                                 }
                             }
                         }
-                        
+
                         let content_len = display_content.len();
                         let display_content = if content_len > 100_000 {
                             let truncated = truncate_to_boundary(&display_content, 100_000);
-                            format!("{}... [Truncated {} characters of content due to size]", truncated, content_len - 100_000)
+                            format!(
+                                "{}... [Truncated {} characters of content due to size]",
+                                truncated,
+                                content_len - 100_000
+                            )
                         } else {
                             display_content
                         };
@@ -470,7 +490,10 @@ impl DreamCoordinator {
                             "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}",
                             ins.content, ep.title, display_content
                         );
-                        let updated_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+                        let updated_summary = self
+                            .llm
+                            .completion(db, Some(sys_prompt), &prompt_text)
+                            .await?;
 
                         let mut source_ep_links = Vec::new();
                         let mut eps_to_link = Vec::new();
@@ -489,19 +512,29 @@ impl DreamCoordinator {
                             String::new()
                         };
 
-                        let relative_path = format!("wiki/{}/insights/{}.md", scope, ins.title.replace(' ', "_"));
+                        let relative_path =
+                            format!("wiki/{}/insights/{}.md", scope, ins.title.replace(' ', "_"));
                         let new_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
                             ins.title,
                             scope,
-                            new_source_episodes.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
+                            new_source_episodes
+                                .iter()
+                                .map(|id| format!("  - \"{}\"", id))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
                             updated_summary,
                             source_ep_section
                         );
                         store.write_file(&relative_path, &new_content)?;
 
                         for (ep_path, _ep_title) in eps_to_link {
-                            let _ = store.append_link_to_file(&ep_path, "Insights & Summaries", &relative_path, &ins.title);
+                            let _ = store.append_link_to_file(
+                                &ep_path,
+                                "Insights & Summaries",
+                                &relative_path,
+                                &ins.title,
+                            );
                         }
 
                         if let Some(ref ep_id) = ep.id {
@@ -517,9 +550,12 @@ impl DreamCoordinator {
                             embedding: None,
                         };
                         if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await
-                            && let Some(ref ep_id) = ep.id {
-                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
-                            }
+                            && let Some(ref ep_id) = ep.id
+                        {
+                            let _ = db
+                                .relate_nodes(ep_id, &wiki_node_id, None, None, None)
+                                .await;
+                        }
 
                         tracing::info!(
                             "Dreaming scope {}/{} ('{}'): incremental episode {} of {} complete (merged into '{}')",
@@ -569,7 +605,8 @@ impl DreamCoordinator {
                     if let Some(ref ep_id) = ep.id {
                         if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
                             if !related_ids.is_empty() {
-                                if let Ok(mem_nodes_resp) = db.get_memory_nodes(&related_ids).await {
+                                if let Ok(mem_nodes_resp) = db.get_memory_nodes(&related_ids).await
+                                {
                                     let mut artifacts_text = String::new();
                                     for node in mem_nodes_resp.wiki_nodes {
                                         artifacts_text.push_str(&format!(
@@ -585,15 +622,22 @@ impl DreamCoordinator {
                             }
                         }
                     }
-                    
+
                     let content_len = ep_display_content.len();
                     let ep_display_content = if content_len > 100_000 {
                         let truncated = truncate_to_boundary(&ep_display_content, 100_000);
-                        format!("{}... [Truncated {} characters of content due to size]", truncated, content_len - 100_000)
+                        format!(
+                            "{}... [Truncated {} characters of content due to size]",
+                            truncated,
+                            content_len - 100_000
+                        )
                     } else {
                         ep_display_content
                     };
-                    events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
+                    events_text.push_str(&format!(
+                        "Event: {}\nContent:\n{}\n\n",
+                        ep.title, ep_display_content
+                    ));
                 }
 
                 let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
@@ -602,34 +646,50 @@ impl DreamCoordinator {
                     events_text
                 );
 
-                let llm_res = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
-                
+                let llm_res = self
+                    .llm
+                    .completion(db, Some(sys_prompt), &prompt_text)
+                    .await?;
+
                 #[derive(serde::Deserialize)]
                 struct ClusterAnalysis {
                     title: String,
                     summary: String,
                 }
-                
+
                 let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
                     Ok(a) => a,
-                    Err(_) => {
-                        ClusterAnalysis {
-                            title: format!("Cluster Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
-                            summary: llm_res,
-                        }
-                    }
+                    Err(_) => ClusterAnalysis {
+                        title: format!(
+                            "Cluster Analysis {}",
+                            &uuid::Uuid::new_v4().to_string()[..8]
+                        ),
+                        summary: llm_res,
+                    },
                 };
 
-                let cluster_ep_ids: Vec<String> = cluster_eps.iter().map(|ep| ep.id.clone().unwrap_or_default()).collect();
+                let cluster_ep_ids: Vec<String> = cluster_eps
+                    .iter()
+                    .map(|ep| ep.id.clone().unwrap_or_default())
+                    .collect();
 
                 let clean_title = analysis.title.replace([' ', '/'], "_");
                 let insight_uuid = uuid::Uuid::new_v4().to_string();
-                let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+                let relative_path = format!(
+                    "wiki/{}/insights/{}_{}.md",
+                    scope,
+                    clean_title,
+                    &insight_uuid[..8]
+                );
                 let insight_content = format!(
                     "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
                     analysis.title,
                     scope,
-                    cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
+                    cluster_ep_ids
+                        .iter()
+                        .map(|id| format!("  - \"{}\"", id))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                     analysis.summary
                 );
                 store.write_file(&relative_path, &insight_content)?;
@@ -644,7 +704,9 @@ impl DreamCoordinator {
                 };
                 if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
                     for ep_id in &cluster_ep_ids {
-                        let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
+                        let _ = db
+                            .relate_nodes(ep_id, &wiki_node_id, None, None, None)
+                            .await;
                     }
                 }
 
@@ -659,7 +721,11 @@ impl DreamCoordinator {
                     events_text
                 );
 
-                if let Ok(wisdom_res) = self.llm.completion(db, Some(sys_wisdom), &prompt_wisdom).await {
+                if let Ok(wisdom_res) = self
+                    .llm
+                    .completion(db, Some(sys_wisdom), &prompt_wisdom)
+                    .await
+                {
                     #[derive(serde::Deserialize)]
                     struct RawWisdom {
                         target_pattern: String,
@@ -671,7 +737,8 @@ impl DreamCoordinator {
                     }
                     if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
                         for r in rules {
-                            let rule_type = r.rule_type.as_deref().unwrap_or("aesthetic").to_lowercase();
+                            let rule_type =
+                                r.rule_type.as_deref().unwrap_or("aesthetic").to_lowercase();
                             let is_procedural = rule_type == "procedural";
 
                             let mut source_ep_links = Vec::new();
@@ -680,7 +747,8 @@ impl DreamCoordinator {
                                 for ep in mem_nodes.episodes {
                                     if let Some(ref path) = ep.vault_path {
                                         let target = path.strip_suffix(".md").unwrap_or(path);
-                                        source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
+                                        source_ep_links
+                                            .push(format!("- [[{}|{}]]", target, ep.title));
                                         eps_to_link.push((path.clone(), ep.title.clone()));
                                     }
                                 }
@@ -694,25 +762,54 @@ impl DreamCoordinator {
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
                             let (rule_path, final_tier, final_scope) = if is_procedural {
                                 // Save to global/wisdom/permanent/
-                                let relative_global_path = format!("global/wisdom/permanent/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
-                                (relative_global_path, "permanent".to_string(), "general".to_string())
+                                let relative_global_path = format!(
+                                    "global/wisdom/permanent/{}_{}.md",
+                                    r.target_pattern.replace([' ', '/'], "_"),
+                                    &rule_uuid[..8]
+                                );
+                                (
+                                    relative_global_path,
+                                    "permanent".to_string(),
+                                    "general".to_string(),
+                                )
                             } else {
                                 // Save to wisdom/dynamic/ (local)
-                                let relative_local_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                                let relative_local_path = format!(
+                                    "wisdom/dynamic/{}_{}.md",
+                                    r.target_pattern.replace([' ', '/'], "_"),
+                                    &rule_uuid[..8]
+                                );
                                 (relative_local_path, "dynamic".to_string(), scope.clone())
                             };
 
                             let rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier, final_scope,
-                                cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
+                                r.target_pattern,
+                                r.action_to_avoid,
+                                r.causal_explanation,
+                                r.prescribed_remedy,
+                                final_tier,
+                                final_scope,
+                                cluster_ep_ids
+                                    .iter()
+                                    .map(|id| format!("  - \"{}\"", id))
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                                r.target_pattern,
+                                r.action_to_avoid,
+                                r.causal_explanation,
+                                r.prescribed_remedy,
                                 source_ep_section
                             );
                             store.write_file(&rule_path, &rule_md)?;
 
                             for (ep_path, _ep_title) in eps_to_link {
-                                let _ = store.append_link_to_file(&ep_path, "Derived Wisdom Rules", &rule_path, &format!("Wisdom: {}", r.target_pattern));
+                                let _ = store.append_link_to_file(
+                                    &ep_path,
+                                    "Derived Wisdom Rules",
+                                    &rule_path,
+                                    &format!("Wisdom: {}", r.target_pattern),
+                                );
                             }
 
                             let rule_contract = WisdomRule {
@@ -733,9 +830,12 @@ impl DreamCoordinator {
                                 superseded_at: None,
                                 superseded_by: None,
                             };
-                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
+                            if let Ok(wisdom_id) =
+                                save_wisdom_rule_with_deduplication(db, store, &rule_contract).await
+                            {
                                 for ep_id in &cluster_ep_ids {
-                                    let _ = db.relate_nodes(ep_id, &wisdom_id, None, None, None).await;
+                                    let _ =
+                                        db.relate_nodes(ep_id, &wisdom_id, None, None, None).await;
                                 }
                             }
                         }
@@ -759,20 +859,32 @@ impl DreamCoordinator {
             }
 
             // --- DRIFT & SPLIT MANAGEMENT LOGIC START ---
-            
+
             // 1. Load all insights for the current scope
             let existing_insights = load_insights(&store.vault_root);
-            tracing::debug!("Scope: {}, existing_insights count: {}", scope, existing_insights.len());
+            tracing::debug!(
+                "Scope: {}, existing_insights count: {}",
+                scope,
+                existing_insights.len()
+            );
             let scope_insights: Vec<InsightNote> = existing_insights
                 .into_iter()
                 .filter(|ins| ins.scope == scope)
                 .collect();
-            tracing::debug!("Scope: {}, scope_insights count: {}", scope, scope_insights.len());
+            tracing::debug!(
+                "Scope: {}, scope_insights count: {}",
+                scope,
+                scope_insights.len()
+            );
 
             // 2. Process each insight for drift detection
             for ins in scope_insights {
                 let source_ids = ins.source_episodes.clone();
-                tracing::debug!("Checking insight: {}, source episodes count: {}", ins.title, source_ids.len());
+                tracing::debug!(
+                    "Checking insight: {}, source episodes count: {}",
+                    ins.title,
+                    source_ids.len()
+                );
                 if source_ids.len() < 2 {
                     continue;
                 }
@@ -785,11 +897,11 @@ impl DreamCoordinator {
                     // 3. Prepare embeddings with local fallback
                     let mut episode_embeddings = Vec::new();
                     let mut valid_episodes = Vec::new();
-                    
+
                     // Separate episodes that need embedding
                     let mut episodes_needing_embedding = Vec::new();
                     let mut episodes_with_embedding = Vec::new();
-                    
+
                     for mut ep in episodes {
                         if ep.embedding.is_none() {
                             episodes_needing_embedding.push(ep.content.clone());
@@ -815,7 +927,7 @@ impl DreamCoordinator {
                             }
                         }
                     }
-                    
+
                     // Merge back into final lists
                     for ep in episodes_with_embedding {
                         if let Some(emb) = &ep.embedding {
@@ -835,7 +947,8 @@ impl DreamCoordinator {
                     let mut max_pair = (0, 1);
                     for i in 0..episode_embeddings.len() {
                         for j in (i + 1)..episode_embeddings.len() {
-                            let dist = cosine_distance(&episode_embeddings[i], &episode_embeddings[j]);
+                            let dist =
+                                cosine_distance(&episode_embeddings[i], &episode_embeddings[j]);
                             if dist > max_dist {
                                 max_dist = dist;
                                 max_pair = (i, j);
@@ -846,13 +959,18 @@ impl DreamCoordinator {
                     tracing::debug!("Max pairwise distance: {}", max_dist);
                     // 5. If drift is high (> 0.30), trigger split
                     if max_dist > 0.30 {
-                        tracing::debug!("Drift > 0.30 detected! Triggering split for: {}", ins.title);
+                        tracing::debug!(
+                            "Drift > 0.30 detected! Triggering split for: {}",
+                            ins.title
+                        );
                         // Prepare references for DBSCAN
-                        let emb_refs: Vec<&[f32]> = episode_embeddings.iter().map(|e| e.as_slice()).collect();
+                        let emb_refs: Vec<&[f32]> =
+                            episode_embeddings.iter().map(|e| e.as_slice()).collect();
                         let labels = dbscan(&emb_refs, 0.08, 2);
 
                         // Group episodes by DBSCAN labels
-                        let mut clusters: std::collections::HashMap<usize, Vec<Episode>> = std::collections::HashMap::new();
+                        let mut clusters: std::collections::HashMap<usize, Vec<Episode>> =
+                            std::collections::HashMap::new();
                         let mut outliers = Vec::new();
 
                         for (idx, label) in labels.into_iter().enumerate() {
@@ -871,14 +989,14 @@ impl DreamCoordinator {
                             // Manual Bisection Split
                             let seed1_emb = &episode_embeddings[max_pair.0];
                             let seed2_emb = &episode_embeddings[max_pair.1];
-                            
+
                             let mut group1 = Vec::new();
                             let mut group2 = Vec::new();
 
                             for (k, ep) in valid_episodes.iter().enumerate() {
                                 let dist1 = cosine_distance(&episode_embeddings[k], seed1_emb);
                                 let dist2 = cosine_distance(&episode_embeddings[k], seed2_emb);
-                                
+
                                 // Assign to closer seed. Ensure seeds themselves are in their respective groups.
                                 if k == max_pair.0 {
                                     group1.push(ep.clone());
@@ -915,7 +1033,9 @@ impl DreamCoordinator {
                                 if let Some(ref ep_id) = ep.id {
                                     if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
                                         if !related_ids.is_empty() {
-                                            if let Ok(mem_nodes_resp) = db.get_memory_nodes(&related_ids).await {
+                                            if let Ok(mem_nodes_resp) =
+                                                db.get_memory_nodes(&related_ids).await
+                                            {
                                                 let mut artifacts_text = String::new();
                                                 for node in mem_nodes_resp.wiki_nodes {
                                                     artifacts_text.push_str(&format!(
@@ -924,22 +1044,31 @@ impl DreamCoordinator {
                                                     ));
                                                 }
                                                 if !artifacts_text.is_empty() {
-                                                    ep_display_content.push_str("\n\nAssociated Artifacts:\n");
+                                                    ep_display_content
+                                                        .push_str("\n\nAssociated Artifacts:\n");
                                                     ep_display_content.push_str(&artifacts_text);
                                                 }
                                             }
                                         }
                                     }
                                 }
-                                
+
                                 let content_len = ep_display_content.len();
                                 let ep_display_content = if content_len > 100_000 {
-                                    let truncated = truncate_to_boundary(&ep_display_content, 100_000);
-                                    format!("{}... [Truncated {} characters of content due to size]", truncated, content_len - 100_000)
+                                    let truncated =
+                                        truncate_to_boundary(&ep_display_content, 100_000);
+                                    format!(
+                                        "{}... [Truncated {} characters of content due to size]",
+                                        truncated,
+                                        content_len - 100_000
+                                    )
                                 } else {
                                     ep_display_content
                                 };
-                                events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
+                                events_text.push_str(&format!(
+                                    "Event: {}\nContent:\n{}\n\n",
+                                    ep.title, ep_display_content
+                                ));
                             }
 
                             // Call LLM Synthesizer
@@ -948,38 +1077,53 @@ impl DreamCoordinator {
                                 "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
                                 events_text
                             );
-                            
-                            if let Ok(llm_res) = self.llm.completion(db, Some(sys_prompt), &prompt_text).await {
+
+                            if let Ok(llm_res) = self
+                                .llm
+                                .completion(db, Some(sys_prompt), &prompt_text)
+                                .await
+                            {
                                 #[derive(serde::Deserialize)]
                                 struct ClusterAnalysis {
                                     title: String,
                                     summary: String,
                                 }
 
-                                let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
+                                let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res)
+                                {
                                     Ok(a) => a,
-                                    Err(_) => {
-                                        ClusterAnalysis {
-                                            title: format!("Split Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
-                                            summary: llm_res,
-                                        }
-                                    }
+                                    Err(_) => ClusterAnalysis {
+                                        title: format!(
+                                            "Split Analysis {}",
+                                            &uuid::Uuid::new_v4().to_string()[..8]
+                                        ),
+                                        summary: llm_res,
+                                    },
                                 };
 
                                 // Write new insight to disk
                                 let clean_title = analysis.title.replace([' ', '/'], "_");
                                 let insight_uuid = uuid::Uuid::new_v4().to_string();
-                                let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+                                let relative_path = format!(
+                                    "wiki/{}/insights/{}_{}.md",
+                                    scope,
+                                    clean_title,
+                                    &insight_uuid[..8]
+                                );
 
                                 let mut source_ep_links = Vec::new();
                                 for ep in &group {
                                     if let Some(ref path) = ep.vault_path {
                                         let target = path.strip_suffix(".md").unwrap_or(path);
-                                        source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
+                                        source_ep_links
+                                            .push(format!("- [[{}|{}]]", target, ep.title));
                                     }
                                 }
                                 let source_ep_section = if !source_ep_links.is_empty() {
-                                    format!("\n\n## Source Episodes\n{}", source_ep_links.join("\n"))
+                                    format!(
+                                        "\n\n## Source Episodes\n{}",
+                                        source_ep_links.join("\n")
+                                    )
                                 } else {
                                     String::new()
                                 };
@@ -988,14 +1132,26 @@ impl DreamCoordinator {
                                     "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
                                     analysis.title,
                                     scope,
-                                    group.iter().map(|ep| format!("  - \"{}\"", ep.id.as_ref().unwrap_or(&String::new()))).collect::<Vec<_>>().join("\n"),
+                                    group
+                                        .iter()
+                                        .map(|ep| format!(
+                                            "  - \"{}\"",
+                                            ep.id.as_ref().unwrap_or(&String::new())
+                                        ))
+                                        .collect::<Vec<_>>()
+                                        .join("\n"),
                                     analysis.summary,
                                     source_ep_section
                                 );
                                 if store.write_file(&relative_path, &insight_content).is_ok() {
                                     for ep in &group {
                                         if let Some(ref path) = ep.vault_path {
-                                            let _ = store.append_link_to_file(path, "Insights & Summaries", &relative_path, &analysis.title);
+                                            let _ = store.append_link_to_file(
+                                                path,
+                                                "Insights & Summaries",
+                                                &relative_path,
+                                                &analysis.title,
+                                            );
                                         }
                                     }
 
@@ -1008,11 +1164,21 @@ impl DreamCoordinator {
                                         vault_path: Some(relative_path.clone()),
                                         embedding: None,
                                     };
-                                    
-                                    if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
+
+                                    if let Ok(wiki_node_id) =
+                                        db.save_wiki_node(&node_contract).await
+                                    {
                                         for ep in &group {
                                             if let Some(ref ep_id) = ep.id {
-                                                let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
+                                                let _ = db
+                                                    .relate_nodes(
+                                                        ep_id,
+                                                        &wiki_node_id,
+                                                        None,
+                                                        None,
+                                                        None,
+                                                    )
+                                                    .await;
                                             }
                                         }
                                     }
@@ -1022,13 +1188,18 @@ impl DreamCoordinator {
 
                         // 8. Delete old drifting insight
                         let _ = std::fs::remove_file(Path::new(&ins.vault_path));
-                        
+
                         let rel_path = Path::new(&ins.vault_path)
                             .strip_prefix(&store.vault_root)
                             .unwrap_or(Path::new(&ins.vault_path))
                             .to_string_lossy()
                             .to_string();
-                        println!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
+                        println!(
+                            "DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'",
+                            rel_path,
+                            ins.vault_path,
+                            store.vault_root.display()
+                        );
                         let _ = db.delete_by_vault_path(&rel_path).await;
                     }
                 }
@@ -1063,7 +1234,7 @@ fn update_archived_rule_content(content: &str, new_id: &str) -> String {
             let actual_second_idx = second_dash_idx + 3;
             let frontmatter = &content[3..actual_second_idx];
             let rest = &content[actual_second_idx..];
-            
+
             let mut new_frontmatter = String::new();
             let mut status_written = false;
             let mut superseded_by_written = false;
@@ -1085,11 +1256,14 @@ fn update_archived_rule_content(content: &str, new_id: &str) -> String {
             if !superseded_by_written {
                 new_frontmatter.push_str(&format!("superseded_by: \"{}\"\n", new_id));
             }
-            
+
             return format!("---\n{}---{}", new_frontmatter, rest);
         }
     }
-    format!("---\nstatus: \"superseded\"\nsuperseded_by: \"{}\"\n---\n\n{}", new_id, content)
+    format!(
+        "---\nstatus: \"superseded\"\nsuperseded_by: \"{}\"\n---\n\n{}",
+        new_id, content
+    )
 }
 
 pub async fn save_wisdom_rule_with_deduplication(
@@ -1102,7 +1276,10 @@ pub async fn save_wisdom_rule_with_deduplication(
     } else {
         let text_to_embed = format!(
             "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-            rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+            rule.target_pattern,
+            rule.action_to_avoid,
+            rule.causal_explanation,
+            rule.prescribed_remedy
         );
         match db.embed(&text_to_embed).await {
             Ok(emb) => emb,
@@ -1129,7 +1306,10 @@ pub async fn save_wisdom_rule_with_deduplication(
             None => {
                 let ext_text = format!(
                     "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-                    existing.target_pattern, existing.action_to_avoid, existing.causal_explanation, existing.prescribed_remedy
+                    existing.target_pattern,
+                    existing.action_to_avoid,
+                    existing.causal_explanation,
+                    existing.prescribed_remedy
                 );
                 match db.embed(&ext_text).await {
                     Ok(emb) => {
@@ -1172,8 +1352,14 @@ pub async fn save_wisdom_rule_with_deduplication(
                  Please merge and generalize these two similar rules into a single comprehensive rule. \
                  Respond ONLY with a JSON object matching the structure of WisdomRule, with fields:\n\
                  - target_pattern\n- action_to_avoid\n- causal_explanation\n- prescribed_remedy",
-                matched.target_pattern, matched.action_to_avoid, matched.causal_explanation, matched.prescribed_remedy,
-                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                matched.target_pattern,
+                matched.action_to_avoid,
+                matched.causal_explanation,
+                matched.prescribed_remedy,
+                rule.target_pattern,
+                rule.action_to_avoid,
+                rule.causal_explanation,
+                rule.prescribed_remedy
             );
 
             let llm = crate::llm::LLMClient::new();
@@ -1181,9 +1367,19 @@ pub async fn save_wisdom_rule_with_deduplication(
                 Ok(res) => {
                     let trimmed = res.trim();
                     let stripped = if trimmed.starts_with("```json") {
-                        trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                        trimmed
+                            .strip_prefix("```json")
+                            .unwrap_or(trimmed)
+                            .strip_suffix("```")
+                            .unwrap_or(trimmed)
+                            .trim()
                     } else if trimmed.starts_with("```") {
-                        trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                        trimmed
+                            .strip_prefix("```")
+                            .unwrap_or(trimmed)
+                            .strip_suffix("```")
+                            .unwrap_or(trimmed)
+                            .trim()
                     } else {
                         trimmed
                     };
@@ -1219,14 +1415,28 @@ pub async fn save_wisdom_rule_with_deduplication(
                         } else if let Some(ref path) = matched.vault_path {
                             path.clone()
                         } else {
-                            format!("wisdom/dynamic/merged_{}.md", &uuid::Uuid::new_v4().to_string()[..8])
+                            format!(
+                                "wisdom/dynamic/merged_{}.md",
+                                &uuid::Uuid::new_v4().to_string()[..8]
+                            )
                         };
 
                         let rule_md = format!(
                             "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"dynamic\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
-                            fields.target_pattern, fields.action_to_avoid, fields.causal_explanation, fields.prescribed_remedy, rule.scope,
-                            merged_eps.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
-                            fields.target_pattern, fields.action_to_avoid, fields.causal_explanation, fields.prescribed_remedy
+                            fields.target_pattern,
+                            fields.action_to_avoid,
+                            fields.causal_explanation,
+                            fields.prescribed_remedy,
+                            rule.scope,
+                            merged_eps
+                                .iter()
+                                .map(|id| format!("  - \"{}\"", id))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            fields.target_pattern,
+                            fields.action_to_avoid,
+                            fields.causal_explanation,
+                            fields.prescribed_remedy
                         );
 
                         if let Err(e) = store.write_file(&final_path, &rule_md) {
@@ -1255,21 +1465,35 @@ pub async fn save_wisdom_rule_with_deduplication(
                         match db.save_wisdom_rule(&merged_contract).await {
                             Ok(saved_id) => {
                                 // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
-                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-                                    let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
-                                    let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
-                                    
+                                if let Some(surreal_backend) =
+                                    db.as_any().downcast_ref::<crate::db::SurrealBackend>()
+                                {
+                                    let old_uuid = matched
+                                        .id
+                                        .as_ref()
+                                        .unwrap()
+                                        .strip_prefix("wisdom:")
+                                        .unwrap_or(matched.id.as_ref().unwrap());
+                                    let new_uuid =
+                                        saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
+
                                     let sql = "
                                         LET $old_rec = type::record('wisdom', $old_uuid);
                                         LET $new_rec = type::record('wisdom', $new_uuid);
                                         UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
                                         RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
                                     ";
-                                    if let Err(e) = surreal_backend.db.query(sql)
+                                    if let Err(e) = surreal_backend
+                                        .db
+                                        .query(sql)
                                         .bind(("old_uuid", old_uuid))
                                         .bind(("new_uuid", new_uuid))
-                                        .await {
-                                        tracing::error!("Failed to update superseded status or relate nodes: {}", e);
+                                        .await
+                                    {
+                                        tracing::error!(
+                                            "Failed to update superseded status or relate nodes: {}",
+                                            e
+                                        );
                                     }
                                 }
 
@@ -1277,14 +1501,21 @@ pub async fn save_wisdom_rule_with_deduplication(
                                 if let Some(ref old_vp) = matched.vault_path {
                                     let src_path = store.vault_root.join(old_vp);
                                     if src_path.exists() {
-                                        let archive_dir = store.vault_root.join("wisdom/superseded_archive");
+                                        let archive_dir =
+                                            store.vault_root.join("wisdom/superseded_archive");
                                         let _ = std::fs::create_dir_all(&archive_dir);
                                         if let Some(filename) = src_path.file_name() {
                                             let dest_path = archive_dir.join(filename);
                                             if std::fs::rename(&src_path, &dest_path).is_ok() {
-                                                if let Ok(content) = std::fs::read_to_string(&dest_path) {
-                                                    let updated_content = update_archived_rule_content(&content, &saved_id);
-                                                    let _ = std::fs::write(&dest_path, updated_content);
+                                                if let Ok(content) =
+                                                    std::fs::read_to_string(&dest_path)
+                                                {
+                                                    let updated_content =
+                                                        update_archived_rule_content(
+                                                            &content, &saved_id,
+                                                        );
+                                                    let _ =
+                                                        std::fs::write(&dest_path, updated_content);
                                                 }
                                             }
                                         }
@@ -1298,7 +1529,10 @@ pub async fn save_wisdom_rule_with_deduplication(
                             }
                         }
                     } else {
-                        tracing::warn!("Failed to parse LLM response as merged fields: {}", stripped);
+                        tracing::warn!(
+                            "Failed to parse LLM response as merged fields: {}",
+                            stripped
+                        );
                     }
                 }
                 Err(e) => {
@@ -1318,15 +1552,15 @@ fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
     if s.chars().count() <= max_chars {
         return s;
     }
-    
+
     // Find the byte index at the character limit
     let limit_byte_idx = match s.char_indices().nth(max_chars) {
         Some((idx, _)) => idx,
         None => return s,
     };
-    
+
     let candidate = &s[..limit_byte_idx];
-    
+
     // Scan backward to find a clean boundary
     // 1. Try paragraph boundary (\n\n) within the last 5000 characters
     if let Some(para_idx) = candidate.rfind("\n\n") {
@@ -1334,21 +1568,21 @@ fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
             return &candidate[..para_idx];
         }
     }
-    
+
     // 2. Try line boundary (\n) within the last 2000 characters
     if let Some(line_idx) = candidate.rfind('\n') {
         if limit_byte_idx - line_idx < 2000 {
             return &candidate[..line_idx];
         }
     }
-    
+
     // 3. Try word boundary (space) within the last 500 characters
     if let Some(space_idx) = candidate.rfind(' ') {
         if limit_byte_idx - space_idx < 500 {
             return &candidate[..space_idx];
         }
     }
-    
+
     // Fallback to exact character boundary truncation
     candidate
 }
@@ -1364,7 +1598,7 @@ mod tests {
         let w = vec![0.0, 1.0];
 
         let embeddings = vec![u.as_slice(), v.as_slice(), w.as_slice()];
-        
+
         let labels = dbscan(&embeddings, 0.05, 2);
 
         assert_eq!(labels.len(), 3);

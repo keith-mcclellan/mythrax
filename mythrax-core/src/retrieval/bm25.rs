@@ -114,10 +114,10 @@ impl OkapiBM25 {
             for term in &query_tokens {
                 let tf = *term_freqs.get(term).unwrap_or(&0) as f32;
                 let df_t = *self.df.get(term).unwrap_or(&0);
-                
+
                 // IDF formula: log((N - df + 0.5)/(df + 0.5) + 1.0)
                 let idf = (((self.n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
-                
+
                 // Okapi BM25 formula
                 let numerator = tf * (self.k1 + 1.0);
                 let dl_ratio = if self.avg_dl > 0.0 {
@@ -126,7 +126,7 @@ impl OkapiBM25 {
                     1.0
                 };
                 let denominator = tf + self.k1 * (1.0 - self.b + self.b * dl_ratio);
-                
+
                 score += idf * (numerator / denominator);
             }
 
@@ -145,8 +145,12 @@ impl OkapiBM25 {
         let mut min_val = f32::MAX;
         let mut max_val = f32::MIN;
         for (_, s) in &raw {
-            if *s < min_val { min_val = *s; }
-            if *s > max_val { max_val = *s; }
+            if *s < min_val {
+                min_val = *s;
+            }
+            if *s > max_val {
+                max_val = *s;
+            }
         }
 
         let denom = max_val - min_val;
@@ -165,8 +169,8 @@ impl OkapiBM25 {
     }
 }
 
-use std::sync::OnceLock;
 use rust_stemmers::{Algorithm, Stemmer};
+use std::sync::OnceLock;
 
 pub fn stem(word: &str) -> String {
     if word.len() <= 2 || word.contains('-') {
@@ -347,9 +351,12 @@ mod tests {
         ];
         for (input, expected) in corpus {
             assert_eq!(
-                stem(input), *expected,
+                stem(input),
+                *expected,
                 "Snowball English mismatch: '{}' -> got '{}', expected '{}'",
-                input, stem(input), expected
+                input,
+                stem(input),
+                expected
             );
         }
     }
@@ -359,7 +366,7 @@ mod tests {
         let db = surrealdb::engine::any::connect("mem://").await.unwrap();
         db.use_ns("test").use_db("test").await.unwrap();
         db.query("DEFINE ANALYZER snowball_en TOKENIZERS blank, punct FILTERS lowercase, snowball(english);").await.unwrap();
-        
+
         let corpus = &[
             "optimization",
             "management",
@@ -376,9 +383,10 @@ mod tests {
             "running",
             "caresses",
         ];
-        
+
         for word in corpus {
-            let mut res = db.query("RETURN search::analyze('snowball_en', $word);")
+            let mut res = db
+                .query("RETURN search::analyze('snowball_en', $word);")
                 .bind(("word", *word))
                 .await
                 .unwrap();

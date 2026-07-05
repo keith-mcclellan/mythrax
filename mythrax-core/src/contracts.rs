@@ -61,7 +61,6 @@ pub struct EpisodeSave {
     pub files_modified: Option<Vec<String>>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResult {
     pub id: String,
@@ -296,4 +295,3 @@ pub struct SymbolicHit {
     pub path_confidence: f32,
     pub hops: usize,
 }
-

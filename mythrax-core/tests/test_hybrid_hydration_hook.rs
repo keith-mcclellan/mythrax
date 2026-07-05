@@ -1,9 +1,9 @@
 use anyhow::Result;
-use serde_json::json;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::api::ApiState;
-use mythrax_core::store::MarkdownStore;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::mcp_routes::call_mcp_tool;
+use mythrax_core::store::MarkdownStore;
+use serde_json::json;
 
 #[tokio::test]
 async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
@@ -23,7 +23,14 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
 
     // 1. Create a BeliefState in SurrealDB
     let session_id = "test-session-123";
-    let _ = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap().db.query("
+    let _ = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap()
+        .db
+        .query(
+            "
         UPSERT type::record('belief_state', $session_id) CONTENT {
             session_id: $session_id,
             tasks_todo: ['task1'],
@@ -32,9 +39,10 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
             uncertainty_areas: ['unc1'],
             updated_at: '2026-06-25T00:00:00Z'
         };
-    ")
-    .bind(("session_id", session_id))
-    .await?;
+    ",
+        )
+        .bind(("session_id", session_id))
+        .await?;
 
     // 2. Insert handoff to trigger the search path
     let handoff = mythrax_core::contracts::HandoffSave {
@@ -53,11 +61,11 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
         "query": "test query",
         "workspace_path": temp_dir.path().to_str().unwrap()
     });
-    
+
     let response = call_mcp_tool(&state, "manage", args).await?;
-    
+
     let text = response["content"][0]["text"].as_str().unwrap();
-    
+
     // Verify BeliefState is prepended nicely
     assert!(text.contains("POMDP Belief State"));
     assert!(text.contains("0.75"));

@@ -1,5 +1,5 @@
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_concept_prefilter_narrows_candidates() {
@@ -9,7 +9,8 @@ async fn test_concept_prefilter_narrows_candidates() {
     // 1. Close but untagged episode
     let ep_close = EpisodeSave {
         title: "Security and authentication overview".to_string(),
-        content: "This document describes overall security patterns including auth and tokens.".to_string(),
+        content: "This document describes overall security patterns including auth and tokens."
+            .to_string(),
         entities: vec![],
         scope: Some("general".to_string()),
         vault_path: Some("notes/security.md".to_string()),
@@ -27,7 +28,8 @@ async fn test_concept_prefilter_narrows_candidates() {
     // 2. Target episode tagged with "oauth"
     let ep_target = EpisodeSave {
         title: "OAuth setup guide".to_string(),
-        content: "Steps to configure the oauth provider and client secrets. security patterns".to_string(),
+        content: "Steps to configure the oauth provider and client secrets. security patterns"
+            .to_string(),
         entities: vec![],
         scope: Some("general".to_string()),
         vault_path: Some("notes/oauth.md".to_string()),
@@ -61,14 +63,17 @@ async fn test_concept_prefilter_narrows_candidates() {
     backend.save_episode(&ep_unrelated).await.unwrap();
 
     // Search for concept "oauth" - should return only the target episode
-    let res = backend.search_filtered(
-        "security patterns",
-        Some("general"),
-        10,
-        0.0,
-        &["oauth".to_string()],
-        &[]
-    ).await.unwrap();
+    let res = backend
+        .search_filtered(
+            "security patterns",
+            Some("general"),
+            10,
+            0.0,
+            &["oauth".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
 
     assert_eq!(res.results.len(), 1);
     assert_eq!(res.results[0].id, target_id);
@@ -81,7 +86,9 @@ async fn test_files_modified_filter() {
 
     let ep1 = EpisodeSave {
         title: "Fix compiler errors in api.rs".to_string(),
-        content: "Fixed struct literals and stand-alone commas in api.rs. refactored tests or fixes".to_string(),
+        content:
+            "Fixed struct literals and stand-alone commas in api.rs. refactored tests or fixes"
+                .to_string(),
         entities: vec![],
         scope: Some("general".to_string()),
         vault_path: Some("notes/api_fix.md".to_string()),
@@ -114,14 +121,17 @@ async fn test_files_modified_filter() {
     backend.save_episode(&ep2).await.unwrap();
 
     // Search filtered by file "api.rs"
-    let res = backend.search_filtered(
-        "refactored tests or fixes",
-        Some("general"),
-        10,
-        0.0,
-        &[],
-        &["api.rs".to_string()]
-    ).await.unwrap();
+    let res = backend
+        .search_filtered(
+            "refactored tests or fixes",
+            Some("general"),
+            10,
+            0.0,
+            &[],
+            &["api.rs".to_string()],
+        )
+        .await
+        .unwrap();
 
     assert_eq!(res.results.len(), 1);
     assert_eq!(res.results[0].id, id1);
@@ -151,14 +161,17 @@ async fn test_structured_filter_never_empties_floor() {
 
     // Search with a concept that doesn't exist ("nonexistent")
     // It should fall back to unfiltered results instead of returning empty list!
-    let res = backend.search_filtered(
-        "General note",
-        Some("general"),
-        10,
-        0.0,
-        &["nonexistent".to_string()],
-        &[]
-    ).await.unwrap();
+    let res = backend
+        .search_filtered(
+            "General note",
+            Some("general"),
+            10,
+            0.0,
+            &["nonexistent".to_string()],
+            &[],
+        )
+        .await
+        .unwrap();
 
     assert!(!res.results.is_empty());
     assert_eq!(res.results[0].id, id);

@@ -1,9 +1,9 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{EpisodeSave, WisdomRule};
 use mythrax_core::cognitive::executor::ArborExecutor;
+use mythrax_core::contracts::{EpisodeSave, WisdomRule};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use std::fs;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_auto_scoping_and_filtering() -> Result<()> {
@@ -19,7 +19,10 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
 
     // Force resolve_active_scope to find our project by setting the environment variable
     unsafe {
-        std::env::set_var("MYTHRAX_WORKSPACE_ROOT", proj_dir.to_string_lossy().to_string());
+        std::env::set_var(
+            "MYTHRAX_WORKSPACE_ROOT",
+            proj_dir.to_string_lossy().to_string(),
+        );
     }
     let active_scope = backend.resolve_active_scope();
     assert_eq!(active_scope, "my-awesome_project");
@@ -66,7 +69,9 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
 
     // Search with scope: None -> should resolve to target scope "myawesomeproject"
     // Search should return both target scope and general scope, but exclude other scopes.
-    let resp = backend.search("Episode", None, false, 10, 0, 0.0, None, false, true, true).await?;
+    let resp = backend
+        .search("Episode", None, false, 10, 0, 0.0, None, false, true, true)
+        .await?;
     let found_titles: Vec<String> = resp.results.iter().map(|r| r.title.clone()).collect();
 
     assert!(found_titles.contains(&"Target Project Episode".to_string()));
@@ -74,7 +79,20 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
     assert!(!found_titles.contains(&"Other Project Episode".to_string()));
 
     // Search with wildcard scope "all" -> should return everything
-    let resp_all = backend.search("Episode", Some("all"), false, 10, 0, 0.0, None, false, true, true).await?;
+    let resp_all = backend
+        .search(
+            "Episode",
+            Some("all"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+        )
+        .await?;
     let all_titles: Vec<String> = resp_all.results.iter().map(|r| r.title.clone()).collect();
 
     assert!(all_titles.contains(&"Target Project Episode".to_string()));
@@ -139,11 +157,27 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
 
     // Verify that sequential save created the followed_by links.
     // Querying with deep_insight: true and include_episodes: true on "Core Logic" should return Step 1 and Step 3 as related nodes.
-    let resp = backend.search("Core Logic", None, true, 10, 0, 0.0, None, false, true, true).await?;
+    let resp = backend
+        .search(
+            "Core Logic",
+            None,
+            true,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+        )
+        .await?;
     let results = resp.results;
     assert!(!results.is_empty());
 
-    let match_ep2 = results.iter().find(|r| r.id == ep2_id).expect("Should find Step 2 in search results");
+    let match_ep2 = results
+        .iter()
+        .find(|r| r.id == ep2_id)
+        .expect("Should find Step 2 in search results");
     assert!(match_ep2.related_nodes.is_some());
     let related = match_ep2.related_nodes.as_ref().unwrap();
 
@@ -185,9 +219,12 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
     let rule_lock = WisdomRule {
         id: None,
         target_pattern: "lock".to_string(),
-        action_to_avoid: "Avoid running concurrent instances accessing the same RocksDB path".to_string(),
-        causal_explanation: "RocksDB lock acquisition failure indicates concurrent access conflicts".to_string(),
-        prescribed_remedy: "Close any running processes or containers holding the DB lock".to_string(),
+        action_to_avoid: "Avoid running concurrent instances accessing the same RocksDB path"
+            .to_string(),
+        causal_explanation:
+            "RocksDB lock acquisition failure indicates concurrent access conflicts".to_string(),
+        prescribed_remedy: "Close any running processes or containers holding the DB lock"
+            .to_string(),
         tier: "permanent".to_string(),
         scope: "general".to_string(),
         vault_path: None,
@@ -212,9 +249,16 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
 
     assert!(diagnosis_rust.is_some());
     let (exp, rem) = diagnosis_rust.unwrap();
-    assert_eq!(exp, "Rust E0063 error occurs when struct fields are missing");
+    assert_eq!(
+        exp,
+        "Rust E0063 error occurs when struct fields are missing"
+    );
     assert_eq!(rem, "Add all required fields to the struct initializer");
-    assert!(duration.as_millis() < 50, "Diagnostics took too long: {}ms", duration.as_millis());
+    assert!(
+        duration.as_millis() < 50,
+        "Diagnostics took too long: {}ms",
+        duration.as_millis()
+    );
 
     // 2. Lock error signature matching
     let diagnosis_lock = backend.diagnose_error_internal(
@@ -224,8 +268,14 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
 
     assert!(diagnosis_lock.is_some());
     let (exp_lock, rem_lock) = diagnosis_lock.unwrap();
-    assert_eq!(exp_lock, "RocksDB lock acquisition failure indicates concurrent access conflicts");
-    assert_eq!(rem_lock, "Close any running processes or containers holding the DB lock");
+    assert_eq!(
+        exp_lock,
+        "RocksDB lock acquisition failure indicates concurrent access conflicts"
+    );
+    assert_eq!(
+        rem_lock,
+        "Close any running processes or containers holding the DB lock"
+    );
 
     Ok(())
 }
@@ -295,13 +345,15 @@ async fn test_executor_decorates_failures() -> Result<()> {
     backend.save_wisdom_rule(&rule).await?;
 
     // Execute command that fails and outputs "error[E0063]" on stderr
-    let (success, logs) = executor.execute(
-        "test-node-fail",
-        &commit_sha,
-        "echo 'error[E0063]: missing fields in struct' >&2 && exit 1",
-        &None,
-        &backend,
-    ).await?;
+    let (success, logs) = executor
+        .execute(
+            "test-node-fail",
+            &commit_sha,
+            "echo 'error[E0063]: missing fields in struct' >&2 && exit 1",
+            &None,
+            &backend,
+        )
+        .await?;
 
     assert!(!success);
     assert!(logs.contains("[MYTHRAX AUTO-DIAGNOSTIC]"));

@@ -48,30 +48,39 @@ async fn precompact_persists_raw_tool_output() -> anyhow::Result<()> {
         backend.as_ref(),
         &store,
         &ignore,
-    ).await?;
+    )
+    .await?;
 
     // 4. Assert returned count >= 2
     assert!(count >= 2);
 
     // 5. Query the backend to verify the raw tool payload was indexed verbatim
-    let response = backend.search(
-        "RAW_TOOL_PAYLOAD_XYZ",
-        Some("general"),
-        false, // deep_insight
-        5,     // limit
-        0,     // offset
-        0.0,   // threshold
-        None,  // token_budget
-        false, // allow_downward
-        true,  // include_episodes
-        true,  // include_artifacts
-    ).await?;
+    let response = backend
+        .search(
+            "RAW_TOOL_PAYLOAD_XYZ",
+            Some("general"),
+            false, // deep_insight
+            5,     // limit
+            0,     // offset
+            0.0,   // threshold
+            None,  // token_budget
+            false, // allow_downward
+            true,  // include_episodes
+            true,  // include_artifacts
+        )
+        .await?;
 
     assert!(response.total_matches > 0);
-    
+
     // Check that at least one result contains the verbatim payload
-    let found = response.results.iter().any(|r| r.content.contains("RAW_TOOL_PAYLOAD_XYZ"));
-    assert!(found, "Verbatim tool output was not found in the search results");
+    let found = response
+        .results
+        .iter()
+        .any(|r| r.content.contains("RAW_TOOL_PAYLOAD_XYZ"));
+    assert!(
+        found,
+        "Verbatim tool output was not found in the search results"
+    );
 
     Ok(())
 }
@@ -112,24 +121,35 @@ async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<(
         backend.as_ref(),
         store.as_ref(),
         &ignore,
-    ).await?;
-    assert!(count >= 2, "expected both array-form turns mined, got {}", count);
+    )
+    .await?;
+    assert!(
+        count >= 2,
+        "expected both array-form turns mined, got {}",
+        count
+    );
 
     for payload in ["BLOCK_TOOL_PAYLOAD_ABC", "NESTED_TOOL_PAYLOAD_DEF"] {
-        let response = backend.search(
-            payload,
-            Some("general"),
-            false,
-            5,
-            0,
-            0.0,
-            None,
-            false,
-            true,
-            true,
-        ).await?;
+        let response = backend
+            .search(
+                payload,
+                Some("general"),
+                false,
+                5,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                true,
+            )
+            .await?;
         let found = response.results.iter().any(|r| r.content.contains(payload));
-        assert!(found, "verbatim tool output {} was dropped from array-form content", payload);
+        assert!(
+            found,
+            "verbatim tool output {} was dropped from array-form content",
+            payload
+        );
     }
 
     Ok(())

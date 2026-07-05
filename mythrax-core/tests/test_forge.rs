@@ -1,26 +1,29 @@
-use std::fs;
 use anyhow::Result;
+use mythrax_core::cognitive::forge::{
+    TOCEntry, chunk_text, extract_pdf_text, parse_markdown_toc, split_into_logical_sections,
+};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use std::fs;
 use tempfile::tempdir;
-use mythrax_core::cognitive::forge::{extract_pdf_text, chunk_text, parse_markdown_toc, split_into_logical_sections, TOCEntry};
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 
 fn create_lopdf_pdf() -> Vec<u8> {
-    use lopdf::{Document, Object, Dictionary, Stream};
+    use lopdf::{Dictionary, Document, Object, Stream};
     let mut doc = Document::with_version("1.4");
     let pages_id = doc.new_object_id();
     let page_id = doc.new_object_id();
     let content_id = doc.new_object_id();
-    
+
     let content = b"BT /F1 12 Tf 72 712 Td (Hello World from Mythrax PDF Extractor) Tj ET";
     let content_stream = Stream::new(Dictionary::new(), content.to_vec());
-    doc.objects.insert(content_id, Object::Stream(content_stream));
-    
+    doc.objects
+        .insert(content_id, Object::Stream(content_stream));
+
     let mut page_dict = Dictionary::new();
     page_dict.set("Type", "Page");
     page_dict.set("Parent", pages_id);
     page_dict.set("MediaBox", vec![0.into(), 0.into(), 612.into(), 792.into()]);
     page_dict.set("Contents", content_id);
-    
+
     let mut resources = Dictionary::new();
     let mut fonts = Dictionary::new();
     let mut font_dict = Dictionary::new();
@@ -30,22 +33,22 @@ fn create_lopdf_pdf() -> Vec<u8> {
     fonts.set("F1", font_dict);
     resources.set("Font", fonts);
     page_dict.set("Resources", resources);
-    
+
     doc.objects.insert(page_id, Object::Dictionary(page_dict));
-    
+
     let mut pages_dict = Dictionary::new();
     pages_dict.set("Type", "Pages");
     pages_dict.set("Kids", vec![page_id.into()]);
     pages_dict.set("Count", 1);
     doc.objects.insert(pages_id, Object::Dictionary(pages_dict));
-    
+
     let mut catalog_dict = Dictionary::new();
     catalog_dict.set("Type", "Catalog");
     catalog_dict.set("Pages", pages_id);
     let catalog_id = doc.add_object(catalog_dict);
-    
+
     doc.trailer.set("Root", catalog_id);
-    
+
     let mut buf = Vec::new();
     doc.save_to(&mut buf).unwrap();
     buf
@@ -69,16 +72,19 @@ fn test_text_chunking() {
     // Generate a long text and verify chunk size and overlap
     let words: Vec<String> = (0..3000).map(|i| format!("word{}", i)).collect();
     let long_text = words.join(" ");
-    
+
     let chunks = chunk_text(&long_text, 2000, 200);
     assert!(!chunks.is_empty());
     assert!(chunks.len() >= 2);
-    
+
     // Robustly check overlap content: there should be common words between the two chunks.
     let words_in_c0: std::collections::HashSet<&str> = chunks[0].split_whitespace().collect();
     let words_in_c1: std::collections::HashSet<&str> = chunks[1].split_whitespace().collect();
     let overlap_words: Vec<&&str> = words_in_c0.intersection(&words_in_c1).collect();
-    assert!(!overlap_words.is_empty(), "There must be overlapping words between chunks");
+    assert!(
+        !overlap_words.is_empty(),
+        "There must be overlapping words between chunks"
+    );
 }
 
 #[tokio::test]
@@ -99,7 +105,10 @@ async fn test_ingest_document() -> Result<()> {
         } else {
             std::env::set_var("MYTHRAX_MOCK_LLM", "false");
         }
-        std::env::set_var("MYTHRAX_WORKSPACE_ROOT", proj_dir.to_string_lossy().to_string());
+        std::env::set_var(
+            "MYTHRAX_WORKSPACE_ROOT",
+            proj_dir.to_string_lossy().to_string(),
+        );
     }
 
     #[cfg(feature = "mlx")]
@@ -107,7 +116,9 @@ async fn test_ingest_document() -> Result<()> {
         if std::env::var("MYTHRAX_TEST_MOCK").is_err() {
             let home = std::env::var("HOME").unwrap();
             let models_dir = std::path::PathBuf::from(home).join(".mythrax/models");
-            let broker = mythrax_core::llm::DynamicModelBroker::new(models_dir).await.unwrap();
+            let broker = mythrax_core::llm::DynamicModelBroker::new(models_dir)
+                .await
+                .unwrap();
             let _ = mythrax_core::llm::DYNAMIC_MODEL_BROKER.set(std::sync::Arc::new(broker));
         }
     }
@@ -117,9 +128,11 @@ async fn test_ingest_document() -> Result<()> {
     let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root)?);
 
     let forge = mythrax_core::cognitive::forge::Forge::new(backend.clone(), store.clone());
-    
+
     // Ingest a document under normalized "testscope" scope
-    forge.ingest_document("Some document text to analyze.", "testscope", "test_source").await?;
+    forge
+        .ingest_document("Some document text to analyze.", "testscope", "test_source")
+        .await?;
 
     // Verify wiki nodes are written and saved to db
     // 1. Files on disk
@@ -129,7 +142,10 @@ async fn test_ingest_document() -> Result<()> {
 
     let wiki_files_vec: Vec<_> = fs::read_dir(&wiki_dir)?.filter_map(|e| e.ok()).collect();
 
-    assert!(!wiki_files_vec.is_empty(), "Should write at least one wiki node file");
+    assert!(
+        !wiki_files_vec.is_empty(),
+        "Should write at least one wiki node file"
+    );
 
     // 2. Records in SurrealDB
     // Query wiki nodes: verify vault_path is persisted in DB
@@ -139,7 +155,9 @@ async fn test_ingest_document() -> Result<()> {
         .unwrap()
         .to_string_lossy()
         .to_string();
-    let wiki_node_id = backend.get_wiki_node_id_by_vault_path(&relative_wiki).await?;
+    let wiki_node_id = backend
+        .get_wiki_node_id_by_vault_path(&relative_wiki)
+        .await?;
     assert!(
         wiki_node_id.is_some(),
         "Wiki node at '{}' should be persisted in SurrealDB",
@@ -157,7 +175,7 @@ async fn test_ingest_document() -> Result<()> {
 fn test_skeletonize_skill_workflow() -> Result<()> {
     let tmp = tempdir()?;
     let skill_path = tmp.path().join("SKILL.md");
-    
+
     let skill_content = r#"---
 name: test-skill
 description: "A test skill"
@@ -179,9 +197,9 @@ Here is a reference link:
 "#;
 
     fs::write(&skill_path, skill_content)?;
-    
+
     mythrax_core::cognitive::forge::skeletonize_skill_file(&skill_path)?;
-    
+
     // Check rewritten SKILL.md
     let rewritten = fs::read_to_string(&skill_path)?;
     assert!(rewritten.contains("name: test-skill"));
@@ -218,19 +236,31 @@ This is subsection 1.1 text.
 Text in section 2.
 ";
     let entries = parse_markdown_toc(md_content);
-    
+
     assert_eq!(entries.len(), 3);
-    
+
     assert_eq!(entries[0].title, "Section 1");
-    assert_eq!(entries[0].start_byte, md_content.find("# Section 1").unwrap());
-    assert_eq!(entries[0].end_byte, md_content.find("## Subsection 1.1").unwrap());
-    
+    assert_eq!(
+        entries[0].start_byte,
+        md_content.find("# Section 1").unwrap()
+    );
+    assert_eq!(
+        entries[0].end_byte,
+        md_content.find("## Subsection 1.1").unwrap()
+    );
+
     assert_eq!(entries[1].title, "Subsection 1.1");
-    assert_eq!(entries[1].start_byte, md_content.find("## Subsection 1.1").unwrap());
+    assert_eq!(
+        entries[1].start_byte,
+        md_content.find("## Subsection 1.1").unwrap()
+    );
     assert_eq!(entries[1].end_byte, md_content.find("# Section 2").unwrap());
-    
+
     assert_eq!(entries[2].title, "Section 2");
-    assert_eq!(entries[2].start_byte, md_content.find("# Section 2").unwrap());
+    assert_eq!(
+        entries[2].start_byte,
+        md_content.find("# Section 2").unwrap()
+    );
     assert_eq!(entries[2].end_byte, md_content.len());
 }
 
@@ -239,22 +269,21 @@ async fn test_extract_toc_via_llm_mock() -> Result<()> {
     unsafe {
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
-    
+
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
     let tmp = tempdir()?;
     let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(tmp.path())?);
-    
+
     let forge = mythrax_core::cognitive::forge::Forge::new(backend, store);
-    
+
     let content = "Some document text to analyze.";
     let toc = forge.extract_toc_via_llm(content).await?;
-    
+
     assert_eq!(toc.len(), 1);
     assert_eq!(toc[0].title, "test_title");
     assert_eq!(toc[0].start_byte, 0);
     assert_eq!(toc[0].end_byte, content.len());
-    
 
     Ok(())
 }
@@ -279,17 +308,17 @@ fn test_logical_section_splitting_and_grouping() {
             end_byte: content.len(),
         },
     ];
-    
+
     let sections = split_into_logical_sections(content, &toc);
-    
+
     assert_eq!(sections.len(), 1);
     assert_eq!(sections[0].title, "Sec 1 - Sec 3");
     assert_eq!(sections[0].content.trim(), content.trim());
-    
+
     let many_words: Vec<String> = (0..26000).map(|i| format!("w{}", i)).collect();
     let large_text = many_words.join(" ");
     let large_content = format!("Small intro. {}", large_text);
-    
+
     let large_toc = vec![
         TOCEntry {
             title: "Small Intro".to_string(),
@@ -302,37 +331,52 @@ fn test_logical_section_splitting_and_grouping() {
             end_byte: large_content.len(),
         },
     ];
-    
+
     let large_sections = split_into_logical_sections(&large_content, &large_toc);
-    
+
     assert!(large_sections.len() >= 3);
     assert_eq!(large_sections[0].title, "Small Intro");
-    assert!(large_sections.iter().any(|sec| sec.title.starts_with("Huge Body (Part 1)")));
-    assert!(large_sections.iter().any(|sec| sec.title.starts_with("Huge Body (Part 2)")));
+    assert!(
+        large_sections
+            .iter()
+            .any(|sec| sec.title.starts_with("Huge Body (Part 1)"))
+    );
+    assert!(
+        large_sections
+            .iter()
+            .any(|sec| sec.title.starts_with("Huge Body (Part 2)"))
+    );
 }
 
 #[test]
 fn test_second_pass_character_chunking() {
     let mut very_long_text = String::new();
     for _ in 1..=5000 {
-        very_long_text.push_str("This is a line of text that is fairly repetitive to build up characters quickly.\n");
+        very_long_text.push_str(
+            "This is a line of text that is fairly repetitive to build up characters quickly.\n",
+        );
     }
     assert!(very_long_text.len() > 100_000);
 
-    let toc = vec![
-        TOCEntry {
-            title: "Long Chapter".to_string(),
-            start_byte: 0,
-            end_byte: very_long_text.len(),
-        }
-    ];
+    let toc = vec![TOCEntry {
+        title: "Long Chapter".to_string(),
+        start_byte: 0,
+        end_byte: very_long_text.len(),
+    }];
 
     let sections = split_into_logical_sections(&very_long_text, &toc);
     assert!(sections.len() >= 3);
-    assert!(sections.iter().any(|sec| sec.title.starts_with("Long Chapter (Part 1)")));
-    assert!(sections.iter().any(|sec| sec.title.starts_with("Long Chapter (Part 2)")));
+    assert!(
+        sections
+            .iter()
+            .any(|sec| sec.title.starts_with("Long Chapter (Part 1)"))
+    );
+    assert!(
+        sections
+            .iter()
+            .any(|sec| sec.title.starts_with("Long Chapter (Part 2)"))
+    );
     assert!(sections[0].content.len() <= 20_000);
     assert!(sections[1].content.len() <= 20_000);
     assert!(sections[2].content.len() <= 20_000);
 }
-

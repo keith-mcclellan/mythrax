@@ -1,7 +1,7 @@
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
-use tempfile::tempdir;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use std::time::Duration;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() {
@@ -11,7 +11,9 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
     let initialized_marker = db_path.join(".initialized");
 
     // 1. Boot primary backend
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await.unwrap();
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()))
+        .await
+        .unwrap();
     backend.init().await.unwrap();
 
     assert!(initialized_marker.exists());
@@ -33,7 +35,10 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
                 task_id: None,
                 ..Default::default()
             };
-            backend_clone.save_episode_with_wal_actor(&episode, &wal_clone).await.unwrap();
+            backend_clone
+                .save_episode_with_wal_actor(&episode, &wal_clone)
+                .await
+                .unwrap();
         });
         handles.push(handle);
     }
@@ -61,7 +66,10 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
         task_id: None,
         ..Default::default()
     };
-    backend.save_episode_with_wal_actor(&duplicate_episode, &wal_path).await.unwrap();
+    backend
+        .save_episode_with_wal_actor(&duplicate_episode, &wal_path)
+        .await
+        .unwrap();
 
     // Give background WAL actor time to write and flush
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -75,10 +83,17 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
 
     // Assert that the compacted WAL file contains exactly 10 lines (the duplicate was collapsed to its latest version)
     let compacted_content = std::fs::read_to_string(&wal_path).unwrap();
-    assert_eq!(compacted_content.lines().count(), 10, "WAL compaction must collapse duplicate records to their latest state");
+    assert_eq!(
+        compacted_content.lines().count(),
+        10,
+        "WAL compaction must collapse duplicate records to their latest state"
+    );
 
     // 4. Inject a corrupted / malformed line to verify robust WAL recovery parsing
-    let mut wal_file = std::fs::OpenOptions::new().append(true).open(&wal_path).unwrap();
+    let mut wal_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&wal_path)
+        .unwrap();
     use std::io::Write;
     writeln!(wal_file, "{{ \"title\": \"Malformed JSON\", \"content\": ").unwrap();
 
@@ -90,16 +105,40 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
     assert!(!initialized_marker.exists());
 
     // Boot fresh backend
-    let recovered_backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await.unwrap();
+    let recovered_backend =
+        SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()))
+            .await
+            .unwrap();
     recovered_backend.init().await.unwrap();
 
     // Trigger recovery replay: must successfully replay the 10 episodes, skip the malformed line with a warning, and write the marker
-    recovered_backend.replay_wal_if_fresh(&wal_path, &initialized_marker).await.unwrap();
+    recovered_backend
+        .replay_wal_if_fresh(&wal_path, &initialized_marker)
+        .await
+        .unwrap();
     assert!(initialized_marker.exists());
 
     // Verify all 10 episodes were successfully recovered
     for i in 0..10 {
-        let search_res = recovered_backend.search(&format!("Concurrent Episode {}", i), None, false, 10, 0, 0.0, None, false, true, false).await.unwrap();
-        assert!(!search_res.results.is_empty(), "Episode {} must be recovered successfully", i);
+        let search_res = recovered_backend
+            .search(
+                &format!("Concurrent Episode {}", i),
+                None,
+                false,
+                10,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !search_res.results.is_empty(),
+            "Episode {} must be recovered successfully",
+            i
+        );
     }
 }

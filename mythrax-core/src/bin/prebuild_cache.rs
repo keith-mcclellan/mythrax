@@ -1,11 +1,13 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use mythrax_core::embeddings::{
+    cache_embedding, load_embedding_cache_from_disk, save_embedding_cache_to_disk,
+};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
-use std::collections::HashSet;
 use std::sync::Arc;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::embeddings::{cache_embedding, save_embedding_cache_to_disk, load_embedding_cache_from_disk};
 
 #[derive(Debug, Clone, Deserialize)]
 struct QuestionEntry {
@@ -54,7 +56,7 @@ async fn main() -> Result<()> {
             }
         }
     }
-    
+
     let total_unique = unique_texts.len();
     println!("Found {} unique turns to embed.", total_unique);
 
@@ -74,7 +76,10 @@ async fn main() -> Result<()> {
     let target_cache_path = target_cache_path.as_path();
 
     if target_cache_path.exists() {
-        println!("Loading existing embedding cache from {:?}", target_cache_path);
+        println!(
+            "Loading existing embedding cache from {:?}",
+            target_cache_path
+        );
         let _ = load_embedding_cache_from_disk(target_cache_path);
     }
 
@@ -90,7 +95,11 @@ async fn main() -> Result<()> {
     texts_to_embed.sort_by_key(|t| t.len());
 
     let to_embed_count = texts_to_embed.len();
-    println!("{} turns already cached. {} turns need embedding.", total_unique - to_embed_count, to_embed_count);
+    println!(
+        "{} turns already cached. {} turns need embedding.",
+        total_unique - to_embed_count,
+        to_embed_count
+    );
 
     if to_embed_count == 0 {
         println!("All turns are already embedded and cached!");
@@ -99,19 +108,26 @@ async fn main() -> Result<()> {
 
     // Initialize backend/embedder
     println!("Initializing SurrealDB in-memory engine and loading model...");
-    let backend = Arc::new(SurrealBackend::new_in_memory().await.context("Failed to init backend")?);
+    let backend = Arc::new(
+        SurrealBackend::new_in_memory()
+            .await
+            .context("Failed to init backend")?,
+    );
 
     // Batch embed with parallel tasks
     let batch_size = 512;
     let concurrency_limit = 4;
     let mut join_set = tokio::task::JoinSet::new();
-    
+
     let total_chunks = (to_embed_count + batch_size - 1) / batch_size;
     let mut chunk_iter = texts_to_embed.chunks(batch_size);
     let mut active = 0;
     let mut completed = 0;
 
-    println!("Spawning parallel embedding workers (concurrency limit: {})...", concurrency_limit);
+    println!(
+        "Spawning parallel embedding workers (concurrency limit: {})...",
+        concurrency_limit
+    );
 
     loop {
         // Fill up parallel queue
@@ -137,24 +153,33 @@ async fn main() -> Result<()> {
         if let Some(res) = join_set.join_next().await {
             active -= 1;
             completed += 1;
-            
+
             let (chunk_vec, embeddings) = res.context("Parallel embedding task panicked")??;
-            
+
             for (idx, text) in chunk_vec.iter().enumerate() {
                 cache_embedding(text.clone(), embeddings[idx].clone());
             }
 
-            println!("Completed batch {}/{} (size {})...", completed, total_chunks, chunk_vec.len());
-            
+            println!(
+                "Completed batch {}/{} (size {})...",
+                completed,
+                total_chunks,
+                chunk_vec.len()
+            );
+
             // Periodically save to disk
             if completed % 10 == 0 || completed == total_chunks {
-                save_embedding_cache_to_disk(target_cache_path).context("Failed to save cache to disk")?;
+                save_embedding_cache_to_disk(target_cache_path)
+                    .context("Failed to save cache to disk")?;
             }
         }
     }
 
     // Final save
     save_embedding_cache_to_disk(target_cache_path).context("Failed to save cache to disk")?;
-    println!("Embedding complete! Cache successfully written to {:?}", target_cache_path);
+    println!(
+        "Embedding complete! Cache successfully written to {:?}",
+        target_cache_path
+    );
     Ok(())
 }

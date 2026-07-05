@@ -43,7 +43,10 @@ const K_RECALL: usize = 5;
 const K_NDCG: usize = 10;
 
 #[derive(Parser, Debug)]
-#[command(name = "bench", about = "Mythrax Advanced-Memory Retrieval Benchmark Harness")]
+#[command(
+    name = "bench",
+    about = "Mythrax Advanced-Memory Retrieval Benchmark Harness"
+)]
 struct Args {
     /// Evaluation split:
     ///   full500       - DEFAULT, the only publishable mode. Scores over the REAL
@@ -141,9 +144,7 @@ fn resolve_scored_file(split: &str) -> Result<&'static str> {
         ),
     };
     if split == "full500" && file == "longmemeval_oracle.json" {
-        anyhow::bail!(
-            "SPEC-GAP: full500 must never score the gold-evidence-only oracle haystack"
-        );
+        anyhow::bail!("SPEC-GAP: full500 must never score the gold-evidence-only oracle haystack");
     }
     Ok(file)
 }
@@ -157,8 +158,8 @@ fn expected_sha_for(filename: &str) -> Option<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    unsafe { 
-        std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); 
+    unsafe {
+        std::env::set_var("MYTHRAX_DAEMON_PORT", "54321");
         std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false");
     }
     let args = Args::parse();
@@ -298,7 +299,9 @@ async fn main() -> Result<()> {
             ("single-session-preference".to_string(), 3),
             ("single-session-user".to_string(), 7),
             ("temporal-reasoning".to_string(), 13),
-        ].into_iter().collect::<std::collections::HashMap<String, usize>>();
+        ]
+        .into_iter()
+        .collect::<std::collections::HashMap<String, usize>>();
 
         for q in sorted {
             let limit = limits.get(&q.question_type).cloned().unwrap_or(0);
@@ -346,13 +349,21 @@ async fn main() -> Result<()> {
         if args.mode == "tune" {
             // Decoupled coordinate sweep
             let tune_questions = &target_questions;
-            
-            let format_metrics = |r_any: f32, r_all: f32, ndcg: f32, r_any_sess: f32, r_all_sess: f32, records: &[QuestionResultRecord]| -> String {
+
+            let format_metrics = |r_any: f32,
+                                  r_all: f32,
+                                  ndcg: f32,
+                                  r_any_sess: f32,
+                                  r_all_sess: f32,
+                                  records: &[QuestionResultRecord]|
+             -> String {
                 let mut type_counts = std::collections::HashMap::new();
                 let mut type_recall_at10 = std::collections::HashMap::new();
                 for record in records {
                     *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
-                    *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
+                    *type_recall_at10
+                        .entry(record.question_type.clone())
+                        .or_insert(0.0) += record.recall_any_turn_at10;
                 }
                 let get_per_type = |t_name: &str| -> f32 {
                     let count = *type_counts.get(t_name).unwrap_or(&0);
@@ -377,40 +388,46 @@ async fn main() -> Result<()> {
                     get_per_type("single-session-user")
                 )
             };
-            
+
             let mut locked_overrides = std::collections::HashMap::new();
-            
+
             // Phase A: Core Fusion
             println!("--- Phase A: Core Fusion Sweep ---");
             let mut best_score_a = -1.0;
             let mut winner_a = (0.55f32, 0.60f32, 0.10f32);
-            
+
             let sigmoid_centers = vec![0.45f32, 0.55f32];
             let fusion_sigmoid_centers = vec![0.50f32, 0.60f32];
             let gammas = vec![0.05f32, 0.10f32, 0.20f32];
-            
+
             for sc in &sigmoid_centers {
                 for fsc in &fusion_sigmoid_centers {
                     for gamma in &gammas {
                         let mut overrides = locked_overrides.clone();
                         overrides.insert("search.sigmoid_center".to_string(), sc.to_string());
-                        overrides.insert("search.fusion_sigmoid_center".to_string(), fsc.to_string());
+                        overrides
+                            .insert("search.fusion_sigmoid_center".to_string(), fsc.to_string());
                         overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
-                        
-                        let (r_any, r_all, ndcg, r_any_sess, r_all_sess, lat, _, records) = run_evaluation(
-                            tune_questions,
-                            "hybrid",
-                            Some(overrides),
-                            &target_cache_path,
-                            published,
-                            &note,
-                        ).await?;
-                        
+
+                        let (r_any, r_all, ndcg, r_any_sess, r_all_sess, lat, _, records) =
+                            run_evaluation(
+                                tune_questions,
+                                "hybrid",
+                                Some(overrides),
+                                &target_cache_path,
+                                published,
+                                &note,
+                            )
+                            .await?;
+
                         let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
-                        let detail = format_metrics(r_any, r_all, ndcg, r_any_sess, r_all_sess, &records);
-                        println!("A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} => score={:.4} ({} Lat={:.2}ms)",
-                            sc, fsc, gamma, score, detail, lat);
-                            
+                        let detail =
+                            format_metrics(r_any, r_all, ndcg, r_any_sess, r_all_sess, &records);
+                        println!(
+                            "A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} => score={:.4} ({} Lat={:.2}ms)",
+                            sc, fsc, gamma, score, detail, lat
+                        );
+
                         if score > best_score_a {
                             best_score_a = score;
                             winner_a = (*sc, *fsc, *gamma);
@@ -418,50 +435,74 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            
-            println!("Winner Phase A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} (Score: {:.4})",
-                winner_a.0, winner_a.1, winner_a.2, best_score_a);
-            
+
+            println!(
+                "Winner Phase A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} (Score: {:.4})",
+                winner_a.0, winner_a.1, winner_a.2, best_score_a
+            );
+
             locked_overrides.insert("search.sigmoid_center".to_string(), winner_a.0.to_string());
-            locked_overrides.insert("search.fusion_sigmoid_center".to_string(), winner_a.1.to_string());
+            locked_overrides.insert(
+                "search.fusion_sigmoid_center".to_string(),
+                winner_a.1.to_string(),
+            );
             locked_overrides.insert("search.gamma_rerank".to_string(), winner_a.2.to_string());
-            
+
             // Phase B: MMR & Reranking
             println!("--- Phase B: MMR & Reranking Sweep ---");
             let mut best_score_b = -1.0;
             let mut winner_b = (1.00f32, 50, 0.40f32, 0.30f32);
-            
+
             let mmr_lambdas = vec![1.00f32];
             let rerank_pool_sizes = vec![15, 20];
             let w_person_names = vec![0.20f32, 0.40f32];
             let w_keyword_overlaps = vec![0.15f32, 0.30f32];
-            
+
             for mmr in &mmr_lambdas {
                 for pool in &rerank_pool_sizes {
                     for w_pn in &w_person_names {
                         for w_ko in &w_keyword_overlaps {
                             let mut overrides = locked_overrides.clone();
                             overrides.insert("search.mmr_lambda".to_string(), mmr.to_string());
-                            overrides.insert("search.rerank_pool_size".to_string(), pool.to_string());
-                            overrides.insert("retrieval.boost.person_name".to_string(), "true".to_string());
-                            overrides.insert("retrieval.boost.keyword_overlap".to_string(), "true".to_string());
-                            overrides.insert("retrieval.boost.weight.person_name".to_string(), w_pn.to_string());
-                            overrides.insert("retrieval.boost.weight.keyword_overlap".to_string(), w_ko.to_string());
-                            
-                            let (r_any, r_all, ndcg, r_any_sess, r_all_sess, lat, _, records) = run_evaluation(
-                                tune_questions,
-                                "hybrid",
-                                Some(overrides),
-                                &target_cache_path,
-                                published,
-                                &note,
-                            ).await?;
-                            
+                            overrides
+                                .insert("search.rerank_pool_size".to_string(), pool.to_string());
+                            overrides.insert(
+                                "retrieval.boost.person_name".to_string(),
+                                "true".to_string(),
+                            );
+                            overrides.insert(
+                                "retrieval.boost.keyword_overlap".to_string(),
+                                "true".to_string(),
+                            );
+                            overrides.insert(
+                                "retrieval.boost.weight.person_name".to_string(),
+                                w_pn.to_string(),
+                            );
+                            overrides.insert(
+                                "retrieval.boost.weight.keyword_overlap".to_string(),
+                                w_ko.to_string(),
+                            );
+
+                            let (r_any, r_all, ndcg, r_any_sess, r_all_sess, lat, _, records) =
+                                run_evaluation(
+                                    tune_questions,
+                                    "hybrid",
+                                    Some(overrides),
+                                    &target_cache_path,
+                                    published,
+                                    &note,
+                                )
+                                .await?;
+
                             let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
-                            let detail = format_metrics(r_any, r_all, ndcg, r_any_sess, r_all_sess, &records);
-                            println!("B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} => score={:.4} ({} Lat={:.2}ms)",
-                                mmr, pool, w_pn, w_ko, score, detail, lat);
-                                
+                            let detail = format_metrics(
+                                r_any, r_all, ndcg, r_any_sess, r_all_sess, &records,
+                            );
+                            println!(
+                                "B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} => score={:.4} ({} Lat={:.2}ms)",
+                                mmr, pool, w_pn, w_ko, score, detail, lat
+                            );
+
                             if score > best_score_b {
                                 best_score_b = score;
                                 winner_b = (*mmr, *pool, *w_pn, *w_ko);
@@ -470,31 +511,48 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            
-            println!("Winner Phase B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} (Score: {:.4})",
-                winner_b.0, winner_b.1, winner_b.2, winner_b.3, best_score_b);
-                
+
+            println!(
+                "Winner Phase B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} (Score: {:.4})",
+                winner_b.0, winner_b.1, winner_b.2, winner_b.3, best_score_b
+            );
+
             locked_overrides.insert("search.mmr_lambda".to_string(), winner_b.0.to_string());
-            locked_overrides.insert("search.rerank_pool_size".to_string(), winner_b.1.to_string());
-            locked_overrides.insert("retrieval.boost.person_name".to_string(), "true".to_string());
-            locked_overrides.insert("retrieval.boost.keyword_overlap".to_string(), "true".to_string());
-            locked_overrides.insert("retrieval.boost.weight.person_name".to_string(), winner_b.2.to_string());
-            locked_overrides.insert("retrieval.boost.weight.keyword_overlap".to_string(), winner_b.3.to_string());
-            
+            locked_overrides.insert(
+                "search.rerank_pool_size".to_string(),
+                winner_b.1.to_string(),
+            );
+            locked_overrides.insert(
+                "retrieval.boost.person_name".to_string(),
+                "true".to_string(),
+            );
+            locked_overrides.insert(
+                "retrieval.boost.keyword_overlap".to_string(),
+                "true".to_string(),
+            );
+            locked_overrides.insert(
+                "retrieval.boost.weight.person_name".to_string(),
+                winner_b.2.to_string(),
+            );
+            locked_overrides.insert(
+                "retrieval.boost.weight.keyword_overlap".to_string(),
+                winner_b.3.to_string(),
+            );
+
             // Phase C: Validation & Fine-Tuning
             println!("--- Phase C: Validation & Fine-Tuning Sweep ---");
             let mut best_score_c = -1.0;
             let mut winner_c = (1.0f32, 0.50f32);
-            
+
             let ladder_scales = vec![0.5f32, 1.0f32];
             let utility_thresholds = vec![0.45f32, 0.55f32];
-            
+
             for ls in &ladder_scales {
                 for ut in &utility_thresholds {
                     let mut overrides = locked_overrides.clone();
                     overrides.insert("search.ladder_scale".to_string(), ls.to_string());
                     overrides.insert("search.utility_threshold".to_string(), ut.to_string());
-                    
+
                     let (r_any, r_all, ndcg, _, _, lat, _, _) = run_evaluation(
                         tune_questions,
                         "hybrid",
@@ -502,41 +560,59 @@ async fn main() -> Result<()> {
                         &target_cache_path,
                         published,
                         &note,
-                    ).await?;
-                    
+                    )
+                    .await?;
+
                     let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
-                    println!("C: ladder_scale={}, utility_threshold={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
-                        ls, ut, score, r_any, ndcg, lat);
-                        
+                    println!(
+                        "C: ladder_scale={}, utility_threshold={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
+                        ls, ut, score, r_any, ndcg, lat
+                    );
+
                     if score > best_score_c {
                         best_score_c = score;
                         winner_c = (*ls, *ut);
                     }
                 }
             }
-            
-            println!("Winner Phase C: ladder_scale={}, utility_threshold={} (Score: {:.4})",
-                winner_c.0, winner_c.1, best_score_c);
-                
+
+            println!(
+                "Winner Phase C: ladder_scale={}, utility_threshold={} (Score: {:.4})",
+                winner_c.0, winner_c.1, best_score_c
+            );
+
             locked_overrides.insert("search.ladder_scale".to_string(), winner_c.0.to_string());
-            locked_overrides.insert("search.utility_threshold".to_string(), winner_c.1.to_string());
-            
+            locked_overrides.insert(
+                "search.utility_threshold".to_string(),
+                winner_c.1.to_string(),
+            );
+
             let output_dir = std::path::Path::new("bench_data");
             let _ = std::fs::create_dir_all(output_dir);
             let tuned_params_path = output_dir.join("tuned_params.json");
-            
+
             let serialized = serde_json::to_string_pretty(&locked_overrides)?;
             std::fs::write(&tuned_params_path, serialized)?;
             println!("Best tuned parameters saved to {:?}", tuned_params_path);
         } else {
-            let (avg_recall_any_turn, avg_recall_all_turn, avg_ndcg_turn, avg_recall_any_session, avg_recall_all_session, avg_latency, p95_latency, records) = run_evaluation(
+            let (
+                avg_recall_any_turn,
+                avg_recall_all_turn,
+                avg_ndcg_turn,
+                avg_recall_any_session,
+                avg_recall_all_session,
+                avg_latency,
+                p95_latency,
+                records,
+            ) = run_evaluation(
                 &target_questions,
                 &args.mode,
                 None,
                 &target_cache_path,
                 published,
                 &note,
-            ).await?;
+            )
+            .await?;
 
             println!("\n========================================================");
             println!("        LongMemEval RETRIEVAL METRICS SUMMARY           ");
@@ -548,22 +624,38 @@ async fn main() -> Result<()> {
             println!("Published:                {}", published);
             println!("Total Questions:          {}", target_questions.len());
             println!("-- turn granularity (has_answer) --");
-            println!("Recall_Any@{}:            {:.4}", K_RECALL, avg_recall_any_turn);
-            println!("Recall_All@{}:            {:.4}", K_RECALL, avg_recall_all_turn);
+            println!(
+                "Recall_Any@{}:            {:.4}",
+                K_RECALL, avg_recall_any_turn
+            );
+            println!(
+                "Recall_All@{}:            {:.4}",
+                K_RECALL, avg_recall_all_turn
+            );
             println!("nDCG@{}:                  {:.4}", K_NDCG, avg_ndcg_turn);
             println!("-- session granularity (answer_session_ids) --");
-            println!("Recall_Any@{} (session):  {:.4}", K_RECALL, avg_recall_any_session);
-            println!("Recall_All@{} (session):  {:.4}", K_RECALL, avg_recall_all_session);
+            println!(
+                "Recall_Any@{} (session):  {:.4}",
+                K_RECALL, avg_recall_any_session
+            );
+            println!(
+                "Recall_All@{} (session):  {:.4}",
+                K_RECALL, avg_recall_all_session
+            );
             println!("--------------------------------------------------------");
             println!("Per-Question-Type R@{} (turn recall_any):", K_NDCG);
-            
-            let mut type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            let mut type_recall_at10: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+
+            let mut type_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let mut type_recall_at10: std::collections::HashMap<String, f32> =
+                std::collections::HashMap::new();
             for record in &records {
                 *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
-                *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
+                *type_recall_at10
+                    .entry(record.question_type.clone())
+                    .or_insert(0.0) += record.recall_any_turn_at10;
             }
-            
+
             let mut type_keys: Vec<&String> = type_counts.keys().collect();
             type_keys.sort();
             for q_type in &type_keys {
@@ -590,7 +682,8 @@ async fn main() -> Result<()> {
             let output_dir = Path::new("bench_data");
             fs::create_dir_all(output_dir).context("Failed to create bench_data directory")?;
             let output_file_path = output_dir.join(format!("results_{}.jsonl", args.split));
-            let mut out_file = File::create(&output_file_path).context("Failed to create results file")?;
+            let mut out_file =
+                File::create(&output_file_path).context("Failed to create results file")?;
             out_file.write_all((serde_json::to_string(&manifest)? + "\n").as_bytes())?;
             for rec in &records {
                 out_file.write_all((serde_json::to_string(rec)? + "\n").as_bytes())?;
@@ -599,15 +692,20 @@ async fn main() -> Result<()> {
 
             if is_published_mode {
                 let baseline_path = output_dir.join("BASELINE.md");
-                let mut baseline_file = File::create(&baseline_path).context("Failed to create BASELINE.md")?;
+                let mut baseline_file =
+                    File::create(&baseline_path).context("Failed to create BASELINE.md")?;
                 let type_table = {
                     let mut keys: Vec<&String> = type_counts.keys().collect();
                     keys.sort();
                     keys.iter()
                         .map(|q_type| {
                             let count = type_counts[*q_type];
-                            let avg = type_recall_at10.get(*q_type).cloned().unwrap_or(0.0) / count as f32;
-                            format!("- **{}** (n={}): R@{} = `{:.4}`", q_type, count, K_NDCG, avg)
+                            let avg = type_recall_at10.get(*q_type).cloned().unwrap_or(0.0)
+                                / count as f32;
+                            format!(
+                                "- **{}** (n={}): R@{} = `{:.4}`",
+                                q_type, count, K_NDCG, avg
+                            )
                         })
                         .collect::<Vec<_>>()
                         .join("\n")
@@ -642,12 +740,18 @@ async fn main() -> Result<()> {
                     scored_sha,
                     manifest.mythrax_git_commit,
                     chrono::Utc::now().to_rfc3339(),
-                    K_RECALL, avg_recall_any_turn,
-                    K_RECALL, avg_recall_all_turn,
-                    K_NDCG, avg_ndcg_turn,
-                    K_RECALL, avg_recall_any_session,
-                    K_RECALL, avg_recall_all_session,
-                    K_NDCG, type_table,
+                    K_RECALL,
+                    avg_recall_any_turn,
+                    K_RECALL,
+                    avg_recall_all_turn,
+                    K_NDCG,
+                    avg_ndcg_turn,
+                    K_RECALL,
+                    avg_recall_any_session,
+                    K_RECALL,
+                    avg_recall_all_session,
+                    K_NDCG,
+                    type_table,
                     K_RECALL,
                 );
                 baseline_file.write_all(baseline_content.as_bytes())?;
@@ -681,8 +785,10 @@ async fn run_evaluation(
     let mut sum_recall_all_session = 0.0f32;
     let mut sum_latency = 0.0f64;
 
-    let mut type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut type_recall_at10: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let mut type_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut type_recall_at10: std::collections::HashMap<String, f32> =
+        std::collections::HashMap::new();
 
     unsafe {
         std::env::set_var("MYTHRAX_BENCH", "1");
@@ -696,7 +802,8 @@ async fn run_evaluation(
         println!("Evaluating question {}/{}...", q_idx + 1, total_q);
         while join_set.len() >= concurrency_limit {
             if let Some(res) = join_set.join_next().await {
-                let record: QuestionResultRecord = res.context("Parallel evaluation task panicked")??;
+                let record: QuestionResultRecord =
+                    res.context("Parallel evaluation task panicked")??;
                 sum_recall_any_turn += record.recall_any_turn_at5;
                 sum_recall_all_turn += record.recall_all_turn_at5;
                 sum_ndcg_turn += record.ndcg_turn_at10;
@@ -705,7 +812,9 @@ async fn run_evaluation(
                 sum_latency += record.query_latency_ms;
 
                 *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
-                *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
+                *type_recall_at10
+                    .entry(record.question_type.clone())
+                    .or_insert(0.0) += record.recall_any_turn_at10;
 
                 records.push(record);
             }
@@ -721,7 +830,10 @@ async fn run_evaluation(
             let backend = SurrealBackend::new_in_memory()
                 .await
                 .context("Failed to create in-memory backend")?;
-            backend.init().await.context("Failed to initialize database schema")?;
+            backend
+                .init()
+                .await
+                .context("Failed to initialize database schema")?;
             backend.set_search_mode(&mode).await;
             if let Some(ref o) = param_overrides {
                 for (k, v) in o {
@@ -747,7 +859,9 @@ async fn run_evaluation(
                     }
                 }
             }
-            backend.save_episodes_batch(&episodes_to_ingest).await
+            backend
+                .save_episodes_batch(&episodes_to_ingest)
+                .await
                 .context("Failed to batch ingest haystack turns")?;
 
             // Allow SurrealDB background FTS indexer to process the new episodes
@@ -770,20 +884,18 @@ async fn run_evaluation(
                 .search(
                     &q.question,
                     Some("general"),
-                    false,       // deep_insight
-                    retrieve_k,  // limit: over-fetch to max(k_recall, k_ndcg)
-                    0,           // offset
-                    0.0,         // threshold (allow all)
-                    None,        // token_budget
-                    false,       // allow_downward
-                    true,        // include_episodes
-                    true,        // include_artifacts
+                    false,      // deep_insight
+                    retrieve_k, // limit: over-fetch to max(k_recall, k_ndcg)
+                    0,          // offset
+                    0.0,        // threshold (allow all)
+                    None,       // token_budget
+                    false,      // allow_downward
+                    true,       // include_episodes
+                    true,       // include_artifacts
                 )
                 .await
                 .context("Search query failed during evaluation")?;
             let query_latency_ms = start_query.elapsed().as_secs_f64() * 1000.0;
-
-
 
             let retrieved_corpus_ids: Vec<String> = search_response
                 .results
@@ -868,7 +980,9 @@ async fn run_evaluation(
         sum_latency += record.query_latency_ms;
 
         *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
-        *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
+        *type_recall_at10
+            .entry(record.question_type.clone())
+            .or_insert(0.0) += record.recall_any_turn_at10;
 
         records.push(record);
     }
@@ -924,12 +1038,18 @@ async fn download_file(url: &str, dest: &Path) -> Result<()> {
                     total_size as f64 / (1024.0 * 1024.0)
                 );
             } else {
-                println!("Downloading... {:.2} MB", downloaded as f64 / (1024.0 * 1024.0));
+                println!(
+                    "Downloading... {:.2} MB",
+                    downloaded as f64 / (1024.0 * 1024.0)
+                );
             }
             last_reported = downloaded;
         }
     }
-    println!("Finished downloading ({:.2} MB)", downloaded as f64 / (1024.0 * 1024.0));
+    println!(
+        "Finished downloading ({:.2} MB)",
+        downloaded as f64 / (1024.0 * 1024.0)
+    );
     Ok(())
 }
 

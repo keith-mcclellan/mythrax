@@ -1,16 +1,14 @@
 #![allow(async_fn_in_trait)]
 #![recursion_limit = "512"]
 
-use mythrax_core::{
-    cli, db, daemon, mcp, vault,
-};
+use mythrax_core::{cli, daemon, db, mcp, vault};
 
+use anyhow::{Context, Result};
 use clap::Parser;
-use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
-use db::{SurrealBackend, StorageBackend};
-use cli::{Cli, Commands, ConfigAction, VaultAction, MemoryAction, HtrAction, StmAction};
+use cli::{Cli, Commands, ConfigAction, HtrAction, MemoryAction, StmAction, VaultAction};
+use db::{StorageBackend, SurrealBackend};
 use mythrax_core::contracts::{WikiNode, WisdomRule};
+use std::path::{Path, PathBuf};
 
 // Embed Mythrax Documentation
 const ARCHITECTURE_DOC: &str = include_str!("../../ARCHITECTURE.md");
@@ -26,7 +24,7 @@ async fn execute_cli_tool_call(tool_name: &str, arguments: serde_json::Value) ->
 
     let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
     let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
-    
+
     // 1. Ensure daemon is active (auto-spawn if not)
     ensure_daemon_active_for_cli(&auth_token, &daemon_url).await?;
 
@@ -38,7 +36,8 @@ async fn execute_cli_tool_call(tool_name: &str, arguments: serde_json::Value) ->
         "arguments": arguments
     });
 
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .header("X-Mythrax-Token", &auth_token)
         .json(&payload)
         .send()
@@ -50,14 +49,18 @@ async fn execute_cli_tool_call(tool_name: &str, arguments: serde_json::Value) ->
         anyhow::bail!("Daemon returned error executing command: {}", err_text);
     }
 
-    let result_json: serde_json::Value = resp.json().await.context("Failed to parse daemon response")?;
-    
+    let result_json: serde_json::Value = resp
+        .json()
+        .await
+        .context("Failed to parse daemon response")?;
+
     // Print text content to stdout
-    if let Some(text) = result_json.get("content")
+    if let Some(text) = result_json
+        .get("content")
         .and_then(|c| c.as_array())
         .and_then(|arr| arr.first())
         .and_then(|first| first.get("text"))
-        .and_then(|t| t.as_str()) 
+        .and_then(|t| t.as_str())
     {
         println!("{}", text);
     } else {
@@ -71,15 +74,22 @@ async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Res
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(1))
         .build()?;
-    
+
     let ping_url = format!("{}/v1/config/llm", daemon_url);
-    
-    if client.get(&ping_url).header("X-Mythrax-Token", auth_token).send().await.is_ok() {
+
+    if client
+        .get(&ping_url)
+        .header("X-Mythrax-Token", auth_token)
+        .send()
+        .await
+        .is_ok()
+    {
         return Ok(());
     }
 
     println!("Daemon inactive. Spawning background daemon...");
-    let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mythrax"));
+    let current_exe =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mythrax"));
     let home = std::env::var("HOME").context("HOME env var not set")?;
     let mythrax_dir = PathBuf::from(&home).join(".mythrax");
     let log_file = mythrax_dir.join("daemon.log");
@@ -93,8 +103,16 @@ async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Res
         cmd.arg("--port").arg(port_val);
     }
 
-    if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_file) {
-        cmd.stdout(file.try_clone().map(std::process::Stdio::from).unwrap_or_else(|_| std::process::Stdio::null()));
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+    {
+        cmd.stdout(
+            file.try_clone()
+                .map(std::process::Stdio::from)
+                .unwrap_or_else(|_| std::process::Stdio::null()),
+        );
         cmd.stderr(file);
     } else {
         cmd.stdout(std::process::Stdio::null());
@@ -106,14 +124,21 @@ async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Res
     let _ = std::fs::write(&pid_file, pid.to_string());
 
     // Poll daemon
-    let poll_client = reqwest::Client::builder().timeout(std::time::Duration::from_millis(200)).build()?;
+    let poll_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(200))
+        .build()?;
     let start_time = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(45);
     let mut healthy = false;
 
     while start_time.elapsed() < timeout {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        if let Ok(resp) = poll_client.get(&ping_url).header("X-Mythrax-Token", auth_token).send().await {
+        if let Ok(resp) = poll_client
+            .get(&ping_url)
+            .header("X-Mythrax-Token", auth_token)
+            .send()
+            .await
+        {
             if resp.status() == reqwest::StatusCode::OK {
                 healthy = true;
                 break;
@@ -147,7 +172,10 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
     println!();
 
     // 1. Vault Root Path
-    print!("Please enter the path to your Mythrax Obsidian vault [default: {}]: ", default_vault.to_string_lossy());
+    print!(
+        "Please enter the path to your Mythrax Obsidian vault [default: {}]: ",
+        default_vault.to_string_lossy()
+    );
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
@@ -267,7 +295,8 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
     })
 }
 
-pub static SUSPEND_BACKGROUND_TASKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static SUSPEND_BACKGROUND_TASKS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(unix)]
 fn is_process_alive(pid: i32) -> bool {
@@ -290,7 +319,9 @@ fn get_process_name(pid: i32) -> Option<String> {
             return None;
         }
         let path = std::path::PathBuf::from(&comm);
-        path.file_name().and_then(|name| name.to_str()).map(|s| s.to_string())
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|s| s.to_string())
     } else {
         None
     }
@@ -317,7 +348,10 @@ fn recover_stale_locks() {
                         }
                     }
                     if is_stale {
-                        eprintln!("[SAFEGUARD] Stale lock detected for PID {}. Purging locks.", pid);
+                        eprintln!(
+                            "[SAFEGUARD] Stale lock detected for PID {}. Purging locks.",
+                            pid
+                        );
                         let _ = std::fs::remove_file(&pid_path);
                         let _ = std::fs::remove_file(&lock_path);
                     }
@@ -327,7 +361,8 @@ fn recover_stale_locks() {
     }
 }
 
-static SYSTEM_MONITOR: std::sync::OnceLock<std::sync::Mutex<sysinfo::System>> = std::sync::OnceLock::new();
+static SYSTEM_MONITOR: std::sync::OnceLock<std::sync::Mutex<sysinfo::System>> =
+    std::sync::OnceLock::new();
 
 fn get_swap_used_bytes() -> Option<u64> {
     let sys_mutex = SYSTEM_MONITOR.get_or_init(|| {
@@ -389,11 +424,12 @@ pub fn spawn_swap_monitor_thread() {
                 let swap_used_gb = swap_used as f64 / (1024.0 * 1024.0 * 1024.0);
 
                 // 4. Enforce model-aware thresholds
-                let active_tier = if let Some(broker) = mythrax_core::llm::DYNAMIC_MODEL_BROKER.get() {
-                    broker.active_tier()
-                } else {
-                    None
-                };
+                let active_tier =
+                    if let Some(broker) = mythrax_core::llm::DYNAMIC_MODEL_BROKER.get() {
+                        broker.active_tier()
+                    } else {
+                        None
+                    };
 
                 if let Some(tier) = active_tier {
                     let threshold_gb = match tier {
@@ -441,15 +477,16 @@ async fn main() -> Result<()> {
     spawn_swap_monitor_thread();
 
     // Initialize tracing with non-blocking writer and size-rolling file backend
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,mythrax=info,mythrax_core=info"));
-    
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("warn,mythrax=info,mythrax_core=info")
+    });
+
     let home_dir = std::env::var("HOME").context("HOME env var not set")?;
     let log_path = PathBuf::from(home_dir).join(".mythrax").join("daemon.log");
-    
+
     let file_writer = SizeRollingFileWriter::new(log_path)?;
     let (non_blocking_writer, _log_guard) = tracing_appender::non_blocking(file_writer);
-    
+
     tracing_subscriber::fmt()
         .with_writer(non_blocking_writer)
         .with_env_filter(filter)
@@ -458,32 +495,41 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { harness, source, non_interactive } => {
+        Commands::Init {
+            harness,
+            source,
+            non_interactive,
+        } => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-            
+
             // 1. Determine vault_root, harness, and llm_config
             use std::io::IsTerminal;
-            let (vault_root, harness_to_use, llm_config_opt) = if harness.is_none() && !non_interactive && std::io::stdin().is_terminal() {
-                let onboard = run_onboarding_interview().await?;
-                (onboard.vault_root, onboard.harness, onboard.llm_config)
-            } else {
-                let config_path = mythrax_dir.join("config.json");
-                let resolved_vault_root = if config_path.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&config_path) {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                            PathBuf::from(val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+            let (vault_root, harness_to_use, llm_config_opt) =
+                if harness.is_none() && !non_interactive && std::io::stdin().is_terminal() {
+                    let onboard = run_onboarding_interview().await?;
+                    (onboard.vault_root, onboard.harness, onboard.llm_config)
+                } else {
+                    let config_path = mythrax_dir.join("config.json");
+                    let resolved_vault_root = if config_path.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&config_path) {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                                PathBuf::from(
+                                    val["vault_root"]
+                                        .as_str()
+                                        .unwrap_or(&format!("{}/mythrax-vault", home)),
+                                )
+                            } else {
+                                PathBuf::from(&home).join("mythrax-vault")
+                            }
                         } else {
                             PathBuf::from(&home).join("mythrax-vault")
                         }
                     } else {
                         PathBuf::from(&home).join("mythrax-vault")
-                    }
-                } else {
-                    PathBuf::from(&home).join("mythrax-vault")
+                    };
+                    (resolved_vault_root, harness, None)
                 };
-                (resolved_vault_root, harness, None)
-            };
 
             // Clean up existing database
             let db_dir = mythrax_dir.join("db");
@@ -496,7 +542,10 @@ async fn main() -> Result<()> {
             let token_path = mythrax_dir.join("token");
 
             // Back up old folders
-            println!("Backing up existing vault directories under {:?}", vault_root);
+            println!(
+                "Backing up existing vault directories under {:?}",
+                vault_root
+            );
             let _ = daemon::backup_vault_folders(&vault_root);
 
             std::fs::create_dir_all(&mythrax_dir)?;
@@ -513,7 +562,15 @@ async fn main() -> Result<()> {
             std::fs::write(&config_path, serde_json::to_string_pretty(&config_data)?)?;
 
             // Setup Obsidian subdirectories
-            let subfolders = ["episodes", "wiki", "wisdom", "general", "archive", "wisdom/permanent", "wiki/mythrax"];
+            let subfolders = [
+                "episodes",
+                "wiki",
+                "wisdom",
+                "general",
+                "archive",
+                "wisdom/permanent",
+                "wiki/mythrax",
+            ];
             for sub in &subfolders {
                 std::fs::create_dir_all(vault_root.join(sub))?;
             }
@@ -522,11 +579,14 @@ async fn main() -> Result<()> {
             let model_path = mythrax_dir.join("models/nomic-embed-text-v1.5.onnx");
             let tokenizer_path = mythrax_dir.join("models/tokenizer.json");
             if !model_path.exists() || !tokenizer_path.exists() {
-                println!("WARNING: Nomis embedding model files not found under ~/.mythrax/models/. Local embeddings will fallback to None.");
+                println!(
+                    "WARNING: Nomis embedding model files not found under ~/.mythrax/models/. Local embeddings will fallback to None."
+                );
             }
 
             // Always initialize the database in-process for pre-ingestion
-            let backend = SurrealBackend::new(&format!("rocksdb://{}", db_dir.to_string_lossy())).await?;
+            let backend =
+                SurrealBackend::new(&format!("rocksdb://{}", db_dir.to_string_lossy())).await?;
             backend.init().await?;
 
             // Persist LLM config if provided in onboarding
@@ -542,7 +602,7 @@ async fn main() -> Result<()> {
 
             // Ingest core documentation (WikiNodes)
             println!("Pre-ingesting core documentation memories...");
-            
+
             let arch_body = format!(
                 "---\nname: \"Mythrax Architecture Spec\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
                 ARCHITECTURE_DOC
@@ -552,7 +612,8 @@ async fn main() -> Result<()> {
             let arch_node = WikiNode {
                 id: None,
                 name: "Mythrax Architecture Spec".to_string(),
-                content: mythrax_core::vault::markdown::extract_plain_text(ARCHITECTURE_DOC).to_string(),
+                content: mythrax_core::vault::markdown::extract_plain_text(ARCHITECTURE_DOC)
+                    .to_string(),
                 scope: "general".to_string(),
                 vault_path: Some(arch_rel.to_string()),
                 embedding: None,
@@ -568,7 +629,8 @@ async fn main() -> Result<()> {
             let user_guide_node = WikiNode {
                 id: None,
                 name: "Mythrax User Guide".to_string(),
-                content: mythrax_core::vault::markdown::extract_plain_text(USER_GUIDE_DOC).to_string(),
+                content: mythrax_core::vault::markdown::extract_plain_text(USER_GUIDE_DOC)
+                    .to_string(),
                 scope: "general".to_string(),
                 vault_path: Some(user_guide_rel.to_string()),
                 embedding: None,
@@ -577,7 +639,8 @@ async fn main() -> Result<()> {
 
             let skill_rel = "wiki/mythrax/skill_playbook.md";
             std::fs::write(vault_root.join(skill_rel), SKILL_DOC)?;
-            let (_skill_yaml, skill_body) = mythrax_core::vault::markdown::parse_frontmatter(SKILL_DOC);
+            let (_skill_yaml, skill_body) =
+                mythrax_core::vault::markdown::parse_frontmatter(SKILL_DOC);
             let skill_node = WikiNode {
                 id: None,
                 name: "mythrax".to_string(),
@@ -687,7 +750,11 @@ async fn main() -> Result<()> {
                 let frontmatter = mythrax_core::vault::watcher::format_wisdom_markdown(&rule);
                 let rule_body = format!(
                     "{}\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
-                    frontmatter, rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                    frontmatter,
+                    rule.target_pattern,
+                    rule.action_to_avoid,
+                    rule.causal_explanation,
+                    rule.prescribed_remedy
                 );
                 let vp = rule.vault_path.as_ref().unwrap();
                 std::fs::write(vault_root.join(vp), &rule_body)?;
@@ -700,18 +767,23 @@ async fn main() -> Result<()> {
         }
         Commands::Config { action } => {
             let (act_str, args) = match action {
-                ConfigAction::Get => {
-                    ("get", serde_json::json!({}))
-                }
-                ConfigAction::Set { provider, duration, model, cloud_provider, api_key } => {
-                    ("set", serde_json::json!({
+                ConfigAction::Get => ("get", serde_json::json!({})),
+                ConfigAction::Set {
+                    provider,
+                    duration,
+                    model,
+                    cloud_provider,
+                    api_key,
+                } => (
+                    "set",
+                    serde_json::json!({
                         "provider": provider,
                         "duration": duration,
                         "model": model,
                         "cloud_provider": cloud_provider,
                         "api_key": api_key,
-                    }))
-                }
+                    }),
+                ),
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
@@ -724,83 +796,94 @@ async fn main() -> Result<()> {
         Commands::Daemon { action } => {
             daemon::handle_daemon(action).await?;
         }
-        Commands::Memory { action } => {
-            match action {
-                MemoryAction::Query {
-                    query,
-                    scope,
-                    limit,
-                    offset,
-                    threshold,
-                    token_budget,
-                    allow_downward,
-                    include_episodes,
-                    include_artifacts,
-                    session_id,
-                } => {
-                    let args = serde_json::json!({
-                        "action": "search",
-                        "query": query,
-                        "scope": scope,
-                        "limit": limit,
-                        "offset": offset,
-                        "threshold": threshold,
-                        "token_budget": token_budget,
-                        "allow_downward": allow_downward,
-                        "include_episodes": include_episodes,
-                        "include_artifacts": include_artifacts,
-                        "session_id": session_id,
-                    });
-                    execute_cli_tool_call("read", args).await?;
-                }
-                MemoryAction::Record { title, file, scope } => {
-                    let path = Path::new(&file);
-                    let content = std::fs::read_to_string(path)
-                        .with_context(|| format!("Failed to read file at {:?}", path))?;
-                    let args = serde_json::json!({
-                        "action": "save",
-                        "title": title,
-                        "content": content,
-                        "scope": scope,
-                    });
-                    execute_cli_tool_call("write", args).await?;
-                }
-                MemoryAction::Feedback { id, success } => {
-                    let args = serde_json::json!({
-                        "action": "feedback",
-                        "episode_id": id,
-                        "success": success,
-                    });
-                    execute_cli_tool_call("write", args).await?;
-                }
-                MemoryAction::Root => {
-                    let args = serde_json::json!({
-                        "action": "root",
-                    });
-                    execute_cli_tool_call("read", args).await?;
-                }
+        Commands::Memory { action } => match action {
+            MemoryAction::Query {
+                query,
+                scope,
+                limit,
+                offset,
+                threshold,
+                token_budget,
+                allow_downward,
+                include_episodes,
+                include_artifacts,
+                session_id,
+            } => {
+                let args = serde_json::json!({
+                    "action": "search",
+                    "query": query,
+                    "scope": scope,
+                    "limit": limit,
+                    "offset": offset,
+                    "threshold": threshold,
+                    "token_budget": token_budget,
+                    "allow_downward": allow_downward,
+                    "include_episodes": include_episodes,
+                    "include_artifacts": include_artifacts,
+                    "session_id": session_id,
+                });
+                execute_cli_tool_call("read", args).await?;
             }
-        }
+            MemoryAction::Record { title, file, scope } => {
+                let path = Path::new(&file);
+                let content = std::fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read file at {:?}", path))?;
+                let args = serde_json::json!({
+                    "action": "save",
+                    "title": title,
+                    "content": content,
+                    "scope": scope,
+                });
+                execute_cli_tool_call("write", args).await?;
+            }
+            MemoryAction::Feedback { id, success } => {
+                let args = serde_json::json!({
+                    "action": "feedback",
+                    "episode_id": id,
+                    "success": success,
+                });
+                execute_cli_tool_call("write", args).await?;
+            }
+            MemoryAction::Root => {
+                let args = serde_json::json!({
+                    "action": "root",
+                });
+                execute_cli_tool_call("read", args).await?;
+            }
+        },
         Commands::Stm { action } => {
             let (act_str, args) = match action {
-                StmAction::Put { session_id, key, value } => {
-                    ("put", serde_json::json!({ "session_id": session_id, "key": key, "value": value }))
-                }
-                StmAction::Get { session_id, key } => {
-                    ("get", serde_json::json!({ "session_id": session_id, "key": key }))
-                }
+                StmAction::Put {
+                    session_id,
+                    key,
+                    value,
+                } => (
+                    "put",
+                    serde_json::json!({ "session_id": session_id, "key": key, "value": value }),
+                ),
+                StmAction::Get { session_id, key } => (
+                    "get",
+                    serde_json::json!({ "session_id": session_id, "key": key }),
+                ),
                 StmAction::Clear { session_id } => {
                     ("clear", serde_json::json!({ "session_id": session_id }))
                 }
-                StmAction::Handoff { parent_conversation_id, subagent_conversation_id, summary, handoff_file_path, scope } => {
-                    ("handoff", serde_json::json!({
+                StmAction::Handoff {
+                    parent_conversation_id,
+                    subagent_conversation_id,
+                    summary,
+                    handoff_file_path,
+                    scope,
+                } => (
+                    "handoff",
+                    serde_json::json!({
                         "parent_conversation_id": parent_conversation_id,
                         "subagent_conversation_id": subagent_conversation_id,
                         "summary": summary,
                         "handoff_file_path": handoff_file_path,
                         "scope": scope,
-                    }))
-                }
+                    }),
+                ),
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
@@ -816,32 +899,33 @@ async fn main() -> Result<()> {
             let token_path = mythrax_dir.join("token");
 
             let auth_token = mythrax_core::auth::get_or_create_token(&token_path)?;
-            
-            let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+
+            let daemon_port =
+                std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
             let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
             let mcp_server = mcp::McpServer::new(auth_token, daemon_url);
             mcp_server.run().await?;
         }
         Commands::Vault { action } => {
             let (act_str, args) = match action {
-                VaultAction::Organize => {
-                    ("organize", serde_json::json!({}))
-                }
-                VaultAction::Verify { fix } => {
-                    ("verify", serde_json::json!({ "fix": fix }))
-                }
-                VaultAction::Reprocess => {
-                    ("reprocess", serde_json::json!({}))
-                }
+                VaultAction::Organize => ("organize", serde_json::json!({})),
+                VaultAction::Verify { fix } => ("verify", serde_json::json!({ "fix": fix })),
+                VaultAction::Reprocess => ("reprocess", serde_json::json!({})),
                 VaultAction::Summarize { scope } => {
                     ("summarize", serde_json::json!({ "scope": scope }))
                 }
-                VaultAction::IngestBulk { source, harness, scope } => {
-                    ("ingest_bulk", serde_json::json!({ "source": source, "harness": harness, "scope": scope }))
-                }
-                VaultAction::IngestForge { source_path, scope } => {
-                    ("ingest_forge", serde_json::json!({ "source_path": source_path, "scope": scope }))
-                }
+                VaultAction::IngestBulk {
+                    source,
+                    harness,
+                    scope,
+                } => (
+                    "ingest_bulk",
+                    serde_json::json!({ "source": source, "harness": harness, "scope": scope }),
+                ),
+                VaultAction::IngestForge { source_path, scope } => (
+                    "ingest_forge",
+                    serde_json::json!({ "source_path": source_path, "scope": scope }),
+                ),
                 VaultAction::Audit { workspace } => {
                     ("audit", serde_json::json!({ "workspace_path": workspace }))
                 }
@@ -852,24 +936,44 @@ async fn main() -> Result<()> {
         }
         Commands::Htr { action } => {
             let (act_str, args) = match action {
-                HtrAction::Init { scope, hypothesis, files } => {
-                    ("init", serde_json::json!({ "scope": scope, "hypothesis": hypothesis, "files": files }))
-                }
-                HtrAction::Ideate { scope, node } => {
-                    ("ideate", serde_json::json!({ "scope": scope, "node_id": node }))
-                }
-                HtrAction::Execute { scope, node, test_command } => {
-                    ("execute", serde_json::json!({ "scope": scope, "node_id": node, "test_command": test_command }))
-                }
-                HtrAction::Backprop { scope, node } => {
-                    ("backprop", serde_json::json!({ "scope": scope, "node_id": node }))
-                }
-                HtrAction::Merge { scope, node } => {
-                    ("merge", serde_json::json!({ "scope": scope, "node_id": node }))
-                }
-                HtrAction::Run { scope, hypothesis, files, test_command, max_steps } => {
-                    ("run", serde_json::json!({ "scope": scope, "hypothesis": hypothesis, "files": files, "test_command": test_command, "max_steps": max_steps }))
-                }
+                HtrAction::Init {
+                    scope,
+                    hypothesis,
+                    files,
+                } => (
+                    "init",
+                    serde_json::json!({ "scope": scope, "hypothesis": hypothesis, "files": files }),
+                ),
+                HtrAction::Ideate { scope, node } => (
+                    "ideate",
+                    serde_json::json!({ "scope": scope, "node_id": node }),
+                ),
+                HtrAction::Execute {
+                    scope,
+                    node,
+                    test_command,
+                } => (
+                    "execute",
+                    serde_json::json!({ "scope": scope, "node_id": node, "test_command": test_command }),
+                ),
+                HtrAction::Backprop { scope, node } => (
+                    "backprop",
+                    serde_json::json!({ "scope": scope, "node_id": node }),
+                ),
+                HtrAction::Merge { scope, node } => (
+                    "merge",
+                    serde_json::json!({ "scope": scope, "node_id": node }),
+                ),
+                HtrAction::Run {
+                    scope,
+                    hypothesis,
+                    files,
+                    test_command,
+                    max_steps,
+                } => (
+                    "run",
+                    serde_json::json!({ "scope": scope, "hypothesis": hypothesis, "files": files, "test_command": test_command, "max_steps": max_steps }),
+                ),
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
@@ -889,8 +993,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-
-
 fn merge_json_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -901,20 +1003,21 @@ fn merge_json_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
     } else {
         serde_json::json!({})
     };
-    
-    let mcp_servers = data.as_object_mut()
+
+    let mcp_servers = data
+        .as_object_mut()
         .unwrap()
         .entry("mcpServers".to_string())
         .or_insert_with(|| serde_json::json!({}));
-        
+
     mcp_servers.as_object_mut().unwrap().insert(
         "mythrax".to_string(),
         serde_json::json!({
             "command": exe_path,
             "args": ["mcp"]
-        })
+        }),
     );
-    
+
     std::fs::write(path, serde_json::to_string_pretty(&data)?)?;
     Ok(())
 }
@@ -929,28 +1032,31 @@ fn merge_antigravity_permissions(path: &std::path::Path) -> Result<()> {
     } else {
         serde_json::json!({})
     };
-    
-    let user_settings = data.as_object_mut()
+
+    let user_settings = data
+        .as_object_mut()
         .unwrap()
         .entry("userSettings".to_string())
         .or_insert_with(|| serde_json::json!({}));
-        
-    let global_grants = user_settings.as_object_mut()
+
+    let global_grants = user_settings
+        .as_object_mut()
         .unwrap()
         .entry("globalPermissionGrants".to_string())
         .or_insert_with(|| serde_json::json!({}));
-        
-    let allow_list = global_grants.as_object_mut()
+
+    let allow_list = global_grants
+        .as_object_mut()
         .unwrap()
         .entry("allow".to_string())
         .or_insert_with(|| serde_json::json!([]));
-        
+
     let allow_arr = allow_list.as_array_mut().unwrap();
     let grant = "mcp(mythrax/*)".to_string();
     if !allow_arr.iter().any(|v| v.as_str() == Some(&grant)) {
         allow_arr.push(serde_json::Value::String(grant));
     }
-    
+
     std::fs::write(path, serde_json::to_string_pretty(&data)?)?;
     Ok(())
 }
@@ -965,14 +1071,15 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
     } else {
         serde_json::json!({})
     };
-    
-    let mythrax_comp = data.as_object_mut()
+
+    let mythrax_comp = data
+        .as_object_mut()
         .unwrap()
         .entry("mythrax-compliance".to_string())
         .or_insert_with(|| serde_json::json!({}));
-        
+
     let comp_obj = mythrax_comp.as_object_mut().unwrap();
-    
+
     comp_obj.insert(
         "PreInvocation".to_string(),
         serde_json::json!([
@@ -984,9 +1091,9 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
                     "action": "pre_invocation"
                 }
             }
-        ])
+        ]),
     );
-    
+
     comp_obj.insert(
         "PreCompaction".to_string(),
         serde_json::json!([
@@ -1000,9 +1107,9 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
                     "transcript_path": "{{transcript_path}}"
                 }
             }
-        ])
+        ]),
     );
-        
+
     std::fs::write(path, serde_json::to_string_pretty(&data)?)?;
     Ok(())
 }
@@ -1016,7 +1123,7 @@ fn merge_toml_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
     } else {
         String::new()
     };
-    
+
     if content.contains("[mcp.mythrax]") {
         let lines: Vec<&str> = content.lines().collect();
         let mut new_lines: Vec<String> = Vec::new();
@@ -1042,10 +1149,13 @@ fn merge_toml_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
             content.push('\n');
         }
         content.push_str("[mcp.mythrax]\n");
-        content.push_str(&format!("command = \"{}\"\n", exe_path.replace("\\", "\\\\")));
+        content.push_str(&format!(
+            "command = \"{}\"\n",
+            exe_path.replace("\\", "\\\\")
+        ));
         content.push_str("args = [\"mcp\"]\n");
     }
-    
+
     std::fs::write(path, content)?;
     Ok(())
 }
@@ -1088,11 +1198,7 @@ fn resolve_default_history(harness: &str) -> Option<PathBuf> {
         "hermes" => PathBuf::from(&home).join(".hermes/"),
         _ => return None,
     };
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.exists() { Some(path) } else { None }
 }
 
 async fn config_harness_action(
@@ -1103,48 +1209,57 @@ async fn config_harness_action(
 ) -> Result<()> {
     let home = std::env::var("HOME").context("HOME env var not set")?;
     let exe_path = std::env::current_exe()?.to_string_lossy().to_string();
-    
+
     match harness {
         "antigravity" => {
             let config_dir = std::path::PathBuf::from(&home).join(".gemini/config");
             merge_json_mcp(&config_dir.join("mcp_config.json"), &exe_path)?;
             merge_antigravity_permissions(&config_dir.join("config.json"))?;
             merge_antigravity_hooks(&config_dir.join("hooks.json"), &exe_path)?;
-            
+
             // Install global /mythrax skill playbook
             let skill_dest = config_dir.join("skills/mythrax/SKILL.md");
             if let Some(parent) = skill_dest.parent() {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&skill_dest, SKILL_DOC)?;
-            println!("Installed global /mythrax skill playbook at: {:?}", skill_dest);
+            println!(
+                "Installed global /mythrax skill playbook at: {:?}",
+                skill_dest
+            );
         }
         "claude" => {
             let path_code = std::path::PathBuf::from(&home).join(".claude.json");
             if let Err(e) = merge_json_mcp(&path_code, &exe_path) {
                 tracing::warn!("Failed to configure Claude Code config: {}", e);
             }
-            
+
             let path_desktop = {
                 #[cfg(target_os = "macos")]
                 {
-                    std::path::PathBuf::from(&home).join("Library/Application Support/Claude/claude_desktop_config.json")
+                    std::path::PathBuf::from(&home)
+                        .join("Library/Application Support/Claude/claude_desktop_config.json")
                 }
                 #[cfg(target_os = "windows")]
                 {
                     if let Ok(appdata) = std::env::var("APPDATA") {
                         std::path::PathBuf::from(&appdata).join("Claude/claude_desktop_config.json")
                     } else {
-                        std::path::PathBuf::from(&home).join("AppData/Roaming/Claude/claude_desktop_config.json")
+                        std::path::PathBuf::from(&home)
+                            .join("AppData/Roaming/Claude/claude_desktop_config.json")
                     }
                 }
                 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 {
-                    std::path::PathBuf::from(&home).join(".config/Claude/claude_desktop_config.json")
+                    std::path::PathBuf::from(&home)
+                        .join(".config/Claude/claude_desktop_config.json")
                 }
             };
             merge_json_mcp(&path_desktop, &exe_path)?;
-            println!("Registered mythrax MCP server in Claude Desktop config at: {:?}", path_desktop);
+            println!(
+                "Registered mythrax MCP server in Claude Desktop config at: {:?}",
+                path_desktop
+            );
         }
         "cursor" => {
             let path = std::path::PathBuf::from(&home).join(".cursor/mcp.json");
@@ -1170,31 +1285,36 @@ async fn config_harness_action(
             anyhow::bail!("Unsupported harness type: {}", other);
         }
     }
-    
-    println!("Configured MCP server and settings for harness: {}", harness);
-    
+
+    println!(
+        "Configured MCP server and settings for harness: {}",
+        harness
+    );
+
     let history_path = if let Some(ref s) = source {
         let p = std::path::PathBuf::from(s);
         if p.exists() {
             Some(p)
         } else {
-            println!("WARNING: Provided source path {:?} does not exist. Skipping ingestion.", p);
+            println!(
+                "WARNING: Provided source path {:?} does not exist. Skipping ingestion.",
+                p
+            );
             None
         }
     } else {
         resolve_default_history(harness)
     };
-    
+
     if let Some(path) = history_path {
-        println!("Auto-discovered/provided history source found at: {:?}", path);
+        println!(
+            "Auto-discovered/provided history source found at: {:?}",
+            path
+        );
         println!("Running bulk ingestion of historical transcripts...");
-        match vault::ingestion::bulk_ingest_vault(
-            vault_root,
-            &path,
-            harness,
-            "general",
-            backend,
-        ).await {
+        match vault::ingestion::bulk_ingest_vault(vault_root, &path, harness, "general", backend)
+            .await
+        {
             Ok((count, errs)) => {
                 println!("Ingested {} episodes successfully.", count);
                 if !errs.is_empty() {
@@ -1206,13 +1326,13 @@ async fn config_harness_action(
             }
         }
     } else {
-        println!("No pre-existing history source resolved or provided. Skipping initial ingestion.");
+        println!(
+            "No pre-existing history source resolved or provided. Skipping initial ingestion."
+        );
     }
-    
+
     Ok(())
 }
-
-
 
 async fn handle_install_hook() -> Result<()> {
     let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
@@ -1221,7 +1341,10 @@ async fn handle_install_hook() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let git_dir = workspace_root.join(".git");
     if !git_dir.exists() {
-        anyhow::bail!("Not a git repository (missing .git directory at {:?})", workspace_root);
+        anyhow::bail!(
+            "Not a git repository (missing .git directory at {:?})",
+            workspace_root
+        );
     }
 
     let hooks_dir = git_dir.join("hooks");
@@ -1243,7 +1366,10 @@ exec mythrax pre-commit
         std::fs::set_permissions(&pre_commit_path, perms)?;
     }
 
-    println!("Successfully installed git pre-commit hook at: {:?}", pre_commit_path);
+    println!(
+        "Successfully installed git pre-commit hook at: {:?}",
+        pre_commit_path
+    );
     Ok(())
 }
 
@@ -1254,14 +1380,17 @@ async fn handle_pre_commit() -> Result<()> {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     println!("Running SecretFilter on staged files under .mythrax-shared...");
-    
+
     let output = std::process::Command::new("git")
         .args(&["diff", "--cached", "--name-only", "--diff-filter=ACM"])
         .current_dir(&workspace_root)
         .output()?;
-    
+
     if !output.status.success() {
-        anyhow::bail!("Failed to run git diff: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Failed to run git diff: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);
@@ -1291,10 +1420,14 @@ async fn handle_pre_commit() -> Result<()> {
 async fn handle_exec(command_name: &str, args: &[String]) -> Result<()> {
     // Validate command_name and all args against shell metacharacters
     let shell_metacharacters = ";&|$`()<>\\\n\r";
-    
+
     let validate_string = |s: &str, label: &str| -> Result<()> {
         if s.chars().any(|c| shell_metacharacters.contains(c)) {
-            anyhow::bail!("Security violation: {} contains shell metacharacters: {}", label, s);
+            anyhow::bail!(
+                "Security violation: {} contains shell metacharacters: {}",
+                label,
+                s
+            );
         }
         Ok(())
     };
@@ -1313,16 +1446,18 @@ async fn handle_exec(command_name: &str, args: &[String]) -> Result<()> {
 
     let auth_token = mythrax_core::auth::get_or_create_token(&token_path)?;
     let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
-    
+
     let mut cmd = std::process::Command::new(command_name);
     cmd.args(args);
-    
+
     cmd.env("MYTHRAX_DAEMON_PORT", &daemon_port);
     cmd.env("MYTHRAX_DAEMON_TOKEN", &auth_token);
-    
-    let mut child = cmd.spawn().context(format!("Failed to spawn command {}", command_name))?;
+
+    let mut child = cmd
+        .spawn()
+        .context(format!("Failed to spawn command {}", command_name))?;
     let status = child.wait().context("Failed to wait for child process")?;
-    
+
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -1366,7 +1501,7 @@ impl SizeRollingFileWriter {
 
     fn write_all_and_roll(&self, buf: &[u8]) -> io::Result<()> {
         let mut inner = self.inner.lock().unwrap();
-        
+
         // 1. Check current file size
         let mut needs_roll = false;
         if let Some(ref file) = inner.file {
@@ -1457,12 +1592,14 @@ mod tests {
     #[test]
     fn test_swap_monitor_cross_platform() {
         let swap = get_swap_used_bytes();
-        assert!(swap.is_some(), "Swap usage should be retrievable and non-empty");
+        assert!(
+            swap.is_some(),
+            "Swap usage should be retrievable and non-empty"
+        );
         let bytes = swap.unwrap();
-        assert!(bytes > 0 || bytes == 0, "Swap bytes should be a valid non-negative number");
+        assert!(
+            bytes > 0 || bytes == 0,
+            "Swap bytes should be a valid non-negative number"
+        );
     }
 }
-
-
-
-

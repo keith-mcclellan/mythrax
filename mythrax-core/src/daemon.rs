@@ -1,17 +1,17 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Instant, Duration};
-use sysinfo::{Pid, System, Signal};
-use anyhow::{Context, Result};
-use crate::db::{SurrealBackend, StorageBackend};
-use crate::store::MarkdownStore;
-use crate::vault::watcher::WatchIgnoreList;
-use crate::contracts::Episode;
-use crate::cli::{DaemonAction, run_auditor};
 use crate::api;
 use crate::auth;
+use crate::cli::{DaemonAction, run_auditor};
 use crate::cognitive;
+use crate::contracts::Episode;
+use crate::db::{StorageBackend, SurrealBackend};
+use crate::store::MarkdownStore;
 use crate::vault;
+use crate::vault::watcher::WatchIgnoreList;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use sysinfo::{Pid, Signal, System};
 
 /// Handles background daemon operations (start, run, stop).
 pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
@@ -27,7 +27,11 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
             } else if config_path.exists() {
                 let config_content = std::fs::read_to_string(&config_path)?;
                 let config_val: serde_json::Value = serde_json::from_str(&config_content)?;
-                PathBuf::from(config_val["vault_root"].as_str().unwrap_or(&format!("{}/mythrax-vault", home)))
+                PathBuf::from(
+                    config_val["vault_root"]
+                        .as_str()
+                        .unwrap_or(&format!("{}/mythrax-vault", home)),
+                )
             } else {
                 PathBuf::from(&home).join("mythrax-vault")
             };
@@ -318,7 +322,7 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
 
     let mut project_type = "unknown";
     let mut check_cmd = vec![];
-    
+
     if workspace_root.join("Cargo.toml").exists() {
         project_type = "rust";
         check_cmd = vec!["cargo", "check"];
@@ -327,7 +331,10 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
         check_cmd = vec!["npx", "tsc", "--noEmit"];
     } else {
         let has_py = std::fs::read_dir(&workspace_root)
-            .map(|dir| dir.flatten().any(|entry| entry.path().extension().map_or(false, |ext| ext == "py")))
+            .map(|dir| {
+                dir.flatten()
+                    .any(|entry| entry.path().extension().map_or(false, |ext| ext == "py"))
+            })
             .unwrap_or(false);
         if has_py {
             project_type = "python";
@@ -337,7 +344,7 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
 
     let check_cmd_clone = check_cmd.clone();
     let workspace_clone = workspace_root.clone();
-    
+
     let compile_result = tokio::task::spawn_blocking(move || {
         if check_cmd_clone.is_empty() {
             return (0, String::new());
@@ -352,9 +359,11 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 (exit_code, stderr)
             }
-            Err(e) => (-1, e.to_string())
+            Err(e) => (-1, e.to_string()),
         }
-    }).await.unwrap_or((-2, "Thread panic".to_string()));
+    })
+    .await
+    .unwrap_or((-2, "Thread panic".to_string()));
 
     let git_diff = tokio::task::spawn_blocking(move || {
         let output = std::process::Command::new("git")
@@ -363,14 +372,19 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
             .output();
         match output {
             Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
-            Err(e) => e.to_string()
+            Err(e) => e.to_string(),
         }
-    }).await.unwrap_or_else(|_| "Thread panic".to_string());
+    })
+    .await
+    .unwrap_or_else(|_| "Thread panic".to_string());
 
-    let checkpoint_id = format!("checkpoint_{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs());
+    let checkpoint_id = format!(
+        "checkpoint_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
 
     let sql = "
         UPSERT type::record('checkpoint_node', $id) CONTENT {
@@ -381,13 +395,16 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
             timestamp: time::now()
         };
     ";
-    backend.db.query(sql)
+    backend
+        .db
+        .query(sql)
         .bind(("id", checkpoint_id.clone()))
         .bind(("project_type", project_type))
         .bind(("exit_code", compile_result.0))
         .bind(("compiler_errors", compile_result.1))
         .bind(("git_diff", git_diff))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     tracing::info!("Saved CheckpointNode: {}", checkpoint_id);
     Ok(())
@@ -396,26 +413,29 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
 pub async fn stop_daemon() -> Result<()> {
     let home = std::env::var("HOME").context("HOME env var not set")?;
     let mythrax_dir = PathBuf::from(&home).join(".mythrax");
-    
+
     // Attempt stopping via HTTP POST request
     let token_path = mythrax_dir.join("token");
     let auth_token = crate::auth::get_or_create_token(&token_path).ok();
-    
+
     let port_str = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
     if let (Some(token), Ok(port)) = (auth_token, port_str.parse::<u16>()) {
         let client = reqwest::Client::new();
         let url = format!("http://127.0.0.1:{}/v1/daemon/stop", port);
-        match client.post(&url)
+        match client
+            .post(&url)
             .header("X-Mythrax-Token", &token)
             .timeout(Duration::from_secs(2))
-            .send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    println!("Successfully sent stop request to daemon on port {}", port);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    return Ok(());
-                }
-                _ => {}
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                println!("Successfully sent stop request to daemon on port {}", port);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                return Ok(());
             }
+            _ => {}
+        }
     }
 
     let pid_path = mythrax_dir.join("daemon.pid");
@@ -462,8 +482,10 @@ pub fn backup_vault_folders(vault_root: &Path) -> Result<()> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
-    let backup_dir = vault_root.join(".trash").join(format!("backup_{}", timestamp));
-    
+    let backup_dir = vault_root
+        .join(".trash")
+        .join(format!("backup_{}", timestamp));
+
     let mut has_files = false;
     for f in &folders {
         if vault_root.join(f).exists() {
@@ -471,7 +493,7 @@ pub fn backup_vault_folders(vault_root: &Path) -> Result<()> {
             break;
         }
     }
-    
+
     if has_files {
         std::fs::create_dir_all(&backup_dir)?;
         for f in &folders {
@@ -514,7 +536,11 @@ pub mod monitor {
 
         #[cfg(target_os = "macos")]
         {
-            let c_path = CString::new(canonical_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?)?;
+            let c_path = CString::new(
+                canonical_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid path"))?,
+            )?;
             let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
             let res = unsafe { libc::statfs(c_path.as_ptr(), &mut buf) };
             if res != 0 {
@@ -532,7 +558,11 @@ pub mod monitor {
 
         #[cfg(target_os = "linux")]
         {
-            let c_path = CString::new(canonical_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?)?;
+            let c_path = CString::new(
+                canonical_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid path"))?,
+            )?;
             let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
             let res = unsafe { libc::statfs(c_path.as_ptr(), &mut buf) };
             if res != 0 {

@@ -1,13 +1,13 @@
+use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-use anyhow::{Context, Result};
-use serde::Deserialize;
 
 use crate::contracts::EpisodeSave;
 use crate::db::backend::StorageBackend;
 use crate::store::MarkdownStore;
-use crate::vault::watcher::{save_episode_bidirectional, WatchIgnoreList};
+use crate::vault::watcher::{WatchIgnoreList, save_episode_bidirectional};
 
 #[derive(Deserialize)]
 struct SimpleMessage {
@@ -75,8 +75,10 @@ pub async fn mine_transcript(
     store: &MarkdownStore,
     ignore: &WatchIgnoreList,
 ) -> Result<usize> {
-    let file = File::open(transcript_path)
-        .context(format!("Failed to open transcript file at {}", transcript_path))?;
+    let file = File::open(transcript_path).context(format!(
+        "Failed to open transcript file at {}",
+        transcript_path
+    ))?;
     let reader = BufReader::new(file);
     let mut saved_count = 0;
 
@@ -87,8 +89,14 @@ pub async fn mine_transcript(
         };
 
         if let Ok(msg) = serde_json::from_str::<SimpleMessage>(&line_str) {
-            let role = msg.role.clone().or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
-            let content = msg.content.clone().or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
+            let role = msg
+                .role
+                .clone()
+                .or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
+            let content = msg
+                .content
+                .clone()
+                .or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
 
             if let (Some(r), Some(c)) = (role, content) {
                 // We mine user turns, tool outputs, computer outputs, and tool_results
@@ -115,20 +123,22 @@ pub async fn mine_transcript(
                         source_episode: None,
                         session_id: Some(session.to_string()),
                         task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                        discovery_tokens: None,
+                        facts: None,
+                        concepts: None,
+                        files_read: None,
+                        files_modified: None,
+                    };
 
                     let store_arc = Arc::new(crate::store::MarkdownStore {
                         vault_root: store.vault_root.clone(),
                     });
                     save_episode_bidirectional(&ep, backend, &store_arc, ignore)
                         .await
-                        .context("Failed to save episode bidirectionally during transcript mining")?;
-                    
+                        .context(
+                            "Failed to save episode bidirectionally during transcript mining",
+                        )?;
+
                     saved_count += 1;
                 }
             }
@@ -136,7 +146,8 @@ files_modified: None,
     }
 
     // 2.0 dual-durability journaling
-    backend.journal_state(&store.vault_root, Some(session))
+    backend
+        .journal_state(&store.vault_root, Some(session))
         .await
         .context("Failed to journal state after transcript mining")?;
 

@@ -1,11 +1,11 @@
+use crate::contracts::HypothesisNode;
+use crate::db::StorageBackend;
+use anyhow::{Result, anyhow};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use anyhow::{Result, anyhow};
-use surrealdb::engine::local::Db;
 use surrealdb::Surreal;
-use crate::db::StorageBackend;
-use crate::contracts::HypothesisNode;
+use surrealdb::engine::local::Db;
 
 pub trait ArborLlmClient: Send + Sync {
     async fn propose_hypotheses(
@@ -16,7 +16,12 @@ pub trait ArborLlmClient: Send + Sync {
         target_files: &[(String, String)],
     ) -> Result<String>;
     async fn evaluate_run(&self, db: &dyn StorageBackend, run_logs: &str) -> Result<String>;
-    async fn abstract_insights(&self, db: &dyn StorageBackend, parent_insight: Option<&str>, child_insight: &str) -> Result<String>;
+    async fn abstract_insights(
+        &self,
+        db: &dyn StorageBackend,
+        parent_insight: Option<&str>,
+        child_insight: &str,
+    ) -> Result<String>;
 }
 
 pub struct ArborCoordinator<L: ArborLlmClient> {
@@ -54,7 +59,10 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
     }
 
     fn get_vault_path(&self, node_id: &str) -> PathBuf {
-        self.vault_root.join(format!("wiki/{}/hypothesis_tree/{}.md", self.scope, node_id))
+        self.vault_root.join(format!(
+            "wiki/{}/hypothesis_tree/{}.md",
+            self.scope, node_id
+        ))
     }
 
     fn get_current_files_context(&self, parent: &HypothesisNode) -> Vec<(String, String)> {
@@ -62,15 +70,17 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         for rel_path in &self.target_files {
             let mut content = String::new();
             if let Some(ref changes) = parent.code_changes
-                && let Some(c) = changes.get(rel_path) {
-                    content = c.clone();
-                }
+                && let Some(c) = changes.get(rel_path)
+            {
+                content = c.clone();
+            }
             if content.is_empty() {
                 let full_path = self.repo_path.join(rel_path);
                 if full_path.exists()
-                    && let Ok(c) = fs::read_to_string(full_path) {
-                        content = c;
-                    }
+                    && let Ok(c) = fs::read_to_string(full_path)
+                {
+                    content = c;
+                }
             }
             result.push((rel_path.clone(), content));
         }
@@ -84,7 +94,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         code_changes: Option<std::collections::HashMap<String, String>>,
     ) -> Result<()> {
         let root_id = "ROOT".to_string();
-        
+
         let root_node = HypothesisNode {
             node_id: root_id.clone(),
             parent_id: None,
@@ -98,11 +108,16 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             code_ref: None,
             code_changes,
             scope: Some(self.scope.clone()),
-            vault_path: Some(format!("wiki/{}/hypothesis_tree/{}.md", self.scope, root_id)),
+            vault_path: Some(format!(
+                "wiki/{}/hypothesis_tree/{}.md",
+                self.scope, root_id
+            )),
         };
 
         // Write to SurrealDB
-        let _: Option<HypothesisNode> = self.db.create(("hypothesis_node", root_id.as_str()))
+        let _: Option<HypothesisNode> = self
+            .db
+            .create(("hypothesis_node", root_id.as_str()))
             .content(root_node.clone())
             .await?;
 
@@ -119,26 +134,41 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 
     /// Step B: Propose hypotheses (Ideation)
     pub async fn trigger_ideation(&self, parent_id: &str) -> Result<()> {
-        let mut parent: HypothesisNode = self.db.select(("hypothesis_node", parent_id))
+        let mut parent: HypothesisNode = self
+            .db
+            .select(("hypothesis_node", parent_id))
             .await?
             .ok_or_else(|| anyhow!("Parent node not found"))?;
 
         let files_context = self.get_current_files_context(&parent);
-        let response = self.llm_client.propose_hypotheses(&self.backend, &parent.node_id, &parent.hypothesis, &files_context).await?;
+        let response = self
+            .llm_client
+            .propose_hypotheses(
+                &self.backend,
+                &parent.node_id,
+                &parent.hypothesis,
+                &files_context,
+            )
+            .await?;
         let proposals: Vec<serde_json::Value> = serde_json::from_str(&response)?;
-        
+
         let mut children_ids = vec![];
         for prop in proposals {
-            let node_id = prop["node_id"].as_str().ok_or_else(|| anyhow!("Missing node_id"))?.to_string();
-            let hypothesis = prop["hypothesis"].as_str().ok_or_else(|| anyhow!("Missing hypothesis"))?.to_string();
+            let node_id = prop["node_id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Missing node_id"))?
+                .to_string();
+            let hypothesis = prop["hypothesis"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Missing hypothesis"))?
+                .to_string();
             let score = prop["score"].as_f64().map(|s| s as f32);
 
-            let code_changes: Option<std::collections::HashMap<String, String>> = prop["code_changes"]
-                .as_object()
-                .map(|obj| {
+            let code_changes: Option<std::collections::HashMap<String, String>> =
+                prop["code_changes"].as_object().map(|obj| {
                     obj.iter()
-                       .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-                       .collect()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                        .collect()
                 });
 
             let child_node = HypothesisNode {
@@ -154,11 +184,16 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                 code_ref: None,
                 code_changes,
                 scope: Some(self.scope.clone()),
-                vault_path: Some(format!("wiki/{}/hypothesis_tree/{}.md", self.scope, node_id)),
+                vault_path: Some(format!(
+                    "wiki/{}/hypothesis_tree/{}.md",
+                    self.scope, node_id
+                )),
             };
 
             // Write to SurrealDB
-            let _: Option<HypothesisNode> = self.db.create(("hypothesis_node", node_id.as_str()))
+            let _: Option<HypothesisNode> = self
+                .db
+                .create(("hypothesis_node", node_id.as_str()))
                 .content(child_node.clone())
                 .await?;
 
@@ -174,9 +209,11 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         }
 
         parent.children_ids.extend(children_ids);
-        
+
         // Update parent in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", parent.node_id.as_str()))
+        let _: Option<HypothesisNode> = self
+            .db
+            .update(("hypothesis_node", parent.node_id.as_str()))
             .content(parent.clone())
             .await?;
 
@@ -199,7 +236,9 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 
     /// Step C: Dispatch/Execute hypothesis node
     pub async fn execute_node(&self, node_id: &str) -> Result<()> {
-        let mut node: HypothesisNode = self.db.select(("hypothesis_node", node_id))
+        let mut node: HypothesisNode = self
+            .db
+            .select(("hypothesis_node", node_id))
             .await?
             .ok_or_else(|| anyhow!("Node not found"))?;
 
@@ -211,15 +250,27 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         let commit_sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         let executor = crate::cognitive::executor::ArborExecutor::new(self.repo_path.clone());
-        let (mut success, mut logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes, &self.backend).await?;
+        let (mut success, mut logs) = executor
+            .execute(
+                &node.node_id,
+                &commit_sha,
+                &self.test_command,
+                &node.code_changes,
+                &self.backend,
+            )
+            .await?;
 
         // T6: Stateful TDD Loop
         let max_attempts = crate::store::get_config_val_int("htr", "tdd_max_attempts", 5) as usize;
         let mut attempt = 1;
-        
+
         while !success && attempt < max_attempts {
-            tracing::warn!("HTR TDD Loop: Attempt {}/{} failed. Attempting self-healing...", attempt, max_attempts);
-            
+            tracing::warn!(
+                "HTR TDD Loop: Attempt {}/{} failed. Attempting self-healing...",
+                attempt,
+                max_attempts
+            );
+
             // Construct debugging prompt
             let prompt = format!(
                 "The previous code changes failed to compile or pass tests.\n\
@@ -230,13 +281,15 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                  JSON Response:",
                 node.hypothesis, logs
             );
-            
+
             // Query the LLM
             match self.llm_client.evaluate_run(&self.backend, &prompt).await {
                 Ok(resp) => {
                     let cleaned = crate::llm::strip_code_fences(&resp);
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
-                        if let Some(changes_obj) = val.get("code_changes").and_then(|c| c.as_object()) {
+                        if let Some(changes_obj) =
+                            val.get("code_changes").and_then(|c| c.as_object())
+                        {
                             let mut new_changes = std::collections::HashMap::new();
                             for (k, v) in changes_obj {
                                 if let Some(content_str) = v.as_str() {
@@ -244,13 +297,23 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                                 }
                             }
                             node.code_changes = Some(new_changes);
-                            
+
                             // Re-execute tests
-                            let (new_success, new_logs) = executor.execute(&node.node_id, &commit_sha, &self.test_command, &node.code_changes, &self.backend).await?;
+                            let (new_success, new_logs) = executor
+                                .execute(
+                                    &node.node_id,
+                                    &commit_sha,
+                                    &self.test_command,
+                                    &node.code_changes,
+                                    &self.backend,
+                                )
+                                .await?;
                             success = new_success;
                             logs = new_logs;
                         } else {
-                            tracing::warn!("LLM did not return code_changes in the expected JSON format");
+                            tracing::warn!(
+                                "LLM did not return code_changes in the expected JSON format"
+                            );
                             break;
                         }
                     } else {
@@ -267,9 +330,11 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         }
 
         node.result = Some(logs);
-        
+
         // Update in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", node.node_id.as_str()))
+        let _: Option<HypothesisNode> = self
+            .db
+            .update(("hypothesis_node", node.node_id.as_str()))
             .content(node.clone())
             .await?;
 
@@ -282,20 +347,26 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 
     /// Step D: Backpropagate evaluation insights up the tree
     pub async fn backpropagate_insights(&self, leaf_id: &str) -> Result<()> {
-        let mut leaf: HypothesisNode = self.db.select(("hypothesis_node", leaf_id))
+        let mut leaf: HypothesisNode = self
+            .db
+            .select(("hypothesis_node", leaf_id))
             .await?
             .ok_or_else(|| anyhow!("Leaf node not found"))?;
 
         let run_logs = leaf.result.as_deref().unwrap_or("");
         let critic = crate::cognitive::critic::ArborCritic::new();
-        let critic_output = critic.evaluate(&self.backend, &self.llm_client, run_logs).await?;
+        let critic_output = critic
+            .evaluate(&self.backend, &self.llm_client, run_logs)
+            .await?;
 
         leaf.score = Some(critic_output.score);
         leaf.insight = Some(critic_output.insight.clone());
         leaf.status = "done".to_string();
 
         // Update leaf in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", leaf.node_id.as_str()))
+        let _: Option<HypothesisNode> = self
+            .db
+            .update(("hypothesis_node", leaf.node_id.as_str()))
             .content(leaf.clone())
             .await?;
 
@@ -306,18 +377,25 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         // Propagate up to parent ancestors
         let mut current_parent_id = leaf.parent_id.clone();
         while let Some(parent_id) = current_parent_id {
-            let mut parent: HypothesisNode = self.db.select(("hypothesis_node", parent_id.as_str()))
+            let mut parent: HypothesisNode = self
+                .db
+                .select(("hypothesis_node", parent_id.as_str()))
                 .await?
                 .ok_or_else(|| anyhow!("Parent node not found"))?;
 
             let parent_insight = parent.insight.as_deref();
             let child_insight = critic_output.insight.as_str();
 
-            let new_insight = self.llm_client.abstract_insights(&self.backend, parent_insight, child_insight).await?;
+            let new_insight = self
+                .llm_client
+                .abstract_insights(&self.backend, parent_insight, child_insight)
+                .await?;
             parent.insight = Some(new_insight);
 
             // Update parent in SurrealDB
-            let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", parent.node_id.as_str()))
+            let _: Option<HypothesisNode> = self
+                .db
+                .update(("hypothesis_node", parent.node_id.as_str()))
                 .content(parent.clone())
                 .await?;
 
@@ -333,7 +411,9 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
 
     /// Step E: Admission control decision and merge gate
     pub async fn decide_admission(&self, node_id: &str) -> Result<()> {
-        let mut node: HypothesisNode = self.db.select(("hypothesis_node", node_id))
+        let mut node: HypothesisNode = self
+            .db
+            .select(("hypothesis_node", node_id))
             .await?
             .ok_or_else(|| anyhow!("Node not found"))?;
 
@@ -355,7 +435,11 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         }
 
         // Commit changes to main branch
-        let commit_msg = format!("Apply HTR refinement: {} (Score: {})", node.hypothesis, node.score.unwrap_or(0.0));
+        let commit_msg = format!(
+            "Apply HTR refinement: {} (Score: {})",
+            node.hypothesis,
+            node.score.unwrap_or(0.0)
+        );
         let _ = Command::new("git")
             .args(["commit", "-m", &commit_msg])
             .current_dir(&self.repo_path)
@@ -364,7 +448,9 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         node.status = "merged".to_string();
 
         // Update in SurrealDB
-        let _: Option<HypothesisNode> = self.db.update(("hypothesis_node", node.node_id.as_str()))
+        let _: Option<HypothesisNode> = self
+            .db
+            .update(("hypothesis_node", node.node_id.as_str()))
             .content(node.clone())
             .await?;
 
@@ -384,7 +470,9 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
         None => "null".to_string(),
     };
 
-    let children_links = node.children_ids.iter()
+    let children_links = node
+        .children_ids
+        .iter()
         .map(|c| format!("\"[[{}]]\"", c))
         .collect::<Vec<_>>()
         .join(", ");
@@ -423,7 +511,9 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
     let nav_children = if node.children_ids.is_empty() {
         "None".to_string()
     } else {
-        let child_bullets: Vec<String> = node.children_ids.iter()
+        let child_bullets: Vec<String> = node
+            .children_ids
+            .iter()
             .map(|c| format!("  - [[wiki/{}/hypothesis_tree/{}|{}]]", scope, c, c))
             .collect();
         format!("\n{}", child_bullets.join("\n"))
@@ -431,8 +521,7 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
 
     let navigation_section = format!(
         "\n\n## Navigation\n- **Parent**: {}\n- **Children**: {}",
-        nav_parent,
-        nav_children
+        nav_parent, nav_children
     );
 
     format!(

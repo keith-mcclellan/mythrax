@@ -1,11 +1,11 @@
+use crate::cognitive::synthesis::load_insights;
+use crate::contracts::WikiNode;
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
-use crate::cognitive::synthesis::load_insights;
-use crate::contracts::WikiNode;
-use surrealdb_types::SurrealValue;
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
+use surrealdb_types::SurrealValue;
 
 pub struct Compactor {
     llm: LLMClient,
@@ -32,10 +32,19 @@ impl Compactor {
 
         let mut prompt_content = String::new();
         for (i, chk) in checkpoints.iter().enumerate() {
-            let timestamp = chk.get("timestamp").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let project_type = chk.get("project_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let timestamp = chk
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let project_type = chk
+                .get("project_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let exit_code = chk.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
-            let errors = chk.get("compiler_errors").and_then(|v| v.as_str()).unwrap_or("");
+            let errors = chk
+                .get("compiler_errors")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let git_diff = chk.get("git_diff").and_then(|v| v.as_str()).unwrap_or("");
 
             if i < 2 {
@@ -46,12 +55,23 @@ impl Compactor {
                      Compiler Exit Code: {}\n\
                      Compiler/Linter Output:\n{}\n\
                      Git Diff:\n{}\n\n",
-                    i + 1, timestamp, project_type, exit_code, errors, git_diff
+                    i + 1,
+                    timestamp,
+                    project_type,
+                    exit_code,
+                    errors,
+                    git_diff
                 ));
             } else {
                 let compact_diff = if git_diff.len() > 200 {
-                    let summary_prompt = format!("Summarize this git diff briefly (under 50 words):\n\n{}", git_diff);
-                    self.llm.completion(db, Some("You are a code summarizer."), &summary_prompt).await.unwrap_or_else(|_| "Git diff summary failed".to_string())
+                    let summary_prompt = format!(
+                        "Summarize this git diff briefly (under 50 words):\n\n{}",
+                        git_diff
+                    );
+                    self.llm
+                        .completion(db, Some("You are a code summarizer."), &summary_prompt)
+                        .await
+                        .unwrap_or_else(|_| "Git diff summary failed".to_string())
                 } else {
                     git_diff.to_string()
                 };
@@ -62,13 +82,20 @@ impl Compactor {
                      Project Type: {}\n\
                      Compiler Exit Code: {}\n\
                      Summary of Changes:\n{}\n\n",
-                    i + 1, timestamp, project_type, exit_code, compact_diff
+                    i + 1,
+                    timestamp,
+                    project_type,
+                    exit_code,
+                    compact_diff
                 ));
             }
         }
 
         let sys_prompt = "You are a master systems architect. Analyze the sequence of checkpoints and summarize the transitions between them, detailing how the codebase evolved, what errors were resolved, and the progression of active changes.";
-        let summary = self.llm.completion(db, Some(sys_prompt), &prompt_content).await?;
+        let summary = self
+            .llm
+            .completion(db, Some(sys_prompt), &prompt_content)
+            .await?;
         Ok(summary)
     }
 
@@ -84,8 +111,14 @@ impl Compactor {
         let _ = self.archive_decayed_episodes(db, store).await;
 
         // Prune chat history exceeding 100 turns per session
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let sessions_res = surreal_backend.db.query("SELECT session_id FROM chat_history GROUP BY session_id;").await;
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
+            let sessions_res = surreal_backend
+                .db
+                .query("SELECT session_id FROM chat_history GROUP BY session_id;")
+                .await;
             match sessions_res {
                 Ok(mut resp) => {
                     #[derive(serde::Deserialize, SurrealValue)]
@@ -106,7 +139,9 @@ impl Compactor {
                                 if ids.len() > 100 {
                                     let to_delete = &ids[100..];
                                     for item in to_delete {
-                                        let _ = surreal_backend.db.query("DELETE $id;")
+                                        let _ = surreal_backend
+                                            .db
+                                            .query("DELETE $id;")
                                             .bind(("id", item.id.clone()))
                                             .await;
                                     }
@@ -197,7 +232,10 @@ impl Compactor {
             Vec::new()
         };
 
-        let mut clusters: std::collections::HashMap<usize, Vec<(crate::cognitive::synthesis::InsightNote, String)>> = std::collections::HashMap::new();
+        let mut clusters: std::collections::HashMap<
+            usize,
+            Vec<(crate::cognitive::synthesis::InsightNote, String)>,
+        > = std::collections::HashMap::new();
 
         for (idx, label) in labels.into_iter().enumerate() {
             let item = dbscan_indices[idx].clone();
@@ -212,7 +250,10 @@ impl Compactor {
         for (cluster_id, member_insights) in &clusters {
             let mut combined_content = String::new();
             for (ins, _) in member_insights {
-                combined_content.push_str(&format!("Insight Title: {}\nInsight Body:\n{}\n\n", ins.title, ins.content));
+                combined_content.push_str(&format!(
+                    "Insight Title: {}\nInsight Body:\n{}\n\n",
+                    ins.title, ins.content
+                ));
             }
 
             // Extract anchors and clean content
@@ -220,7 +261,10 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = self
+                .llm
+                .completion(db, Some(sys_prompt), &prompt_text)
+                .await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -231,17 +275,17 @@ impl Compactor {
                 }
             }
 
-            let first_title = member_insights.first().map(|(c, _)| c.title.as_str()).unwrap_or("compaction");
+            let first_title = member_insights
+                .first()
+                .map(|(c, _)| c.title.as_str())
+                .unwrap_or("compaction");
             let slug = first_title.to_lowercase().replace([' ', '/'], "_");
             let uuid = uuid::Uuid::new_v4().to_string();
             let relative_path = format!("wiki/compaction/{}_{}_{}.md", scope, slug, &uuid[..8]);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
-                scope,
-                cluster_id,
-                scope,
-                summary
+                scope, cluster_id, scope, summary
             );
 
             if !all_anchors.is_empty() {
@@ -263,19 +307,28 @@ impl Compactor {
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in member_insights {
                     if !insight_id.is_empty() {
-                        let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                        let _ = db
+                            .relate_nodes(insight_id, &compaction_id, None, None, None)
+                            .await;
                     }
                 }
             }
 
-            tracing::info!("Compacted scope '{}' cluster {}: summary saved", scope, cluster_id);
+            tracing::info!(
+                "Compacted scope '{}' cluster {}: summary saved",
+                scope,
+                cluster_id
+            );
         }
 
         // 4. Handle outlier insights by grouping them into a single miscellaneous compaction
         if !outlier_insights.is_empty() {
             let mut combined_content = String::new();
             for (ins, _) in &outlier_insights {
-                combined_content.push_str(&format!("Insight Title: {}\nInsight Body:\n{}\n\n", ins.title, ins.content));
+                combined_content.push_str(&format!(
+                    "Insight Title: {}\nInsight Body:\n{}\n\n",
+                    ins.title, ins.content
+                ));
             }
 
             // Extract anchors and clean content
@@ -283,7 +336,10 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = self
+                .llm
+                .completion(db, Some(sys_prompt), &prompt_text)
+                .await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -295,13 +351,12 @@ impl Compactor {
             }
 
             let uuid = uuid::Uuid::new_v4().to_string();
-            let relative_path = format!("wiki/compaction/{}_miscellaneous_{}.md", scope, &uuid[..8]);
+            let relative_path =
+                format!("wiki/compaction/{}_miscellaneous_{}.md", scope, &uuid[..8]);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: \"miscellaneous\"\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
-                scope,
-                scope,
-                summary
+                scope, scope, summary
             );
 
             if !all_anchors.is_empty() {
@@ -323,12 +378,17 @@ impl Compactor {
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in &outlier_insights {
                     if !insight_id.is_empty() {
-                        let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                        let _ = db
+                            .relate_nodes(insight_id, &compaction_id, None, None, None)
+                            .await;
                     }
                 }
             }
 
-            tracing::info!("Compacted scope '{}' outliers: miscellaneous summary saved", scope);
+            tracing::info!(
+                "Compacted scope '{}' outliers: miscellaneous summary saved",
+                scope
+            );
         }
 
         Ok(())
@@ -344,7 +404,10 @@ impl Compactor {
         let _ = self.archive_decayed_episodes(db, store).await;
 
         // Perform history pruning using SurrealDB backend if available
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
             let mut pruning_days: i64 = 30; // default 30 days
             let query_res = surreal_backend.db.query("SELECT VALUE value FROM profile WHERE key = 'compaction.history_pruning_days' LIMIT 1;").await;
             if let Ok(mut resp) = query_res {
@@ -356,9 +419,11 @@ impl Compactor {
                     }
                 }
             }
-            
+
             let threshold = chrono::Utc::now() - chrono::Duration::days(pruning_days);
-            let _ = surreal_backend.db.query("DELETE wiki_node_history WHERE changed_at < type::datetime($threshold);")
+            let _ = surreal_backend
+                .db
+                .query("DELETE wiki_node_history WHERE changed_at < type::datetime($threshold);")
                 .bind(("threshold", threshold.to_rfc3339()))
                 .await;
         }
@@ -373,7 +438,8 @@ impl Compactor {
             for entry in entries.flatten() {
                 if entry.path().extension().map(|s| s == "md").unwrap_or(false) {
                     let path = entry.path();
-                    let rel_path = path.strip_prefix(&store.vault_root)
+                    let rel_path = path
+                        .strip_prefix(&store.vault_root)
                         .unwrap_or(&path)
                         .to_string_lossy()
                         .to_string();
@@ -390,11 +456,15 @@ impl Compactor {
             return Ok(());
         }
 
-        let (cleaned_compaction, extracted_anchors) = extract_attention_anchors(&combined_compaction);
+        let (cleaned_compaction, extracted_anchors) =
+            extract_attention_anchors(&combined_compaction);
 
         let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.";
         let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
-        let global_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+        let global_summary = self
+            .llm
+            .completion(db, Some(sys_prompt), &prompt_text)
+            .await?;
         let global_summary = page_markdown_code_blocks(db, &global_summary).await?;
 
         let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -431,7 +501,9 @@ impl Compactor {
         if let Ok(global_compaction_id) = db.save_wiki_node(&node_contract).await {
             for comp_path in compaction_paths {
                 if let Ok(Some(comp_id)) = db.get_wiki_node_id_by_vault_path(&comp_path).await {
-                    let _ = db.relate_nodes(&comp_id, &global_compaction_id, None, None, None).await;
+                    let _ = db
+                        .relate_nodes(&comp_id, &global_compaction_id, None, None, None)
+                        .await;
                 }
             }
         }
@@ -446,8 +518,12 @@ impl Compactor {
     ) -> Result<()> {
         // Retrieve compaction.decay_threshold (default 0.15) from 'profile' table
         let mut decay_threshold = 0.15f32;
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let query_sql = "SELECT VALUE value FROM profile WHERE key = 'compaction.decay_threshold' LIMIT 1;";
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
+            let query_sql =
+                "SELECT VALUE value FROM profile WHERE key = 'compaction.decay_threshold' LIMIT 1;";
             if let Ok(mut resp) = surreal_backend.db.query(query_sql).await {
                 if let Ok(Some(val_str)) = resp.take::<Option<String>>(0) {
                     if let Ok(parsed) = val_str.parse::<f32>() {
@@ -470,18 +546,26 @@ impl Compactor {
             } else {
                 now
             };
-            
+
             let decay_factor = calculate_decay_factor(now, last_ret);
             let utility = ep.utility.unwrap_or(50.0);
             let decayed_utility = utility * decay_factor;
 
             if decayed_utility < decay_threshold * 50.0 {
                 let mut is_referenced = false;
-                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                if let Some(surreal_backend) = db
+                    .as_any()
+                    .downcast_ref::<crate::db::backend::SurrealBackend>()
+                {
                     if let Some(ref ep_id) = ep.id {
                         if let Ok(ep_rec) = crate::db::backend::parse_record_id(ep_id) {
                             let check_ref_sql = "SELECT VALUE id FROM relates_to WHERE in = $ep OR out = $ep LIMIT 1;";
-                            if let Ok(mut resp) = surreal_backend.db.query(check_ref_sql).bind(("ep", ep_rec)).await {
+                            if let Ok(mut resp) = surreal_backend
+                                .db
+                                .query(check_ref_sql)
+                                .bind(("ep", ep_rec))
+                                .await
+                            {
                                 if let Ok(rows) = resp.take::<Vec<surrealdb::types::RecordId>>(0) {
                                     if !rows.is_empty() {
                                         is_referenced = true;
@@ -493,7 +577,10 @@ impl Compactor {
                 }
 
                 if is_referenced {
-                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    if let Some(surreal_backend) = db
+                        .as_any()
+                        .downcast_ref::<crate::db::backend::SurrealBackend>()
+                    {
                         if let Some(ref ep_id) = ep.id {
                             let query_sql = "UPDATE type::record('episode', $id) MERGE {
                                 archived: true,
@@ -501,7 +588,9 @@ impl Compactor {
                                 importance: 1.0
                             };";
                             let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
-                            let _ = surreal_backend.db.query(query_sql)
+                            let _ = surreal_backend
+                                .db
+                                .query(query_sql)
                                 .bind(("id", id_raw))
                                 .await;
                         }
@@ -521,7 +610,7 @@ impl Compactor {
                         let dest_file = archive_dir.join(filename);
                         let _ = std::fs::rename(&src_file, &dest_file);
                     }
-                    
+
                     // 2. Generate high-level Raptor summary using the LLM
                     let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.";
                     let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
@@ -547,8 +636,14 @@ impl Compactor {
                     }
 
                     // 4. Demote the record in the database instead of deleting it (Epic 3)
-                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-                        let ep_id = ep.id.as_ref().ok_or_else(|| anyhow::anyhow!("Episode ID missing"))?;
+                    if let Some(surreal_backend) = db
+                        .as_any()
+                        .downcast_ref::<crate::db::backend::SurrealBackend>()
+                    {
+                        let ep_id = ep
+                            .id
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("Episode ID missing"))?;
                         let filename = std::path::Path::new(vp)
                             .file_name()
                             .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
@@ -561,7 +656,9 @@ impl Compactor {
                             vault_path: $new_vp
                         };";
 
-                        let resp = surreal_backend.db.query(query_sql)
+                        let resp = surreal_backend
+                            .db
+                            .query(query_sql)
                             .bind(("id", ep_id.split(':').nth(1).unwrap_or(ep_id).to_string()))
                             .bind(("new_vp", new_vp))
                             .await?;
@@ -576,8 +673,12 @@ impl Compactor {
     }
 }
 
-pub fn calculate_decay_factor(now: std::time::SystemTime, last_retrieved_at: std::time::SystemTime) -> f32 {
-    let t_secs = now.duration_since(last_retrieved_at)
+pub fn calculate_decay_factor(
+    now: std::time::SystemTime,
+    last_retrieved_at: std::time::SystemTime,
+) -> f32 {
+    let t_secs = now
+        .duration_since(last_retrieved_at)
         .unwrap_or_default()
         .as_secs_f32();
     let t_days = t_secs / 86400.0f32;
@@ -585,8 +686,12 @@ pub fn calculate_decay_factor(now: std::time::SystemTime, last_retrieved_at: std
     (-lambda * t_days).exp()
 }
 
-pub fn should_prune_history(now: std::time::SystemTime, record_time: std::time::SystemTime) -> bool {
-    let t_secs = now.duration_since(record_time)
+pub fn should_prune_history(
+    now: std::time::SystemTime,
+    record_time: std::time::SystemTime,
+) -> bool {
+    let t_secs = now
+        .duration_since(record_time)
         .unwrap_or_default()
         .as_secs();
     t_secs > 30 * 86400
@@ -632,14 +737,17 @@ fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file()
-                && path.file_name().map_or(false, |name| name.to_string_lossy().starts_with("stm_"))
-                && path.extension().map_or(false, |ext| ext == "json") {
-                    if let Ok(metadata) = entry.metadata() {
-                        if let Ok(modified) = metadata.modified() {
-                            stm_files.push((path, modified));
-                        }
+                && path
+                    .file_name()
+                    .map_or(false, |name| name.to_string_lossy().starts_with("stm_"))
+                && path.extension().map_or(false, |ext| ext == "json")
+            {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        stm_files.push((path, modified));
                     }
                 }
+            }
         }
 
         stm_files.sort_by(|a, b| b.1.cmp(&a.1));
@@ -732,7 +840,8 @@ pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) 
             if line.trim() == "```" {
                 // End of code block. Page the content
                 let paged = if !current_lang.is_empty() {
-                    crate::cognitive::paging::page_code_block(surreal, &current_block, current_lang).await?
+                    crate::cognitive::paging::page_code_block(surreal, &current_block, current_lang)
+                        .await?
                 } else {
                     current_block.clone()
                 };

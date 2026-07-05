@@ -159,9 +159,7 @@ pub enum StmAction {
         key: Option<String>,
     },
     /// Clear all short-term memory variables for a session
-    Clear {
-        session_id: String,
-    },
+    Clear { session_id: String },
     /// Save a parent-to-subagent task handoff and link context
     Handoff {
         parent_conversation_id: String,
