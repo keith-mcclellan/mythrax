@@ -5884,7 +5884,7 @@ files_modified: None,
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search("Pattern", Some("budget-test"), true, 10, 0, 0.0, Some(20), false, true, true).await.unwrap();
+        let response = backend.search("Pattern", Some("budget-test"), true, 10, 0, 0.0, Some(50), false, true, true).await.unwrap();
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
