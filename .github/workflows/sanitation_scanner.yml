@@ -1,0 +1,43 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches-ignore: [ ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 6
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run Sanitation Scanner
+        run: |
+          chmod +x scripts/sanitation_scanner.py
+          python scripts/sanitation_scanner.py
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+
+      - name: Comment on PR
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Try to find the PR associated with this push
+          PR_NUMBER=$(gh pr list --head ${{ github.ref_name }} --json number -q '.[0].number')
+          if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
+            gh pr comment $PR_NUMBER -F sanitation_scorecard.md
+          else
+            echo "No PR found for this branch."
+          fi
