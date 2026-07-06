@@ -1,0 +1,4 @@
+## 2025-02-14 - Fix SQL Injection in SurrealDB node scope query
+**Vulnerability:** SQL Injection in `get_node_scope` within `mcp_routes.rs`. The code was interpolating `rec_id.table` directly into the query string: `format!("SELECT scope FROM {};", rec_id.table)`. This allows a malicious table name from `parse_record_id` to inject arbitrary SurrealQL. Furthermore, it completely omitted filtering by the parsed ID.
+**Learning:** Even with an object-oriented or ORM-like structure in SurrealDB, string concatenation must be avoided for variables controlled by input. Additionally, omitting the record ID when fetching record-specific data returns incorrect data regardless of the security implication.
+**Prevention:** Always parameterize SurrealDB variables. When querying a specific ID, use `SELECT * FROM $id` and safely bind `id` as a variable in the query, allowing SurrealDB to handle the table inference safely.
