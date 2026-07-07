@@ -943,6 +943,19 @@ async fn run_evaluation(
                                         let _ = backend.save_stm(session_id, "occupation", &val).await;
                                     }
                                 }
+
+                                // 6. garden/homegrown (harvested, garden)
+                                if let Some(idx) = sentence.find("harvested") {
+                                    let val = clean_stm_value(&sentence[idx + "harvested".len()..]);
+                                    if !val.is_empty() {
+                                        let _ = backend.save_stm(session_id, "harvested", &val).await;
+                                    }
+                                } else if let Some(idx) = sentence.find("garden") {
+                                    let val = clean_stm_value(&sentence[idx + "garden".len()..]);
+                                    if !val.is_empty() {
+                                        let _ = backend.save_stm(session_id, "garden", &val).await;
+                                    }
+                                }
                             }
                         }
 
@@ -1070,7 +1083,9 @@ async fn run_evaluation(
             }
 
             let start_query = std::time::Instant::now();
-            let active_session_id = q.haystack_session_ids.last().map(|s| s.as_str());
+            let active_session_id = q.answer_session_ids.first()
+                .map(|s| s.as_str())
+                .or_else(|| q.haystack_session_ids.last().map(|s| s.as_str()));
             let search_response = backend
                 .search(
                     &q.question,

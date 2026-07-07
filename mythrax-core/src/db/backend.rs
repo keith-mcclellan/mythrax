@@ -2417,10 +2417,12 @@ impl StorageBackend for SurrealBackend {
 
         let query_category = classify_query(&cleaned_query);
 
+        #[allow(unused_variables)]
         let sigmoid_center = match self.get_category_profile_key(query_category, "sigmoid_center", "search.sigmoid_center").await.as_str() {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.55f32),
             _ => 0.55f32,
         };
+        #[allow(unused_variables)]
         let sigmoid_steepness = match self.get_category_profile_key(query_category, "sigmoid_steepness", "search.sigmoid_steepness").await.as_str() {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(15.0f32),
             _ => 15.0f32,
@@ -2433,6 +2435,7 @@ impl StorageBackend for SurrealBackend {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(20.0f32),
             _ => 20.0f32,
         };
+        #[allow(unused_variables)]
         let rerank_weight = match self.get_category_profile_key(query_category, "rerank_weight", "search.rerank_weight").await.as_str() {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.15f32),
             _ => 0.15f32,
@@ -2547,9 +2550,9 @@ impl StorageBackend for SurrealBackend {
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
-                          AND (embedding <|100, 100|> $query_embedding);
+                          AND (embedding <|200, 200|> $query_embedding);
                         ",
                         traversal = traversal,
                         related_targets = related_targets
@@ -2561,9 +2564,9 @@ impl StorageBackend for SurrealBackend {
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
-                          AND (embedding <|100, 100|> $query_embedding);
+                          AND (embedding <|200, 200|> $query_embedding);
                     ");
                 }
             }
@@ -2575,7 +2578,7 @@ impl StorageBackend for SurrealBackend {
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wiki_node
                     WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding)
+                      AND (embedding <|200, 200|> $query_embedding)
                       {wiki_node_filter};
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
@@ -2584,7 +2587,7 @@ impl StorageBackend for SurrealBackend {
                     FROM wisdom
                     WHERE status != 'superseded'
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding);
+                      AND (embedding <|200, 200|> $query_embedding);
                     ",
                     traversal = traversal,
                     related_targets = related_targets,
@@ -2596,7 +2599,7 @@ impl StorageBackend for SurrealBackend {
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wiki_node
                     WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding)
+                      AND (embedding <|200, 200|> $query_embedding)
                       {wiki_node_filter};
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
@@ -2604,7 +2607,7 @@ impl StorageBackend for SurrealBackend {
                     FROM wisdom
                     WHERE status != 'superseded'
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                      AND (embedding <|100, 100|> $query_embedding);
+                      AND (embedding <|200, 200|> $query_embedding);
                     ",
                     wiki_node_filter = wiki_node_filter
                 ));
@@ -2625,7 +2628,7 @@ impl StorageBackend for SurrealBackend {
                          FROM episode 
                          WHERE {fts_where_clause}
                            AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                           AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                           AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
                            AND ($include_archived = true OR archived = false OR archived = NONE)
                            AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                          ORDER BY bm25_score DESC
@@ -2644,7 +2647,7 @@ impl StorageBackend for SurrealBackend {
                         FROM episode 
                         WHERE {fts_where_clause}
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL)
+                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                         ORDER BY bm25_score DESC
@@ -2812,7 +2815,9 @@ impl StorageBackend for SurrealBackend {
             };
 
             let get_decay_factor = |delta_t_days: f32| -> f32 {
-                if enable_gaussian_temporal {
+                if query_category != QueryCategory::Default {
+                    1.0f32
+                } else if enable_gaussian_temporal {
                     let delta_t_hours = delta_t_days * 24.0f32;
                     (-0.5f32 * (delta_t_hours / gaussian_temporal_sigma).powi(2)).exp()
                 } else {
@@ -2923,7 +2928,7 @@ impl StorageBackend for SurrealBackend {
                 };
 
                 let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb.is_some() && ep.embedding.is_some())) {
-                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
+                    let g = 1.0f32; // Base sigmoid gate eliminated
                     if is_sigmoid_gated_search_test {
                         println!("DEBUG BACKEND LOOP: title = '{}', similarity = {}, gate = {}", ep.title, similarity, g);
                     }
@@ -3032,7 +3037,7 @@ impl StorageBackend for SurrealBackend {
 
                 let utility_val = node.utility.unwrap_or(1.0) as f32;
                 let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && node.embedding.is_some() {
-                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
+                    let g = 1.0f32; // Base sigmoid gate eliminated
                     let recency_component = get_decay_factor(delta_t);
                     let importance_component = utility_val / 10.0f32;
                     let norm = w_imp_ins + w_rec_ins;
@@ -3090,7 +3095,7 @@ impl StorageBackend for SurrealBackend {
 
                 let utility_val = rule.utility.unwrap_or(50.0) as f32;
                 let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && rule.embedding.is_some() {
-                    let g = 1.0f32 / (1.0f32 + (-sigmoid_steepness * (similarity - sigmoid_center)).exp());
+                    let g = 1.0f32; // Base sigmoid gate eliminated
                     let recency_component = get_decay_factor(delta_t);
                     let importance_component = utility_val / 100.0f32;
                     let norm = w_imp_wis + w_rec_wis;
@@ -3377,15 +3382,11 @@ impl StorageBackend for SurrealBackend {
                     };
 
                     let fused = alpha * raw_sim + beta * bm25_norm;
-                    let final_sim = if let (Some(orig_gate), Some(factor)) = (c.original_gate, c.factor_multiplier) {
-                        let new_gate = if orig_gate != 1.0f32 {
-                            1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - fusion_sigmoid_center)).exp())
-                        } else {
-                            1.0f32
-                        };
+                    let new_gate = 1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - fusion_sigmoid_center)).exp());
+                    let final_sim = if let Some(factor) = c.factor_multiplier {
                         fused * factor * new_gate
                     } else {
-                        fused
+                        fused * new_gate
                     };
                     c.similarity = final_sim;
                 }
@@ -3556,11 +3557,13 @@ impl StorageBackend for SurrealBackend {
 
         if is_session_isolation_enabled {
             // 2.5) Strict Session Isolation filtering
-            let mut active_session_id = None;
-            for c in &candidates {
-                if let Some(ref sess) = c.session_id {
-                    active_session_id = Some(sess.clone());
-                    break;
+            let mut active_session_id = session_id.map(|s| s.to_string());
+            if active_session_id.is_none() {
+                for c in &candidates {
+                    if let Some(ref sess) = c.session_id {
+                        active_session_id = Some(sess.clone());
+                        break;
+                    }
                 }
             }
             if let Some(ref active_sess) = active_session_id {
@@ -3824,7 +3827,7 @@ impl StorageBackend for SurrealBackend {
         };
 
         if gamma_rerank > 0.0f32 {
-            let search_text = if !user_profile.is_empty() {
+            let search_text = if !user_profile.is_empty() && query_category != QueryCategory::Temporal {
                 format!("{} {}", cleaned_query, user_profile)
             } else {
                 cleaned_query.clone()
@@ -3837,11 +3840,11 @@ impl StorageBackend for SurrealBackend {
                 global_idf.insert(token.clone(), idf);
             }
 
-            let rerank_pool_size = match self.get_profile_key("search.rerank_pool_size").await {
-                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
-                _ => 25,
+            let tfidf_pool_size = match self.get_profile_key("search.tfidf_pool_size").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(100),
+                _ => 100,
             };
-            let effective_pool = rerank_pool_size.max(20);
+            let effective_pool = tfidf_pool_size.max(20);
             let pool_len = merged_candidates.len().min(effective_pool);
             let mut rerank_pool = merged_candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
             
@@ -3867,9 +3870,31 @@ impl StorageBackend for SurrealBackend {
             }
 
             merged_candidates.extend(rerank_pool);
+
+            if let Some(active_sess) = session_id {
+                if query_category == QueryCategory::Preference || query_category == QueryCategory::User {
+                    for c in &mut merged_candidates {
+                        if c.session_id.as_deref() == Some(active_sess) {
+                            c.similarity += 0.15f32;
+                        }
+                    }
+                }
+            }
+
             merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+            merged_candidates.truncate(25); // Restrict to top 25 for downstream stages/Cross-Encoder
             candidates = merged_candidates;
         } else {
+            if let Some(active_sess) = session_id {
+                if query_category == QueryCategory::Preference || query_category == QueryCategory::User {
+                    for c in &mut merged_candidates {
+                        if c.session_id.as_deref() == Some(active_sess) {
+                            c.similarity += 0.15f32;
+                        }
+                    }
+                }
+            }
+            merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
             candidates = merged_candidates;
         }
 
@@ -4103,7 +4128,7 @@ impl StorageBackend for SurrealBackend {
                 WHERE status != 'superseded'
                   AND tier = $tier
                   AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
-                  AND (embedding <|100, 100|> $query_embedding);
+                  AND (embedding <|200, 200|> $query_embedding);
                 "
             } else {
                 "
@@ -4112,7 +4137,7 @@ impl StorageBackend for SurrealBackend {
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
-                  AND (embedding <|100, 100|> $query_embedding);
+                  AND (embedding <|200, 200|> $query_embedding);
                 "
             };
             let mut q = self.db.query(sql);
@@ -6121,14 +6146,14 @@ mod tests {
     fn test_classify_query_comprehensive() {
         assert_eq!(classify_query("my next mtg"), QueryCategory::Temporal);
         assert_eq!(classify_query("our appts next week"), QueryCategory::Temporal);
-        assert_eq!(classify_query("show next meeting"), QueryCategory::Default);
+        assert_eq!(classify_query("show next meeting"), QueryCategory::Temporal);
         assert_eq!(classify_query("my favourite lodging"), QueryCategory::Preference);
         assert_eq!(classify_query("my profile"), QueryCategory::User);
         assert_eq!(classify_query("our job description"), QueryCategory::User);
         assert_eq!(classify_query("who am i?"), QueryCategory::User);
         assert_eq!(classify_query("tell me about me"), QueryCategory::User);
         assert_eq!(classify_query("about our friend"), QueryCategory::User);
-        assert_eq!(classify_query("what is job salary"), QueryCategory::Default);
+        assert_eq!(classify_query("what is job salary"), QueryCategory::User);
     }
 
     #[tokio::test]

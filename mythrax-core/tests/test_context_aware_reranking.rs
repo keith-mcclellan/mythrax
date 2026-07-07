@@ -123,3 +123,15 @@ async fn test_user_profile_smart_truncation() {
     let expected = "Weather is nice today so\nI went for a walk to\ndeg: math\nfav: red";
     assert_eq!(profile.trim(), expected);
 }
+
+#[tokio::test]
+async fn test_pipeline_retrieval_optimizations() {
+    let backend = SurrealBackend::new_in_memory().await.unwrap();
+    backend.init().await.unwrap();
+
+    // Verify default TF-IDF pool size configuration can be queried
+    backend.save_profile_key("search.tfidf_pool_size", "100").await.unwrap();
+    let tfidf_pool = backend.get_profile_key("search.tfidf_pool_size").await.unwrap();
+    assert_eq!(tfidf_pool.unwrap(), "100");
+}
+
