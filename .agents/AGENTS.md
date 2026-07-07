@@ -14,3 +14,12 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
 3. **Cross-Project Global Memory (Wisdom):** Maintain a durable, global partition (`wisdom`) for general guidelines, coding practices, user preferences, and architectural rules that apply universally across workspaces (e.g. general design principles).
 4. **Forged Knowledge & Skill Integration:** Enable raw reference assets (like PDFs, specs, and papers) and composed agent strategies (e.g. chaining `spec-builder`, `loop-builder`, and reviewers) to be dynamically injected via RAG into active context windows on-demand.
 5. **Resource-Efficient Memory Brokerage:** Optimize token footprint and compute overhead using local models (`mlx-community/Qwen3.6-35B-A3B-4bit`) for text embeddings, token budget management, and code generation.
+
+## Mythrax 6-Signal Unified Retrieval (v2.5.2)
+- **6 Retrieval Signals**: Combine Vector Similarity, BM25 (FTS) Relevance, Concept Spreading Activation, STM Working Memory Injection, Temporal Neighbor Expansion, and Gaussian Temporal Proximity.
+- **Concept Spreading Activation**: Attenuates scores as it traverses `relates_to` edges cross-scope (`anchor_sim * edge_confidence * 0.5`).
+- **STM Working Memory Injection**: Query active STM KV pairs, compare query embedding with values, and inject matching entries as high-priority candidates (`tier: "working"`).
+- **Temporal Neighbors**: Expand candidates by traversing `followed_by` temporal relationship edges.
+- **Gaussian Temporal Proximity decay**: Replace hard time-demotions with \(\exp(-\Delta t^2 / 2\sigma^2)\) scoring, default \(\sigma = 168h\).
+- **Active VRAM Model Broker**: Dynamic coordination unloads embedding models before loading reranking/inference models to prevent OOM.
+- **Cross-Scope Graduation**: Promotes project-scoped insights and procedural episodes (365-day half-life, 500-node LRU cap) to generalized global wisdom rules upon convergence across multiple projects (cosine \(\ge 0.85\)).

@@ -49,6 +49,9 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         concepts: Some(vec!["test_entity".to_string()]),
         files_read: Some(vec!["src/main.rs".to_string()]),
         files_modified: Some(vec![]),
+    
+        confidence: None,
+        ..Default::default()
     };
 
     let ep_id = backend.save_episode(&ep_save).await.unwrap();
@@ -113,7 +116,8 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         status: Some("active".to_string()),
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     let wisdom_id = backend.save_wisdom_rule(&wisdom_rule).await.unwrap();
     assert!(!wisdom_id.is_empty(), "Saved wisdom rule ID must not be empty");

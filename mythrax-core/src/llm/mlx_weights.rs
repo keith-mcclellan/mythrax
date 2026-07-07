@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use anyhow::{Result, Context};
-use mlx_rs::Array;
+use mlx_rs::{Array, Dtype};
 use mlx_rs::builder::Builder;
 use mlx_rs::nn::{
     Linear, LinearBuilder, RmsNorm, RmsNormBuilder, LayerNorm, LayerNormBuilder,
@@ -193,13 +193,29 @@ pub fn load_model_weights(model_dir: &std::path::Path) -> Result<HashMap<String,
             let shard_path = model_dir.join(shard);
             let weights = Array::load_safetensors(&shard_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load shard {}: {:?}", shard_path.display(), e))?;
-            all_weights.extend(weights);
+            for (k, v) in weights {
+                let cast_v = if v.dtype() == Dtype::Bfloat16 || v.dtype() == Dtype::Float32 {
+                    v.as_dtype(Dtype::Float16)?
+                } else {
+                    v
+                };
+                all_weights.insert(k, cast_v);
+            }
         }
         Ok(all_weights)
     } else {
         let safetensors_path = model_dir.join("model.safetensors");
         let weights = Array::load_safetensors(&safetensors_path)
             .map_err(|e| anyhow::anyhow!("Failed to load safetensors: {:?}", e))?;
-        Ok(weights)
+        let mut cast_weights = HashMap::new();
+        for (k, v) in weights {
+            let cast_v = if v.dtype() == Dtype::Bfloat16 || v.dtype() == Dtype::Float32 {
+                v.as_dtype(Dtype::Float16)?
+            } else {
+                v
+            };
+            cast_weights.insert(k, cast_v);
+        }
+        Ok(cast_weights)
     }
 }

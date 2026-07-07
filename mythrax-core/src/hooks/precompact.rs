@@ -174,6 +174,7 @@ pub async fn mine_transcript(
                         files_read: None,
                         files_modified: None,
                         node_type: Some(type_val),
+                        confidence: None,
                     };    
                     let store_arc = Arc::new(crate::store::MarkdownStore {
                         vault_root: store.vault_root.clone(),

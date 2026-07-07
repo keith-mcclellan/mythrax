@@ -230,6 +230,114 @@ impl DreamCoordinator {
         }
     }
 
+    pub async fn save_wiki_node_with_contradiction_resolution(
+        &self,
+        db: &dyn StorageBackend,
+        store: &MarkdownStore,
+        node: &WikiNode,
+        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+    ) -> Result<String> {
+        if !db.is_feature_enabled("compactor.enable_contradiction_detection", true).await {
+            return db.save_wiki_node(node).await;
+        }
+
+        let mut node = node.clone();
+        if node.embedding.is_none() {
+            if let Some(ref emb) = embedder {
+                if let Ok(e) = emb.embed(&node.content) {
+                    node.embedding = Some(e);
+                }
+            }
+        }
+
+        // Get all existing wiki nodes in the SAME scope
+        let all_nodes = db.get_all_wiki_nodes().await?;
+        let same_scope_nodes: Vec<WikiNode> = all_nodes.into_iter()
+            .filter(|n| n.scope == node.scope && n.embedding.is_some())
+            .collect();
+
+        let mut candidates = Vec::new();
+        if let Some(ref new_emb) = node.embedding {
+            for existing in same_scope_nodes {
+                if let Some(ref ext_emb) = existing.embedding {
+                    let sim = {
+                        let dot: f32 = new_emb.iter().zip(ext_emb.iter()).map(|(a, b)| a * b).sum();
+                        let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        let norm_v: f32 = ext_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        if norm_u == 0.0 || norm_v == 0.0 {
+                            0.0
+                        } else {
+                            dot / (norm_u * norm_v)
+                        }
+                    };
+                    if sim >= 0.70 {
+                        candidates.push((sim, existing));
+                    }
+                }
+            }
+        }
+
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let top_candidates: Vec<_> = candidates.into_iter().take(5).collect();
+
+        for (_sim, existing_node) in top_candidates {
+            let sys_prompt = "You are an expert knowledge consistency checker. Compare the NEW insight against the EXISTING insight. Determine if they contradict each other. Output ONLY valid JSON.";
+            let user_prompt = format!(
+                "NEW INSIGHT:\n{}\n\nEXISTING INSIGHT:\n{}\n\nRespond with a JSON object containing contradicts: bool, conflicting_field: string, resolution: string, and confidence: float.",
+                node.content,
+                existing_node.content
+            );
+
+            if let Ok(resp_str) = self.llm.completion(db, Some(sys_prompt), &user_prompt).await {
+                #[derive(serde::Deserialize)]
+                struct ContradictionResponse {
+                    contradicts: bool,
+                    resolution: Option<String>,
+                    confidence: f32,
+                }
+                // Strip markdown code block wrappers if any
+                let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                if let Ok(res) = serde_json::from_str::<ContradictionResponse>(clean_resp) {
+                    if res.contradicts && res.confidence >= 0.80 {
+                        if let Some(resolution) = res.resolution {
+                            let mut updated_node = existing_node.clone();
+                            updated_node.content = resolution.clone();
+                            
+                            // Re-embed resolved content
+                            if let Some(ref emb) = embedder {
+                                if let Ok(e) = emb.embed(&updated_node.content) {
+                                    updated_node.embedding = Some(e);
+                                }
+                            }
+
+                            // Save updated existing node to DB
+                            db.save_wiki_node(&updated_node).await?;
+
+                            // Update its physical file, preserving frontmatter
+                            if let Some(ref vp) = updated_node.vault_path {
+                                if let Ok(existing_file_content) = std::fs::read_to_string(store.vault_root.join(vp)) {
+                                    let parts: Vec<&str> = existing_file_content.splitn(3, "---").collect();
+                                    if parts.len() == 3 {
+                                        let updated_file_content = format!("---{}---\n\n{}", parts[1], resolution);
+                                        let _ = store.write_file(vp, &updated_file_content);
+                                    } else {
+                                        let _ = store.write_file(vp, &resolution);
+                                    }
+                                } else {
+                                    let _ = store.write_file(vp, &resolution);
+                                }
+                            }
+
+                            return Ok(updated_node.id.unwrap_or_default());
+                        }
+                    }
+                }
+            }
+        }
+
+        db.save_wiki_node(&node).await
+    }
+
     pub async fn run_dream(
         &self,
         db: &dyn StorageBackend,
@@ -517,7 +625,7 @@ impl DreamCoordinator {
                             vault_path: Some(relative_path.clone()),
                             embedding: None,
                         };
-                        if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await
+                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await
                             && let Some(ref ep_id) = ep.id {
                                  let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                             }
@@ -643,7 +751,7 @@ impl DreamCoordinator {
                     vault_path: Some(relative_path.clone()),
                     embedding: None,
                 };
-                if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
+                if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
                     for ep_id in &cluster_ep_ids {
                         let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                     }
@@ -673,7 +781,7 @@ impl DreamCoordinator {
                     if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
                         for r in rules {
                             let rule_type = r.rule_type.as_deref().unwrap_or("aesthetic").to_lowercase();
-                            let is_procedural = rule_type == "procedural";
+                            let _is_procedural = rule_type == "procedural";
 
                             let mut source_ep_links = Vec::new();
                             let mut eps_to_link = Vec::new();
@@ -693,15 +801,9 @@ impl DreamCoordinator {
                             };
 
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let (rule_path, final_tier, final_scope) = if is_procedural {
-                                // Save to global/wisdom/permanent/
-                                let relative_global_path = format!("global/wisdom/permanent/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
-                                (relative_global_path, "permanent".to_string(), "general".to_string())
-                            } else {
-                                // Save to wisdom/dynamic/ (local)
-                                let relative_local_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
-                                (relative_local_path, "dynamic".to_string(), scope.clone())
-                            };
+                            let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                            let final_tier = "dynamic".to_string();
+                            let final_scope = scope.clone();
 
                             let rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
@@ -733,6 +835,7 @@ impl DreamCoordinator {
                                 status: None,
                                 superseded_at: None,
                                 superseded_by: None,
+                                rule_type: Some(rule_type.clone()),
                             };
                             if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
                                 for ep_id in &cluster_ep_ids {
@@ -1010,7 +1113,7 @@ impl DreamCoordinator {
                                         embedding: None,
                                     };
                                     
-                                    if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
+                                    if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
                                         for ep in &group {
                                             if let Some(ref ep_id) = ep.id {
                                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
@@ -1036,6 +1139,279 @@ impl DreamCoordinator {
             }
             // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
         }
+
+        // --- Tasks C.6 & C.6a: Cross-Scope Graduation Pass ---
+        if db.is_feature_enabled("compactor.enable_cross_scope_graduation", true).await {
+            #[derive(Clone, Debug)]
+            struct GradCandidate {
+                id: String,
+                scope: String,
+                name: String,
+                content: String,
+                embedding: Vec<f32>,
+                is_procedural: bool,
+            }
+
+            let mut candidates = Vec::new();
+
+            // 1. Fetch wiki nodes
+            if let Ok(wiki_nodes) = db.get_all_wiki_nodes().await {
+                for node in wiki_nodes {
+                    if let Some(ref emb) = node.embedding {
+                        candidates.push(GradCandidate {
+                            id: node.id.unwrap_or_default(),
+                            scope: node.scope,
+                            name: node.name,
+                            content: node.content,
+                            embedding: emb.clone(),
+                            is_procedural: false,
+                        });
+                    }
+                }
+            }
+
+            // 2. Fetch procedural episodes
+            if let Ok(episodes) = db.get_episodes_by_node_type("procedural").await {
+                for ep in episodes {
+                    if !ep.archived.unwrap_or(false) {
+                        if let Some(ref emb) = ep.embedding {
+                            candidates.push(GradCandidate {
+                                id: ep.id.unwrap_or_default(),
+                                scope: ep.scope.unwrap_or_else(|| "general".to_string()),
+                                name: ep.title,
+                                content: ep.content,
+                                embedding: emb.clone(),
+                                is_procedural: true,
+                            });
+                        }
+                    }
+                }
+            }
+
+            let hnsw_ef = match db.get_profile_key("search.hnsw_ef").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(100),
+                _ => 100,
+            };
+
+            let mut clusters: Vec<Vec<GradCandidate>> = Vec::new();
+
+            for cand in &candidates {
+                let mut cluster = vec![cand.clone()];
+
+                let mut matches_wiki = Vec::new();
+                let mut matches_ep = Vec::new();
+
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    // Search wiki_node HNSW index
+                    let sql_wiki = format!("SELECT *, vector::similarity::cosine(embedding, $emb) AS similarity \
+                               FROM wiki_node \
+                               WHERE embedding <|200, {}|> $emb;", hnsw_ef);
+                    if let Ok(mut resp) = surreal_backend.db.query(&sql_wiki).bind(("emb", cand.embedding.clone())).await {
+                        if let Ok(rows) = resp.take::<Vec<serde_json::Value>>(0) {
+                            for row in rows {
+                                let sim = row.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                if sim >= 0.85 {
+                                    if let Ok(node) = serde_json::from_value::<WikiNode>(row) {
+                                        if node.scope != cand.scope {
+                                            matches_wiki.push(node);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Search procedural episodes HNSW index
+                    let sql_ep = format!("SELECT *, vector::similarity::cosine(embedding, $emb) AS similarity \
+                             FROM episode \
+                             WHERE node_type = 'procedural' AND embedding <|200, {}|> $emb;", hnsw_ef);
+                    if let Ok(mut resp) = surreal_backend.db.query(&sql_ep).bind(("emb", cand.embedding.clone())).await {
+                        if let Ok(rows) = resp.take::<Vec<serde_json::Value>>(0) {
+                            for row in rows {
+                                let sim = row.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                if sim >= 0.85 {
+                                    if let Ok(ep) = serde_json::from_value::<Episode>(row) {
+                                        let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                                        if ep_scope != cand.scope {
+                                            matches_ep.push(ep);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // In-memory similarity fallbacks for testing / mocked environments where index is not dynamically built
+                if matches_wiki.is_empty() {
+                    for other in &candidates {
+                        if !other.is_procedural && other.scope != cand.scope {
+                            let sim = {
+                                let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
+                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                if norm_u == 0.0 || norm_v == 0.0 {
+                                    0.0
+                                } else {
+                                    dot / (norm_u * norm_v)
+                                }
+                            };
+                            if sim >= 0.85 {
+                                cluster.push(other.clone());
+                            }
+                        }
+                    }
+                } else {
+                    for node in matches_wiki {
+                        cluster.push(GradCandidate {
+                            id: node.id.unwrap_or_default(),
+                            scope: node.scope,
+                            name: node.name,
+                            content: node.content,
+                            embedding: node.embedding.unwrap_or_default(),
+                            is_procedural: false,
+                        });
+                    }
+                }
+
+                if matches_ep.is_empty() {
+                    for other in &candidates {
+                        if other.is_procedural && other.scope != cand.scope {
+                            let sim = {
+                                let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
+                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                if norm_u == 0.0 || norm_v == 0.0 {
+                                    0.0
+                                } else {
+                                    dot / (norm_u * norm_v)
+                                }
+                            };
+                            if sim >= 0.85 {
+                                if !cluster.iter().any(|c| c.id == other.id) {
+                                    cluster.push(other.clone());
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for ep in matches_ep {
+                        let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                        cluster.push(GradCandidate {
+                            id: ep.id.unwrap_or_default(),
+                            scope: ep_scope,
+                            name: ep.title,
+                            content: ep.content,
+                            embedding: ep.embedding.unwrap_or_default(),
+                            is_procedural: true,
+                        });
+                    }
+                }
+
+                let distinct_scopes: std::collections::HashSet<String> = cluster.iter().map(|c| c.scope.clone()).collect();
+                if distinct_scopes.len() >= 2 {
+                    cluster.sort_by(|a, b| a.id.cmp(&b.id));
+                    clusters.push(cluster);
+                }
+            }
+
+            // Deduplicate overlapping clusters: sort clusters by size descending, and skip clusters whose anchor is already in a larger accepted cluster
+            clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+
+            let mut accepted_clusters = Vec::new();
+            let mut seen_anchors = std::collections::HashSet::new();
+
+            for cluster in clusters {
+                let anchor_id = &cluster[0].id;
+                if seen_anchors.contains(anchor_id) {
+                    continue;
+                }
+                
+                // Mark all members of this cluster as seen anchors
+                for member in &cluster {
+                    seen_anchors.insert(member.id.clone());
+                }
+                accepted_clusters.push(cluster);
+            }
+
+            for cluster in accepted_clusters {
+                let n = cluster.len();
+                let mut insights_with_scope_labels = String::new();
+                for member in &cluster {
+                    insights_with_scope_labels.push_str(&format!(
+                        "Scope: {}\nTitle/Name: {}\nContent:\n{}\n\n",
+                        member.scope, member.name, member.content
+                    ));
+                }
+
+                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.";
+                let user_prompt = format!(
+                    "The following insights emerged independently in {} different projects:\n\n{}Respond with a JSON object containing target_pattern: string, action_to_avoid: string, causal_explanation: string, prescribed_remedy: string, and confidence: float.",
+                    n,
+                    insights_with_scope_labels
+                );
+
+                if let Ok(resp_str) = self.llm.completion(db, Some(sys_prompt), &user_prompt).await {
+                    #[derive(serde::Deserialize)]
+                    struct GeneralizationResponse {
+                        target_pattern: String,
+                        action_to_avoid: String,
+                        causal_explanation: String,
+                        prescribed_remedy: String,
+                        confidence: f32,
+                    }
+                    let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(clean_resp) {
+                        if res.confidence >= 0.80 {
+                            let all_procedural = cluster.iter().all(|c| c.is_procedural);
+                            let tier = if all_procedural { "permanent" } else { "dynamic" };
+
+                            let rule_uuid = uuid::Uuid::new_v4().to_string();
+                            let rule_path = if all_procedural {
+                                format!("global/wisdom/permanent/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
+                            } else {
+                                format!("global/wisdom/dynamic/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
+                            };
+
+                            let rule_md = format!(
+                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\nsource_nodes:\n{}\ngenerator_name: \"ScopeGraduator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                                res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy, tier,
+                                cluster.iter().map(|c| format!("  - \"{}\"", c.id)).collect::<Vec<_>>().join("\n"),
+                                res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy
+                            );
+                            let _ = store.write_file(&rule_path, &rule_md);
+
+                            let rule_contract = WisdomRule {
+                                id: None,
+                                target_pattern: res.target_pattern,
+                                action_to_avoid: res.action_to_avoid,
+                                causal_explanation: res.causal_explanation,
+                                prescribed_remedy: res.prescribed_remedy,
+                                tier: tier.to_string(),
+                                scope: "general".to_string(),
+                                vault_path: Some(rule_path),
+                                embedding: None,
+                                source_episodes: cluster.iter().map(|c| c.id.clone()).collect(),
+                                generator_name: "ScopeGraduator".to_string(),
+                                similarity: None,
+                                utility: None,
+                                status: None,
+                                superseded_at: None,
+                                superseded_by: None,
+                                rule_type: Some(if all_procedural { "procedural".to_string() } else { "aesthetic".to_string() }),
+                            };
+
+                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
+                                for member in &cluster {
+                                    let _ = db.relate_nodes(&member.id, &wisdom_id, None, None, None).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if let Err(e) = db.prune_stale_memories(&store.vault_root).await {
             tracing::error!("Dreaming pruning failed: {:?}", e);
         }
@@ -1251,6 +1627,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             status: None,
                             superseded_at: None,
                             superseded_by: None,
+                            rule_type: None,
                         };
 
                         match db.save_wisdom_rule(&merged_contract).await {
@@ -1499,6 +1876,7 @@ pub async fn traverse_adjacent_logs(
                     word_count: node.word_count,
                     archived_at: node.archived_at,
                     node_type: node.node_type,
+                    confidence: None,
                 });
                 accumulated_chars = char_cap;
                 break;
@@ -1526,6 +1904,7 @@ pub async fn traverse_adjacent_logs(
                     word_count: node.word_count,
                     archived_at: node.archived_at,
                     node_type: node.node_type,
+                    confidence: None,
                 });
             }
 

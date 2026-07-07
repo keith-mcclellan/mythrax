@@ -9,7 +9,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS embedding ON entity TYPE option<array<float>>;
     DEFINE INDEX IF NOT EXISTS entity_name ON entity FIELDS name UNIQUE;
     DEFINE INDEX IF NOT EXISTS entity_scope ON entity FIELDS scope;
-    DEFINE INDEX IF NOT EXISTS entity_hnsw ON TABLE entity FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX OVERWRITE entity_hnsw ON TABLE entity FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
     DEFINE TABLE IF NOT EXISTS episode SCHEMAFULL;
@@ -36,9 +36,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS word_count ON episode TYPE option<int>;
     DEFINE FIELD IF NOT EXISTS metrics ON episode TYPE option<record<episode_metrics>>;
     DEFINE FIELD IF NOT EXISTS node_type ON episode TYPE string DEFAULT 'agent_thought';
+    DEFINE FIELD IF NOT EXISTS confidence ON episode TYPE float DEFAULT 0.90;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
-    DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
     DEFINE INDEX IF NOT EXISTS episode_session ON episode FIELDS session_id;
     DEFINE INDEX IF NOT EXISTS episode_vault_path ON episode FIELDS vault_path;
     DEFINE INDEX IF NOT EXISTS episode_scope_created ON episode FIELDS scope, created_at;
@@ -62,7 +63,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS utility ON wiki_node TYPE option<float>;
     DEFINE INDEX IF NOT EXISTS wiki_node_name ON wiki_node FIELDS name UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
-    DEFINE INDEX IF NOT EXISTS wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX OVERWRITE wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
     DEFINE TABLE IF NOT EXISTS wisdom SCHEMAFULL;
@@ -82,9 +83,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS importance ON wisdom TYPE float DEFAULT 5.0;
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wisdom TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON wisdom TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS rule_type ON wisdom TYPE string DEFAULT 'aesthetic';
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
-    DEFINE INDEX IF NOT EXISTS wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX OVERWRITE wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
     DEFINE TABLE IF NOT EXISTS hypothesis_node SCHEMALESS;
@@ -104,7 +106,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS handoff_scope ON handoff FIELDS scope;
     DEFINE INDEX IF NOT EXISTS handoff_parent ON handoff FIELDS parent_conversation_id;
     DEFINE INDEX IF NOT EXISTS handoff_subagent ON handoff FIELDS subagent_conversation_id;
-    DEFINE INDEX IF NOT EXISTS handoff_hnsw ON TABLE handoff FIELDS embedding HNSW DIMENSION 768 DIST COSINE;
+    DEFINE INDEX OVERWRITE handoff_hnsw ON TABLE handoff FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
     DEFINE TABLE IF NOT EXISTS profile SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS key ON profile TYPE string;
     DEFINE FIELD IF NOT EXISTS value ON profile TYPE string;
@@ -215,4 +217,23 @@ pub const INIT_SCHEMA: &str = "
             changed_at: time::now()
         }
     );
+
+    UPSERT type::record('profile', 'search.enable_cross_encoder_rerank') CONTENT { key: 'search.enable_cross_encoder_rerank', value: 'true' };
+    UPSERT type::record('profile', 'search.rerank_pool_size') CONTENT { key: 'search.rerank_pool_size', value: '15' };
+    UPSERT type::record('profile', 'search.rerank_weight') CONTENT { key: 'search.rerank_weight', value: '0.15' };
+    UPSERT type::record('profile', 'search.sigmoid_center') CONTENT { key: 'search.sigmoid_center', value: '0.45' };
+    UPSERT type::record('profile', 'search.fusion_sigmoid_center') CONTENT { key: 'search.fusion_sigmoid_center', value: '0.6' };
+    UPSERT type::record('profile', 'search.gamma_rerank') CONTENT { key: 'search.gamma_rerank', value: '0.2' };
+    UPSERT type::record('profile', 'search.enable_spreading_activation') CONTENT { key: 'search.enable_spreading_activation', value: 'true' };
+    UPSERT type::record('profile', 'search.enable_stm_retrieval') CONTENT { key: 'search.enable_stm_retrieval', value: 'true' };
+    UPSERT type::record('profile', 'search.enable_access_reinforcement') CONTENT { key: 'search.enable_access_reinforcement', value: 'true' };
+    UPSERT type::record('profile', 'compactor.enable_contradiction_detection') CONTENT { key: 'compactor.enable_contradiction_detection', value: 'true' };
+    UPSERT type::record('profile', 'compactor.protect_procedural_nodes') CONTENT { key: 'compactor.protect_procedural_nodes', value: 'true' };
+    UPSERT type::record('profile', 'compactor.enable_near_duplicate_merging') CONTENT { key: 'compactor.enable_near_duplicate_merging', value: 'true' };
+    UPSERT type::record('profile', 'search.enable_calibrated_confidence') CONTENT { key: 'search.enable_calibrated_confidence', value: 'true' };
+    UPSERT type::record('profile', 'search.enable_gaussian_temporal') CONTENT { key: 'search.enable_gaussian_temporal', value: 'true' };
+    UPSERT type::record('profile', 'search.hnsw_ef') CONTENT { key: 'search.hnsw_ef', value: '64' };
+    UPSERT type::record('profile', 'search.spreading_activation_attenuation') CONTENT { key: 'search.spreading_activation_attenuation', value: '0.7' };
+    UPSERT type::record('profile', 'search.stm_relevance_threshold') CONTENT { key: 'search.stm_relevance_threshold', value: '0.4' };
+    UPSERT type::record('profile', 'search.gaussian_temporal_sigma') CONTENT { key: 'search.gaussian_temporal_sigma', value: '168.0' };
 ";

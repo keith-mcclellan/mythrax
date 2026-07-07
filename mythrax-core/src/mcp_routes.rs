@@ -686,7 +686,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             if search_res.has_more {
                 let remainder = search_res.total_matches.saturating_sub(offset + limit);
                 text.push_str(&format!(
-                    "\n\n=== PAGINATION NOTICE: There are {} more matching memories. To retrieve the next page, query search_memories with offset={} and limit={}. ===",
+                    "\n\n=== PAGINATION NOTICE: There are {} more matching memories. To retrieve the next page, call read(action=\"search\", offset={}, limit={}). ===",
                     remainder, search_res.next_offset, limit
                 ));
             }
@@ -974,7 +974,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             if search_res.has_more {
                 let remainder = search_res.total_matches.saturating_sub(offset + limit);
                 text.push_str(&format!(
-                    "\n\n=== PAGINATION NOTICE: There are {} more matching wisdom rules. To retrieve the next page, query search_wisdom with offset={} and limit={}. ===",
+                    "\n\n=== PAGINATION NOTICE: There are {} more matching wisdom rules. To retrieve the next page, call read(action=\"rules\", offset={}, limit={}). ===",
                     remainder, search_res.next_offset, limit
                 ));
             }
@@ -1090,6 +1090,7 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
                 files_read: None,
                 files_modified: None,
                 node_type,
+                confidence: None,
             };
 
             let id = crate::vault::watcher::save_episode_bidirectional(&episode, state.backend.as_ref(), &state.store, &state.ignore_list).await?;
@@ -1481,6 +1482,7 @@ async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                 files_read: None,
                 files_modified: None,
                 node_type: Some("handoff_event".to_string()),
+                confidence: None,
             };
             let _ = state.backend.save_episode(&event_ep).await;
 
@@ -1578,6 +1580,7 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                                 files_read: None,
                                 files_modified: None,
                                 node_type: ep.node_type.clone(),
+                                confidence: None,
                             };
                             let markdown = crate::vault::watcher::format_episode_markdown(&save);
                             state.store.write_file(vp, &markdown)?;
@@ -1626,6 +1629,7 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                         files_read: None,
                         files_modified: None,
                         node_type: ep.node_type.clone(),
+                        confidence: None,
                     };
                     state.backend.save_episode(&save).await?;
                     count += 1;
@@ -1853,6 +1857,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     files_read: None,
                     files_modified: None,
                     node_type: ep.node_type.clone(),
+                    confidence: None,
                 };
                 let markdown = crate::vault::watcher::format_episode_markdown(&save);
                 state.store.write_file(vp, &markdown)?;
@@ -2093,7 +2098,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
         if !high_confidence_memories_found {
             parts.push(format!(
-                "\n> [!IMPORTANT]\n> **Pinned Deep-Search Instruction**: No high-confidence memory episodes were found. If you need deeper historical context or past resolutions, please invoke the 'search_memories' tool with a specific query.\n"
+                "\n> [!IMPORTANT]\n> **Pinned Deep-Search Instruction**: No high-confidence memory episodes were found. If you need deeper historical context or past resolutions, please call read(action=\"search\", query=\"...\") with a specific query.\n"
             ));
         }
     }
@@ -2331,6 +2336,7 @@ pub async fn run_llm_critic(
         status: None,
         superseded_at: None,
         superseded_by: None,
+        rule_type: None,
     };
 
     let markdown = crate::vault::watcher::format_wisdom_markdown(&rule_save);
@@ -2517,6 +2523,7 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
                 files_read: None,
                 files_modified: Some(vec![path.to_string()]),
                 node_type: Some("artifact_state".to_string()),
+                confidence: None,
             };
             let _ = state.backend.save_episode(&artifact_ep).await;
 
@@ -2621,6 +2628,7 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
                 files_read: None,
                 files_modified: Some(vec![path.to_string()]),
                 node_type: Some("artifact_state".to_string()),
+                confidence: None,
             };
             let _ = state.backend.save_episode(&artifact_ep).await;
 

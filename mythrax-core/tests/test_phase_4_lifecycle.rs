@@ -87,7 +87,8 @@ Rule body"#;
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     // Save wisdom rule (should trigger T1 federated promotion)
     let rule_id = backend.save_wisdom_rule(&rule).await?;
@@ -196,6 +197,8 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
 
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
+    backend.save_profile_key("search.enable_gaussian_temporal", "false").await?;
+    backend.save_profile_key("search.enable_access_reinforcement", "false").await?;
 
     // Seed an episode
     let ep = EpisodeSave {
@@ -470,7 +473,8 @@ Old rule body"#;
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     // Save the old rule in the DB to get its ID
     let old_rule_id = backend.save_wisdom_rule(&old_rule).await?;
@@ -498,7 +502,8 @@ Old rule body"#;
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     // Call save_wisdom_rule_with_deduplication
     // This should trigger the merge, save a new merged rule, and mark the old rule as superseded!

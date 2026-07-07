@@ -6,6 +6,11 @@ use mythrax_core::contracts::EpisodeSave;
 async fn test_archived_demotion_logic() -> Result<()> {
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
+    backend.save_profile_key("search.sigmoid_center", "0.55").await?;
+    backend.save_profile_key("search.fusion_sigmoid_center", "0.60").await?;
+    backend.save_profile_key("search.gamma_rerank", "0.10").await?;
+    backend.save_profile_key("search.rerank_pool_size", "25").await?;
+    backend.save_profile_key("search.rerank_weight", "0.45").await?;
 
     // Create 7 episodes with the same content so their raw vector similarity is identical
     let content = "Database index compression algorithms and HNSW graphs.";
@@ -159,6 +164,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
     ).await?;
 
     let results_same = resp_same.results;
+    println!("SAME-SESSION RESULTS: {:?}", results_same.iter().map(|r| &r.title).collect::<Vec<_>>());
     assert_eq!(results_same.len(), 2, "Should return 2 search results matching the session");
 
     let get_score_same = |id: &str| -> f32 {

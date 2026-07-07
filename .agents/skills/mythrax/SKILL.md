@@ -3,7 +3,7 @@ name: mythrax
 description: Always query Mythrax memory via the MCP server before starting tasks or making edits, verify vault/knowledge graph integrity, and run HTR cognitive execution loops.
 ---
 
-# Mythrax Unified Memory, Integrity & Cognitive Guidance (v2.3.1)
+# Mythrax Unified Memory, Integrity & Cognitive Guidance (v2.5.2)
 
 You are equipped with the **Mythrax** MCP server, which exposes tools for semantic memory storage, retrieval, reinforcement, compliance verification, vault integrity self-healing, cognitive hypothesis execution, short-term memory sharing between agents, and document ingestion via Forge.
 
@@ -15,7 +15,7 @@ All legacy granular tools have been consolidated into 4 high-efficiency, action-
 
 | Tool | Action Enum / Parameters | Purpose |
 |------|---------------------------|---------|
-| `read` | **Action**: `view_file` \| `search_memory` \| `search_wisdom` \| `get_memory_nodes` \| `get_vault_root` \| `get_short_term` \| `get_config` \| `query_symbolic` \| `search_index` \| `timeline` \| `get_full`<br>**Params**: `path?`, `start_line?`, `end_line?`, `query?`, `scope?`, `limit?`, `token_budget?`, `allow_downward?`, `node_ids?`, `node_id?`, `relation?`, `max_depth?`, `session_id?`, `key?`, `ids?` | Perform read-only operations including virtual page viewing (`view_file`), episodic memory search (`search_memory`), wisdom rules search (`search_wisdom`), hydrating node IDs (`get_memory_nodes`), retrieving vault root path (`get_vault_root`), retrieving short-term memory (`get_short_term`), fetching config (`get_config`), and timeline query (`timeline`). |
+| `read` | **Action**: `view_file` \| `search_memory` \| `search_wisdom` \| `get_memory_nodes` \| `get_vault_root` \| `get_short_term` \| `get_config` \| `query_symbolic` \| `search_index` \| `timeline` \| `get_full`<br>**Params**: `path?`, `start_line?`, `end_line?`, `query?`, `scope?`, `limit?`, `token_budget?`, `allow_downward?`, `node_ids?`, `node_id?`, `relation?`, `max_depth?`, `session_id?`, `key?`, `ids?` | Perform read-only operations including virtual page viewing (`view_file`), episodic memory search via the 6-Signal Unified Retrieval pipeline (`search_memory`), wisdom rules search (`search_wisdom`), hydrating node IDs (`get_memory_nodes`), retrieving vault root path (`get_vault_root`), retrieving short-term memory (`get_short_term`), fetching config (`get_config`), and timeline query (`timeline`). |
 | `write` | **Action**: `edit_file` \| `multi_edit_file` \| `save_episode` \| `record_feedback` \| `put_short_term` \| `clear_short_term` \| `save_forged_assets` \| `ingest_bulk` \| `ingest_forge` \| `set_config`<br>**Params**: `path?`, `target_content?`, `replacement_content?`, `chunks?`, `allow_multiple?`, `instruction?`, `description?`, `title?`, `content?`, `scope?`, `episode_id?`, `success?`, `session_id?`, `key?`, `value?`, `provider?`, `duration?`, `model?`, `cloud_provider?`, `api_key?` | Perform write operations including contiguous file edits (`edit_file`), non-contiguous patch edits (`multi_edit_file`), saving episodic memories (`save_episode`), recording reinforcement feedback (`record_feedback`), setting short-term memory values (`put_short_term`), clearing short-term memory (`clear_short_term`), setting config (`set_config`), and ingesting assets (`save_forged_assets`, `ingest_bulk`, `ingest_forge`). |
 | `manage` | **Action**: `pre_invocation` \| `precompact` \| `verify_vault` \| `organize_vault` \| `reprocess_vault` \| `summarize_vault` \| `audit_compliance` \| `init_htr` \| `ideate_htr` \| `execute_htr` \| `backprop_htr` \| `merge_htr` \| `run_htr`<br>**Params**: `session_id?`, `query?`, `workspace_path?`, `transcript_path?`, `fix?`, `scope?`, `hypothesis?`, `node_id?`, `files?`, `test_command?`, `max_steps?` | Perform management operations including workspace/compilation hook pre-invocation checking (`pre_invocation`), log/transcript precompacting (`precompact`), vault integrity verification (`verify_vault`), compliance auditing (`audit_compliance`), and cognitive HTR loop executions (`init_htr`, `ideate_htr`, `execute_htr`, etc.). |
 | `agent` | **Action**: `complete_task` \| `save_handoff`<br>**Params**: `prompt?`, `files?`, `model?`, `system_instruction?`, `enable_thinking?`, `parent_conversation_id?`, `subagent_conversation_id?`, `summary?`, `handoff_file_path?`, `scope?`, `session_id?` | Perform agent-related coordination including executing an autonomous task loop (`complete_task`), and registering parent-subagent stm/obsidian handoffs (`save_handoff`). |
@@ -41,6 +41,16 @@ To ensure high-quality execution and prevent duplicate coding effort:
 3. **Enforced Memory Query**: If the pre-invocation hook output indicates no high-confidence memory episodes were found, or the query context is empty, you **MUST** manually invoke `read(action="search_memory", query="...")` with a specific search query related to your task *before* writing any code.
 4. **Log Episodic Memory**: After completing a task, call `write(action="save_episode", title="...", content="...")` to persist your decisions and solutions.
 5. **Record Feedback**: After running tests (e.g. `cargo test`) and verifying they pass, call `write(action="record_feedback", episode_id="...", success=true)` to reinforce retrieved wisdom.
+
+### Mythrax 6-Signal Unified Retrieval Pipeline (v2.5.2)
+
+The `read(action="search_memory")` and automatic pre-invocation retrieval utilize the **6-Signal Unified Retrieval** pipeline:
+1. **Vector Similarity**: Semantic embedding distance.
+2. **BM25 (FTS) Relevance**: Full-text keyword matching.
+3. **Concept Spreading Activation**: Traverses `relates_to` edges cross-scope with attenuation (`anchor_sim * edge_confidence * 0.5`).
+4. **STM Working Memory Injection**: Active STM key-value pairs are queried, and their values are embedding-matched against the query. These STM values are matched using `embed_batch` to prevent multiple serial embedding network roundtrips, then injected as high-priority candidates (`tier: "working"`).
+5. **Temporal Neighbor Expansion**: Candidates are expanded by traversing `followed_by` temporal relationship edges.
+6. **Gaussian Temporal Proximity decay**: Applies a smooth time decay scoring \(\exp(-\Delta t^2 / 2\sigma^2)\) (default \(\sigma = 168h\)) instead of hard time-demotions.
 
 ---
 

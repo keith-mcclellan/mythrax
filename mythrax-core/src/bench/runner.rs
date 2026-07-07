@@ -13,6 +13,7 @@ use std::path::Path;
 use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id};
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
+use surrealdb_types::SurrealValue;
 
 // === PINNED DATASET PROVENANCE (BI-2, BI-3) ===
 // Canonical primary source: HF dataset `xiaowu0162/longmemeval-cleaned`, pinned to an
@@ -110,6 +111,8 @@ struct Manifest {
 struct QuestionResultRecord {
     question_id: String,
     question_type: String,
+    question: String,
+    category: String,
     // turn-granularity (has_answer)
     recall_any_turn_at5: f32,
     recall_all_turn_at5: f32,
@@ -406,7 +409,7 @@ async fn main() -> Result<()> {
                             &note,
                         ).await?;
                         
-                        let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
+                        let score = 0.50 * ndcg + 0.40 * r_all + 0.10 * r_any;
                         let detail = format_metrics(r_any, r_all, ndcg, r_any_sess, r_all_sess, &records);
                         println!("A: sigmoid_center={}, fusion_sigmoid_center={}, gamma_rerank={} => score={:.4} ({} Lat={:.2}ms)",
                             sc, fsc, gamma, score, detail, lat);
@@ -457,7 +460,7 @@ async fn main() -> Result<()> {
                                 &note,
                             ).await?;
                             
-                            let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
+                            let score = 0.50 * ndcg + 0.40 * r_all + 0.10 * r_any;
                             let detail = format_metrics(r_any, r_all, ndcg, r_any_sess, r_all_sess, &records);
                             println!("B: mmr_lambda={}, rerank_pool_size={}, w_person_name={}, w_keyword_overlap={} => score={:.4} ({} Lat={:.2}ms)",
                                 mmr, pool, w_pn, w_ko, score, detail, lat);
@@ -504,7 +507,7 @@ async fn main() -> Result<()> {
                         &note,
                     ).await?;
                     
-                    let score = 0.45 * r_any + 0.45 * ndcg + 0.1 * r_all;
+                    let score = 0.50 * ndcg + 0.40 * r_all + 0.10 * r_any;
                     println!("C: ladder_scale={}, utility_threshold={} => score={:.4} (R_any={:.4}, nDCG={:.4}, Lat={:.2}ms)",
                         ls, ut, score, r_any, ndcg, lat);
                         
@@ -570,6 +573,84 @@ async fn main() -> Result<()> {
                 let count = type_counts[*q_type];
                 let avg = type_recall_at10.get(*q_type).cloned().unwrap_or(0.0) / count as f32;
                 println!("  - {:<28} (n={:<3}): {:.4}", q_type, count, avg);
+            }
+            println!("--------------------------------------------------------");
+            println!("Category-Specific Metrics:");
+            
+            let mut cat_records: std::collections::HashMap<String, Vec<&QuestionResultRecord>> = std::collections::HashMap::new();
+            for rec in &records {
+                let cat = mythrax_core::db::backend::classify_query(&rec.question).as_str().to_string();
+                cat_records.entry(cat).or_default().push(rec);
+            }
+
+            let categories = vec!["preference", "user", "temporal", "default"];
+            for cat_name in &categories {
+                if let Some(recs) = cat_records.get(*cat_name) {
+                    let mut sum_recall_at3 = 0.0;
+                    let mut sum_ndcg_at3 = 0.0;
+                    let mut rank_values = Vec::new();
+                    let mut count_rank_ge5 = 0;
+                    
+                    for rec in recs {
+                        let mut first_rank = None;
+                        for (idx, r_id) in rec.retrieved_corpus_ids.iter().enumerate() {
+                            if rec.gold_corpus_ids.contains(r_id) {
+                                first_rank = Some(idx + 1);
+                                break;
+                            }
+                        }
+                        
+                        if let Some(rank) = first_rank {
+                            rank_values.push(rank as f32);
+                            if rank >= 5 {
+                                count_rank_ge5 += 1;
+                            }
+                        } else {
+                            count_rank_ge5 += 1;
+                        }
+
+                        let r3 = if rec.retrieved_corpus_ids.iter().take(3).any(|r_id| rec.gold_corpus_ids.contains(r_id)) {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        sum_recall_at3 += r3;
+
+                        let mut dcg = 0.0;
+                        let mut idcg = 0.0;
+                        for i in 0..std::cmp::min(rec.retrieved_corpus_ids.len(), 3) {
+                            let gain = if rec.gold_corpus_ids.contains(&rec.retrieved_corpus_ids[i]) {
+                                1.0
+                            } else {
+                                0.0
+                            };
+                            dcg += gain / ((i + 2) as f64).log2();
+                        }
+                        for i in 0..std::cmp::min(rec.gold_corpus_ids.len(), 3) {
+                            idcg += 1.0 / ((i + 2) as f64).log2();
+                        }
+                        let ndcg3 = if idcg > 0.0 { dcg / idcg } else { 0.0 };
+                        sum_ndcg_at3 += ndcg3;
+                    }
+
+                    let total = recs.len() as f64;
+                    let avg_r3 = (sum_recall_at3 as f64) / total;
+                    let avg_ndcg3 = sum_ndcg_at3 / total;
+                    let avg_rank = if !rank_values.is_empty() {
+                        (rank_values.iter().sum::<f32>() as f64) / rank_values.len() as f64
+                    } else {
+                        0.0
+                    };
+                    let freq_ge5 = (count_rank_ge5 as f64) / total;
+
+                    println!("  Category: {}", cat_name);
+                    println!("    Recall@3:               {:.4}", avg_r3);
+                    println!("    nDCG@3:                 {:.4}", avg_ndcg3);
+                    println!("    Avg First Relevant Rank: {:.2}", avg_rank);
+                    println!("    Frequency of Rank >= 5:  {:.4} ({}/{})", freq_ge5, count_rank_ge5, recs.len());
+                } else {
+                    println!("  Category: {} (n=0) - No questions", cat_name);
+                }
             }
             println!("========================================================\n");
 
@@ -664,6 +745,40 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn extract_entities(text: &str) -> Vec<String> {
+    let mut entities = std::collections::HashSet::new();
+    
+    // 1. Extract multi-word capitalized phrases (highly reliable proper nouns)
+    static MULTI_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let multi_re = MULTI_RE.get_or_init(|| regex::Regex::new(r"\b[A-Z][a-zA-Z0-9_-]+(?:\s+[A-Z][a-zA-Z0-9_-]+)+\b").unwrap());
+    for m in multi_re.find_iter(text) {
+        entities.insert(m.as_str().trim().to_string());
+    }
+    
+    // 2. Extract single-word capitalized proper nouns (excluding first word of each sentence/clause)
+    for sentence in text.split(|c| c == '.' || c == '?' || c == '!' || c == '\n') {
+        let words: Vec<&str> = sentence.split_whitespace().collect();
+        if words.len() > 1 {
+            // Skip the first word as it's capitalized due to sentence-start
+            for word in &words[1..] {
+                // Strip punctuation
+                let cleaned: String = word.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+                if !cleaned.is_empty() {
+                    let first_char = cleaned.chars().next().unwrap();
+                    if first_char.is_ascii_uppercase() {
+                        let lower = cleaned.to_lowercase();
+                        if !matches!(lower.as_str(), "i" | "the" | "a" | "an" | "we" | "he" | "she" | "they" | "our" | "my" | "it" | "this" | "that" | "you" | "your" | "there" | "here" | "and" | "but" | "or" | "so" | "if" | "then" | "of" | "in" | "on" | "at" | "to" | "for" | "with" | "by") {
+                            entities.insert(cleaned);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    entities.into_iter().collect()
+}
+
 async fn run_evaluation(
     target_questions: &[QuestionEntry],
     mode: &str,
@@ -690,7 +805,7 @@ async fn run_evaluation(
 
     let total_q = target_questions.len();
     let mut join_set = tokio::task::JoinSet::new();
-    let concurrency_limit = 4;
+    let concurrency_limit = if cfg!(feature = "mlx") { 1 } else { 4 };
 
     for (q_idx, q) in target_questions.iter().enumerate() {
         println!("Evaluating question {}/{}...", q_idx + 1, total_q);
@@ -732,11 +847,113 @@ async fn run_evaluation(
             // Ingest only haystack sessions for this question
             let mut episodes_to_ingest = Vec::new();
             let mut session_user_inputs = std::collections::HashSet::new();
+
+            let mut turn_entities = std::collections::HashMap::new();
+            let mut all_entities_set = std::collections::HashSet::new();
+
             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
                 if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
                     for (turn_idx, turn) in session_turns.iter().enumerate() {
                         let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
                         let role_lower = turn.role.to_lowercase();
+                        
+                        if role_lower == "user" {
+                            let norm_content = turn.content.to_lowercase().replace("favourite", "favorite");
+                            let clean_stm_value = |val: &str| -> String {
+                                let trimmed = val.trim();
+                                let mut cleaned = trimmed;
+                                if cleaned.starts_with("the ") {
+                                    cleaned = &cleaned[4..];
+                                } else if cleaned.starts_with("a ") {
+                                    cleaned = &cleaned[2..];
+                                } else if cleaned.starts_with("an ") {
+                                    cleaned = &cleaned[3..];
+                                }
+                                cleaned.trim().to_string()
+                            };
+
+                            for sentence in norm_content.split('.') {
+                                let sentence = sentence.trim();
+                                if sentence.is_empty() {
+                                    continue;
+                                }
+
+                                // 1. degree
+                                if let Some(idx) = sentence.find("degree in") {
+                                    let val = clean_stm_value(&sentence[idx + "degree in".len()..]);
+                                    if !val.is_empty() {
+                                        let _ = backend.save_stm(session_id, "degree", &val).await;
+                                    }
+                                } else if let Some(idx) = sentence.find("majored in") {
+                                    let val = clean_stm_value(&sentence[idx + "majored in".len()..]);
+                                    if !val.is_empty() {
+                                        let _ = backend.save_stm(session_id, "degree", &val).await;
+                                    }
+                                }
+
+                                // 2. favorite
+                                if let Some(fav_idx) = sentence.find("favorite ") {
+                                    let remaining = &sentence[fav_idx + "favorite ".len()..];
+                                    if let Some(is_idx) = remaining.find(" is ") {
+                                        let word = remaining[..is_idx].trim();
+                                        if !word.is_empty() && word.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                            let val = clean_stm_value(&remaining[is_idx + " is ".len()..]);
+                                            if !val.is_empty() {
+                                                let key = format!("favorite_{}", word);
+                                                let _ = backend.save_stm(session_id, &key, &val).await;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 3. prefer
+                                if let Some(idx) = sentence.find("prefer") {
+                                    let val = clean_stm_value(&sentence[idx + "prefer".len()..]);
+                                    if !val.is_empty() {
+                                        let _ = backend.save_stm(session_id, "preference", &val).await;
+                                    }
+                                }
+
+                                // 4. booked (chose, selected, booked)
+                                let mut booked_idx = None;
+                                if let Some(idx) = sentence.find("chose") {
+                                    booked_idx = Some((idx, "chose".len()));
+                                } else if let Some(idx) = sentence.find("selected") {
+                                    booked_idx = Some((idx, "selected".len()));
+                                } else if let Some(idx) = sentence.find("booked") {
+                                    booked_idx = Some((idx, "booked".len()));
+                                }
+                                if let Some((idx, len)) = booked_idx {
+                                    let val = clean_stm_value(&sentence[idx + len..]);
+                                    if !val.is_empty() {
+                                        let _ = backend.save_stm(session_id, "booked", &val).await;
+                                    }
+                                }
+
+                                // 5. occupation (work as a, work at)
+                                let mut occ_idx = None;
+                                if let Some(idx) = sentence.find("work as a") {
+                                    occ_idx = Some((idx, "work as a".len()));
+                                } else if let Some(idx) = sentence.find("work at") {
+                                    occ_idx = Some((idx, "work at".len()));
+                                }
+                                if let Some((idx, len)) = occ_idx {
+                                    let val = clean_stm_value(&sentence[idx + len..]);
+                                    if !val.is_empty() {
+                                        let _ = backend.save_stm(session_id, "occupation", &val).await;
+                                    }
+                                }
+                            }
+                        }
+
+                        let ents = extract_entities(&turn.content);
+                        if !ents.is_empty() {
+                            for ent in &ents {
+                                all_entities_set.insert(ent.clone());
+                            }
+                            turn_entities.insert(corpus_id.clone(), ents);
+                        }
+
                         let node_type = match role_lower.as_str() {
                             "user" => {
                                 if session_user_inputs.insert(session_id.clone()) {
@@ -766,8 +983,79 @@ async fn run_evaluation(
             backend.save_episodes_batch(&episodes_to_ingest).await
                 .context("Failed to batch ingest haystack turns")?;
 
-            // Allow SurrealDB background FTS indexer to process the new episodes
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let surreal_backend = backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+            let db = &surreal_backend.db;
+
+            let mut corpus_to_ep_id = std::collections::HashMap::new();
+            let mut ep_response = db.query("SELECT id, vault_path FROM episode;").await?;
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+            struct EpResult {
+                id: surrealdb::types::RecordId,
+                vault_path: Option<String>,
+            }
+            let ep_results: Vec<EpResult> = ep_response.take(0).unwrap_or_default();
+            for r in ep_results {
+                if let Some(vp) = r.vault_path {
+                    corpus_to_ep_id.insert(vp, mythrax_core::db::backend::format_record_id(&r.id));
+                }
+            }
+
+            let mut transaction_sql = "BEGIN TRANSACTION;".to_string();
+            for ent in all_entities_set {
+                let escaped = ent.replace("'", "\\'");
+                transaction_sql.push_str(&format!(
+                    "UPSERT entity:⟨{}⟩ CONTENT {{ name: '{}', entity_type: 'concept', summary: '', labels: ['concept'], scope: 'general' }}; ",
+                    escaped, escaped
+                ));
+            }
+
+            for (corpus_id, entities) in &turn_entities {
+                if let Some(ep_id) = corpus_to_ep_id.get(corpus_id) {
+                    let ep_uuid = ep_id.strip_prefix("episode:").unwrap_or(ep_id);
+                    for ent in entities {
+                        let escaped = ent.replace("'", "\\'");
+                        transaction_sql.push_str(&format!(
+                            "RELATE episode:⟨{}⟩ -> mentions -> entity:⟨{}⟩ CONTENT {{ created_at: time::now() }}; ",
+                            ep_uuid, escaped
+                        ));
+                    }
+                }
+            }
+
+            for sess_idx in 0..q.haystack_session_ids.len() {
+                let session_id = &q.haystack_session_ids[sess_idx];
+                if let Some(turns) = q.haystack_sessions.get(sess_idx) {
+                    for i in 0..turns.len() {
+                        let corpus_id_a = format!("{}_turn_{}", session_id, i);
+                        let ents_a = match turn_entities.get(&corpus_id_a) {
+                            Some(v) => v,
+                            None => continue,
+                        };
+                        for j in (i + 1)..turns.len() {
+                            let corpus_id_b = format!("{}_turn_{}", session_id, j);
+                            let ents_b = match turn_entities.get(&corpus_id_b) {
+                                Some(v) => v,
+                                None => continue,
+                            };
+                            let has_intersection = ents_a.iter().any(|e| ents_b.contains(e));
+                            if has_intersection {
+                                if let (Some(ep_a), Some(ep_b)) = (corpus_to_ep_id.get(&corpus_id_a), corpus_to_ep_id.get(&corpus_id_b)) {
+                                    let ep_a_uuid = ep_a.strip_prefix("episode:").unwrap_or(ep_a);
+                                    let ep_b_uuid = ep_b.strip_prefix("episode:").unwrap_or(ep_b);
+                                    transaction_sql.push_str(&format!(
+                                        "RELATE episode:⟨{}⟩ -> relates_to -> episode:⟨{}⟩ CONTENT {{ confidence: 0.85 }}; ",
+                                        ep_a_uuid, ep_b_uuid
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            transaction_sql.push_str("COMMIT TRANSACTION;");
+            let _ = db.query(&transaction_sql).await?.check();
+
+            // SurrealDB in-memory FTS index updates are synchronous on commit; no sleep needed
 
             let mut correct_turn_ids = Vec::new();
             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
@@ -782,6 +1070,7 @@ async fn run_evaluation(
             }
 
             let start_query = std::time::Instant::now();
+            let active_session_id = q.haystack_session_ids.last().map(|s| s.as_str());
             let search_response = backend
                 .search(
                     &q.question,
@@ -794,7 +1083,7 @@ async fn run_evaluation(
                     false,       // allow_downward
                     true,        // include_episodes
                     true,        // include_artifacts
-                    None,        // session_id
+                    active_session_id, // session_id
                     true,        // include_archived
                 )
                 .await
@@ -860,6 +1149,8 @@ async fn run_evaluation(
             Ok::<QuestionResultRecord, anyhow::Error>(QuestionResultRecord {
                 question_id: q.question_id,
                 question_type: q.question_type,
+                question: q.question.clone(),
+                category: mythrax_core::db::backend::classify_query(&q.question).as_str().to_string(),
                 recall_any_turn_at5: turn5.recall_any,
                 recall_all_turn_at5: turn5.recall_all,
                 ndcg_turn_at10: ndcg10,

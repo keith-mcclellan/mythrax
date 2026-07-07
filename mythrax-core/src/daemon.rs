@@ -555,7 +555,6 @@ pub mod monitor {
 
         Ok(())
     }
-    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
     pub fn check_swap_pressure(tier: crate::llm::ModelTier, swap_used_bytes: u64) -> bool {
         let threshold = match tier {
             crate::llm::ModelTier::Tier1 => 2_000 * 1024 * 1024,
@@ -565,7 +564,6 @@ pub mod monitor {
         swap_used_bytes >= threshold
     }
 
-    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
     pub fn check_memory_pressure() -> bool {
         false
     }

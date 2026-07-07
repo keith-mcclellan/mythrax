@@ -593,6 +593,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                         if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
                             success_count += 1;
@@ -667,6 +668,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;
@@ -786,6 +788,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -831,6 +834,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -881,6 +885,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -929,6 +934,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -977,6 +983,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -1022,6 +1029,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -1072,6 +1080,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
@@ -1116,6 +1125,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+confidence: None,
 };
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;

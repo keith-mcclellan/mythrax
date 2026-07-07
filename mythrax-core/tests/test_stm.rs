@@ -798,6 +798,7 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
         status: None,
         superseded_at: None,
         superseded_by: None,
+        rule_type: None,
     };
     let saved_id = backend.save_wisdom_rule(&rule).await?;
 

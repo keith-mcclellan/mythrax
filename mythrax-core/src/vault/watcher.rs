@@ -525,6 +525,7 @@ concepts: None,
 files_read: None,
 files_modified: None,
 node_type: None,
+            confidence: None,
         };
 
         backend.save_episode(&episode).await?;
@@ -570,6 +571,7 @@ node_type: None,
                 status: frontmatter.status,
                 superseded_at: frontmatter.superseded_at,
                 superseded_by: frontmatter.superseded_by,
+                rule_type: None,
             };
 
             backend.save_wisdom_rule(&rule).await?;
@@ -869,6 +871,7 @@ mod tests {
             files_read: None,
             files_modified: None,
             node_type: None,
+            confidence: None,
         };
         
         let ep_id = save_episode_bidirectional(&episode, backend.as_ref(), &store, &ignore_list).await.unwrap();

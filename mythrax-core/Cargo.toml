@@ -37,8 +37,9 @@ rlimit = "0.10"
 libc = "0.2"
 sha2 = "0.10"
 hex = "0.4"
-mlx-rs = { version = "0.25.3", optional = true }
+mlx-rs = { version = "0.25.3", features = ["metal"], optional = true }
 safetensors = { version = "0.4.3", optional = true }
+half = "2.4"
 
 tempfile = "3.8"
 
@@ -63,5 +64,15 @@ required-features = ["bench"]
 [[bin]]
 name = "tune_arbor"
 path = "src/bin/tune_arbor.rs"
+
+[[bin]]
+name = "inspect_classification"
+path = "src/bin/inspect_classification.rs"
+
+
+[profile.release]
+opt-level = 3
+debug = true
+
 
 
