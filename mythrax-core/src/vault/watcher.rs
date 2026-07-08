@@ -600,14 +600,8 @@ node_type: None,
         if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
             let from_id = crate::db::parse_record_id(&db_id)?;
             
-            // Parse body wikilinks using regex
-            let body_links_regex = regex::Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
-            let mut body_links = Vec::new();
-            for cap in body_links_regex.captures_iter(&body) {
-                let target_str = cap.get(1).unwrap().as_str();
-                let clean_target = target_str.split('|').next().unwrap_or(target_str).trim();
-                body_links.push(clean_target.to_string());
-            }
+            // Parse body wikilinks using zero-regex robust scanner
+            let body_links = crate::parser::extract_wiki_links(&body);
 
             // Resolve desired relations
             let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();

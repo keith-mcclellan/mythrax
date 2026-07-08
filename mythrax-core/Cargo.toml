@@ -23,6 +23,7 @@ futures-util = { version = "0.3", features = ["alloc"] }
 rust-stemmers = "1.2"
 url = "2.5"
 uuid = { version = "1.6", features = ["v4"] }
+winnow = "0.6"
 clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
 tokenizers = { version = "0.19", default-features = false, features = ["onig"] }
@@ -66,9 +67,8 @@ name = "tune_arbor"
 path = "src/bin/tune_arbor.rs"
 
 [[bin]]
-name = "inspect_classification"
-path = "src/bin/inspect_classification.rs"
-
+name = "generate_seeds"
+path = "scratch/generate_seeds.rs"
 
 [profile.release]
 opt-level = 3

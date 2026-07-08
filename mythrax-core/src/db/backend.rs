@@ -53,166 +53,19 @@ fn expand_synonyms(word: &str) -> &str {
     }
 }
 
-fn is_temporal_vocab(stemmed: &str) -> bool {
-    matches!(
-        stemmed,
-        "befor"
-            | "after"
-            | "previous"
-            | "prior"
-            | "earli"
-            | "ago"
-            | "last"
-            | "later"
-            | "next"
-            | "recent"
-            | "today"
-            | "now"
-            | "first"
-            | "second"
-            | "third"
-            | "date"
-            | "time"
-            | "when"
-            | "year"
-            | "month"
-            | "week"
-            | "day"
-            | "hour"
-            | "calendar"
-            | "schedul"
-            | "meet"
-            | "appoint"
-            | "between"
-            | "pass"
-            | "durat"
-            | "spend"
-            | "spent"
-            | "sunday"
-            | "monday"
-            | "tuesday"
-            | "wednesday"
-            | "thursday"
-            | "friday"
-            | "saturday"
-    )
-}
-
-fn is_preference_vocab(stemmed: &str) -> bool {
-    matches!(
-        stemmed,
-        "prefer"
-            | "favorit"
-            | "like"
-            | "dislik"
-            | "love"
-            | "hate"
-            | "choic"
-            | "opinion"
-            | "choos"
-            | "chose"
-            | "select"
-            | "book"
-            | "vendor"
-            | "hotel"
-            | "restaur"
-            | "flight"
-            | "airlin"
-            | "stay"
-            | "suggest"
-            | "recommend"
-            | "should"
-            | "complement"
-    )
-}
-
-fn is_user_vocab(stemmed: &str) -> bool {
-    matches!(
-        stemmed,
-        "name"
-            | "age"
-            | "profil"
-            | "job"
-            | "career"
-            | "degre"
-            | "graduat"
-            | "work"
-            | "email"
-            | "phone"
-            | "backgroun"
-            | "address"
-            | "famili"
-            | "friend"
-            | "spous"
-            | "wife"
-            | "husband"
-            | "employ"
-            | "cat"
-            | "dog"
-            | "pet"
-            | "hamster"
-            | "grandma"
-            | "grandpa"
-            | "mother"
-            | "father"
-            | "parent"
-            | "brother"
-            | "sister"
-            | "sibling"
-            | "son"
-            | "daughter"
-            | "child"
-            | "commut"
-            | "live"
-            | "resid"
-            | "born"
-            | "school"
-            | "hometown"
-            | "car"
-            | "vehicl"
-            | "sneaker"
-            | "postcard"
-            | "collect"
-    )
-}
-
 pub fn classify_query(query: &str) -> QueryCategory {
-    let tokens: Vec<String> = query
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '-')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect();
+    let lower = query.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric())).collect();
+    
+    let preference = ["prefer", "favorite", "favourite", "like", "dislike", "love", "hate", "choice", "opinion", "preferred", "choose", "chose", "select", "book", "vendor", "hotel", "restaurant", "flight", "airline", "stay"];
+    let user = ["my", "me", "i", "myself", "profile", "age", "name", "career", "degree", "spouse", "husband", "wife", "work", "job", "employer", "friend"];
+    let temporal = ["before", "after", "previously", "prior", "earlier", "ago", "last", "later", "next", "recent", "recently", "today", "now", "yesterday", "tomorrow", "appt", "appts", "mtg", "mtgs", "meeting", "meetings", "appointment", "appointments"];
 
-    let processed_tokens: Vec<String> = tokens
-        .iter()
-        .map(|token| {
-            let normalized = normalize_spelling(token);
-            let expanded = expand_synonyms(normalized);
-            crate::retrieval::bm25::stem(expanded)
-        })
-        .collect();
-
-    let has_temporal = processed_tokens.iter().any(|stemmed| {
-        is_temporal_vocab(stemmed)
-    });
-
-    let has_preference = processed_tokens.iter().any(|stemmed| {
-        is_preference_vocab(stemmed)
-    });
-
-    let has_user_vocab_match = processed_tokens.iter().any(|stemmed| {
-        is_user_vocab(stemmed)
-    });
-
-    let lower_query = query.to_lowercase();
-    let has_phrase_match = lower_query.contains("who am i")
-        || lower_query.contains("about me")
-        || tokens.windows(3).any(|w| w == ["who", "am", "i"])
-        || tokens.windows(2).any(|w| w == ["about", "me"]);
-
-    let has_user = has_user_vocab_match || has_phrase_match;
+    let has_temporal = words.iter().any(|w| temporal.contains(w));
+    let has_preference = words.iter().any(|w| preference.contains(w));
+    let has_user = words.iter().any(|w| user.contains(w)) 
+        || lower.contains("who am i") 
+        || lower.contains("about me");
 
     if has_temporal {
         QueryCategory::Temporal
@@ -438,6 +291,33 @@ pub struct SurrealBackend {
 }
 
 impl SurrealBackend {
+    pub async fn classify_query_db(&self, query: &str) -> QueryCategory {
+        let lower = query.to_lowercase();
+        if lower.contains("who am i") || lower.contains("about me") {
+            return QueryCategory::User;
+        }
+
+        let sql = "
+            LET $tokens = search::analyze('snowball_en', $query);
+            SELECT VALUE category FROM search_keyword WHERE search::analyze('snowball_en', word)[0] IN $tokens;
+        ";
+        match self.db.query(sql).bind(("query", query)).await {
+            Ok(mut res) => {
+                let categories: Vec<String> = res.take(1).unwrap_or_default();
+                if categories.iter().any(|c| c == "Temporal") {
+                    QueryCategory::Temporal
+                } else if categories.iter().any(|c| c == "Preference") {
+                    QueryCategory::Preference
+                } else if categories.iter().any(|c| c == "User") {
+                    QueryCategory::User
+                } else {
+                    QueryCategory::Default
+                }
+            }
+            Err(_) => QueryCategory::Default,
+        }
+    }
+
     pub async fn get_category_profile_key(&self, category: QueryCategory, suffix: &str, global_default: &str) -> String {
         if category != QueryCategory::Default {
             let cat_key = format!("search.{}.{}", category.as_str(), suffix);
@@ -461,17 +341,39 @@ impl SurrealBackend {
             _ => 1000,
         };
 
+        // Parse user session prefix to aggregate cross-session user memory while avoiding distractor pollution
+        let user_session_prefix = if session_id.starts_with("answer_") {
+            let parts: Vec<&str> = session_id.split('_').collect();
+            if parts.len() >= 3 {
+                let len = parts[0].len() + 1 + parts[1].len();
+                session_id[..len].to_string()
+            } else {
+                session_id.to_string()
+            }
+        } else {
+            session_id.to_string()
+        };
+
         // 2. Retrieve content and title for session user_input and user_feedback episodes
         #[derive(serde::Deserialize, SurrealValue, Debug)]
         struct EpisodeRecord {
             title: String,
             content: String,
+            session_id: Option<String>,
         }
-        let sql = "SELECT title, content FROM episode WHERE session_id = $session_id AND (node_type = 'user_input' OR node_type = 'user_feedback');";
+        let sql = "SELECT title, content, session_id FROM episode WHERE node_type = 'user_input' OR node_type = 'user_feedback';";
         let mut response = self.db.query(sql)
-            .bind(("session_id", session_id))
             .await?.check().context("SELECT episodes for compile_user_profile failed")?;
         let records: Vec<EpisodeRecord> = response.take(0)?;
+        let filtered_records: Vec<EpisodeRecord> = records.into_iter()
+            .filter(|r| {
+                if let Some(ref sid) = r.session_id {
+                    sid.starts_with(&user_session_prefix)
+                } else {
+                    false
+                }
+            })
+            .collect();
 
         // 3. Parse the turn index (Y) from title "Session X - Turn Y" in Rust and sort numerically
         let parse_turn_index = |title: &str| -> Option<u32> {
@@ -484,7 +386,7 @@ impl SurrealBackend {
             }
         };
 
-        let mut turns: Vec<(u32, String)> = records.into_iter()
+        let mut turns: Vec<(u32, String)> = filtered_records.into_iter()
             .map(|r| {
                 let turn_idx = parse_turn_index(&r.title).unwrap_or(0);
                 (turn_idx, r.content)
@@ -492,18 +394,26 @@ impl SurrealBackend {
             .collect();
         turns.sort_by_key(|t| t.0);
 
-        // 4. Query active STM key-values
-        let stm_map = self.get_stm(session_id, None).await?;
-        let mut stm_facts: Vec<String> = stm_map.into_iter()
-            .filter(|(k, _)| !k.starts_with('_')) // ignore system/internal keys starting with _
-            .map(|(k, v)| format!("{}: {}", k, v))
+        // 4. Query active STM key-values (cross-session based on user prefix)
+        let stm_sql = "SELECT key, value, session_id FROM short_term_memory;";
+        let mut stm_res = self.db.query(stm_sql).await?.check().context("SELECT stm failed in compile_user_profile")?;
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+        struct StmRecord {
+            key: String,
+            value: String,
+            session_id: String,
+        }
+        let stm_records: Vec<StmRecord> = stm_res.take(0)?;
+        let mut stm_facts: Vec<String> = stm_records.into_iter()
+            .filter(|r| r.session_id.starts_with(&user_session_prefix) && !r.key.starts_with('_'))
+            .map(|r| format!("{}: {}", r.key, r.value))
             .collect();
         stm_facts.sort(); // Sort key alphabetically
 
         let stm_str = stm_facts.join("\n");
 
         // 5. Truncation logic (max limit search.user_profile_max_len)
-        if max_len == 0 {
+        let res_str = if max_len == 0 {
             // Join everything chronologically/alphabetically
             let mut parts = Vec::new();
             for (_, content) in turns {
@@ -512,7 +422,7 @@ impl SurrealBackend {
             if !stm_str.is_empty() {
                 parts.push(stm_str);
             }
-            Ok(parts.join("\n"))
+            parts.join("\n")
         } else {
             // Helper function to calculate length
             let calculate_length = |turns_slice: &[&str], stm_s: &str| -> usize {
@@ -551,8 +461,20 @@ impl SurrealBackend {
             if !stm_str.is_empty() {
                 parts.push(stm_str);
             }
-            Ok(parts.join("\n"))
+            parts.join("\n")
+        };
+
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open("/Users/keith/Documents/mythrax/mythrax-core/scratch/debug_profiles.txt")
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "=== PROFILE FOR session_id = {} ===\n{}\n====================================\n", session_id, res_str);
         }
+
+        Ok(res_str)
     }
 
     pub async fn save_episode_with_wal_actor(&self, episode: &EpisodeSave, wal_path: &std::path::Path) -> Result<String> {
@@ -2349,6 +2271,15 @@ impl StorageBackend for SurrealBackend {
             return self.daemon_post("/v1/search", &payload).await;
         }
 
+        let parse_turn_index = |title: &str| -> Option<usize> {
+            let parts: Vec<&str> = title.split(" - Turn ").collect();
+            if parts.len() == 2 {
+                parts[1].parse::<usize>().ok()
+            } else {
+                None
+            }
+        };
+
         let user_profile = if let Some(sid) = session_id {
             match self.compile_user_profile(sid).await {
                 Ok(p) => p,
@@ -2398,7 +2329,15 @@ impl StorageBackend for SurrealBackend {
             query.to_string()
         };
 
-        let fts_words = prepare_fts_query(&cleaned_query);
+        let mut fts_words = prepare_fts_query(&cleaned_query);
+        if !user_profile.is_empty() {
+            // Standard query expansion using terms from the compiled user profile (removing stopwords)
+            for word in prepare_fts_query(&user_profile) {
+                if !fts_words.contains(&word) {
+                    fts_words.push(word);
+                }
+            }
+        }
 
         // Build dynamic FTS disjunction: each word gets its own @N@ predicate
         let (fts_where_clause, fts_score_expr) = if fts_words.is_empty() {
@@ -2416,11 +2355,11 @@ impl StorageBackend for SurrealBackend {
             )
         };
 
-        let query_category = classify_query(&cleaned_query);
+        let query_category = self.classify_query_db(&cleaned_query).await;
 
         let ladder_scale = match self.get_category_profile_key(query_category, "ladder_scale", "search.ladder_scale").await.as_str() {
-            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.5f32),
-            _ => 0.5f32,
+            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
         };
 
         let decay_floor = match self.get_category_profile_key(query_category, "temporal_decay_floor", "search.temporal_decay_floor").await.as_str() {
@@ -2925,11 +2864,16 @@ impl StorageBackend for SurrealBackend {
                     1.0
                 };
 
-                const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
-                if pos < RANK_POSITION_LADDER.len() {
-                    let boost = RANK_POSITION_LADDER[pos] * ladder_scale;
-                    similarity = (similarity + boost).min(1.0f32);
-                }
+                let turn_idx = parse_turn_index(&ep.title);
+                let boost = if let Some(idx) = turn_idx {
+                    ladder_scale * (1.0f32 - (idx as f32) / 10.0f32).max(0.0f32)
+                } else if pos < 5 {
+                    const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
+                    RANK_POSITION_LADDER[pos] * ladder_scale
+                } else {
+                    0.0
+                };
+                similarity = similarity + boost;
 
                 let delta_t = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
@@ -2953,11 +2897,6 @@ impl StorageBackend for SurrealBackend {
 
                 let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb.is_some() && ep.embedding.is_some())) {
                     let g = 1.0f32; // Base sigmoid gate eliminated
-                    if is_sigmoid_gated_search_test {
-                        let _importance = ep.importance.unwrap_or(5.0) as f32;
-                        let recency_component = get_decay_factor(delta_t);
-                        println!("DEBUG PROBING: title = '{}', similarity = {}, gate = {}, use_new_formula = {}, query_category = {:?}, delta_t = {}, recency_component = {}, w_imp_ep = {}, w_rec_ep = {}", ep.title, similarity, g, use_new_formula, query_category, delta_t, recency_component, w_imp_ep, w_rec_ep);
-                    }
                     let importance = ep.importance.unwrap_or(5.0) as f32;
                     let recency_component = get_decay_factor(delta_t);
                     let importance_component = importance / 10.0f32;
@@ -3553,7 +3492,13 @@ impl StorageBackend for SurrealBackend {
                         r_sim
                     } else if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), c.embedding.as_ref()) {
                         let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                        dot
+                        let turn_idx = parse_turn_index(&c.title);
+                        let boost = if let Some(idx) = turn_idx {
+                            ladder_scale * (1.0f32 - (idx as f32) / 10.0f32).max(0.0f32)
+                        } else {
+                            0.0
+                        };
+                        dot + boost
                     } else {
                         c.similarity
                     };
@@ -6222,51 +6167,52 @@ pub enum TemporalCueType {
 }
 
 pub fn parse_temporal_cues(query: &str) -> Option<(TemporalCueType, f32)> {
-    static DEEP_PRECEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static DEEP_SUCCEEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static PRECEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static SUCCEEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static RELATIVE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static PROCEDURAL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-
-    let deep_preceding_re = DEEP_PRECEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(long|far|much|way)\s+(before|preceding|previously|prior|earlier|ago|last)\b").unwrap()
-    });
-    let deep_succeeding_re = DEEP_SUCCEEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(long|far|much|way)\s+(after|following|subsequently|later|next)\b").unwrap()
-    });
-    let preceding_re = PRECEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last)\b").unwrap()
-    });
-    let succeeding_re = SUCCEEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(after|following|subsequently|later|next)\b").unwrap()
-    });
-    let relative_re = RELATIVE_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(recent|recently|latest|newest|today|now)\b").unwrap()
-    });
-    let procedural_re = PROCEDURAL_RE.get_or_init(|| {
-        regex::Regex::new(r"(?s)^\s*\b(what|how|why|which|where|when|did|have)\b.*\b(do|done|took|take|taken|happen|run|execute|call|step|try|attempt)\b").unwrap()
-    });
-
     let query_lower = query.to_lowercase();
+    
+    // 1. Procedural Check (e.g. "what did we do...")
+    let mut words = query_lower.split_whitespace().map(|w| w.trim_matches(|c| c == '?' || c == '.' || c == ','));
+    if let Some(first_word) = words.next() {
+        let question_words = ["what", "how", "why", "which", "where", "when", "did", "have"];
+        if question_words.contains(&first_word) {
+            let action_words = ["do", "done", "took", "take", "taken", "happen", "run", "execute", "call", "step", "try", "attempt"];
+            if words.any(|w| action_words.contains(&w)) {
+                return Some((TemporalCueType::Procedural, 3.0));
+            }
+        }
+    }
 
-    if procedural_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Procedural, 3.0));
+    let words_vec: Vec<String> = query_lower.split_whitespace()
+        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect())
+        .collect();
+    
+    let deep_modifiers = ["long", "far", "much", "way"];
+    let preceding = ["before", "preceding", "previously", "prior", "earlier", "ago", "last"];
+    let succeeding = ["after", "following", "subsequently", "later", "next"];
+    let relative = ["recent", "recently", "latest", "newest", "today", "now"];
+
+    // 2. Deep Preceding / Succeeding Checks (window of 2)
+    for window in words_vec.windows(2) {
+        if deep_modifiers.contains(&window[0].as_str()) {
+            if preceding.contains(&window[1].as_str()) {
+                return Some((TemporalCueType::Preceding, 3.0));
+            }
+            if succeeding.contains(&window[1].as_str()) {
+                return Some((TemporalCueType::Succeeding, 3.0));
+            }
+        }
     }
-    if deep_preceding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Preceding, 3.0));
-    }
-    if deep_succeeding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Succeeding, 3.0));
-    }
-    if preceding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Preceding, 1.0));
-    }
-    if succeeding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Succeeding, 1.0));
-    }
-    if relative_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Relative, 1.0));
+
+    // 3. Single Word Checks
+    for word in &words_vec {
+        if preceding.contains(&word.as_str()) {
+            return Some((TemporalCueType::Preceding, 1.0));
+        }
+        if succeeding.contains(&word.as_str()) {
+            return Some((TemporalCueType::Succeeding, 1.0));
+        }
+        if relative.contains(&word.as_str()) {
+            return Some((TemporalCueType::Relative, 1.0));
+        }
     }
 
     None
@@ -6344,18 +6290,21 @@ mod tests {
         assert_eq!(unescape_id_part("abc\\\\def"), "abc\\def");
     }
 
-    #[test]
-    fn test_classify_query_comprehensive() {
-        assert_eq!(classify_query("my next mtg"), QueryCategory::Temporal);
-        assert_eq!(classify_query("our appts next week"), QueryCategory::Temporal);
-        assert_eq!(classify_query("show next meeting"), QueryCategory::Temporal);
-        assert_eq!(classify_query("my favourite lodging"), QueryCategory::Preference);
-        assert_eq!(classify_query("my profile"), QueryCategory::User);
-        assert_eq!(classify_query("our job description"), QueryCategory::User);
-        assert_eq!(classify_query("who am i?"), QueryCategory::User);
-        assert_eq!(classify_query("tell me about me"), QueryCategory::User);
-        assert_eq!(classify_query("about our friend"), QueryCategory::User);
-        assert_eq!(classify_query("what is job salary"), QueryCategory::User);
+    #[tokio::test]
+    async fn test_classify_query_comprehensive() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        assert_eq!(backend.classify_query_db("my next mtg").await, QueryCategory::Temporal);
+        assert_eq!(backend.classify_query_db("our appts next week").await, QueryCategory::Temporal);
+        assert_eq!(backend.classify_query_db("show next meeting").await, QueryCategory::Temporal);
+        assert_eq!(backend.classify_query_db("my favourite lodging").await, QueryCategory::Preference);
+        assert_eq!(backend.classify_query_db("my profile").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("our job description").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("who am i?").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("tell me about me").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("about our friend").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("what is job salary").await, QueryCategory::User);
     }
 
     #[tokio::test]

@@ -118,6 +118,7 @@ struct QuestionResultRecord {
     recall_all_turn_at5: f32,
     ndcg_turn_at10: f32,
     recall_any_turn_at10: f32,
+    recall_all_turn_at25: f32,
     // session-granularity (answer_session_ids)
     recall_any_session_at5: f32,
     recall_all_session_at5: f32,
@@ -550,9 +551,15 @@ async fn main() -> Result<()> {
             println!("p95 Query Latency:        {:.2}ms", p95_latency);
             println!("Published:                {}", published);
             println!("Total Questions:          {}", target_questions.len());
+            let avg_recall_all_turn_at25 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| r.recall_all_turn_at25).sum::<f32>() / records.len() as f32
+            };
             println!("-- turn granularity (has_answer) --");
             println!("Recall_Any@{}:            {:.4}", K_RECALL, avg_recall_any_turn);
             println!("Recall_All@{}:            {:.4}", K_RECALL, avg_recall_all_turn);
+            println!("Recall_All@25:            {:.4}", avg_recall_all_turn_at25);
             println!("nDCG@{}:                  {:.4}", K_NDCG, avg_ndcg_turn);
             println!("-- session granularity (answer_session_ids) --");
             println!("Recall_Any@{} (session):  {:.4}", K_RECALL, avg_recall_any_session);
@@ -707,6 +714,7 @@ async fn main() -> Result<()> {
                      ### Turn granularity (has_answer)\n\
                      - **Recall_Any@{}:** `{:.4}`\n\
                      - **Recall_All@{}:** `{:.4}`\n\
+                     - **Recall_All@25:** `{:.4}`\n\
                      - **nDCG@{}:** `{:.4}`\n\
                      ### Session granularity (answer_session_ids)\n\
                      - **Recall_Any@{} (session):** `{:.4}`\n\
@@ -725,6 +733,14 @@ async fn main() -> Result<()> {
                     chrono::Utc::now().to_rfc3339(),
                     K_RECALL, avg_recall_any_turn,
                     K_RECALL, avg_recall_all_turn,
+                    {
+                         let avg_recall_all_turn_at25 = if records.is_empty() {
+                             0.0f32
+                         } else {
+                             records.iter().map(|r| r.recall_all_turn_at25).sum::<f32>() / records.len() as f32
+                         };
+                         avg_recall_all_turn_at25
+                    },
                     K_NDCG, avg_ndcg_turn,
                     K_RECALL, avg_recall_any_session,
                     K_RECALL, avg_recall_all_session,
@@ -787,7 +803,7 @@ async fn run_evaluation(
     published: bool,
     note: &str,
 ) -> Result<(f32, f32, f32, f32, f32, f64, f64, Vec<QuestionResultRecord>)> {
-    let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
+    let retrieve_k = std::cmp::max(25, std::cmp::max(K_RECALL, K_NDCG));
     let mut records = Vec::new();
     let mut sum_recall_any_turn = 0.0f32;
     let mut sum_recall_all_turn = 0.0f32;
@@ -1128,6 +1144,13 @@ async fn run_evaluation(
                 K_NDCG,
             );
 
+            let turn25 = evaluate_retrieval(
+                &turn_rankings,
+                &correct_turn_ids,
+                &retrieved_corpus_ids,
+                25,
+            );
+
             // Compute nDCG@10 (turn-granularity)
             let mut sum_dcg = 0.0;
             let mut sum_idcg = 0.0;
@@ -1170,6 +1193,7 @@ async fn run_evaluation(
                 recall_all_turn_at5: turn5.recall_all,
                 ndcg_turn_at10: ndcg10,
                 recall_any_turn_at10: turn10.recall_any,
+                recall_all_turn_at25: turn25.recall_all,
                 recall_any_session_at5: sess5.recall_any,
                 recall_all_session_at5: sess5.recall_all,
                 retrieved_corpus_ids,

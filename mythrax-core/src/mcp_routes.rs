@@ -2364,12 +2364,20 @@ fn slice_content_by_lines(content: &str, start: Option<usize>, end: Option<usize
 
 async fn resolve_placeholders(backend: &SurrealBackend, text: &str) -> String {
     let mut resolved = text.to_string();
-    let re = regex::Regex::new(r"\[Paged Symbol: Reference (page_[a-zA-Z0-9_]+)\]").unwrap();
+    let prefix = "[Paged Symbol: Reference ";
     
     let mut captures = Vec::new();
-    for cap in re.captures_iter(text) {
-        if let Some(m) = cap.get(1) {
-            captures.push(m.as_str().to_string());
+    let mut start = 0;
+    while let Some(idx) = text[start..].find(prefix) {
+        let absolute_start = start + idx + prefix.len();
+        if let Some(end_idx) = text[absolute_start..].find(']') {
+            let page_id = &text[absolute_start..absolute_start + end_idx];
+            if page_id.starts_with("page_") && page_id.chars().skip(5).all(|c| c.is_alphanumeric() || c == '_') {
+                captures.push(page_id.to_string());
+            }
+            start = absolute_start + end_idx + 1;
+        } else {
+            break;
         }
     }
     
