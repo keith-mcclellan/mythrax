@@ -2364,20 +2364,6 @@ impl StorageBackend for SurrealBackend {
         let mode = self.get_search_mode().await;
         let is_hybrid = mode == "hybrid";
 
-        let ladder_scale = match self.get_profile_key("search.ladder_scale").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.5f32),
-            _ => 0.5f32,
-        };
-
-        let decay_floor = match self.get_profile_key("search.temporal_decay_floor").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.0f32),
-            _ => 0.0f32,
-        };
-
-        let single_path_offset = match self.get_profile_key("search.single_path_center_offset").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.0f32),
-            _ => 0.0f32,
-        };
 
         let is_session_isolation_enabled = if let Ok(val) = std::env::var("MYTHRAX_SESSION_ISOLATION") {
             val == "true"
@@ -2431,6 +2417,21 @@ impl StorageBackend for SurrealBackend {
         };
 
         let query_category = classify_query(&cleaned_query);
+
+        let ladder_scale = match self.get_category_profile_key(query_category, "ladder_scale", "search.ladder_scale").await.as_str() {
+            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.5f32),
+            _ => 0.5f32,
+        };
+
+        let decay_floor = match self.get_category_profile_key(query_category, "temporal_decay_floor", "search.temporal_decay_floor").await.as_str() {
+            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
+        };
+
+        let single_path_offset = match self.get_category_profile_key(query_category, "single_path_center_offset", "search.single_path_center_offset").await.as_str() {
+            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
+        };
 
         #[allow(unused_variables)]
         let sigmoid_center = match self.get_category_profile_key(query_category, "sigmoid_center", "search.sigmoid_center").await.as_str() {
