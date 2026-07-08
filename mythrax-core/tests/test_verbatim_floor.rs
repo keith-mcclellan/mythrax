@@ -29,7 +29,9 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
     let ep_low = EpisodeSave {
         title: "Backup Notes on Agentic Memory".to_string(),
         content: "Draft backup notes describing basic episodic retrieval concepts and simple graph structures.".to_string(),
@@ -44,7 +46,9 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
 
     // Write physical files so the compactor watcher doesn't get confused when doing moves
     store.write_file("agentic_memory_hi.md", &ep_hi.content)?;
@@ -84,6 +88,8 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
         None,
         false,
         true,
+        true,
+        None,
         true,
     ).await?;
 

@@ -25,7 +25,9 @@ async fn test_episode_save_roundtrips_discovery_tokens() {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
     let id_some = backend.save_episode(&ep_some).await.unwrap();
 
     // 2. Check with None value
@@ -43,7 +45,9 @@ async fn test_episode_save_roundtrips_discovery_tokens() {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
     let id_none = backend.save_episode(&ep_none).await.unwrap();
 
     let all = backend.get_all_episodes().await.unwrap();
@@ -94,7 +98,9 @@ async fn test_token_economics_savings() {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
     let id1 = backend.save_episode(&ep1).await.unwrap();
 
     // Episode 2: title (9) + content (391) = 400 chars. read_tokens = 100. discovery_tokens = Some(500).
@@ -112,7 +118,9 @@ async fn test_token_economics_savings() {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
     let id2 = backend.save_episode(&ep2).await.unwrap();
 
     // Episode 3: has None/zero discovery tokens (will not be in distilled_context_nodes, so not hydrated)
@@ -130,7 +138,9 @@ async fn test_token_economics_savings() {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
     let _id3 = backend.save_episode(&ep3).await.unwrap();
 
     // Put distilled_context_nodes in STM to hydrate exactly ep1 and ep2 (sum of read tokens = 200, discovery = 1500)
@@ -192,7 +202,9 @@ async fn test_zero_discovery_no_divide_by_zero() {
         concepts: None,
         files_read: None,
         files_modified: None,
-    };
+        node_type: None,
+    
+        confidence: None,};
     let id = backend.save_episode(&ep).await.unwrap();
 
     let node_ids = vec![id];

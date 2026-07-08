@@ -43,6 +43,7 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
         summary: "test summary".to_string(),
         handoff_file_path: "handoff.md".to_string(),
         scope: Some("general".to_string()),
+        include_tool_execution: None,
     };
     state.backend.save_handoff(&handoff).await?;
 

@@ -20,7 +20,6 @@ pub mod daemon;
 pub mod hooks;
 pub mod retrieval;
 
-#[cfg(any(test, feature = "bench"))]
 pub mod bench;
 
 

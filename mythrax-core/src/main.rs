@@ -608,6 +608,7 @@ async fn main() -> Result<()> {
                     status: None,
                     superseded_at: None,
                     superseded_by: None,
+                    rule_type: None,
                 },
                 WisdomRule {
                     id: None,
@@ -626,6 +627,7 @@ async fn main() -> Result<()> {
                     status: None,
                     superseded_at: None,
                     superseded_by: None,
+                    rule_type: None,
                 },
                 WisdomRule {
                     id: None,
@@ -644,6 +646,7 @@ async fn main() -> Result<()> {
                     status: None,
                     superseded_at: None,
                     superseded_by: None,
+                    rule_type: None,
                 },
                 WisdomRule {
                     id: None,
@@ -662,6 +665,7 @@ async fn main() -> Result<()> {
                     status: None,
                     superseded_at: None,
                     superseded_by: None,
+                    rule_type: None,
                 },
                 WisdomRule {
                     id: None,
@@ -680,6 +684,7 @@ async fn main() -> Result<()> {
                     status: None,
                     superseded_at: None,
                     superseded_by: None,
+                    rule_type: None,
                 },
             ];
 

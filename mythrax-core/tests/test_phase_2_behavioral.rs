@@ -113,6 +113,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         source_episode: None,
         last_retrieved_at: None,
         utility: None,
+        node_type: Some("procedural".to_string()),
         ..Default::default()
     };
     let ep2 = mythrax_core::contracts::Episode {
@@ -120,13 +121,14 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         title: "Refactored CSS layout".to_string(),
         content: "Fixed alignment and shadow sizing in dark theme layout.".to_string(),
         source: None,
-        scope: Some("project-x".to_string()),
+        scope: Some("project-y".to_string()),
         vault_path: Some("episodes/ep2.md".to_string()),
         embedding: Some(vec![0.11; 768]), // Close embedding to form a cluster
         processed_in_dream: Some(false),
         source_episode: None,
         last_retrieved_at: None,
         utility: None,
+        node_type: Some("procedural".to_string()),
         ..Default::default()
     };
 
@@ -136,6 +138,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         entities: vec![],
         scope: ep1.scope.clone(),
         vault_path: ep1.vault_path.clone(),
+        node_type: ep1.node_type.clone(),
         source_episode: None,
         session_id: None,
         task_id: None,
@@ -148,6 +151,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         entities: vec![],
         scope: ep2.scope.clone(),
         vault_path: ep2.vault_path.clone(),
+        node_type: ep2.node_type.clone(),
         source_episode: None,
         session_id: None,
         task_id: None,

@@ -1,0 +1,256 @@
+diff --git a/mythrax-core/src/bench/runner.rs b/mythrax-core/src/bench/runner.rs
+index 5a212c9..c97dfc3 100644
+--- a/mythrax-core/src/bench/runner.rs
++++ b/mythrax-core/src/bench/runner.rs
+@@ -10,9 +10,10 @@ use std::fs::{self, File};
+ use std::io::{Read, Write};
+ use std::path::Path;
+ 
+-use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id};
++use mythrax_core::bench::metrics::{evaluate_retrieval, session_id_from_corpus_id};
+ use mythrax_core::contracts::EpisodeSave;
+ use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
++use mythrax_core::db::schema::{INIT_SCHEMA, BUILD_FULLTEXT_INDEXES};
+ 
+ // === PINNED DATASET PROVENANCE (BI-2, BI-3) ===
+ // Canonical primary source: HF dataset `xiaowu0162/longmemeval-cleaned`, pinned to an
+@@ -349,6 +350,7 @@ async fn main() -> Result<()> {
+             let mut best_score = -1.0;
+             let mut best_params = (String::new(), String::new());
+ 
++            let mut active_backend: Option<std::sync::Arc<SurrealBackend>> = None;
+             println!("Starting 5-fold cross-validation grid search parameter sweep on dev split...");
+             for lambda in &lambdas {
+                 for gamma in &gammas {
+@@ -356,14 +358,16 @@ async fn main() -> Result<()> {
+                     overrides.insert("search.decay_lambda".to_string(), lambda.to_string());
+                     overrides.insert("search.gamma_rerank".to_string(), gamma.to_string());
+ 
+-                    let (avg_r_any, avg_r_all, avg_ndcg, _, _, avg_lat, _) = run_evaluation(
++                    let (avg_r_any, avg_r_all, avg_ndcg, _, _, avg_lat, _, backend_opt) = run_evaluation(
+                         &target_questions,
+                         "hybrid",
+                         Some(overrides),
+                         &target_cache_path,
+                         published,
+                         &note,
++                        active_backend,
+                     ).await?;
++                    active_backend = backend_opt;
+ 
+                     println!("Params: decay_lambda={}, gamma_rerank={} => Recall_Any@5={:.4}, Recall_All@5={:.4}, nDCG@10={:.4}, Latency={:.2}ms",
+                              lambda, gamma, avg_r_any, avg_r_all, avg_ndcg, avg_lat);
+@@ -378,13 +382,14 @@ async fn main() -> Result<()> {
+             println!("Best Parameters found: decay_lambda={}, gamma_rerank={} (Combined Score: {:.4})",
+                      best_params.0, best_params.1, best_score);
+         } else {
+-            let (avg_recall_any_turn, avg_recall_all_turn, avg_ndcg_turn, avg_recall_any_session, avg_recall_all_session, avg_latency, records) = run_evaluation(
++            let (avg_recall_any_turn, avg_recall_all_turn, avg_ndcg_turn, avg_recall_any_session, avg_recall_all_session, avg_latency, records, _) = run_evaluation(
+                 &target_questions,
+                 &args.mode,
+                 None,
+                 &target_cache_path,
+                 published,
+                 &note,
++                None,
+             ).await?;
+ 
+             println!("\n========================================================");
+@@ -516,10 +521,11 @@ async fn run_evaluation(
+     target_questions: &[QuestionEntry],
+     mode: &str,
+     param_overrides: Option<std::collections::HashMap<String, String>>,
+-    target_cache_path: &std::path::Path,
++    _target_cache_path: &std::path::Path,
+     published: bool,
+     note: &str,
+-) -> Result<(f32, f32, f32, f32, f32, f64, Vec<QuestionResultRecord>)> {
++    existing_backend: Option<std::sync::Arc<SurrealBackend>>,
++) -> Result<(f32, f32, f32, f32, f32, f64, Vec<QuestionResultRecord>, Option<std::sync::Arc<SurrealBackend>>)> {
+     let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
+     let mut records = Vec::new();
+     let mut sum_recall_any_turn = 0.0f32;
+@@ -536,80 +542,116 @@ async fn run_evaluation(
+         std::env::set_var("MYTHRAX_BENCH", "1");
+     }
+ 
+-    let db_path = std::path::Path::new("bench_data/mythrax_bench.db");
+-    if let Some(parent) = db_path.parent() {
+-        let _ = std::fs::create_dir_all(parent);
+-    }
+-    let conn_str = format!("surrealkv://{}", db_path.to_string_lossy());
+-
+-    let shared_backend = SurrealBackend::new(&conn_str)
+-        .await
+-        .context("Failed to create shared SurrealKV database engine")?;
+-    shared_backend.init().await.context("Failed to initialize database schema")?;
+-    shared_backend.set_search_mode(mode).await;
+-    if let Some(ref o) = param_overrides {
+-        for (k, v) in o {
+-            let _ = shared_backend.save_profile_key(k, v).await;
+-        }
+-    }
+-    let shared_backend = std::sync::Arc::new(shared_backend);
+-
+-    // Calculate unique turn IDs expected for target questions
+-    let mut expected_corpus_ids = std::collections::HashSet::new();
+-    for q in target_questions {
+-        for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+-            if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+-                for (turn_idx, _) in session_turns.iter().enumerate() {
+-                    let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
+-                    expected_corpus_ids.insert(corpus_id);
+-                }
++    let shared_backend = if let Some(backend) = existing_backend {
++        backend.set_search_mode(mode).await;
++        if let Some(ref o) = param_overrides {
++            for (k, v) in o {
++                let _ = backend.save_profile_key(k, v).await;
+             }
+         }
+-    }
+-    let expected_count = expected_corpus_ids.len();
++        backend
++    } else {
++        let conn_str = std::env::var("MYTHRAX_BENCH_DB").unwrap_or_else(|_| {
++            let db_path = std::path::Path::new("bench_data/mythrax_bench.db");
++            if let Some(parent) = db_path.parent() {
++                let _ = std::fs::create_dir_all(parent);
++            }
++            format!("surrealkv://{}", db_path.to_string_lossy())
++        });
+ 
+-    // Query database to see if we already have the expected episodes
+-    let current_count: usize = match shared_backend.db.query("SELECT VALUE count(id) FROM episode;").await {
+-        Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
+-        Err(_) => 0,
+-    };
++        let backend = SurrealBackend::new(&conn_str)
++            .await
++            .context("Failed to create shared SurrealKV database engine")?;
++        backend.db.query(INIT_SCHEMA).await?
++            .check().context("Failed to initialize database schema")?;
++
++        // Initialize default configuration if config:settings does not exist
++        let check_sql = "SELECT * FROM config:settings;";
++        let mut response = backend.db.query(check_sql).await?.check().context("Check config failed")?;
++        let config_opt: Option<mythrax_core::contracts::LlmConfigResponse> = response.take(0)?;
++        if config_opt.is_none() {
++            let insert_sql = "
++                CREATE config:settings CONTENT {
++                    active_provider: 'local',
++                    model: 'mlx-community/Qwen3.6-35B-A3B-4bit',
++                    cloud_provider: 'gemini',
++                    is_override: false,
++                    expires_at: NONE
++                };
++            ";
++            backend.db.query(insert_sql).await?.check().context("Insert default config failed")?;
++        }
+ 
+-    if current_count >= expected_count {
+-        println!("Database already contains {} episodes (expected {}). Skipping ingestion phase!", current_count, expected_count);
+-    } else {
+-        println!("Ingesting all haystack sessions sequentially upfront...");
+-        let mut ingested_corpus_ids = std::collections::HashSet::new();
+-        let mut buffer = Vec::new();
++        backend.set_search_mode(mode).await;
++        if let Some(ref o) = param_overrides {
++            for (k, v) in o {
++                let _ = backend.save_profile_key(k, v).await;
++            }
++        }
++        let shared_backend = std::sync::Arc::new(backend);
+ 
++        // Calculate unique turn IDs expected for target questions
++        let mut expected_corpus_ids = std::collections::HashSet::new();
+         for q in target_questions {
+             for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
+                 if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
+-                    for (turn_idx, turn) in session_turns.iter().enumerate() {
++                    for (turn_idx, _) in session_turns.iter().enumerate() {
+                         let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
+-                        if ingested_corpus_ids.insert(corpus_id.clone()) {
+-                            let ep = EpisodeSave {
+-                                title: format!("Session {} - Turn {}", session_id, turn_idx),
+-                                content: format!("{}: {}", turn.role, turn.content),
+-                                scope: Some("general".to_string()),
+-                                vault_path: Some(corpus_id),
+-                                session_id: Some(session_id.clone()),
+-                                ..Default::default()
+-                            };
+-                            buffer.push(ep);
+-                            if buffer.len() >= 1000 {
+-                                let _ = shared_backend.save_episodes_batch(&buffer).await;
+-                                buffer.clear();
++                        expected_corpus_ids.insert(corpus_id);
++                    }
++                }
++            }
++        }
++        let expected_count = expected_corpus_ids.len();
++
++        // Query database to see if we already have the expected episodes
++        let current_count: usize = match shared_backend.db.query("SELECT VALUE count(id) FROM episode;").await {
++            Ok(mut res) => res.take::<Option<usize>>(0).unwrap_or(None).unwrap_or(0),
++            Err(_) => 0,
++        };
++
++        if current_count >= expected_count {
++            println!("Database already contains {} episodes (expected {}). Skipping ingestion phase!", current_count, expected_count);
++        } else {
++            println!("Ingesting all haystack sessions sequentially upfront...");
++            let mut ingested_corpus_ids = std::collections::HashSet::new();
++            let mut buffer = Vec::new();
++
++            for q in target_questions {
++                for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
++                    if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
++                        for (turn_idx, turn) in session_turns.iter().enumerate() {
++                            let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
++                            if ingested_corpus_ids.insert(corpus_id.clone()) {
++                                let ep = EpisodeSave {
++                                    title: format!("Session {} - Turn {}", session_id, turn_idx),
++                                    content: format!("{}: {}", turn.role, turn.content),
++                                    scope: Some("general".to_string()),
++                                    vault_path: Some(corpus_id),
++                                    session_id: Some(session_id.clone()),
++                                    ..Default::default()
++                                };
++                                buffer.push(ep);
++                                if buffer.len() >= 1000 {
++                                    let _ = shared_backend.save_episodes_batch(&buffer).await;
++                                    buffer.clear();
++                                }
+                             }
+                         }
+                     }
+                 }
+             }
++            if !buffer.is_empty() {
++                let _ = shared_backend.save_episodes_batch(&buffer).await;
++            }
++            println!("Ingestion complete.");
+         }
+-        if !buffer.is_empty() {
+-            let _ = shared_backend.save_episodes_batch(&buffer).await;
+-        }
+-        println!("Ingestion complete.");
+-    }
++
++        shared_backend.db.query(BUILD_FULLTEXT_INDEXES).await?
++            .check().context("Applying fulltext indexes failed")?;
++
++        shared_backend
++    };
+ 
+     let total_q = target_questions.len();
+     let mut join_set = tokio::task::JoinSet::new();
+@@ -774,6 +816,7 @@ async fn run_evaluation(
+         avg_recall_all_session,
+         avg_latency,
+         records,
++        Some(shared_backend),
+     ))
+ }
+ 

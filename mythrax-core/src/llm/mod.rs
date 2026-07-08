@@ -18,11 +18,18 @@ pub mod mlx_weights;
 pub mod nomic_mlx;
 #[cfg(feature = "mlx")]
 pub mod qwen2_mlx;
+#[cfg(feature = "mlx")]
+pub mod mxbai_mlx;
+
+#[cfg(feature = "mlx")]
+pub use mxbai_mlx::MxbaiReranker;
 
 #[cfg(not(feature = "mlx"))]
 pub struct Qwen2Model;
 #[cfg(not(feature = "mlx"))]
 pub struct Tokenizer;
+#[cfg(not(feature = "mlx"))]
+pub struct MxbaiReranker;
 
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
 static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
@@ -107,6 +114,10 @@ impl LLMClient {
                     return Ok(r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string());
                 } else if prompt.contains("Insights:") {
                     return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
+                } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {
+                    return Ok(r#"{"contradicts": true, "conflicting_field": "database", "resolution": "We should use SurrealDB for the database because Postgres was deprecated.", "confidence": 0.95}"#.to_string());
+                } else if prompt.contains("knowledge generalizer") || prompt.contains("emerged independently") {
+                    return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test", "confidence": 0.95}"#.to_string());
                 } else {
                     return Ok(r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string());
                 }

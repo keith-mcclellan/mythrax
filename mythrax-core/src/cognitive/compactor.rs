@@ -83,6 +83,283 @@ impl Compactor {
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
 
+        // -------------------------------------------------------------
+        // Enforce 500-node procedural episode cap per scope
+        // -------------------------------------------------------------
+        if let Ok(mut active_procs) = db.get_episodes_by_node_type("procedural").await {
+            active_procs.retain(|ep| ep.scope.as_deref() == Some(scope) && !ep.archived.unwrap_or(false));
+            if active_procs.len() > 500 {
+                active_procs.sort_by(|a, b| {
+                    let time_a = a.last_retrieved_at.as_ref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|| chrono::Utc::now());
+                    let time_b = b.last_retrieved_at.as_ref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|| chrono::Utc::now());
+                    time_a.cmp(&time_b)
+                });
+
+                let num_to_archive = active_procs.len() - 500;
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    for i in 0..num_to_archive {
+                        if let Some(ref ep_id) = active_procs[i].id {
+                            let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
+                            let archive_sql = "UPDATE type::record('episode', $id) MERGE {
+                                archived: true,
+                                archived_at: time::now(),
+                                utility: 1.0,
+                                importance: 1.0
+                            };";
+                            let _ = surreal_backend.db.query(archive_sql).bind(("id", id_raw)).await;
+
+                            if let Some(ref vp) = active_procs[i].vault_path {
+                                let src_file = store.vault_root.join(vp);
+                                if src_file.exists() {
+                                    let archive_dir = store.vault_root.join("vault/archive");
+                                    let _ = std::fs::create_dir_all(&archive_dir);
+                                    let filename = std::path::Path::new(vp)
+                                        .file_name()
+                                        .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
+                                    let dest_file = archive_dir.join(filename);
+                                    let _ = std::fs::rename(&src_file, &dest_file);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------
+        // Task C.1: Near-Duplicate Episodic Merging
+        // -------------------------------------------------------------
+        if db.is_feature_enabled("compactor.enable_near_duplicate_merging", true).await {
+            let mut dedup_threshold = 0.90f32;
+            if let Ok(Some(val_str)) = db.get_profile_key("compactor.dedup_threshold").await {
+                if let Ok(parsed) = val_str.parse::<f32>() {
+                    dedup_threshold = parsed;
+                }
+            }
+
+            if let Ok(episodes) = db.get_all_episodes().await {
+                let mut active_eps: Vec<crate::contracts::Episode> = episodes.into_iter()
+                    .filter(|ep| {
+                        ep.scope.as_deref() == Some(scope) &&
+                        !ep.archived.unwrap_or(false) &&
+                        ep.embedding.is_some() &&
+                        ep.id.is_some()
+                    })
+                    .collect();
+
+                let mut deleted_ids = std::collections::HashSet::new();
+
+                for i in 0..active_eps.len() {
+                    let id_i = active_eps[i].id.as_ref().cloned().unwrap();
+                    if deleted_ids.contains(&id_i) {
+                        continue;
+                    }
+
+                    for j in (i + 1)..active_eps.len() {
+                        let id_j = active_eps[j].id.as_ref().cloned().unwrap();
+                        if deleted_ids.contains(&id_j) {
+                            continue;
+                        }
+
+                        // Check session_id and node_type
+                        let same_session = active_eps[i].session_id == active_eps[j].session_id;
+                        let same_node_type = active_eps[i].node_type == active_eps[j].node_type;
+                        if same_session && same_node_type {
+                            // Check similarity
+                            let sim = cosine_similarity(
+                                active_eps[i].embedding.as_ref().unwrap(),
+                                active_eps[j].embedding.as_ref().unwrap()
+                            );
+
+                            if sim >= dedup_threshold {
+                                // Determine older vs newer
+                                let time_i = active_eps[i].last_retrieved_at.as_ref()
+                                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                                    .unwrap_or_else(|| chrono::Utc::now());
+                                let time_j = active_eps[j].last_retrieved_at.as_ref()
+                                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                                    .unwrap_or_else(|| chrono::Utc::now());
+
+                                let (older_idx, newer_idx) = if time_i <= time_j {
+                                    (i, j)
+                                } else {
+                                    (j, i)
+                                };
+
+                                let older = active_eps[older_idx].clone();
+                                let newer = active_eps[newer_idx].clone();
+
+                                let merged_content = format!("{}\n{}", older.content, newer.content);
+                                let merged_last_retrieved_at = newer.last_retrieved_at.clone().or(older.last_retrieved_at.clone());
+                                let merged_word_count = Some(older.word_count.unwrap_or(0) + newer.word_count.unwrap_or(0));
+
+                                let mut merged_facts = older.facts.clone().unwrap_or_default();
+                                if let Some(ref new_facts) = newer.facts {
+                                    for f in new_facts {
+                                        if !merged_facts.contains(f) {
+                                            merged_facts.push(f.clone());
+                                        }
+                                    }
+                                }
+                                let merged_facts = if merged_facts.is_empty() { None } else { Some(merged_facts) };
+
+                                let mut merged_concepts = older.concepts.clone().unwrap_or_default();
+                                if let Some(ref new_concepts) = newer.concepts {
+                                    for c in new_concepts {
+                                        if !merged_concepts.contains(c) {
+                                            merged_concepts.push(c.clone());
+                                        }
+                                    }
+                                }
+                                let merged_concepts = if merged_concepts.is_empty() { None } else { Some(merged_concepts) };
+
+                                let mut merged_files_read = older.files_read.clone().unwrap_or_default();
+                                if let Some(ref new_files) = newer.files_read {
+                                    for f in new_files {
+                                        if !merged_files_read.contains(f) {
+                                            merged_files_read.push(f.clone());
+                                        }
+                                    }
+                                }
+                                let merged_files_read = if merged_files_read.is_empty() { None } else { Some(merged_files_read) };
+
+                                let mut merged_files_modified = older.files_modified.clone().unwrap_or_default();
+                                if let Some(ref new_files) = newer.files_modified {
+                                    for f in new_files {
+                                        if !merged_files_modified.contains(f) {
+                                            merged_files_modified.push(f.clone());
+                                        }
+                                    }
+                                }
+                                let merged_files_modified = if merged_files_modified.is_empty() { None } else { Some(merged_files_modified) };
+
+                                // Update older episode in active_eps
+                                active_eps[older_idx].content = merged_content.clone();
+                                active_eps[older_idx].last_retrieved_at = merged_last_retrieved_at.clone();
+                                active_eps[older_idx].word_count = merged_word_count;
+                                active_eps[older_idx].facts = merged_facts.clone();
+                                active_eps[older_idx].concepts = merged_concepts.clone();
+                                active_eps[older_idx].files_read = merged_files_read.clone();
+                                active_eps[older_idx].files_modified = merged_files_modified.clone();
+
+                                let newer_id = newer.id.as_ref().unwrap();
+                                deleted_ids.insert(newer_id.clone());
+
+                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                                    let older_raw_id = older.id.as_ref().unwrap().split(':').nth(1).unwrap_or(older.id.as_ref().unwrap()).to_string();
+                                    let query_sql = "UPDATE type::record('episode', $id) MERGE {
+                                        content: $content,
+                                        last_retrieved_at: $last_retrieved_at,
+                                        facts: $facts,
+                                        concepts: $concepts,
+                                        files_read: $files_read,
+                                        files_modified: $files_modified,
+                                        word_count: $word_count
+                                    };";
+                                    let _ = surreal_backend.db.query(query_sql)
+                                        .bind(("id", older_raw_id))
+                                        .bind(("content", merged_content.clone()))
+                                        .bind(("last_retrieved_at", merged_last_retrieved_at))
+                                        .bind(("facts", merged_facts))
+                                        .bind(("concepts", merged_concepts))
+                                        .bind(("files_read", merged_files_read))
+                                        .bind(("files_modified", merged_files_modified))
+                                        .bind(("word_count", merged_word_count))
+                                        .await;
+
+                                    let older_rec = crate::db::backend::parse_record_id(older.id.as_ref().unwrap()).unwrap();
+                                    let newer_rec = crate::db::backend::parse_record_id(newer.id.as_ref().unwrap()).unwrap();
+
+                                    let mut older_count = 0;
+                                    let mut newer_count = 0;
+                                    let mut older_exists = false;
+                                    let mut newer_exists = false;
+
+                                    let metrics_sql = "SELECT target_id, access_count FROM metrics WHERE target_id = $older OR target_id = $newer;";
+                                    if let Ok(mut resp) = surreal_backend.db.query(metrics_sql)
+                                        .bind(("older", older_rec.clone()))
+                                        .bind(("newer", newer_rec.clone()))
+                                        .await {
+                                        #[derive(serde::Deserialize, SurrealValue)]
+                                        struct MetRow {
+                                            target_id: surrealdb::types::RecordId,
+                                            access_count: i64,
+                                        }
+                                        if let Ok(rows) = resp.take::<Vec<MetRow>>(0) {
+                                            for r in rows {
+                                                let r_target_str = crate::db::backend::format_record_id(&r.target_id);
+                                                if r_target_str == *older.id.as_ref().unwrap() {
+                                                    older_count = r.access_count;
+                                                    older_exists = true;
+                                                } else if r_target_str == *newer.id.as_ref().unwrap() {
+                                                    newer_count = r.access_count;
+                                                    newer_exists = true;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let sum_count = older_count + newer_count;
+                                    if older_exists {
+                                        let update_metric_sql = "UPDATE metrics SET access_count = $count, last_accessed = time::now() WHERE target_id = $target_id;";
+                                        let _ = surreal_backend.db.query(update_metric_sql)
+                                            .bind(("count", sum_count))
+                                            .bind(("target_id", older_rec.clone()))
+                                            .await;
+                                    } else {
+                                        let metrics_uuid = uuid::Uuid::new_v4().to_string();
+                                        let create_sql = "CREATE type::record('metrics', $metrics_uuid) CONTENT {
+                                            target_id: $target_id,
+                                            utility_score: 50.0,
+                                            access_count: $count,
+                                            last_accessed: time::now()
+                                        };";
+                                        let _ = surreal_backend.db.query(create_sql)
+                                            .bind(("metrics_uuid", metrics_uuid))
+                                            .bind(("target_id", older_rec.clone()))
+                                            .bind(("count", sum_count))
+                                            .await;
+                                    }
+
+                                    if newer_exists {
+                                        let delete_metric_sql = "DELETE FROM metrics WHERE target_id = $target_id;";
+                                        let _ = surreal_backend.db.query(delete_metric_sql)
+                                            .bind(("target_id", newer_rec))
+                                            .await;
+                                    }
+
+                                    let newer_raw_id = newer.id.as_ref().unwrap().split(':').nth(1).unwrap_or(newer.id.as_ref().unwrap()).to_string();
+                                    let delete_ep_sql = "DELETE type::record('episode', $id);";
+                                    let _ = surreal_backend.db.query(delete_ep_sql)
+                                        .bind(("id", newer_raw_id))
+                                        .await;
+                                }
+
+                                if let Some(ref vp) = older.vault_path {
+                                    let _ = store.write_file(vp, &merged_content);
+                                }
+
+                                if let Some(ref vp) = newer.vault_path {
+                                    let path = store.vault_root.join(vp);
+                                    if path.exists() {
+                                        let _ = std::fs::remove_file(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Prune chat history exceeding 100 turns per session
         if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
             let sessions_res = surreal_backend.db.query("SELECT session_id FROM chat_history GROUP BY session_id;").await;
@@ -457,6 +734,19 @@ impl Compactor {
             }
         }
 
+        let mut access_counts = std::collections::HashMap::new();
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let metrics_sql = "SELECT target_id, access_count FROM metrics;";
+            if let Ok(mut resp) = surreal_backend.db.query(metrics_sql).await {
+                if let Ok(rows) = resp.take::<Vec<crate::db::backend::MetricAccess>>(0) {
+                    for r in rows {
+                        let target_str = crate::db::backend::format_record_id(&r.target_id);
+                        access_counts.insert(target_str, r.access_count);
+                    }
+                }
+            }
+        }
+
         let episodes = db.get_all_episodes().await?;
         let now = std::time::SystemTime::now();
         for ep in episodes {
@@ -471,7 +761,24 @@ impl Compactor {
                 now
             };
             
-            let decay_factor = calculate_decay_factor(now, last_ret);
+            let is_procedural = ep.node_type.as_deref() == Some("procedural");
+            let access_count = ep.id.as_ref()
+                .and_then(|id| access_counts.get(id).copied())
+                .unwrap_or(0);
+            
+            let t_half_type = if is_procedural { 365.0f32 } else { 30.0f32 };
+            let t_half_eff = if is_procedural {
+                365.0f32
+            } else {
+                t_half_type * (1.0f32 + 0.3f32 * ((1.0f32 + access_count as f32).log2()))
+            };
+            
+            let lambda_eff = 2.0f32.ln() / t_half_eff;
+            let t_secs = now.duration_since(last_ret)
+                .unwrap_or_default()
+                .as_secs_f32();
+            let t_days = t_secs / 86400.0f32;
+            let decay_factor = (-lambda_eff * t_days).exp();
             let utility = ep.utility.unwrap_or(50.0);
             let decayed_utility = utility * decay_factor;
 
@@ -497,6 +804,7 @@ impl Compactor {
                         if let Some(ref ep_id) = ep.id {
                             let query_sql = "UPDATE type::record('episode', $id) MERGE {
                                 archived: true,
+                                archived_at: time::now(),
                                 utility: 1.0,
                                 importance: 1.0
                             };";
@@ -556,6 +864,7 @@ impl Compactor {
 
                         let query_sql = "UPDATE type::record('episode', $id) MERGE {
                             archived: true,
+                            archived_at: time::now(),
                             utility: 1.0,
                             importance: 1.0,
                             vault_path: $new_vp
@@ -780,5 +1089,24 @@ pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) 
             result.pop();
         }
         Ok(result)
+    }
+}
+
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut norm_a = 0.0;
+    let mut norm_b = 0.0;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        norm_a += a[i] * a[i];
+        norm_b += b[i] * b[i];
+    }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a.sqrt() * norm_b.sqrt())
     }
 }

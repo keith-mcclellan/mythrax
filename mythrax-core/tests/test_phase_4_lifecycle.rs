@@ -87,7 +87,8 @@ Rule body"#;
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     // Save wisdom rule (should trigger T1 federated promotion)
     let rule_id = backend.save_wisdom_rule(&rule).await?;
@@ -196,6 +197,8 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
 
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
+    backend.save_profile_key("search.enable_gaussian_temporal", "false").await?;
+    backend.save_profile_key("search.enable_access_reinforcement", "false").await?;
 
     // Seed an episode
     let ep = EpisodeSave {
@@ -229,7 +232,7 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
         .await?;
 
     // 3. Run a search. This will calculate decay on-the-fly and return it
-    let search_res = backend.search("Decay", Some("decay-test"), false, 10, 0, 0.0, None, false, true, false).await?;
+    let search_res = backend.search("Decay",  Some("decay-test"),  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await?;
     assert_eq!(search_res.results.len(), 1);
     let returned_utility = search_res.results[0].utility;
     // Decay: 50.0 * e^(-0.05 * 10) = 50.0 * e^(-0.5) = 50.0 * 0.6065 = 30.32
@@ -470,7 +473,8 @@ Old rule body"#;
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     // Save the old rule in the DB to get its ID
     let old_rule_id = backend.save_wisdom_rule(&old_rule).await?;
@@ -498,7 +502,8 @@ Old rule body"#;
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     // Call save_wisdom_rule_with_deduplication
     // This should trigger the merge, save a new merged rule, and mark the old rule as superseded!

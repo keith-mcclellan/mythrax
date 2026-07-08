@@ -47,17 +47,19 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
     // The runner's exact search call signature.
     let response = backend
         .search(
-            "advanced memory bitemporal",
-            Some("general"),
-            false, // deep_insight
-            10,    // limit (over-fetch to max(k_recall, k_ndcg))
-            0,     // offset
-            0.0,   // threshold
-            None,  // token_budget
-            false, // allow_downward
-            true,  // include_episodes
-            true,  // include_artifacts
-        )
+        "advanced memory bitemporal",
+        Some("general"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+    )
         .await?;
 
     assert!(response.total_matches > 0);

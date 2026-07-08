@@ -69,14 +69,14 @@ async fn test_watcher_upstream_filtering_coalescing_and_bounded_pool() {
     let mut bulk_indexed = false;
     for _ in 0..80 {
         if !coalesced_indexed {
-            if let Ok(query_res) = backend.search("Write 4", None, false, 10, 0, 0.0, None, false, true, false).await {
+            if let Ok(query_res) = backend.search("Write 4",  None,  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await {
                 if !query_res.results.is_empty() {
                     coalesced_indexed = true;
                 }
             }
         }
         if !bulk_indexed {
-            if let Ok(query_res) = backend.search("Bulk Content 19", None, false, 10, 0, 0.0, None, false, true, false).await {
+            if let Ok(query_res) = backend.search("Bulk Content 19",  None,  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await {
                 if !query_res.results.is_empty() {
                     bulk_indexed = true;
                 }

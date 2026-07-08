@@ -9,6 +9,7 @@ use mythrax_core::embeddings::{cache_embedding, save_embedding_cache_to_disk, lo
 
 #[derive(Debug, Clone, Deserialize)]
 struct QuestionEntry {
+    question: String,
     haystack_session_ids: Vec<String>,
     haystack_sessions: Vec<Vec<TurnEntry>>,
 }
@@ -43,7 +44,13 @@ async fn main() -> Result<()> {
 
     // Extract all unique texts to embed
     let mut unique_texts = HashSet::new();
+    let cleaning_re = regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last|after|following|subsequently|later|next|recent|recently|latest|newest|today|now)\b").unwrap();
     for q in &questions {
+        unique_texts.insert(q.question.clone());
+        unique_texts.insert(format!("search_query: {}", q.question));
+        let cleaned = cleaning_re.replace_all(&q.question, "").to_string();
+        let cleaned_query = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
+        unique_texts.insert(format!("search_query: {}", cleaned_query));
         for (sess_idx, session_id) in q.haystack_session_ids.iter().enumerate() {
             if let Some(session_turns) = q.haystack_sessions.get(sess_idx) {
                 for (turn_idx, turn) in session_turns.iter().enumerate() {

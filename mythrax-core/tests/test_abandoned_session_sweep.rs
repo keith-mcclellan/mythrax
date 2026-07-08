@@ -79,6 +79,8 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
         false,
         true,
         false,
+        None,
+        true,
     ).await?;
     assert!(search_res.total_matches > 0, "Mined episode containing verification token should be retrievable");
 
@@ -139,6 +141,8 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
         false,
         true,
         false,
+        None,
+        true,
     ).await?;
     assert!(search_res.total_matches > 0, "Second mined episode should be retrievable");
 

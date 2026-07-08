@@ -646,8 +646,9 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let include_episodes = args.get("include_episodes").and_then(|v| v.as_bool()).unwrap_or(false);
             let include_artifacts = args.get("include_artifacts").and_then(|v| v.as_bool()).unwrap_or(false);
             let session_id = args.get("session_id").and_then(|v| v.as_str());
+            let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
 
-            let search_res = state.backend.search(query, scope, false, limit, offset, threshold, token_budget, allow_downward, include_episodes, include_artifacts).await?;
+            let search_res = state.backend.search(query, scope, false, limit, offset, threshold, token_budget, allow_downward, include_episodes, include_artifacts, session_id, include_archived).await?;
             
             if let Some(sess_id) = session_id {
                 let mut cited_ids = Vec::new();
@@ -685,7 +686,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             if search_res.has_more {
                 let remainder = search_res.total_matches.saturating_sub(offset + limit);
                 text.push_str(&format!(
-                    "\n\n=== PAGINATION NOTICE: There are {} more matching memories. To retrieve the next page, query search_memories with offset={} and limit={}. ===",
+                    "\n\n=== PAGINATION NOTICE: There are {} more matching memories. To retrieve the next page, call read(action=\"search\", offset={}, limit={}). ===",
                     remainder, search_res.next_offset, limit
                 ));
             }
@@ -718,6 +719,8 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
             let token_budget = args.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
             let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
+            let session_id = args.get("session_id").and_then(|v| v.as_str());
+            let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
 
             let search_res = state.backend.search(
                 query,
@@ -729,7 +732,9 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                 token_budget,
                 allow_downward,
                 true, // include_episodes
-                false // include_artifacts
+                false, // include_artifacts
+                session_id,
+                include_archived,
             ).await?;
 
             // Broad Cheap Projection (BCP): we deliberately filter and only project
@@ -778,7 +783,9 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                     None,
                     false,
                     true,
-                    false
+                    false,
+                    None,
+                    true,
                 ).await?;
                 let best = search_res.results.first().context("No matching anchor episode found for query")?;
                 best.id.clone()
@@ -967,7 +974,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             if search_res.has_more {
                 let remainder = search_res.total_matches.saturating_sub(offset + limit);
                 text.push_str(&format!(
-                    "\n\n=== PAGINATION NOTICE: There are {} more matching wisdom rules. To retrieve the next page, query search_wisdom with offset={} and limit={}. ===",
+                    "\n\n=== PAGINATION NOTICE: There are {} more matching wisdom rules. To retrieve the next page, call read(action=\"rules\", offset={}, limit={}). ===",
                     remainder, search_res.next_offset, limit
                 ));
             }
@@ -1058,6 +1065,7 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
             let vault_path = args.get("vault_path").and_then(|v| v.as_str()).map(|s| s.to_string());
             let session_id = args.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
             let task_id = args.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let node_type = args.get("node_type").and_then(|v| v.as_str()).map(|s| s.to_string());
             
             let mut entities = vec![];
             if let Some(arr) = args.get("entities").and_then(|v| v.as_array()) {
@@ -1076,12 +1084,14 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
                 source_episode: None,
                 session_id,
                 task_id,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                discovery_tokens: None,
+                facts: None,
+                concepts: None,
+                files_read: None,
+                files_modified: None,
+                node_type,
+                confidence: None,
+            };
 
             let id = crate::vault::watcher::save_episode_bidirectional(&episode, state.backend.as_ref(), &state.store, &state.ignore_list).await?;
 
@@ -1444,6 +1454,7 @@ async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             let summary = args.get("summary").and_then(|v| v.as_str()).context("Missing summary")?.to_string();
             let handoff_file_path = args.get("handoff_file_path").and_then(|v| v.as_str()).context("Missing handoff_file_path")?.to_string();
             let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let include_tool_execution = args.get("include_tool_execution").and_then(|v| v.as_bool());
 
             let handoff = HandoffSave {
                 parent_conversation_id: parent_conversation_id.clone(),
@@ -1451,9 +1462,29 @@ async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                 summary,
                 handoff_file_path: handoff_file_path.clone(),
                 scope,
+                include_tool_execution,
             };
 
             let id = state.backend.save_handoff(&handoff).await?;
+
+            let event_ep = EpisodeSave {
+                title: format!("Handoff Event: Parent to Subagent"),
+                content: format!("Handoff registered. Parent: {}, Subagent: {}, Summary: {}, File Path: {}", parent_conversation_id, subagent_conversation_id, handoff.summary, handoff.handoff_file_path),
+                entities: vec![],
+                scope: handoff.scope.clone(),
+                vault_path: None,
+                source_episode: None,
+                session_id: Some(parent_conversation_id.clone()),
+                task_id: None,
+                discovery_tokens: None,
+                facts: None,
+                concepts: None,
+                files_read: None,
+                files_modified: None,
+                node_type: Some("handoff_event".to_string()),
+                confidence: None,
+            };
+            let _ = state.backend.save_episode(&event_ep).await;
 
             // T6: Citations Footnotes
             if let Ok(stm_map) = state.backend.get_stm(&parent_conversation_id, Some("_session_citations")).await {
@@ -1543,12 +1574,14 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                                 source_episode: ep.source_episode.clone(),
                                 session_id: None,
                                 task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                                discovery_tokens: None,
+                                facts: None,
+                                concepts: None,
+                                files_read: None,
+                                files_modified: None,
+                                node_type: ep.node_type.clone(),
+                                confidence: None,
+                            };
                             let markdown = crate::vault::watcher::format_episode_markdown(&save);
                             state.store.write_file(vp, &markdown)?;
                         }
@@ -1590,12 +1623,14 @@ files_modified: None,
                         source_episode: ep.source_episode.clone(),
                         session_id: None,
                         task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                        discovery_tokens: None,
+                        facts: None,
+                        concepts: None,
+                        files_read: None,
+                        files_modified: None,
+                        node_type: ep.node_type.clone(),
+                        confidence: None,
+                    };
                     state.backend.save_episode(&save).await?;
                     count += 1;
                 }
@@ -1816,12 +1851,14 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     source_episode: ep.source_episode.clone(),
                     session_id: None,
                     task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+                    discovery_tokens: None,
+                    facts: None,
+                    concepts: None,
+                    files_read: None,
+                    files_modified: None,
+                    node_type: ep.node_type.clone(),
+                    confidence: None,
+                };
                 let markdown = crate::vault::watcher::format_episode_markdown(&save);
                 state.store.write_file(vp, &markdown)?;
             }
@@ -1994,7 +2031,9 @@ files_modified: None,
                 None,
                 false,
                 true,
-                false
+                false,
+                None,
+                true,
             ).await?;
 
             parts.push("## Retrieved Semantic Context\n".to_string());
@@ -2035,6 +2074,8 @@ files_modified: None,
             false,
             true,
             false,
+            Some(session_id),
+            true,
         ).await?;
 
         parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));
@@ -2057,7 +2098,7 @@ files_modified: None,
 
         if !high_confidence_memories_found {
             parts.push(format!(
-                "\n> [!IMPORTANT]\n> **Pinned Deep-Search Instruction**: No high-confidence memory episodes were found. If you need deeper historical context or past resolutions, please invoke the 'search_memories' tool with a specific query.\n"
+                "\n> [!IMPORTANT]\n> **Pinned Deep-Search Instruction**: No high-confidence memory episodes were found. If you need deeper historical context or past resolutions, please call read(action=\"search\", query=\"...\") with a specific query.\n"
             ));
         }
     }
@@ -2295,6 +2336,7 @@ pub async fn run_llm_critic(
         status: None,
         superseded_at: None,
         superseded_by: None,
+        rule_type: None,
     };
 
     let markdown = crate::vault::watcher::format_wisdom_markdown(&rule_save);
@@ -2460,6 +2502,31 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
 
             std::fs::write(path_buf, new_content)?;
 
+            let rel_path = if let Ok(stripped) = path_buf.strip_prefix(&state.store.vault_root) {
+                stripped.to_string_lossy().to_string()
+            } else {
+                path.to_string()
+            };
+
+            let artifact_ep = EpisodeSave {
+                title: format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
+                content: format!("File updated successfully: {}", rel_path),
+                entities: vec![],
+                scope: Some("general".to_string()),
+                vault_path: Some(rel_path),
+                source_episode: None,
+                session_id: None,
+                task_id: None,
+                discovery_tokens: None,
+                facts: None,
+                concepts: None,
+                files_read: None,
+                files_modified: Some(vec![path.to_string()]),
+                node_type: Some("artifact_state".to_string()),
+                confidence: None,
+            };
+            let _ = state.backend.save_episode(&artifact_ep).await;
+
             Ok(json!({
                 "content": [
                     {
@@ -2539,6 +2606,31 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
             }
 
             std::fs::write(path_buf, file_content)?;
+
+            let rel_path = if let Ok(stripped) = path_buf.strip_prefix(&state.store.vault_root) {
+                stripped.to_string_lossy().to_string()
+            } else {
+                path.to_string()
+            };
+
+            let artifact_ep = EpisodeSave {
+                title: format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
+                content: format!("File updated successfully: {}", rel_path),
+                entities: vec![],
+                scope: Some("general".to_string()),
+                vault_path: Some(rel_path),
+                source_episode: None,
+                session_id: None,
+                task_id: None,
+                discovery_tokens: None,
+                facts: None,
+                concepts: None,
+                files_read: None,
+                files_modified: Some(vec![path.to_string()]),
+                node_type: Some("artifact_state".to_string()),
+                confidence: None,
+            };
+            let _ = state.backend.save_episode(&artifact_ep).await;
 
             Ok(json!({
                 "content": [

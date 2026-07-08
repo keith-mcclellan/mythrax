@@ -63,6 +63,7 @@ pub async fn handle_merge_vault() -> Result<()> {
                             status: None,
                             superseded_at: None,
                             superseded_by: None,
+                            rule_type: None,
                         };
                         rules_group.entry(rule.target_pattern.clone()).or_default().push((file_path.clone(), rule));
                     }
@@ -128,6 +129,7 @@ pub async fn handle_merge_vault() -> Result<()> {
                 status: None,
                 superseded_at: None,
                 superseded_by: None,
+                rule_type: None,
             };
 
             let frontmatter_str = vault::watcher::format_wisdom_markdown(&merged_rule);
@@ -228,7 +230,9 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
             None,
             false,
             true,
-            false
+            false,
+            None,
+            true,
         ).await?;
 
         let found = search_res.results.iter().any(|r| r.id == ep_id);

@@ -42,6 +42,10 @@ pub struct Episode {
     pub files_modified: Option<Vec<String>>,
     pub session_id: Option<String>,
     pub word_count: Option<u32>,
+    pub archived_at: Option<String>,
+    pub node_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -59,6 +63,9 @@ pub struct EpisodeSave {
     pub concepts: Option<Vec<String>>,
     pub files_read: Option<Vec<String>>,
     pub files_modified: Option<Vec<String>>,
+    pub node_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 }
 
 
@@ -91,9 +98,13 @@ pub struct SearchResult {
     pub word_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bm25_score: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_retrieved_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct WisdomRule {
     pub id: Option<String>,
     pub target_pattern: String,
@@ -111,6 +122,8 @@ pub struct WisdomRule {
     pub status: Option<String>,
     pub superseded_at: Option<String>,
     pub superseded_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +175,7 @@ pub struct HandoffSave {
     pub summary: String,
     pub handoff_file_path: String,
     pub scope: Option<String>,
+    pub include_tool_execution: Option<bool>,
 }
 
 /// Full hydrated Handoff — reserved for agent-tracking API; construction deferred.
@@ -177,6 +191,7 @@ pub struct Handoff {
     pub status: Option<String>,
     pub created_at: Option<String>,
     pub embedding: Option<Vec<f32>>,
+    pub include_tool_execution: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]

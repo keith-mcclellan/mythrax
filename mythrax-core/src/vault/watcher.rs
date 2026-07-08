@@ -524,7 +524,9 @@ facts: None,
 concepts: None,
 files_read: None,
 files_modified: None,
-};
+node_type: None,
+            confidence: None,
+        };
 
         backend.save_episode(&episode).await?;
     } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
@@ -569,6 +571,7 @@ files_modified: None,
                 status: frontmatter.status,
                 superseded_at: frontmatter.superseded_at,
                 superseded_by: frontmatter.superseded_by,
+                rule_type: None,
             };
 
             backend.save_wisdom_rule(&rule).await?;
@@ -838,7 +841,7 @@ mod tests {
         
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
-        let results = backend.search("Body content", Some("watcher-testing"), false, 1, 0, 0.55, None, false, true, true).await.unwrap();
+        let results = backend.search("Body content",  Some("watcher-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Watcher Test");
     }
@@ -862,12 +865,14 @@ mod tests {
             source_episode: None,
             session_id: None,
             task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-};
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+            node_type: None,
+            confidence: None,
+        };
         
         let ep_id = save_episode_bidirectional(&episode, backend.as_ref(), &store, &ignore_list).await.unwrap();
         assert!(ep_id.contains("episode:"));
@@ -884,7 +889,7 @@ files_modified: None,
         assert!(ignore_list.is_ignored(&abs_path));
         
         // Verify content in DB
-        let results = backend.search("bidirectional sync", Some("bi-testing"), false, 1, 0, 0.55, None, false, true, true).await.unwrap();
+        let results = backend.search("bidirectional sync",  Some("bi-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Bidirectional Test");
         
@@ -901,7 +906,7 @@ files_modified: None,
         sync_file_to_db(&abs_path, &backend, &store).await.unwrap();
         
         // Verify DB got updated
-        let results2 = backend.search("updated body", Some("bi-testing"), false, 1, 0, 0.55, None, false, true, true).await.unwrap();
+        let results2 = backend.search("updated body",  Some("bi-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
         assert_eq!(results2.results.len(), 1);
         assert_eq!(results2.results[0].title, "Watcher Test Updated");
     }

@@ -1,0 +1,190 @@
+diff --git a/mythrax-core/src/db/backend.rs b/mythrax-core/src/db/backend.rs
+index 865f945..dc94639 100644
+--- a/mythrax-core/src/db/backend.rs
++++ b/mythrax-core/src/db/backend.rs
+@@ -6,7 +6,7 @@ use surrealdb::engine::local::{Db, Mem, SurrealKv};
+ use surrealdb::{Surreal, IndexedResults};
+ use std::sync::Arc;
+ use uuid::Uuid;
+-use crate::db::schema::INIT_SCHEMA;
++use crate::db::schema::{INIT_SCHEMA, BUILD_FULLTEXT_INDEXES};
+ 
+ pub static GLOBAL_BACKEND: std::sync::OnceLock<Arc<SurrealBackend>> = std::sync::OnceLock::new();
+ 
+@@ -235,57 +235,85 @@ impl SurrealBackend {
+             return Ok(());
+         }
+ 
+-        // 1. Generate embeddings in batch if embedder is present
+-        let embeddings: Option<Vec<Vec<f32>>> = if let Some(_) = &self.embedder {
+-            let texts: Vec<String> = episodes
+-                .iter()
+-                .map(|ep| format!("{}: {}", ep.title, ep.content))
+-                .collect();
+-            match self.embed_batch(&texts).await {
+-                Ok(embeds) => Some(embeds),
+-                Err(e) => {
+-                    tracing::warn!("Embedding generation failed in save_episodes_batch: {}", e);
+-                    None
++        // 1. Generate embeddings individually by checking cached or calling self.embed
++        let mut embeddings = Vec::new();
++        for ep in episodes {
++            let text = format!("{}: {}", ep.title, ep.content);
++            if let Some(emb) = crate::embeddings::get_cached_embedding(&text) {
++                embeddings.push(Some(emb));
++            } else if self.embedder.is_some() {
++                match self.embed(&text).await {
++                    Ok(emb) => embeddings.push(Some(emb)),
++                    Err(e) => {
++                        tracing::warn!("Embedding generation failed in save_episodes_batch: {}", e);
++                        embeddings.push(None);
++                    }
+                 }
++            } else {
++                embeddings.push(None);
+             }
+-        } else {
+-            None
+-        };
++        }
+ 
+-        // 2. Map episodes to JSON objects for SurrealQL
+-        let mapped_json_array: Vec<serde_json::Value> = episodes
+-            .iter()
+-            .enumerate()
+-            .map(|(i, ep)| {
+-                let id_str = Uuid::new_v4().to_string();
+-                let metrics_id_str = Uuid::new_v4().to_string();
+-                let embedding = embeddings.as_ref().and_then(|es| es.get(i).cloned());
+-                let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
+-                let last_retrieved_at = chrono::Utc::now().to_rfc3339();
+-
+-                let mut ep_json = serde_json::json!({
+-                    "id_str": id_str,
+-                    "metrics_id_str": metrics_id_str,
+-                    "title": ep.title,
+-                    "content": ep.content,
+-                    "scope": ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+-                    "vault_path": ep.vault_path.clone().unwrap_or_default(),
+-                    "utility": 50.0f32,
+-                    "last_retrieved_at": last_retrieved_at,
+-                    "word_count": word_count
+-                });
+-
+-                let ep_obj = ep_json.as_object_mut().unwrap();
+-                if let Some(emb) = embedding {
+-                    ep_obj.insert("embedding".to_string(), serde_json::json!(emb));
+-                }
+-                if let Some(ref sess) = ep.session_id {
+-                    ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
+-                }
++        #[derive(serde::Serialize, serde::Deserialize, Clone, SurrealValue)]
++        struct EpisodeInsert {
++            id: surrealdb::types::RecordId,
++            title: String,
++            content: String,
++            scope: String,
++            vault_path: String,
++            embedding: Option<Vec<f32>>,
++            session_id: Option<String>,
++            metrics: surrealdb::types::RecordId,
++        }
+ 
+-                ep_json
+-            })
+-            .collect();
++        #[derive(serde::Serialize, serde::Deserialize, Clone, SurrealValue)]
++        struct MetricsInsert {
++            id: surrealdb::types::RecordId,
++            episode: surrealdb::types::RecordId,
++            utility: f32,
++            last_retrieved_at: chrono::DateTime<chrono::Utc>,
++            word_count: u32,
++        }
++
++        // 2. Map episodes to arrays (episodes_array and metrics_array)
++        let mut episodes_array = Vec::new();
++        let mut metrics_array = Vec::new();
++
++        for (i, ep) in episodes.iter().enumerate() {
++            let id_str = Uuid::new_v4().to_string();
++            let metrics_id_str = Uuid::new_v4().to_string();
++            
++            let ep_id = surrealdb::types::RecordId {
++                table: "episode".into(),
++                key: surrealdb::types::RecordIdKey::from(id_str.clone()),
++            };
++            let met_id = surrealdb::types::RecordId {
++                table: "episode_metrics".into(),
++                key: surrealdb::types::RecordIdKey::from(metrics_id_str.clone()),
++            };
++
++            let embedding = embeddings[i].clone();
++            let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
++
++            episodes_array.push(EpisodeInsert {
++                id: ep_id.clone(),
++                title: ep.title.clone(),
++                content: ep.content.clone(),
++                scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
++                vault_path: ep.vault_path.clone().unwrap_or_default(),
++                embedding,
++                session_id: ep.session_id.clone(),
++                metrics: met_id.clone(),
++            });
++
++            metrics_array.push(MetricsInsert {
++                id: met_id,
++                episode: ep_id,
++                utility: 50.0f32,
++                last_retrieved_at: chrono::Utc::now(),
++                word_count,
++            });
++        }
+ 
+         // 3. Record indexing writes for any vault_path present
+         for ep in episodes {
+@@ -294,27 +322,19 @@ impl SurrealBackend {
+             }
+         }
+ 
+-        // 4. Execute batch transaction
++        // 4. Execute direct bulk inserts
+         let query = r#"
+-            BEGIN TRANSACTION;
+-            FOR $ep IN $episodes {
+-                LET $ep_id = type::record('episode', $ep.id_str);
+-                LET $met_id = type::record('episode_metrics', $ep.metrics_id_str);
+-                
+-                INSERT INTO episode (id, title, content, scope, vault_path, embedding, created_at, session_id, metrics)
+-                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, time::now(), $ep.session_id, $met_id);
+-                
+-                INSERT INTO episode_metrics (id, episode, utility, last_retrieved_at, word_count)
+-                VALUES ($met_id, $ep_id, $ep.utility, type::datetime($ep.last_retrieved_at), $ep.word_count);
+-            };
+-            COMMIT TRANSACTION;
++            INSERT INTO episode $episodes;
++            INSERT INTO episode_metrics $metrics;
+         "#;
++
+         run_write!(self, {
+             async {
+                 let response = self.db.query(query)
+-                    .bind(("episodes", mapped_json_array.clone()))
++                    .bind(("episodes", episodes_array.clone()))
++                    .bind(("metrics", metrics_array.clone()))
+                     .await?;
+-                response.check().map_err(|e| anyhow::anyhow!("SurrealDB save_episodes_batch transaction failed: {}", e))
++                response.check().map_err(|e| anyhow::anyhow!("SurrealDB save_episodes_batch bulk insert failed: {}", e))
+             }.await
+         })?;
+ 
+@@ -1346,6 +1366,8 @@ impl StorageBackend for SurrealBackend {
+         }
+         self.db.query(INIT_SCHEMA).await?
+             .check().context("Applying schemas failed")?;
++        self.db.query(BUILD_FULLTEXT_INDEXES).await?
++            .check().context("Applying fulltext indexes failed")?;
+ 
+         // Initialize default configuration if config:settings does not exist
+         let check_sql = "SELECT * FROM config:settings;";

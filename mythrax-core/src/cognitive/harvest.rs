@@ -198,6 +198,7 @@ impl Harvester {
                         status: None,
                         superseded_at: None,
                         superseded_by: None,
+                        rule_type: None,
                     };
                     let _ = db.save_wisdom_rule(&rule_contract).await;
                 }

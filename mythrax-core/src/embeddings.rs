@@ -137,6 +137,8 @@ impl LocalEmbedder {
         }
     }
 
+    pub fn evict(&self) {}
+
     pub fn new() -> Result<Self> {
         let home = env::var("HOME").context("HOME env var not set")?;
         let base_path = Path::new(&home).join(".mythrax/models");
@@ -420,7 +422,7 @@ use mlx_rs::Array;
 
 #[cfg(feature = "mlx")]
 pub struct LocalEmbedder {
-    model: std::sync::Mutex<crate::llm::nomic_mlx::NomicBertModel>,
+    model: std::sync::Mutex<Option<crate::llm::nomic_mlx::NomicBertModel>>,
     tokenizer: Tokenizer,
 }
 
@@ -444,6 +446,15 @@ impl LocalEmbedder {
         }
     }
 
+    pub fn evict(&self) {
+        if let Ok(mut lock) = self.model.lock() {
+            if lock.is_some() {
+                tracing::info!("Evicting nomic-embed model from VRAM");
+                *lock = None;
+            }
+        }
+    }
+
     pub fn new() -> Result<Self> {
         let home = env::var("HOME").context("HOME env var not set")?;
         let base_path = Path::new(&home).join(".mythrax/models");
@@ -455,14 +466,10 @@ impl LocalEmbedder {
             anyhow::bail!("MLX model.safetensors or tokenizer files not found in ~/.mythrax/models/");
         }
 
-        let weights = Array::load_safetensors(&model_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load safetensors: {:?}", e))?;
-
-        let model = crate::llm::nomic_mlx::NomicBertModel::new(&weights)?;
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        Ok(Self { model: std::sync::Mutex::new(model), tokenizer })
+        Ok(Self { model: std::sync::Mutex::new(None), tokenizer })
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -496,7 +503,26 @@ impl LocalEmbedder {
         let mask_i32: Vec<i32> = mask.iter().take(seq_len).map(|&x| x as i32).collect();
         let mask_array = Array::from_slice(&mask_i32, &[1, seq_len as i32]);
 
-        let mut model = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        let _permit = loop {
+            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
+                break permit;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+
+        let mut model_lock = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        if model_lock.is_none() {
+            println!("!!! RELOADING EMBEDDER SINGLE MODEL !!!");
+            tracing::info!("Reloading nomic-embed model lazily into VRAM");
+            let home = env::var("HOME").context("HOME env var not set")?;
+            let base_path = Path::new(&home).join(".mythrax/models");
+            let model_path = base_path.join("model.safetensors");
+            let weights = Array::load_safetensors(&model_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load safetensors: {:?}", e))?;
+            let loaded = crate::llm::nomic_mlx::NomicBertModel::new(&weights)?;
+            *model_lock = Some(loaded);
+        }
+        let model = model_lock.as_mut().unwrap();
         let output = model.forward(&input_array, Some(&mask_array))?;
 
         // Mean pool on GPU: sum(x * mask) / max(sum(mask), 1.0)
@@ -612,7 +638,26 @@ impl LocalEmbedder {
         let input_array = Array::from_slice(&input_ids_data, &[batch_size as i32, max_len as i32]);
         let mask_array = Array::from_slice(&attention_mask_data, &[batch_size as i32, max_len as i32]);
 
-        let mut model = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        let _permit = loop {
+            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
+                break permit;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+
+        let mut model_lock = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        if model_lock.is_none() {
+            println!("!!! RELOADING EMBEDDER BATCH MODEL !!!");
+            tracing::info!("Reloading nomic-embed model lazily into VRAM");
+            let home = env::var("HOME").context("HOME env var not set")?;
+            let base_path = Path::new(&home).join(".mythrax/models");
+            let model_path = base_path.join("model.safetensors");
+            let weights = Array::load_safetensors(&model_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load safetensors: {:?}", e))?;
+            let loaded = crate::llm::nomic_mlx::NomicBertModel::new(&weights)?;
+            *model_lock = Some(loaded);
+        }
+        let model = model_lock.as_mut().unwrap();
         let output = model.forward(&input_array, Some(&mask_array))?;
 
         let mask_expanded = mask_array.reshape(&[batch_size as i32, max_len as i32, 1])?

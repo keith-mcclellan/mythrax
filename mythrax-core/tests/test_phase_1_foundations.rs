@@ -66,7 +66,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
 
     // Search with scope: None -> should resolve to target scope "myawesomeproject"
     // Search should return both target scope and general scope, but exclude other scopes.
-    let resp = backend.search("Episode", None, false, 10, 0, 0.0, None, false, true, true).await?;
+    let resp = backend.search("Episode",  None,  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
     let found_titles: Vec<String> = resp.results.iter().map(|r| r.title.clone()).collect();
 
     assert!(found_titles.contains(&"Target Project Episode".to_string()));
@@ -74,7 +74,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
     assert!(!found_titles.contains(&"Other Project Episode".to_string()));
 
     // Search with wildcard scope "all" -> should return everything
-    let resp_all = backend.search("Episode", Some("all"), false, 10, 0, 0.0, None, false, true, true).await?;
+    let resp_all = backend.search("Episode",  Some("all"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
     let all_titles: Vec<String> = resp_all.results.iter().map(|r| r.title.clone()).collect();
 
     assert!(all_titles.contains(&"Target Project Episode".to_string()));
@@ -139,7 +139,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
 
     // Verify that sequential save created the followed_by links.
     // Querying with deep_insight: true and include_episodes: true on "Core Logic" should return Step 1 and Step 3 as related nodes.
-    let resp = backend.search("Core Logic", None, true, 10, 0, 0.0, None, false, true, true).await?;
+    let resp = backend.search("Core Logic",  None,  true,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
     let results = resp.results;
     assert!(!results.is_empty());
 
@@ -178,7 +178,8 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
     backend.save_wisdom_rule(&rule_rust).await?;
 
     // Store a mock RocksDB lock error remedy
@@ -199,7 +200,8 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
     backend.save_wisdom_rule(&rule_lock).await?;
 
     // 1. Rust error signature matching
@@ -291,7 +293,8 @@ async fn test_executor_decorates_failures() -> Result<()> {
         status: None,
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
     backend.save_wisdom_rule(&rule).await?;
 
     // Execute command that fails and outputs "error[E0063]" on stderr

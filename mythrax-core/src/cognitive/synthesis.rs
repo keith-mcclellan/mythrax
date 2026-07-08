@@ -2,6 +2,7 @@ use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
 use crate::contracts::{Episode, WisdomRule, WikiNode};
+use surrealdb_types::SurrealValue;
 use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
@@ -227,6 +228,114 @@ impl DreamCoordinator {
         Self {
             llm: LLMClient::new(),
         }
+    }
+
+    pub async fn save_wiki_node_with_contradiction_resolution(
+        &self,
+        db: &dyn StorageBackend,
+        store: &MarkdownStore,
+        node: &WikiNode,
+        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+    ) -> Result<String> {
+        if !db.is_feature_enabled("compactor.enable_contradiction_detection", true).await {
+            return db.save_wiki_node(node).await;
+        }
+
+        let mut node = node.clone();
+        if node.embedding.is_none() {
+            if let Some(ref emb) = embedder {
+                if let Ok(e) = emb.embed(&node.content) {
+                    node.embedding = Some(e);
+                }
+            }
+        }
+
+        // Get all existing wiki nodes in the SAME scope
+        let all_nodes = db.get_all_wiki_nodes().await?;
+        let same_scope_nodes: Vec<WikiNode> = all_nodes.into_iter()
+            .filter(|n| n.scope == node.scope && n.embedding.is_some())
+            .collect();
+
+        let mut candidates = Vec::new();
+        if let Some(ref new_emb) = node.embedding {
+            for existing in same_scope_nodes {
+                if let Some(ref ext_emb) = existing.embedding {
+                    let sim = {
+                        let dot: f32 = new_emb.iter().zip(ext_emb.iter()).map(|(a, b)| a * b).sum();
+                        let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        let norm_v: f32 = ext_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        if norm_u == 0.0 || norm_v == 0.0 {
+                            0.0
+                        } else {
+                            dot / (norm_u * norm_v)
+                        }
+                    };
+                    if sim >= 0.70 {
+                        candidates.push((sim, existing));
+                    }
+                }
+            }
+        }
+
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let top_candidates: Vec<_> = candidates.into_iter().take(5).collect();
+
+        for (_sim, existing_node) in top_candidates {
+            let sys_prompt = "You are an expert knowledge consistency checker. Compare the NEW insight against the EXISTING insight. Determine if they contradict each other. Output ONLY valid JSON.";
+            let user_prompt = format!(
+                "NEW INSIGHT:\n{}\n\nEXISTING INSIGHT:\n{}\n\nRespond with a JSON object containing contradicts: bool, conflicting_field: string, resolution: string, and confidence: float.",
+                node.content,
+                existing_node.content
+            );
+
+            if let Ok(resp_str) = self.llm.completion(db, Some(sys_prompt), &user_prompt).await {
+                #[derive(serde::Deserialize)]
+                struct ContradictionResponse {
+                    contradicts: bool,
+                    resolution: Option<String>,
+                    confidence: f32,
+                }
+                // Strip markdown code block wrappers if any
+                let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                if let Ok(res) = serde_json::from_str::<ContradictionResponse>(clean_resp) {
+                    if res.contradicts && res.confidence >= 0.80 {
+                        if let Some(resolution) = res.resolution {
+                            let mut updated_node = existing_node.clone();
+                            updated_node.content = resolution.clone();
+                            
+                            // Re-embed resolved content
+                            if let Some(ref emb) = embedder {
+                                if let Ok(e) = emb.embed(&updated_node.content) {
+                                    updated_node.embedding = Some(e);
+                                }
+                            }
+
+                            // Save updated existing node to DB
+                            db.save_wiki_node(&updated_node).await?;
+
+                            // Update its physical file, preserving frontmatter
+                            if let Some(ref vp) = updated_node.vault_path {
+                                if let Ok(existing_file_content) = std::fs::read_to_string(store.vault_root.join(vp)) {
+                                    let parts: Vec<&str> = existing_file_content.splitn(3, "---").collect();
+                                    if parts.len() == 3 {
+                                        let updated_file_content = format!("---{}---\n\n{}", parts[1], resolution);
+                                        let _ = store.write_file(vp, &updated_file_content);
+                                    } else {
+                                        let _ = store.write_file(vp, &resolution);
+                                    }
+                                } else {
+                                    let _ = store.write_file(vp, &resolution);
+                                }
+                            }
+
+                            return Ok(updated_node.id.unwrap_or_default());
+                        }
+                    }
+                }
+            }
+        }
+
+        db.save_wiki_node(&node).await
     }
 
     pub async fn run_dream(
@@ -516,7 +625,7 @@ impl DreamCoordinator {
                             vault_path: Some(relative_path.clone()),
                             embedding: None,
                         };
-                        if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await
+                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await
                             && let Some(ref ep_id) = ep.id {
                                  let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                             }
@@ -642,7 +751,7 @@ impl DreamCoordinator {
                     vault_path: Some(relative_path.clone()),
                     embedding: None,
                 };
-                if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
+                if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
                     for ep_id in &cluster_ep_ids {
                         let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                     }
@@ -672,7 +781,7 @@ impl DreamCoordinator {
                     if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
                         for r in rules {
                             let rule_type = r.rule_type.as_deref().unwrap_or("aesthetic").to_lowercase();
-                            let is_procedural = rule_type == "procedural";
+                            let _is_procedural = rule_type == "procedural";
 
                             let mut source_ep_links = Vec::new();
                             let mut eps_to_link = Vec::new();
@@ -692,15 +801,9 @@ impl DreamCoordinator {
                             };
 
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let (rule_path, final_tier, final_scope) = if is_procedural {
-                                // Save to global/wisdom/permanent/
-                                let relative_global_path = format!("global/wisdom/permanent/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
-                                (relative_global_path, "permanent".to_string(), "general".to_string())
-                            } else {
-                                // Save to wisdom/dynamic/ (local)
-                                let relative_local_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
-                                (relative_local_path, "dynamic".to_string(), scope.clone())
-                            };
+                            let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                            let final_tier = "dynamic".to_string();
+                            let final_scope = scope.clone();
 
                             let rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
@@ -732,6 +835,7 @@ impl DreamCoordinator {
                                 status: None,
                                 superseded_at: None,
                                 superseded_by: None,
+                                rule_type: Some(rule_type.clone()),
                             };
                             if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
                                 for ep_id in &cluster_ep_ids {
@@ -1009,7 +1113,7 @@ impl DreamCoordinator {
                                         embedding: None,
                                     };
                                     
-                                    if let Ok(wiki_node_id) = db.save_wiki_node(&node_contract).await {
+                                    if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
                                         for ep in &group {
                                             if let Some(ref ep_id) = ep.id {
                                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
@@ -1035,6 +1139,279 @@ impl DreamCoordinator {
             }
             // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
         }
+
+        // --- Tasks C.6 & C.6a: Cross-Scope Graduation Pass ---
+        if db.is_feature_enabled("compactor.enable_cross_scope_graduation", true).await {
+            #[derive(Clone, Debug)]
+            struct GradCandidate {
+                id: String,
+                scope: String,
+                name: String,
+                content: String,
+                embedding: Vec<f32>,
+                is_procedural: bool,
+            }
+
+            let mut candidates = Vec::new();
+
+            // 1. Fetch wiki nodes
+            if let Ok(wiki_nodes) = db.get_all_wiki_nodes().await {
+                for node in wiki_nodes {
+                    if let Some(ref emb) = node.embedding {
+                        candidates.push(GradCandidate {
+                            id: node.id.unwrap_or_default(),
+                            scope: node.scope,
+                            name: node.name,
+                            content: node.content,
+                            embedding: emb.clone(),
+                            is_procedural: false,
+                        });
+                    }
+                }
+            }
+
+            // 2. Fetch procedural episodes
+            if let Ok(episodes) = db.get_episodes_by_node_type("procedural").await {
+                for ep in episodes {
+                    if !ep.archived.unwrap_or(false) {
+                        if let Some(ref emb) = ep.embedding {
+                            candidates.push(GradCandidate {
+                                id: ep.id.unwrap_or_default(),
+                                scope: ep.scope.unwrap_or_else(|| "general".to_string()),
+                                name: ep.title,
+                                content: ep.content,
+                                embedding: emb.clone(),
+                                is_procedural: true,
+                            });
+                        }
+                    }
+                }
+            }
+
+            let hnsw_ef = match db.get_profile_key("search.hnsw_ef").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(100),
+                _ => 100,
+            };
+
+            let mut clusters: Vec<Vec<GradCandidate>> = Vec::new();
+
+            for cand in &candidates {
+                let mut cluster = vec![cand.clone()];
+
+                let mut matches_wiki = Vec::new();
+                let mut matches_ep = Vec::new();
+
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    // Search wiki_node HNSW index
+                    let sql_wiki = format!("SELECT *, vector::similarity::cosine(embedding, $emb) AS similarity \
+                               FROM wiki_node \
+                               WHERE embedding <|200, {}|> $emb;", hnsw_ef);
+                    if let Ok(mut resp) = surreal_backend.db.query(&sql_wiki).bind(("emb", cand.embedding.clone())).await {
+                        if let Ok(rows) = resp.take::<Vec<serde_json::Value>>(0) {
+                            for row in rows {
+                                let sim = row.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                if sim >= 0.85 {
+                                    if let Ok(node) = serde_json::from_value::<WikiNode>(row) {
+                                        if node.scope != cand.scope {
+                                            matches_wiki.push(node);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Search procedural episodes HNSW index
+                    let sql_ep = format!("SELECT *, vector::similarity::cosine(embedding, $emb) AS similarity \
+                             FROM episode \
+                             WHERE node_type = 'procedural' AND embedding <|200, {}|> $emb;", hnsw_ef);
+                    if let Ok(mut resp) = surreal_backend.db.query(&sql_ep).bind(("emb", cand.embedding.clone())).await {
+                        if let Ok(rows) = resp.take::<Vec<serde_json::Value>>(0) {
+                            for row in rows {
+                                let sim = row.get("similarity").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                if sim >= 0.85 {
+                                    if let Ok(ep) = serde_json::from_value::<Episode>(row) {
+                                        let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                                        if ep_scope != cand.scope {
+                                            matches_ep.push(ep);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // In-memory similarity fallbacks for testing / mocked environments where index is not dynamically built
+                if matches_wiki.is_empty() {
+                    for other in &candidates {
+                        if !other.is_procedural && other.scope != cand.scope {
+                            let sim = {
+                                let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
+                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                if norm_u == 0.0 || norm_v == 0.0 {
+                                    0.0
+                                } else {
+                                    dot / (norm_u * norm_v)
+                                }
+                            };
+                            if sim >= 0.85 {
+                                cluster.push(other.clone());
+                            }
+                        }
+                    }
+                } else {
+                    for node in matches_wiki {
+                        cluster.push(GradCandidate {
+                            id: node.id.unwrap_or_default(),
+                            scope: node.scope,
+                            name: node.name,
+                            content: node.content,
+                            embedding: node.embedding.unwrap_or_default(),
+                            is_procedural: false,
+                        });
+                    }
+                }
+
+                if matches_ep.is_empty() {
+                    for other in &candidates {
+                        if other.is_procedural && other.scope != cand.scope {
+                            let sim = {
+                                let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
+                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                if norm_u == 0.0 || norm_v == 0.0 {
+                                    0.0
+                                } else {
+                                    dot / (norm_u * norm_v)
+                                }
+                            };
+                            if sim >= 0.85 {
+                                if !cluster.iter().any(|c| c.id == other.id) {
+                                    cluster.push(other.clone());
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for ep in matches_ep {
+                        let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                        cluster.push(GradCandidate {
+                            id: ep.id.unwrap_or_default(),
+                            scope: ep_scope,
+                            name: ep.title,
+                            content: ep.content,
+                            embedding: ep.embedding.unwrap_or_default(),
+                            is_procedural: true,
+                        });
+                    }
+                }
+
+                let distinct_scopes: std::collections::HashSet<String> = cluster.iter().map(|c| c.scope.clone()).collect();
+                if distinct_scopes.len() >= 2 {
+                    cluster.sort_by(|a, b| a.id.cmp(&b.id));
+                    clusters.push(cluster);
+                }
+            }
+
+            // Deduplicate overlapping clusters: sort clusters by size descending, and skip clusters whose anchor is already in a larger accepted cluster
+            clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+
+            let mut accepted_clusters = Vec::new();
+            let mut seen_anchors = std::collections::HashSet::new();
+
+            for cluster in clusters {
+                let anchor_id = &cluster[0].id;
+                if seen_anchors.contains(anchor_id) {
+                    continue;
+                }
+                
+                // Mark all members of this cluster as seen anchors
+                for member in &cluster {
+                    seen_anchors.insert(member.id.clone());
+                }
+                accepted_clusters.push(cluster);
+            }
+
+            for cluster in accepted_clusters {
+                let n = cluster.len();
+                let mut insights_with_scope_labels = String::new();
+                for member in &cluster {
+                    insights_with_scope_labels.push_str(&format!(
+                        "Scope: {}\nTitle/Name: {}\nContent:\n{}\n\n",
+                        member.scope, member.name, member.content
+                    ));
+                }
+
+                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.";
+                let user_prompt = format!(
+                    "The following insights emerged independently in {} different projects:\n\n{}Respond with a JSON object containing target_pattern: string, action_to_avoid: string, causal_explanation: string, prescribed_remedy: string, and confidence: float.",
+                    n,
+                    insights_with_scope_labels
+                );
+
+                if let Ok(resp_str) = self.llm.completion(db, Some(sys_prompt), &user_prompt).await {
+                    #[derive(serde::Deserialize)]
+                    struct GeneralizationResponse {
+                        target_pattern: String,
+                        action_to_avoid: String,
+                        causal_explanation: String,
+                        prescribed_remedy: String,
+                        confidence: f32,
+                    }
+                    let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(clean_resp) {
+                        if res.confidence >= 0.80 {
+                            let all_procedural = cluster.iter().all(|c| c.is_procedural);
+                            let tier = if all_procedural { "permanent" } else { "dynamic" };
+
+                            let rule_uuid = uuid::Uuid::new_v4().to_string();
+                            let rule_path = if all_procedural {
+                                format!("global/wisdom/permanent/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
+                            } else {
+                                format!("global/wisdom/dynamic/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
+                            };
+
+                            let rule_md = format!(
+                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\nsource_nodes:\n{}\ngenerator_name: \"ScopeGraduator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                                res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy, tier,
+                                cluster.iter().map(|c| format!("  - \"{}\"", c.id)).collect::<Vec<_>>().join("\n"),
+                                res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy
+                            );
+                            let _ = store.write_file(&rule_path, &rule_md);
+
+                            let rule_contract = WisdomRule {
+                                id: None,
+                                target_pattern: res.target_pattern,
+                                action_to_avoid: res.action_to_avoid,
+                                causal_explanation: res.causal_explanation,
+                                prescribed_remedy: res.prescribed_remedy,
+                                tier: tier.to_string(),
+                                scope: "general".to_string(),
+                                vault_path: Some(rule_path),
+                                embedding: None,
+                                source_episodes: cluster.iter().map(|c| c.id.clone()).collect(),
+                                generator_name: "ScopeGraduator".to_string(),
+                                similarity: None,
+                                utility: None,
+                                status: None,
+                                superseded_at: None,
+                                superseded_by: None,
+                                rule_type: Some(if all_procedural { "procedural".to_string() } else { "aesthetic".to_string() }),
+                            };
+
+                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
+                                for member in &cluster {
+                                    let _ = db.relate_nodes(&member.id, &wisdom_id, None, None, None).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if let Err(e) = db.prune_stale_memories(&store.vault_root).await {
             tracing::error!("Dreaming pruning failed: {:?}", e);
         }
@@ -1250,6 +1627,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             status: None,
                             superseded_at: None,
                             superseded_by: None,
+                            rule_type: None,
                         };
 
                         match db.save_wisdom_rule(&merged_contract).await {
@@ -1351,6 +1729,206 @@ fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
     
     // Fallback to exact character boundary truncation
     candidate
+}
+
+pub async fn traverse_adjacent_logs(
+    db: &dyn crate::db::StorageBackend,
+    start_nodes: &[String],
+    max_depth: usize,
+    max_nodes: usize,
+    max_tokens: usize,
+    session_id: Option<&str>,
+    include_types: Option<&[&str]>,
+) -> Result<Vec<crate::contracts::Episode>> {
+    let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() else {
+        anyhow::bail!("traverse_adjacent_logs is only supported on SurrealBackend");
+    };
+
+    use std::collections::HashSet;
+    let mut visited = HashSet::new();
+    let mut results = Vec::new();
+    let mut current_level = Vec::new();
+
+    for node_id in start_nodes {
+        if !node_id.is_empty() {
+            visited.insert(node_id.clone());
+            current_level.push(node_id.clone());
+        }
+    }
+
+    let char_cap = max_tokens * 4;
+    let mut accumulated_chars = 0;
+
+    for _depth in 0..=max_depth {
+        if current_level.is_empty() || results.len() >= max_nodes || accumulated_chars >= char_cap {
+            break;
+        }
+
+        // Convert string IDs to RecordIds
+        let mut record_ids = Vec::new();
+        for id_str in &current_level {
+            if let Ok(rid) = crate::db::backend::parse_record_id(id_str) {
+                record_ids.push(rid);
+            }
+        }
+
+        if record_ids.is_empty() {
+            break;
+        }
+
+        // Query adjacent nodes
+        let sql = "SELECT id, title, content, scope, vault_path, embedding, processed_in_dream, source_episode, last_retrieved_at, utility, archived, archived_at, discovery_tokens, facts, concepts, files_read, files_modified, session_id, word_count, node_type,
+                  <-followed_by<-episode AS followed_by_in,
+                  ->followed_by->episode AS followed_by_out,
+                  <-relates_to<-episode AS relates_to_in,
+                  ->relates_to->episode AS relates_to_out
+           FROM episode WHERE id IN $ids;";
+
+        let mut query_res = surreal.db.query(sql).bind(("ids", record_ids)).await?;
+        
+        #[derive(serde::Serialize, serde::Deserialize, Debug, SurrealValue)]
+        struct TraversalNode {
+            id: surrealdb::types::RecordId,
+            title: String,
+            content: String,
+            scope: Option<String>,
+            vault_path: Option<String>,
+            embedding: Option<Vec<f32>>,
+            processed_in_dream: Option<bool>,
+            source_episode: Option<String>,
+            last_retrieved_at: Option<String>,
+            utility: Option<f32>,
+            archived: Option<bool>,
+            archived_at: Option<String>,
+            discovery_tokens: Option<u32>,
+            facts: Option<Vec<String>>,
+            concepts: Option<Vec<String>>,
+            files_read: Option<Vec<String>>,
+            files_modified: Option<Vec<String>>,
+            session_id: Option<String>,
+            word_count: Option<u32>,
+            node_type: Option<String>,
+            
+            #[serde(default)]
+            followed_by_in: Vec<surrealdb::types::RecordId>,
+            #[serde(default)]
+            followed_by_out: Vec<surrealdb::types::RecordId>,
+            #[serde(default)]
+            relates_to_in: Vec<surrealdb::types::RecordId>,
+            #[serde(default)]
+            relates_to_out: Vec<surrealdb::types::RecordId>,
+        }
+
+        let nodes: Vec<TraversalNode> = query_res.take(0)?;
+        let mut next_level = Vec::new();
+
+        for node in nodes {
+            if results.len() >= max_nodes || accumulated_chars >= char_cap {
+                break;
+            }
+
+            // Session isolation check
+            if let Some(target_sess) = session_id {
+                if let Some(ref node_sess) = node.session_id {
+                    if node_sess != target_sess {
+                        continue;
+                    }
+                }
+            }
+
+            // Include types check
+            if let Some(types) = include_types {
+                if let Some(ref ntype) = node.node_type {
+                    if !types.contains(&ntype.as_str()) {
+                        continue;
+                    }
+                } else {
+                    continue; // Skip if node_type is None and we filter
+                }
+            }
+
+            let node_id_str = crate::db::backend::format_record_id(&node.id);
+            let node_char_count = node.content.chars().count();
+
+            if accumulated_chars + node_char_count > char_cap {
+                // Truncate this node using truncate_to_boundary
+                let remaining = char_cap - accumulated_chars;
+                let truncated_content = truncate_to_boundary(&node.content, remaining).to_string();
+                results.push(crate::contracts::Episode {
+                    id: Some(node_id_str),
+                    title: node.title,
+                    content: truncated_content,
+                    source: None,
+                    scope: node.scope,
+                    vault_path: node.vault_path,
+                    embedding: node.embedding,
+                    processed_in_dream: node.processed_in_dream,
+                    source_episode: node.source_episode,
+                    last_retrieved_at: node.last_retrieved_at,
+                    utility: node.utility,
+                    archived: node.archived,
+                    discovery_tokens: node.discovery_tokens,
+                    facts: node.facts,
+                    concepts: node.concepts,
+                    files_read: node.files_read,
+                    files_modified: node.files_modified,
+                    session_id: node.session_id,
+                    word_count: node.word_count,
+                    archived_at: node.archived_at,
+                    node_type: node.node_type,
+                    confidence: None,
+                });
+                accumulated_chars = char_cap;
+                break;
+            } else {
+                accumulated_chars += node_char_count;
+                results.push(crate::contracts::Episode {
+                    id: Some(node_id_str),
+                    title: node.title,
+                    content: node.content,
+                    source: None,
+                    scope: node.scope,
+                    vault_path: node.vault_path,
+                    embedding: node.embedding,
+                    processed_in_dream: node.processed_in_dream,
+                    source_episode: node.source_episode,
+                    last_retrieved_at: node.last_retrieved_at,
+                    utility: node.utility,
+                    archived: node.archived,
+                    discovery_tokens: node.discovery_tokens,
+                    facts: node.facts,
+                    concepts: node.concepts,
+                    files_read: node.files_read,
+                    files_modified: node.files_modified,
+                    session_id: node.session_id,
+                    word_count: node.word_count,
+                    archived_at: node.archived_at,
+                    node_type: node.node_type,
+                    confidence: None,
+                });
+            }
+
+            // Collect unique adjacent node IDs for the next level traversal
+            let mut add_adjacent = |adj_list: Vec<surrealdb::types::RecordId>| {
+                for adj_id in adj_list {
+                    let adj_str = crate::db::backend::format_record_id(&adj_id);
+                    if !visited.contains(&adj_str) {
+                        visited.insert(adj_str.clone());
+                        next_level.push(adj_str);
+                    }
+                }
+            };
+
+            add_adjacent(node.followed_by_in);
+            add_adjacent(node.followed_by_out);
+            add_adjacent(node.relates_to_in);
+            add_adjacent(node.relates_to_out);
+        }
+
+        current_level = next_level;
+    }
+
+    Ok(results)
 }
 
 #[cfg(test)]

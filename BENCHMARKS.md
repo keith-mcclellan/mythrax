@@ -2,6 +2,41 @@
 
 This file tracks the retrieval performance of the Mythrax Memory System releases.
 
+## v2.5.2 (2026-07-04)
+
+**Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
+- **Dataset ID:** `xiaowu0162/longmemeval-cleaned`
+- **Pinned Revision (commit SHA):** `98d7416c24c778c2fee6e6f3006e7a073259d48f`
+- **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
+- **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
+- **Mythrax Git Commit:** `v2.5.2` (Short-Term Memory Optimizations & Pipeline Simplification)
+
+### Key Improvements in v2.5.2
+- **Precompact Sequential linking**: Links contiguous mined assistant turns by storing the preceding turn ID in `preceding_turn_id` field.
+- **Configurable FTS Cap**: Added configurable limit for keyword candidates (`search.fts_cap` profile key or `MYTHRAX_FTS_CAP` environment variable, defaulting to 200).
+- **Stage 10/11 Simplification**: Removed rank-position boost ladder due to zero metric/recall impact on LongMemEval.
+
+### Performance Metrics (Untuned Production Default)
+
+| Metric | v2.5.1 (Untuned) | v2.5.2 (Untuned) | Change | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Recall_Any@5 (turn)** | `0.8200` | **`0.8200`** | `0.00%` | **Stable** |
+| **Recall_All@5 (turn)** | `0.5500` | **`0.5480`** | `-0.04%` | **Stable** |
+| **nDCG@10 (turn)** | `0.6263` | **`0.6247`** | `-0.26%` | **Stable** |
+| **Recall_Any@5 (session)** | `0.9680` | **`0.9680`** | `0.00%` | **Stable** |
+| **Recall_All@5 (session)** | `0.7620` | **`0.7560`** | `-0.79%` | **Stable** |
+
+### Per-Question-Type R@10 (turn recall_any)
+
+| Question Type | Sample Count (n) | v2.5.1 (Untuned) | v2.5.2 (Untuned) | Change |
+| :--- | :---: | :---: | :---: | :---: |
+| **knowledge-update** | `78` | `0.9231` | **`0.9231`** | `0.00%` |
+| **multi-session** | `133` | `0.8722` | **`0.8647`** | `-0.86%` |
+| **single-session-assistant** | `56` | `0.9821` | **`0.9821`** | `0.00%` |
+| **single-session-preference** | `30` | `0.6667` | **`0.6667`** | `0.00%` |
+| **single-session-user** | `70` | `0.8857` | **`0.9000`** | `+1.61%` |
+| **temporal-reasoning** | `133` | `0.9098` | **`0.9023`** | `-0.82%` |
+
 ## v2.5.1 (2026-07-04)
 
 **Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.

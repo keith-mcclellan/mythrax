@@ -49,13 +49,16 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         concepts: Some(vec!["test_entity".to_string()]),
         files_read: Some(vec!["src/main.rs".to_string()]),
         files_modified: Some(vec![]),
+    
+        confidence: None,
+        ..Default::default()
     };
 
     let ep_id = backend.save_episode(&ep_save).await.unwrap();
     assert!(!ep_id.is_empty(), "Saved episode ID must not be empty");
 
     // Retrieve via search matching general
-    let search_res = backend.search("execution context", Some("general"), false, 5, 0, 0.1, None, false, true, false).await.unwrap();
+    let search_res = backend.search("execution context",  Some("general"),  false,  5,  0,  0.1,  None,  false,  true,  false, None, true).await.unwrap();
     assert!(!search_res.results.is_empty(), "Must retrieve the ingested episode");
     assert_eq!(search_res.results[0].title, "Test Ingestion System Flow");
 
@@ -73,7 +76,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!raptor_id.is_empty(), "Saved Raptor summary ID must not be empty");
 
     // Retrieve Raptor Summary
-    let search_raptor = backend.search("Raptor Summary", Some("general"), false, 5, 0, 0.1, None, false, false, false).await.unwrap();
+    let search_raptor = backend.search("Raptor Summary",  Some("general"),  false,  5,  0,  0.1,  None,  false,  false,  false, None, true).await.unwrap();
     assert!(!search_raptor.results.is_empty(), "Must retrieve the Raptor summary node");
     assert!(search_raptor.results[0].title.contains("Raptor Summary"));
 
@@ -91,7 +94,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!insight_id.is_empty(), "Saved insight node ID must not be empty");
 
     // Retrieve Insight Node
-    let search_insight = backend.search("permanent wiki nodes", Some("general"), false, 5, 0, 0.1, None, false, false, false).await.unwrap();
+    let search_insight = backend.search("permanent wiki nodes",  Some("general"),  false,  5,  0,  0.1,  None,  false,  false,  false, None, true).await.unwrap();
     assert!(!search_insight.results.is_empty(), "Must retrieve the synthesized insight node");
     assert_eq!(search_insight.results[0].title, "Insight: System Hierarchical Flow");
 
@@ -113,7 +116,8 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         status: Some("active".to_string()),
         superseded_at: None,
         superseded_by: None,
-    };
+    
+        rule_type: None,};
 
     let wisdom_id = backend.save_wisdom_rule(&wisdom_rule).await.unwrap();
     assert!(!wisdom_id.is_empty(), "Saved wisdom rule ID must not be empty");
