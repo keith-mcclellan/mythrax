@@ -1,0 +1,44 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0 # Need full history for previous commits
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+
+    - name: Run Sanitation Scanner
+      run: |
+        python3 scripts/sanitation_scanner.py
+
+    - name: Append to PR
+      if: github.event_name == 'push'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Look for open PRs associated with the pushed branch
+        PR_URL=$(gh pr list --head "${GITHUB_REF_NAME}" --json url --jq '.[0].url')
+
+        if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
+          gh pr comment "$PR_URL" --body-file sanitation_scorecard.md
+        else
+          echo "No open PR found for this push event."
+        fi
