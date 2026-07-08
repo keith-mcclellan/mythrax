@@ -3816,6 +3816,15 @@ impl StorageBackend for SurrealBackend {
         let mut merged_candidates: Vec<SearchResult> = unique_map.into_values().collect();
         merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
 
+        let enable_cross_encoder_rerank = match self.get_profile_key("search.enable_cross_encoder_rerank").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+        let rerank_pool_size = match self.get_profile_key("search.rerank_pool_size").await {
+            Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
+            _ => 25,
+        };
+
         // 5) Sentence-level TF-IDF Cosine Reranking (top-10 only)
         let gamma_rerank = if !is_hybrid {
             0.0f32
@@ -3882,7 +3891,12 @@ impl StorageBackend for SurrealBackend {
             }
 
             merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-            merged_candidates.truncate(25); // Restrict to top 25 for downstream stages/Cross-Encoder
+            let tfidf_exit_size = if enable_cross_encoder_rerank {
+                rerank_pool_size
+            } else {
+                rerank_pool_size.max(50)
+            };
+            merged_candidates.truncate(tfidf_exit_size);
             candidates = merged_candidates;
         } else {
             if let Some(active_sess) = session_id {
@@ -3898,10 +3912,7 @@ impl StorageBackend for SurrealBackend {
             candidates = merged_candidates;
         }
 
-        let enable_cross_encoder_rerank = match self.get_profile_key("search.enable_cross_encoder_rerank").await {
-            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-            _ => false,
-        };
+
 
         if enable_cross_encoder_rerank {
             if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
@@ -3917,10 +3928,7 @@ impl StorageBackend for SurrealBackend {
             } else {
                 #[cfg(feature = "mlx")]
                 {
-                    let rerank_pool_size = match self.get_profile_key("search.rerank_pool_size").await {
-                        Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
-                        _ => 25,
-                    };
+
                     let pool_len = candidates.len().min(rerank_pool_size);
                     if pool_len > 0 {
                         candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
