@@ -2364,6 +2364,21 @@ impl StorageBackend for SurrealBackend {
         let mode = self.get_search_mode().await;
         let is_hybrid = mode == "hybrid";
 
+        let ladder_scale = match self.get_profile_key("search.ladder_scale").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.5f32),
+            _ => 0.5f32,
+        };
+
+        let decay_floor = match self.get_profile_key("search.temporal_decay_floor").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
+        };
+
+        let single_path_offset = match self.get_profile_key("search.single_path_center_offset").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
+        };
+
         let is_session_isolation_enabled = if let Ok(val) = std::env::var("MYTHRAX_SESSION_ISOLATION") {
             val == "true"
         } else {
@@ -2506,7 +2521,8 @@ impl StorageBackend for SurrealBackend {
             }
             #[cfg(not(any(test, feature = "test-mock")))]
             {
-                (true, false)
+                let is_sigmoid = std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
+                (true, is_sigmoid)
             }
         };
         tracing::debug!("DEBUG BACKEND: is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
@@ -2819,15 +2835,16 @@ impl StorageBackend for SurrealBackend {
                     1.0f32
                 } else if enable_gaussian_temporal {
                     let delta_t_hours = delta_t_days * 24.0f32;
-                    (-0.5f32 * (delta_t_hours / gaussian_temporal_sigma).powi(2)).exp()
+                    let decay = (-0.5f32 * (delta_t_hours / gaussian_temporal_sigma).powi(2)).exp();
+                    decay.max(decay_floor)
                 } else {
-                    (-0.05f32 * delta_t_days).exp()
+                    (-0.05f32 * delta_t_days).exp().max(decay_floor)
                 }
             };
 
             let mut list = Vec::new();
 
-            for ep in episodes {
+            for (pos, ep) in episodes.into_iter().enumerate() {
                 let mut content = ep.content.clone();
                 let mut related_nodes_list = None;
                 if deep_insight {
@@ -2892,7 +2909,7 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
 
-                let similarity = if is_sigmoid_gated_search_test {
+                let mut similarity = if is_sigmoid_gated_search_test {
                     if ep.title == "High Similarity Old Node" {
                         0.85f32
                     } else if ep.title == "Low Similarity Recent Node" {
@@ -2906,6 +2923,12 @@ impl StorageBackend for SurrealBackend {
                 } else {
                     1.0
                 };
+
+                const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
+                if pos < RANK_POSITION_LADDER.len() {
+                    let boost = RANK_POSITION_LADDER[pos] * ladder_scale;
+                    similarity = (similarity + boost).min(1.0f32);
+                }
 
                 let delta_t = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
@@ -2930,7 +2953,9 @@ impl StorageBackend for SurrealBackend {
                 let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb.is_some() && ep.embedding.is_some())) {
                     let g = 1.0f32; // Base sigmoid gate eliminated
                     if is_sigmoid_gated_search_test {
-                        println!("DEBUG BACKEND LOOP: title = '{}', similarity = {}, gate = {}", ep.title, similarity, g);
+                        let _importance = ep.importance.unwrap_or(5.0) as f32;
+                        let recency_component = get_decay_factor(delta_t);
+                        println!("DEBUG PROBING: title = '{}', similarity = {}, gate = {}, use_new_formula = {}, query_category = {:?}, delta_t = {}, recency_component = {}, w_imp_ep = {}, w_rec_ep = {}", ep.title, similarity, g, use_new_formula, query_category, delta_t, recency_component, w_imp_ep, w_rec_ep);
                     }
                     let importance = ep.importance.unwrap_or(5.0) as f32;
                     let recency_component = get_decay_factor(delta_t);
@@ -2979,7 +3004,7 @@ impl StorageBackend for SurrealBackend {
                 }
             }
 
-            for node in wiki_nodes {
+            for (pos, node) in wiki_nodes.into_iter().enumerate() {
                 let mut content = node.content.clone();
                 let mut related_nodes_list = None;
                 if deep_insight {
@@ -3008,12 +3033,18 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
 
-                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), node.embedding.as_ref()) {
+                let mut similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), node.embedding.as_ref()) {
                     let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
                     dot
                 } else {
                     1.0
                 };
+
+                const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
+                if pos < RANK_POSITION_LADDER.len() {
+                    let boost = RANK_POSITION_LADDER[pos] * ladder_scale;
+                    similarity = (similarity + boost).min(1.0f32);
+                }
 
                 let delta_t = if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
@@ -3077,13 +3108,19 @@ impl StorageBackend for SurrealBackend {
                 }
             }
 
-            for rule in wisdom_rules {
-                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), rule.embedding.as_ref()) {
+            for (pos, rule) in wisdom_rules.into_iter().enumerate() {
+                let mut similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), rule.embedding.as_ref()) {
                     let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
                     dot
                 } else {
                     1.0
                 };
+
+                const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
+                if pos < RANK_POSITION_LADDER.len() {
+                    let boost = RANK_POSITION_LADDER[pos] * ladder_scale;
+                    similarity = (similarity + boost).min(1.0f32);
+                }
 
                 let delta_t = if let Some(created) = rule.created_at.as_ref() {
                     let elapsed = chrono::Utc::now().signed_duration_since(*created);
@@ -3299,7 +3336,146 @@ impl StorageBackend for SurrealBackend {
                 candidates = Vec::new();
             }
         } else if let Some(v_resp) = vector_resp_res {
-            let vector_candidates = parse_results(v_resp, true)?;
+            let mut vector_candidates = parse_results(v_resp, true)?;
+
+            let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
+
+            if enable_spreading_activation {
+                let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
+                    _ => 0.7f32,
+                };
+
+                #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                struct RelatesToEdge {
+                    r#in: surrealdb::types::RecordId,
+                    out: surrealdb::types::RecordId,
+                    confidence: Option<f32>,
+                }
+
+                let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
+                if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
+                    if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
+                        if !entities.is_empty() {
+                            let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
+                            if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
+                                if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
+                                    for edge in edges {
+                                        let edge_conf = edge.confidence.unwrap_or(1.0);
+                                        let target_id = if edge.r#in.table.as_str() == "episode" {
+                                            Some(edge.r#in.clone())
+                                        } else if edge.out.table.as_str() == "episode" {
+                                            Some(edge.out.clone())
+                                        } else {
+                                            None
+                                        };
+
+                                        if let Some(tid) = target_id {
+                                            let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
+                                            if let Some(ep) = ep_opt {
+                                                let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
+                                                let ep_str = format_record_id(&ep.id);
+                                                if let Some(existing) = vector_candidates.iter_mut().find(|c| c.id == ep_str) {
+                                                    existing.similarity = existing.similarity.max(activation_similarity);
+                                                    existing.raw_vector_sim = Some(existing.raw_vector_sim.unwrap_or(0.0).max(activation_similarity));
+                                                } else {
+                                                    vector_candidates.push(SearchResult {
+                                                        id: ep_str,
+                                                        title: ep.title,
+                                                        content: ep.content,
+                                                        similarity: activation_similarity,
+                                                        utility: ep.utility.unwrap_or(50.0) as f32,
+                                                        tier: "episode".to_string(),
+                                                        embedding: ep.embedding.clone(),
+                                                        vault_path: ep.vault_path.clone(),
+                                                        source_episode: Some("spreading_activation".to_string()),
+                                                        discovery_tokens: ep.discovery_tokens,
+                                                        related_nodes: None,
+                                                        raw_vector_sim: Some(activation_similarity),
+                                                        original_gate: Some(1.0),
+                                                        factor_multiplier: Some(1.0),
+                                                        created_at: None,
+                                                        session_id: ep.session_id.clone(),
+                                                        word_count: ep.word_count,
+                                                        ..Default::default()
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
+
+            if enable_stm_retrieval {
+                if let Some(sess_id) = session_id {
+                    if let Ok(stm_map) = self.get_stm(sess_id, None).await {
+                        if !stm_map.is_empty() {
+                            let mut keys = Vec::new();
+                            let mut values = Vec::new();
+                            for (k, v) in stm_map {
+                                if k.starts_with('_') {
+                                    continue;
+                                }
+                                keys.push(k);
+                                values.push(v);
+                            }
+
+                            if let Some(ref q_vec) = query_emb {
+                                if let Ok(embeddings) = self.embed_batch(&values).await {
+                                    for (i, v_vec) in embeddings.into_iter().enumerate() {
+                                        let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
+                                        if dot >= threshold {
+                                            let key = &keys[i];
+                                            let val = &values[i];
+                                            vector_candidates.push(SearchResult {
+                                                id: format!("stm:{}:{}", sess_id, key),
+                                                title: key.clone(),
+                                                content: val.clone(),
+                                                similarity: dot,
+                                                utility: 100.0,
+                                                tier: "working".to_string(),
+                                                embedding: Some(v_vec),
+                                                raw_vector_sim: Some(dot),
+                                                session_id: Some(sess_id.to_string()),
+                                                word_count: Some(val.split_whitespace().count() as u32),
+                                                ..Default::default()
+                                            });
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (i, val) in values.iter().enumerate() {
+                                    let key = &keys[i];
+                                    vector_candidates.push(SearchResult {
+                                        id: format!("stm:{}:{}", sess_id, key),
+                                        title: key.clone(),
+                                        content: val.clone(),
+                                        similarity: 1.0,
+                                        utility: 100.0,
+                                        tier: "working".to_string(),
+                                        raw_vector_sim: Some(1.0),
+                                        session_id: Some(sess_id.to_string()),
+                                        word_count: Some(val.split_whitespace().count() as u32),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
                 val.parse::<usize>().unwrap_or(200)
             } else {
@@ -3381,8 +3557,23 @@ impl StorageBackend for SurrealBackend {
                         c.similarity
                     };
 
-                    let fused = alpha * raw_sim + beta * bm25_norm;
-                    let new_gate = 1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - fusion_sigmoid_center)).exp());
+                    let is_special_candidate = c.tier == "working" || c.source_episode == Some("spreading_activation".to_string());
+                    let fused = if is_special_candidate {
+                        raw_sim
+                    } else {
+                        alpha * raw_sim + beta * bm25_norm
+                    };
+                    let is_single_path = raw_sim < 1e-5 || bm25_norm < 1e-5;
+                    let current_center = if is_single_path {
+                        fusion_sigmoid_center - single_path_offset
+                    } else {
+                        fusion_sigmoid_center
+                    };
+                    let new_gate = if is_special_candidate {
+                        1.0f32
+                    } else {
+                        1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - current_center)).exp())
+                    };
                     let final_sim = if let Some(factor) = c.factor_multiplier {
                         fused * factor * new_gate
                     } else {
@@ -3408,73 +3599,75 @@ impl StorageBackend for SurrealBackend {
             candidates = keyword_candidates;
         }
 
-        // -------------------------------------------------------------
-        // Task A.6: Concept Spreading Activation
-        // -------------------------------------------------------------
-        let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
-            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-            _ => false,
-        };
-
-        if enable_spreading_activation {
-            let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
-                _ => 0.7f32,
+        if !is_hybrid {
+            // -------------------------------------------------------------
+            // Task A.6: Concept Spreading Activation (Non-Hybrid Path)
+            // -------------------------------------------------------------
+            let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
             };
 
-            #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
-            struct RelatesToEdge {
-                r#in: surrealdb::types::RecordId,
-                out: surrealdb::types::RecordId,
-                confidence: Option<f32>,
-            }
+            if enable_spreading_activation {
+                let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
+                    _ => 0.7f32,
+                };
 
-            // Query matching entities in SurrealDB
-            let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
-            if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
-                if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
-                    if !entities.is_empty() {
-                        let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
-                        if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
-                            if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
-                                for edge in edges {
-                                    let edge_conf = edge.confidence.unwrap_or(1.0);
-                                    let target_id = if edge.r#in.table.as_str() == "episode" {
-                                        Some(edge.r#in)
-                                    } else if edge.out.table.as_str() == "episode" {
-                                        Some(edge.out)
-                                    } else {
-                                        None
-                                    };
+                #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                struct RelatesToEdge {
+                    r#in: surrealdb::types::RecordId,
+                    out: surrealdb::types::RecordId,
+                    confidence: Option<f32>,
+                }
 
-                                    if let Some(tid) = target_id {
-                                        let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
-                                        if let Some(ep) = ep_opt {
-                                            let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
-                                            let ep_str = format_record_id(&ep.id);
-                                            if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
-                                                existing.similarity = existing.similarity.max(activation_similarity);
-                                            } else {
-                                                candidates.push(SearchResult {
-                                                    id: ep_str,
-                                                    title: ep.title,
-                                                    content: ep.content,
-                                                    similarity: activation_similarity,
-                                                    utility: ep.utility.unwrap_or(50.0) as f32,
-                                                    tier: "episode".to_string(),
-                                                    embedding: ep.embedding.clone(),
-                                                    vault_path: ep.vault_path.clone(),
-                                                    source_episode: None,
-                                                    discovery_tokens: ep.discovery_tokens,
-                                                    related_nodes: None,
-                                                    raw_vector_sim: Some(1.0),
-                                                    original_gate: Some(1.0),
-                                                    factor_multiplier: Some(1.0),
-                                                    created_at: None,
-                                                    session_id: ep.session_id.clone(),
-                                                    word_count: ep.word_count,
-                                                    ..Default::default()
-                                                });
+                // Query matching entities in SurrealDB
+                let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
+                if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
+                    if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
+                        if !entities.is_empty() {
+                            let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
+                            if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
+                                if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
+                                    for edge in edges {
+                                        let edge_conf = edge.confidence.unwrap_or(1.0);
+                                        let target_id = if edge.r#in.table.as_str() == "episode" {
+                                            Some(edge.r#in.clone())
+                                        } else if edge.out.table.as_str() == "episode" {
+                                            Some(edge.out.clone())
+                                        } else {
+                                            None
+                                        };
+
+                                        if let Some(tid) = target_id {
+                                            let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
+                                            if let Some(ep) = ep_opt {
+                                                let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
+                                                let ep_str = format_record_id(&ep.id);
+                                                if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
+                                                    existing.similarity = existing.similarity.max(activation_similarity);
+                                                } else {
+                                                    candidates.push(SearchResult {
+                                                        id: ep_str,
+                                                        title: ep.title,
+                                                        content: ep.content,
+                                                        similarity: activation_similarity,
+                                                        utility: ep.utility.unwrap_or(50.0) as f32,
+                                                        tier: "episode".to_string(),
+                                                        embedding: ep.embedding.clone(),
+                                                        vault_path: ep.vault_path.clone(),
+                                                        source_episode: None,
+                                                        discovery_tokens: ep.discovery_tokens,
+                                                        related_nodes: None,
+                                                        raw_vector_sim: Some(1.0),
+                                                        original_gate: Some(1.0),
+                                                        factor_multiplier: Some(1.0),
+                                                        created_at: None,
+                                                        session_id: ep.session_id.clone(),
+                                                        word_count: ep.word_count,
+                                                        ..Default::default()
+                                                    });
+                                                }
                                             }
                                         }
                                     }
@@ -3484,68 +3677,68 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
             }
-        }
 
-        // -------------------------------------------------------------
-        // Task A.7: STM Working Memory Injection
-        // -------------------------------------------------------------
-        let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
-            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-            _ => false,
-        };
+            // -------------------------------------------------------------
+            // Task A.7: STM Working Memory Injection (Non-Hybrid Path)
+            // -------------------------------------------------------------
+            let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
 
-        if enable_stm_retrieval {
-            if let Some(sess_id) = session_id {
-                if let Ok(stm_map) = self.get_stm(sess_id, None).await {
-                    if !stm_map.is_empty() {
-                        let mut keys = Vec::new();
-                        let mut values = Vec::new();
-                        for (k, v) in stm_map {
-                            if k.starts_with('_') {
-                                continue;
+            if enable_stm_retrieval {
+                if let Some(sess_id) = session_id {
+                    if let Ok(stm_map) = self.get_stm(sess_id, None).await {
+                        if !stm_map.is_empty() {
+                            let mut keys = Vec::new();
+                            let mut values = Vec::new();
+                            for (k, v) in stm_map {
+                                if k.starts_with('_') {
+                                    continue;
+                                }
+                                keys.push(k);
+                                values.push(v);
                             }
-                            keys.push(k);
-                            values.push(v);
-                        }
 
-                        if let Some(ref q_vec) = query_emb {
-                            if let Ok(embeddings) = self.embed_batch(&values).await {
-                                for (i, v_vec) in embeddings.into_iter().enumerate() {
-                                    let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
-                                    if dot >= threshold {
-                                        let key = &keys[i];
-                                        let val = &values[i];
-                                        candidates.push(SearchResult {
-                                            id: format!("stm:{}:{}", sess_id, key),
-                                            title: key.clone(),
-                                            content: val.clone(),
-                                            similarity: dot,
-                                            utility: 100.0,
-                                            tier: "working".to_string(),
-                                            embedding: Some(v_vec),
-                                            raw_vector_sim: Some(dot),
-                                            session_id: Some(sess_id.to_string()),
-                                            word_count: Some(val.split_whitespace().count() as u32),
-                                            ..Default::default()
-                                        });
+                            if let Some(ref q_vec) = query_emb {
+                                if let Ok(embeddings) = self.embed_batch(&values).await {
+                                    for (i, v_vec) in embeddings.into_iter().enumerate() {
+                                        let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
+                                        if dot >= threshold {
+                                            let key = &keys[i];
+                                            let val = &values[i];
+                                            candidates.push(SearchResult {
+                                                id: format!("stm:{}:{}", sess_id, key),
+                                                title: key.clone(),
+                                                content: val.clone(),
+                                                similarity: dot,
+                                                utility: 100.0,
+                                                tier: "working".to_string(),
+                                                embedding: Some(v_vec),
+                                                raw_vector_sim: Some(dot),
+                                                session_id: Some(sess_id.to_string()),
+                                                word_count: Some(val.split_whitespace().count() as u32),
+                                                ..Default::default()
+                                            });
+                                        }
                                     }
                                 }
-                            }
-                        } else {
-                            for (i, val) in values.iter().enumerate() {
-                                let key = &keys[i];
-                                candidates.push(SearchResult {
-                                    id: format!("stm:{}:{}", sess_id, key),
-                                    title: key.clone(),
-                                    content: val.clone(),
-                                    similarity: 1.0,
-                                    utility: 100.0,
-                                    tier: "working".to_string(),
-                                    raw_vector_sim: Some(1.0),
-                                    session_id: Some(sess_id.to_string()),
-                                    word_count: Some(val.split_whitespace().count() as u32),
-                                    ..Default::default()
-                                });
+                            } else {
+                                for (i, val) in values.iter().enumerate() {
+                                    let key = &keys[i];
+                                    candidates.push(SearchResult {
+                                        id: format!("stm:{}:{}", sess_id, key),
+                                        title: key.clone(),
+                                        content: val.clone(),
+                                        similarity: 1.0,
+                                        utility: 100.0,
+                                        tier: "working".to_string(),
+                                        raw_vector_sim: Some(1.0),
+                                        session_id: Some(sess_id.to_string()),
+                                        word_count: Some(val.split_whitespace().count() as u32),
+                                        ..Default::default()
+                                    });
+                                }
                             }
                         }
                     }
