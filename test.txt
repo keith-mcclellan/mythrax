@@ -1,0 +1,1 @@
+The `gh` (GitHub CLI) tool is not available in the environment. Do not use the `submit` tool to fulfill requirements to 'open a GitHub Issue' or 'create a PR'; instead, generate mock Markdown files (e.g., `issue_1.md`, `mock_pr.md`) in the workspace containing the requested title, description, and details.
