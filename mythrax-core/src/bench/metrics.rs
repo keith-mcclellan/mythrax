@@ -113,3 +113,20 @@ pub fn session_id_from_corpus_id(id: &str) -> &str {
         id
     }
 }
+
+pub fn parse_haystack_date(date_str: &str) -> Option<String> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"^(\d{4})/(\d{2})/(\d{2})\s+\([A-Za-z]+\)\s+(\d{2}):(\d{2})$").unwrap()
+    });
+    if let Some(caps) = re.captures(date_str) {
+        let year = caps.get(1)?.as_str();
+        let month = caps.get(2)?.as_str();
+        let day = caps.get(3)?.as_str();
+        let hour = caps.get(4)?.as_str();
+        let minute = caps.get(5)?.as_str();
+        Some(format!("{}-{}-{}T{}:{}:00Z", year, month, day, hour, minute))
+    } else {
+        None
+    }
+}

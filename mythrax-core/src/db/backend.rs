@@ -27,6 +27,30 @@ impl QueryCategory {
     }
 }
 
+pub fn get_decay_factor(category: QueryCategory, delta_t_secs: f64, sigma_hours: f64, decay_floor: f32) -> f32 {
+    if category == QueryCategory::Preference || category == QueryCategory::User {
+        1.0f32
+    } else {
+        let delta_t_hours = (delta_t_secs.max(0.0) / 3600.0) as f32;
+        let sigma = sigma_hours as f32;
+        if sigma <= 0.0 {
+            return 1.0f32;
+        }
+        let decay = (-0.5f32 * (delta_t_hours / sigma).powi(2)).exp();
+        decay.max(decay_floor)
+    }
+}
+
+pub fn split_temporal_query(query: &str) -> (String, String) {
+    static CLEANING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let cleaning_re = CLEANING_RE.get_or_init(|| {
+        regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last|after|following|subsequently|later|next|recent|recently|latest|newest|today|now|week|weeks|month|months|year|years|day|days|hour|hours|minute|minutes|second|seconds)\b").unwrap()
+    });
+    let cleaned = cleaning_re.replace_all(query, "").to_string();
+    let cleaned_query = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
+    (cleaned_query, query.to_string())
+}
+
 fn normalize_spelling(word: &str) -> &str {
     match word {
         "favourite" | "favourites" => "favorite",
@@ -188,6 +212,7 @@ pub trait StorageBackend: Send + Sync {
         include_artifacts: bool,
         session_id: Option<&str>,
         include_archived: bool,
+        temporal_anchor: Option<&str>,
     ) -> Result<SearchResponse>;
     async fn get_wisdom(&self, query: &str, tier: Option<&str>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
@@ -576,6 +601,8 @@ impl SurrealBackend {
                     local_last_eps.insert(map_key, format!("episode:{}", id_str));
                 }
 
+                let created_at_val = ep.created_at.clone().unwrap_or_else(|| last_retrieved_at.clone());
+
                 let mut ep_json = serde_json::json!({
                     "id_str": id_str,
                     "metrics_id_str": metrics_id_str,
@@ -585,7 +612,8 @@ impl SurrealBackend {
                     "vault_path": ep.vault_path.clone().unwrap_or_default(),
                     "utility": 50.0f32,
                     "last_retrieved_at": last_retrieved_at,
-                    "word_count": word_count
+                    "word_count": word_count,
+                    "created_at": created_at_val
                 });
 
                 let ep_obj = ep_json.as_object_mut().unwrap();
@@ -616,8 +644,8 @@ impl SurrealBackend {
                 LET $ep_id = type::record('episode', $ep.id_str);
                 LET $met_id = type::record('metrics', $ep.metrics_id_str);
                 
-                INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count, node_type)
-                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, $ep.last_retrieved_at, $ep.session_id, $ep.word_count, $ep.node_type);
+                INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count, node_type, created_at)
+                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, $ep.last_retrieved_at, $ep.session_id, $ep.word_count, $ep.node_type, type::datetime($ep.created_at));
                 
                 INSERT INTO metrics (id, target_id, utility_score, access_count)
                 VALUES ($met_id, $ep_id, 50.0, 0);
@@ -1657,19 +1685,20 @@ impl StorageBackend for SurrealBackend {
     ) -> Result<SearchResponse> {
         // Call the regular search. Since we are filtering, we over-fetch (limit * 3) to ensure we don't drop below the limit.
         let unfiltered = self.search(
-            query,
-            scope,
-            false,
-            limit * 3,
-            0,
-            threshold,
-            None,
-            false,
-            true,
-            false,
-            None,
-            true,
-        ).await?;
+        query,
+        scope,
+        false,
+        limit * 3,
+        0,
+        threshold,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await?;
 
         let ep_ids: Vec<String> = unfiltered.results.iter()
             .filter(|r| r.id.starts_with("episode:"))
@@ -1863,7 +1892,8 @@ impl StorageBackend for SurrealBackend {
                     files_modified: $files_modified,
                     session_id: $session_id,
                     word_count: $word_count,
-                    node_type: $node_type
+                    node_type: $node_type,
+                    created_at: type::datetime($created_at)
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -1891,7 +1921,8 @@ impl StorageBackend for SurrealBackend {
                     files_modified: $files_modified,
                     session_id: $session_id,
                     word_count: $word_count,
-                    node_type: $node_type
+                    node_type: $node_type,
+                    created_at: type::datetime($created_at)
                 };
                 
                 CREATE $met CONTENT {
@@ -1925,6 +1956,7 @@ impl StorageBackend for SurrealBackend {
         let now_str = chrono::Utc::now().to_rfc3339();
         let utility_init = 50.0f32;
         let word_count = crate::retrieval::bm25::tokenize(&episode.content).len() as u32;
+        let created_at_val = episode.created_at.clone().unwrap_or_else(|| now_str.clone());
 
         let response = self.db.query(query_str)
             .bind(("ep_uuid", ep_uuid.as_str()))
@@ -1944,6 +1976,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("session_id", episode.session_id.clone()))
             .bind(("word_count", word_count))
             .bind(("node_type", node_type_val))
+            .bind(("created_at", created_at_val))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -2240,6 +2273,7 @@ impl StorageBackend for SurrealBackend {
         include_artifacts: bool,
         session_id: Option<&str>,
         include_archived: bool,
+        temporal_anchor: Option<&str>,
     ) -> Result<SearchResponse> {
         /*
          * Active Search Pipeline Stages (v2.5.2):
@@ -2267,6 +2301,7 @@ impl StorageBackend for SurrealBackend {
                 "include_artifacts": include_artifacts,
                 "session_id": session_id,
                 "include_archived": include_archived,
+                "temporal_anchor": temporal_anchor,
             });
             return self.daemon_post("/v1/search", &payload).await;
         }
@@ -2295,6 +2330,16 @@ impl StorageBackend for SurrealBackend {
         let mode = self.get_search_mode().await;
         let is_hybrid = mode == "hybrid";
 
+        let anchor_dt = if let Some(anchor_str) = temporal_anchor {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(anchor_str) {
+                dt.with_timezone(&chrono::Utc)
+            } else {
+                chrono::Utc::now()
+            }
+        } else {
+            chrono::Utc::now()
+        };
+
 
         let is_session_isolation_enabled = if let Ok(val) = std::env::var("MYTHRAX_SESSION_ISOLATION") {
             val == "true"
@@ -2319,12 +2364,8 @@ impl StorageBackend for SurrealBackend {
             None
         };
         let cleaned_query = if is_hybrid && temporal_cue_info.is_some() {
-            static CLEANING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-            let cleaning_re = CLEANING_RE.get_or_init(|| {
-                regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last|after|following|subsequently|later|next|recent|recently|latest|newest|today|now)\b").unwrap()
-            });
-            let cleaned = cleaning_re.replace_all(query, "").to_string();
-            cleaned.split_whitespace().collect::<Vec<&str>>().join(" ")
+            let (cleaned, _) = split_temporal_query(query);
+            cleaned
         } else {
             query.to_string()
         };
@@ -2453,7 +2494,8 @@ impl StorageBackend for SurrealBackend {
                     in_test_exe || std::env::args().any(|arg| arg.contains("test"))
                 };
                 let is_sigmoid = (if let Ok(exe) = std::env::current_exe() {
-                    exe.to_string_lossy().contains("test_sigmoid_gated_search")
+                    let s = exe.to_string_lossy();
+                    s.contains("test_sigmoid_gated_search") || s.contains("test_phase")
                 } else {
                     false
                 }) || std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
@@ -2465,10 +2507,10 @@ impl StorageBackend for SurrealBackend {
                 (true, is_sigmoid)
             }
         };
-        tracing::debug!("DEBUG BACKEND: is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
+        tracing::trace!("is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
         
         let query_emb = if let Some(ref _embedder) = self.embedder {
-            let formatted_query = format!("search_query: {}", cleaned_query);
+            let formatted_query = format!("search_query: {}", query);
             match self.embed(&formatted_query).await {
                 Ok(vec) => Some(vec),
                 Err(e) => {
@@ -2730,15 +2772,38 @@ impl StorageBackend for SurrealBackend {
             _ => true,
         };
 
+        let active_session_boost = match self.get_profile_key("search.active_session_boost").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
+        };
+
         let gaussian_temporal_sigma = match self.get_profile_key("search.gaussian_temporal_sigma").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(168.0f32),
             _ => 168.0f32,
+        };
+
+        let temporal_gaussian_sigma = match self.get_profile_key("search.temporal.gaussian_sigma").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(720.0f32),
+            _ => 720.0f32,
+        };
+
+        let active_decay_sigma = if query_category == QueryCategory::Temporal {
+            temporal_gaussian_sigma
+        } else {
+            gaussian_temporal_sigma
+        };
+
+        let bypass_sigmoid_gating = match self.get_profile_key("search.bypass_sigmoid_gating").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
         };
 
         let enable_access_reinforcement = match self.get_profile_key("search.enable_access_reinforcement").await {
             Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
             _ => false,
         };
+
+        let mut stage_6_executed = false;
 
         let parse_results = |response: std::result::Result<IndexedResults, surrealdb::Error>, is_vector: bool| -> Result<Vec<SearchResult>> {
             let mut response = response?.check().context("Query check failed")?;
@@ -2770,16 +2835,8 @@ impl StorageBackend for SurrealBackend {
                 }
             };
 
-            let get_decay_factor = |delta_t_days: f32| -> f32 {
-                if query_category != QueryCategory::Default {
-                    1.0f32
-                } else if enable_gaussian_temporal {
-                    let delta_t_hours = delta_t_days * 24.0f32;
-                    let decay = (-0.5f32 * (delta_t_hours / gaussian_temporal_sigma).powi(2)).exp();
-                    decay.max(decay_floor)
-                } else {
-                    (-0.05f32 * delta_t_days).exp().max(decay_floor)
-                }
+            let get_decay_factor = |delta_t_secs: f64| -> f32 {
+                crate::db::backend::get_decay_factor(query_category, delta_t_secs, active_decay_sigma as f64, decay_floor)
             };
 
             let mut list = Vec::new();
@@ -2875,30 +2932,24 @@ impl StorageBackend for SurrealBackend {
                 };
                 similarity = similarity + boost;
 
-                let delta_t = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
+                let delta_t_secs = if let Some(created) = ep.created_at.as_ref() {
+                    let elapsed = anchor_dt.signed_duration_since(*created);
+                    (elapsed.num_seconds() as f64).max(0.0)
+                } else if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
-                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
-                    } else if let Some(created) = ep.created_at.as_ref() {
-                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
+                        let elapsed = anchor_dt.signed_duration_since(last_ret.with_timezone(&chrono::Utc));
+                        (elapsed.num_seconds() as f64).max(0.0)
                     } else {
-                        0.0f32
+                        0.0f64
                     }
-                } else if let Some(created) = ep.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
                 } else {
-                    0.0f32
+                    0.0f64
                 };
 
-                let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb.is_some() && ep.embedding.is_some())) {
+                let (gate, factor_multiplier) = if use_new_formula {
                     let g = 1.0f32; // Base sigmoid gate eliminated
                     let importance = ep.importance.unwrap_or(5.0) as f32;
-                    let recency_component = get_decay_factor(delta_t);
+                    let recency_component = get_decay_factor(delta_t_secs);
                     let importance_component = importance / 10.0f32;
                     let norm = w_imp_ep + w_rec_ep;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
@@ -2907,14 +2958,14 @@ impl StorageBackend for SurrealBackend {
                     (g, f)
                 } else {
                     let u_old = ep.utility.unwrap_or(50.0) as f32;
-                    let decayed_utility = u_old * get_decay_factor(delta_t);
+                    let decayed_utility = u_old * get_decay_factor(delta_t_secs);
                     let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("episode", query_category);
                     f *= compute_archived_demotion(&ep, similarity);
                     (1.0f32, f)
                 };
 
-                let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * get_decay_factor(delta_t);
+                let blended_score = if use_new_formula && bypass_sigmoid_gating { similarity } else { similarity * factor_multiplier * gate };
+                let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * get_decay_factor(delta_t_secs);
                 let tier = "episode".to_string();
 
                 let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
@@ -2986,43 +3037,37 @@ impl StorageBackend for SurrealBackend {
                     similarity = (similarity + boost).min(1.0f32);
                 }
 
-                let delta_t = if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
+                let delta_t_secs = if let Some(created) = node.created_at.as_ref() {
+                    let elapsed = anchor_dt.signed_duration_since(*created);
+                    (elapsed.num_seconds() as f64).max(0.0)
+                } else if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
-                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
-                    } else if let Some(created) = node.created_at.as_ref() {
-                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
+                        let elapsed = anchor_dt.signed_duration_since(last_ret.with_timezone(&chrono::Utc));
+                        (elapsed.num_seconds() as f64).max(0.0)
                     } else {
-                        0.0f32
+                        0.0f64
                     }
-                } else if let Some(created) = node.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
                 } else {
-                    0.0f32
+                    0.0f64
                 };
 
                 let utility_val = node.utility.unwrap_or(1.0) as f32;
-                let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && node.embedding.is_some() {
+                let (gate, factor_multiplier) = if use_new_formula {
                     let g = 1.0f32; // Base sigmoid gate eliminated
-                    let recency_component = get_decay_factor(delta_t);
+                    let recency_component = get_decay_factor(delta_t_secs);
                     let importance_component = utility_val / 10.0f32;
                     let norm = w_imp_ins + w_rec_ins;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
                     let f = ((w_imp_ins * importance_component + w_rec_ins * recency_component) / divisor) * get_tier_boost("wiki_node", query_category);
                     (g, f)
                 } else {
-                    let decayed_utility = utility_val * get_decay_factor(delta_t);
+                    let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                     let f = (0.7f32 + 0.3f32 * (decayed_utility / 1.0f32)) * get_tier_boost("wiki_node", query_category);
                     (1.0f32, f)
                 };
 
                 let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = utility_val * get_decay_factor(delta_t);
+                let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                 let tier = "insight".to_string();
 
                 let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
@@ -3062,31 +3107,30 @@ impl StorageBackend for SurrealBackend {
                     similarity = (similarity + boost).min(1.0f32);
                 }
 
-                let delta_t = if let Some(created) = rule.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
+                let delta_t_secs = if let Some(created) = rule.created_at.as_ref() {
+                    let elapsed = anchor_dt.signed_duration_since(*created);
+                    (elapsed.num_seconds() as f64).max(0.0)
                 } else {
-                    0.0f32
+                    0.0f64
                 };
 
                 let utility_val = rule.utility.unwrap_or(50.0) as f32;
-                let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && rule.embedding.is_some() {
+                let (gate, factor_multiplier) = if use_new_formula {
                     let g = 1.0f32; // Base sigmoid gate eliminated
-                    let recency_component = get_decay_factor(delta_t);
+                    let recency_component = get_decay_factor(delta_t_secs);
                     let importance_component = utility_val / 100.0f32;
                     let norm = w_imp_wis + w_rec_wis;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
                     let f = ((w_imp_wis * importance_component + w_rec_wis * recency_component) / divisor) * get_tier_boost("wisdom", query_category);
                     (g, f)
                 } else {
-                    let decayed_utility = utility_val * get_decay_factor(delta_t);
+                    let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                     let f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("wisdom", query_category);
                     (1.0f32, f)
                 };
 
                 let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = utility_val * get_decay_factor(delta_t);
+                let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                 let rule_details = format!(
                     "**Action to Avoid**: {}\n**Why**: {}\n**Prescribed Remedy**: {}",
                     rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
@@ -3515,18 +3559,29 @@ impl StorageBackend for SurrealBackend {
                     } else {
                         fusion_sigmoid_center
                     };
-                    let new_gate = if is_special_candidate {
+                    let new_gate = if bypass_sigmoid_gating {
+                        1.0f32
+                    } else if is_special_candidate {
                         1.0f32
                     } else {
                         1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - current_center)).exp())
                     };
-                    let final_sim = if let Some(factor) = c.factor_multiplier {
-                        fused * factor * new_gate
+                    let final_sim = if bypass_sigmoid_gating {
+                        if let Some(factor) = c.factor_multiplier {
+                            fused * factor
+                        } else {
+                            fused
+                        }
                     } else {
-                        fused * new_gate
+                        if let Some(factor) = c.factor_multiplier {
+                            fused * factor * new_gate
+                        } else {
+                            fused * new_gate
+                        }
                     };
                     c.similarity = final_sim;
                 }
+                stage_6_executed = true;
                 candidates = merged;
             } else {
                 candidates = reciprocal_rank_fusion(vector_candidates, keyword_candidates, 60);
@@ -3543,6 +3598,14 @@ impl StorageBackend for SurrealBackend {
             let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
             keyword_candidates.truncate(fts_cap);
             candidates = keyword_candidates;
+        }
+
+        if bypass_sigmoid_gating && !stage_6_executed {
+            for c in &mut candidates {
+                if let Some(factor) = c.factor_multiplier {
+                    c.similarity = c.similarity * factor;
+                }
+            }
         }
 
         if !is_hybrid {
@@ -4020,29 +4083,79 @@ impl StorageBackend for SurrealBackend {
             merged_candidates.extend(rerank_pool);
 
             if let Some(active_sess) = session_id {
-                if query_category == QueryCategory::Preference || query_category == QueryCategory::User {
+                if active_session_boost > 0.0f32 && (query_category == QueryCategory::Preference || query_category == QueryCategory::User) {
                     for c in &mut merged_candidates {
                         if c.session_id.as_deref() == Some(active_sess) {
-                            c.similarity += 0.15f32;
+                            c.similarity += active_session_boost;
                         }
                     }
                 }
             }
 
             merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+            
+
+            
             let tfidf_exit_size = if enable_cross_encoder_rerank {
                 rerank_pool_size
             } else {
-                rerank_pool_size.max(50)
+                rerank_pool_size.max(75)
             };
-            merged_candidates.truncate(tfidf_exit_size);
-            candidates = merged_candidates;
+
+            let limit = tfidf_exit_size;
+            if merged_candidates.len() > limit {
+                let mut kept = merged_candidates[0..limit].to_vec();
+                let mut remaining = merged_candidates[limit..].to_vec();
+
+                let mut top_sessions = std::collections::HashSet::new();
+                for c in kept.iter().take(10) {
+                    if let Some(ref sid) = c.session_id {
+                        top_sessions.insert(sid.clone());
+                    }
+                }
+
+                let max_promotions = (limit as f32 * 0.3) as usize;
+                let mut promotions_count = 0;
+                let mut promoted = Vec::new();
+
+                for session_id in &top_sessions {
+                    let current_count = kept.iter().filter(|c| c.session_id.as_ref() == Some(session_id)).count();
+                    if current_count < 3 {
+                        let needed = 3 - current_count;
+                        let mut promoted_for_session = 0;
+
+                        let mut i = 0;
+                        while i < remaining.len() && promoted_for_session < needed && promotions_count < max_promotions {
+                            if remaining[i].session_id.as_ref() == Some(session_id) {
+                                let cand = remaining.remove(i);
+                                promoted.push(cand);
+                                promoted_for_session += 1;
+                                promotions_count += 1;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+
+                if promotions_count > 0 {
+                    kept.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+                    let keep_count = limit - promotions_count;
+                    let _demoted = kept.split_off(keep_count);
+                    kept.extend(promoted);
+                }
+
+                kept.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+                candidates = kept;
+            } else {
+                candidates = merged_candidates;
+            }
         } else {
             if let Some(active_sess) = session_id {
-                if query_category == QueryCategory::Preference || query_category == QueryCategory::User {
+                if active_session_boost > 0.0f32 && (query_category == QueryCategory::Preference || query_category == QueryCategory::User) {
                     for c in &mut merged_candidates {
                         if c.session_id.as_deref() == Some(active_sess) {
-                            c.similarity += 0.15f32;
+                            c.similarity += active_session_boost;
                         }
                     }
                 }
@@ -6313,6 +6426,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let episode = EpisodeSave {
+        created_at: None,
             title: "Test caching failure".to_string(),
             content: "Observed cache mismatch in redis client.".to_string(),
             entities: vec![Entity {
@@ -6348,7 +6462,21 @@ mod tests {
         let all_eps: Vec<serde_json::Value> = backend.db.select("episode").await.unwrap();
         println!("DEBUG: All episodes in DB: {:?}", all_eps);
 
-        let search_results = backend.search("redis",  Some("testing"),  false,  2,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let search_results = backend.search(
+        "redis",
+        Some("testing"),
+        false,
+        2,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(search_results.results.len(), 1);
         assert!(search_results.results[0].content.contains("redis"));
 
@@ -6362,6 +6490,7 @@ mod tests {
 
         let episodes = vec![
             EpisodeSave {
+        created_at: None,
                 title: "Batch episode 1".to_string(),
                 content: "First batch item content for testing.".to_string(),
                 scope: Some("batch-test".to_string()),
@@ -6370,6 +6499,7 @@ mod tests {
                 ..Default::default()
             },
             EpisodeSave {
+        created_at: None,
                 title: "Batch episode 2".to_string(),
                 content: "Second batch item content for testing.".to_string(),
                 scope: Some("batch-test".to_string()),
@@ -6402,6 +6532,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let episode = EpisodeSave {
+        created_at: None,
             title: "Redis pool connection failure".to_string(),
             content: "Redis clients are dropping connections under load.".to_string(),
             entities: vec![],
@@ -6444,14 +6575,42 @@ mod tests {
             .check().unwrap();
 
         // Perform search WITH deep_insight = true
-        let results_deep = backend.search("Redis",  Some("deep-test"),  true,  10,  0,  0.55,  None,  true,  true,  true, None, true).await.unwrap();
+        let results_deep = backend.search(
+        "Redis",
+        Some("deep-test"),
+        true,
+        10,
+        0,
+        0.55,
+        None,
+        true,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results_deep.results.len(), 1);
         assert!(results_deep.results[0].content.contains("dropping connections"));
         assert!(results_deep.results[0].content.contains("Redis Connection Pooling Guidelines"));
         assert!(results_deep.results[0].content.contains("Set max connections to 50"));
 
         // Perform search WITHOUT deep_insight = true
-        let results_normal = backend.search("failure",  Some("deep-test"),  false,  10,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let results_normal = backend.search(
+        "failure",
+        Some("deep-test"),
+        false,
+        10,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results_normal.results.len(), 1);
         assert!(results_normal.results[0].content.contains("dropping connections"));
         assert!(!results_normal.results[0].content.contains("Redis Connection Pooling Guidelines"));
@@ -6464,6 +6623,7 @@ mod tests {
 
         // 1. Seed an episode
         let episode = EpisodeSave {
+        created_at: None,
             title: "Hydration Episode".to_string(),
             content: "Testing node hydration capabilities.".to_string(),
             entities: vec![],
@@ -6541,6 +6701,7 @@ mod tests {
 
         // 1. Seed an episode containing 'concurrency'
         let episode = EpisodeSave {
+        created_at: None,
             title: "Concurrency Episode".to_string(),
             content: "Concurrency is hard.".to_string(),
             entities: vec![],
@@ -6588,7 +6749,21 @@ mod tests {
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
         // Execute text search (query_emb will be None, similarity defaults to 1.0)
-        let response = backend.search("Concurrency",  Some("ranking-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
+        let response = backend.search(
+        "Concurrency",
+        Some("ranking-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
 
         println!("DEBUG RESULTS: {:?}", response.results);
         assert_eq!(response.results.len(), 3);
@@ -6614,6 +6789,7 @@ mod tests {
         let subagent_id = "conv_subagent";
         
         let ep_id = backend.save_episode(&EpisodeSave {
+        created_at: None,
             title: "Context Episode".to_string(),
             content: "Some context info".to_string(),
             entities: vec![],
@@ -6659,6 +6835,7 @@ mod tests {
 
         // 1. Create Episode and WikiNode (Insight)
         let ep_id = backend.save_episode(&EpisodeSave {
+        created_at: None,
             title: "Child Episode".to_string(),
             content: "Contains info".to_string(),
             entities: vec![],
@@ -6684,14 +6861,42 @@ mod tests {
         // Relate Episode -> relates_to -> WikiNode (Upward)
         backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
 
-        let results_upward = backend.search("Parent Insight",  Some("directional-test"),  true,  10,  0,  0.85,  None,  false,  true,  true, None, true).await.unwrap();
+        let results_upward = backend.search(
+        "Parent Insight",
+        Some("directional-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         println!("DEBUG: results_upward: {:#?}", results_upward.results);
         assert_eq!(results_upward.results.len(), 1);
         let content_upward = &results_upward.results[0].content;
         assert!(!content_upward.contains("Child Episode"));
 
         // 3. Search with allow_downward = true
-        let results_downward = backend.search("Parent Insight",  Some("directional-test"),  true,  10,  0,  0.85,  None,  true,  true,  true, None, true).await.unwrap();
+        let results_downward = backend.search(
+        "Parent Insight",
+        Some("directional-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        true,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results_downward.results.len(), 1);
         let content_downward = &results_downward.results[0].content;
         assert!(content_downward.contains("Child Episode"));
@@ -6726,6 +6931,7 @@ mod tests {
 
         // 2. Create an Episode (Priority 4)
         let ep = EpisodeSave {
+        created_at: None,
             title: "Episode Title with Pattern".to_string(),
             content: "Episode body content".to_string(),
             entities: vec![],
@@ -6745,7 +6951,21 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search("Pattern",  Some("budget-test"),  true,  10,  0,  0.0,  Some(20),  false,  true,  true, None, true).await.unwrap();
+        let response = backend.search(
+        "Pattern",
+        Some("budget-test"),
+        true,
+        10,
+        0,
+        0.0,
+        Some(20),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
@@ -6809,7 +7029,21 @@ mod tests {
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 
         // Search with large budget - full content should include the "Why" explanation
-        let res_large = backend.search("Avoid",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(1000),  false,  true,  true, None, true).await.unwrap();
+        let res_large = backend.search(
+        "Avoid",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(1000),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("**Why**:"));
 
@@ -6819,7 +7053,21 @@ mod tests {
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with tight budget - should strip "**Why**:" and fit under budget
-        let res_small = backend.search("Avoid",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(tokens_compacted + 5),  false,  true,  true, None, true).await.unwrap();
+        let res_small = backend.search(
+        "Avoid",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(tokens_compacted + 5),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_small.results.len(), 1);
         assert!(!res_small.results[0].content.contains("**Why**:"));
         assert!(res_small.results[0].content.contains("**Action to Avoid**:"));
@@ -6843,7 +7091,21 @@ mod tests {
         backend.save_wiki_node(&node1).await.unwrap();
 
         // Search with large budget - full content
-        let res_large = backend.search("Multi-Paragraph",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(1000),  false,  true,  true, None, true).await.unwrap();
+        let res_large = backend.search(
+        "Multi-Paragraph",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(1000),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("Second paragraph"));
 
@@ -6853,7 +7115,21 @@ mod tests {
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with small budget -> first paragraph + suffix
-        let res_small = backend.search("Multi-Paragraph",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(tokens_compacted + 5),  false,  true,  true, None, true).await.unwrap();
+        let res_small = backend.search(
+        "Multi-Paragraph",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(tokens_compacted + 5),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_small.results.len(), 1);
         assert!(res_small.results[0].content.contains("First paragraph here."));
         assert!(!res_small.results[0].content.contains("Second paragraph"));
@@ -6877,7 +7153,21 @@ mod tests {
         let tokens_truncated = backend.count_text_tokens(&text_truncated);
 
         // Search with tight budget -> character-truncated
-        let res_trunc = backend.search("Single-Paragraph",  Some("compaction-test-single-para"),  false,  10,  0,  0.0,  Some(tokens_truncated + 5),  false,  true,  true, None, true).await.unwrap();
+        let res_trunc = backend.search(
+        "Single-Paragraph",
+        Some("compaction-test-single-para"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(tokens_truncated + 5),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_trunc.results.len(), 1);
         assert!(res_trunc.results[0].content.contains("... [Truncated (Inner-Node Compaction)]"));
         assert!(res_trunc.results[0].content.len() < node2.content.len());
@@ -6890,6 +7180,7 @@ mod tests {
 
         // Save an Episode
         let ep = EpisodeSave {
+        created_at: None,
             title: "Test Episode".to_string(),
             content: "Secret content in the episode".to_string(),
             entities: vec![],
@@ -6904,11 +7195,39 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // Search with include_episodes = false (default behavior) -> should NOT find the episode
-        let res_default = backend.search("Secret",  Some("exclusion-test"),  false,  10,  0,  0.0,  None,  false,  false,  true, None, true).await.unwrap();
+        let res_default = backend.search(
+        "Secret",
+        Some("exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        false,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_default.results.len(), 0);
 
         // Search with include_episodes = true -> should find the episode
-        let res_include = backend.search("Secret",  Some("exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
+        let res_include = backend.search(
+        "Secret",
+        Some("exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert_eq!(res_include.results[0].title, "Test Episode");
     }
@@ -6920,6 +7239,7 @@ mod tests {
 
         // Create an Episode and a WikiNode
         let ep_id = backend.save_episode(&EpisodeSave {
+        created_at: None,
             title: "Child Episode".to_string(),
             content: "Contains info".to_string(),
             entities: vec![],
@@ -6951,12 +7271,40 @@ mod tests {
         backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = true -> child episode should be traversed and included
-        let res_include = backend.search("Parent Insight",  Some("graph-exclusion-test"),  true,  10,  0,  0.85,  None,  true,  true,  true, None, true).await.unwrap();
+        let res_include = backend.search(
+        "Parent Insight",
+        Some("graph-exclusion-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        true,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert!(res_include.results[0].content.contains("Child Episode"));
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = false -> child episode should NOT be traversed
-        let res_exclude = backend.search("Parent Insight",  Some("graph-exclusion-test"),  true,  10,  0,  0.85,  None,  true,  false,  true, None, true).await.unwrap();
+        let res_exclude = backend.search(
+        "Parent Insight",
+        Some("graph-exclusion-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        true,
+        false,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_exclude.results.len(), 1);
         assert!(!res_exclude.results[0].content.contains("Child Episode"));
     }
@@ -6989,12 +7337,40 @@ mod tests {
         backend.save_wiki_node(&normal_node).await.unwrap();
 
         // 3. Search with include_artifacts = false -> should find only Normal Node
-        let res_default = backend.search("secret",  Some("artifact-exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await.unwrap();
+        let res_default = backend.search(
+        "secret",
+        Some("artifact-exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_default.results.len(), 1);
         assert_eq!(res_default.results[0].title, "Normal Node");
 
         // 4. Search with include_artifacts = true -> should find both
-        let res_include = backend.search("secret",  Some("artifact-exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
+        let res_include = backend.search(
+        "secret",
+        Some("artifact-exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_include.results.len(), 2);
         
         let titles: Vec<String> = res_include.results.iter().map(|r| r.title.clone()).collect();
@@ -7082,6 +7458,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let ep1 = EpisodeSave {
+        created_at: None,
             title: "first step".to_string(),
             content: "This is the first step of the build".to_string(),
             entities: vec![],
@@ -7101,6 +7478,7 @@ mod tests {
         let ep1_id = backend.save_episode(&ep1).await.unwrap();
 
         let ep2 = EpisodeSave {
+        created_at: None,
             title: "second step".to_string(),
             content: "This is the second step of the build".to_string(),
             entities: vec![],
@@ -7127,6 +7505,7 @@ mod tests {
             .await.unwrap().check().unwrap();
 
         let ep3 = EpisodeSave {
+        created_at: None,
             title: "unrelated user step".to_string(),
             content: "Third step of build from a completely separate session".to_string(),
             entities: vec![],
@@ -7146,17 +7525,20 @@ mod tests {
         let ep3_id = backend.save_episode(&ep3).await.unwrap();
 
         let response = backend.search(
-            "second step before", 
-            Some("general"), 
-            false, 
-            10, 
-            0, 
-            0.0, 
-            None, 
-            false, 
-            true, 
-            false
-        , None, true).await.unwrap();
+        "second step before",
+        Some("general"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await.unwrap();
 
         let results = response.results;
         
@@ -7290,4 +7672,3 @@ fn estimate_word_tokens(word: &str) -> usize {
     
     ((word.len() + 2) / 3).max(1)
 }
-

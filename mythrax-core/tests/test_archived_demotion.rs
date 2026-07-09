@@ -32,6 +32,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
             Some("session-abc".to_string())
         };
         let ep = EpisodeSave {
+        created_at: None,
             title: title.to_string(),
             content: content.to_string(),
             scope: Some("general".to_string()),
@@ -104,6 +105,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
     unsafe { std::env::set_var("MYTHRAX_SESSION_ISOLATION", "true"); }
 
@@ -161,6 +163,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
         true,
         Some("session-123"),
         true,
+        None,
     ).await?;
 
     let results_same = resp_same.results;

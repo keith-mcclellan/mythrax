@@ -176,6 +176,7 @@ async fn main() -> Result<()> {
                     _ => "agent_thought".to_string(),
                 };
                 let ep = EpisodeSave {
+        created_at: None,
                     title: format!("Session {} - Turn {}", session_id, turn_idx),
                     content: format!("{}: {}", turn.role, turn.content),
                     scope: Some("general".to_string()),
@@ -291,16 +292,17 @@ async fn main() -> Result<()> {
     let results = backend.search(
         &q.question,
         Some("general"),
-        false, // deep_insight
-        15, // limit
-        0, // offset
-        0.0, // threshold
-        None, // token_budget
-        false, // allow_downward
-        true, // include_episodes
-        false, // include_artifacts
+        false,
+        15,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
         last_sess_id.as_deref(),
-        false, // include_archived
+        false,
+        None,
     ).await?;
 
     println!("\n--- Retrieved Results (Top 10) ---");

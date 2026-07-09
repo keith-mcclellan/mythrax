@@ -33,6 +33,7 @@ async fn test_get_full_hydration_cap() -> Result<()> {
     // Create an episode with very large content (> 10000 characters)
     let large_content = "A".repeat(12000);
     let ep_save = EpisodeSave {
+        created_at: None,
         title: "Very Large Episode".to_string(),
         content: large_content.clone(),
         scope: Some("general".to_string()),

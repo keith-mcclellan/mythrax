@@ -580,6 +580,7 @@ pub async fn bulk_ingest_vault(
                     
                     if store.write_file(&parent_relative_path, &parent_content).is_ok() {
                         let parent_ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                             title: parent_title.clone(),
                             content: parent_content,
                             entities: vec![],
@@ -655,6 +656,7 @@ confidence: None,
 
                     if store.write_file(&relative_path, &note_content).is_ok() {
                         let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                             title: part_title.clone(),
                             content: note_content,
                             entities: vec![],
@@ -775,6 +777,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -821,6 +824,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -872,6 +876,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -921,6 +926,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -970,6 +976,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -1016,6 +1023,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -1067,6 +1075,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -1112,6 +1121,7 @@ confidence: None,
                         
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],

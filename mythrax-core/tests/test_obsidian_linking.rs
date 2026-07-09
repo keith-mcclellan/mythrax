@@ -22,6 +22,7 @@ async fn test_obsidian_compatibility_linking() -> Result<()> {
     // 1. Create a mock episode on disk and save in SurrealDB
     let ep_vault_path = "episodes/antigravity_test_ep.md";
     let ep_save = EpisodeSave {
+        created_at: None,
         title: "antigravity_test_ep".to_string(),
         content: "This is some test transcript content.".to_string(),
         entities: vec![],

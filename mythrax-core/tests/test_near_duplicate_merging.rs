@@ -44,6 +44,7 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
 
     // Create older episode
     let ep_older = EpisodeSave {
+        created_at: None,
         title: "Older Episode".to_string(),
         content: "Older content".to_string(),
         scope: Some("test_scope".to_string()),
@@ -68,6 +69,7 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
 
     // Create newer episode
     let ep_newer = EpisodeSave {
+        created_at: None,
         title: "Newer Episode".to_string(),
         content: "Newer content".to_string(),
         scope: Some("test_scope".to_string()),

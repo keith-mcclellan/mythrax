@@ -38,6 +38,7 @@ async fn test_compactor_decay_referenced_safety() -> Result<()> {
 
     // 1. Create a referenced episode that is decayed:
     let ep_save = EpisodeSave {
+        created_at: None,
         title: "Referenced Episode".to_string(),
         content: "Some important referenced content.".to_string(),
         scope: Some("general".to_string()),

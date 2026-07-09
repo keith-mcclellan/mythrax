@@ -231,6 +231,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
 
     // Save 4 episodes to SurrealDB
     let episode1 = mythrax_core::contracts::EpisodeSave {
+        created_at: None,
         title: "Episode 1".to_string(),
         content: "Content 1".to_string(),
         entities: vec![],
@@ -244,6 +245,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
     let id1 = backend.save_episode(&episode1).await?;
 
     let episode2 = mythrax_core::contracts::EpisodeSave {
+        created_at: None,
         title: "Episode 2".to_string(),
         content: "Content 2".to_string(),
         entities: vec![],
@@ -257,6 +259,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
     let id2 = backend.save_episode(&episode2).await?;
 
     let episode3 = mythrax_core::contracts::EpisodeSave {
+        created_at: None,
         title: "Episode 3".to_string(),
         content: "Content 3".to_string(),
         entities: vec![],
@@ -270,6 +273,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
     let id3 = backend.save_episode(&episode3).await?;
 
     let episode4 = mythrax_core::contracts::EpisodeSave {
+        created_at: None,
         title: "Episode 4".to_string(),
         content: "Content 4".to_string(),
         entities: vec![],

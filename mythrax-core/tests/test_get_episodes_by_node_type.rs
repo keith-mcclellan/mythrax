@@ -34,6 +34,7 @@ async fn test_get_episodes_by_node_type_filtering() -> Result<()> {
 
     // Create a procedural episode
     let ep_proc = EpisodeSave {
+        created_at: None,
         title: "Procedural Ep".to_string(),
         content: "Some procedural content".to_string(),
         scope: Some("test_scope".to_string()),
@@ -47,6 +48,7 @@ async fn test_get_episodes_by_node_type_filtering() -> Result<()> {
 
     // Create a standard episode
     let ep_std = EpisodeSave {
+        created_at: None,
         title: "Standard Ep".to_string(),
         content: "Some standard content".to_string(),
         scope: Some("test_scope".to_string()),

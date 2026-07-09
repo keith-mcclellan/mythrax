@@ -68,18 +68,18 @@ async fn test_t2_temporal_decay_with_anchor() -> Result<()> {
 #[test]
 fn test_t2b_decay_factor_per_category() {
     // Temporal: decay < 1.0 for delta_t=10 days, sigma=720h
-    let decay_temp = get_decay_factor(QueryCategory::Temporal, 10.0 * 86400.0, 720.0);
+    let decay_temp = get_decay_factor(QueryCategory::Temporal, 10.0 * 86400.0, 720.0, 0.10);
     assert!(decay_temp < 1.0, "Temporal category must decay: {}", decay_temp);
 
     // Default: decay < 1.0 for delta_t=10 days, sigma=168h
-    let decay_def = get_decay_factor(QueryCategory::Default, 10.0 * 86400.0, 168.0);
+    let decay_def = get_decay_factor(QueryCategory::Default, 10.0 * 86400.0, 168.0, 0.10);
     assert!(decay_def < 1.0, "Default category must decay: {}", decay_def);
 
     // Preference/User: decay == 1.0
-    let decay_pref = get_decay_factor(QueryCategory::Preference, 10.0 * 86400.0, 168.0);
+    let decay_pref = get_decay_factor(QueryCategory::Preference, 10.0 * 86400.0, 168.0, 0.10);
     assert_eq!(decay_pref, 1.0, "Preference category must not decay");
     
-    let decay_user = get_decay_factor(QueryCategory::User, 10.0 * 86400.0, 168.0);
+    let decay_user = get_decay_factor(QueryCategory::User, 10.0 * 86400.0, 168.0, 0.10);
     assert_eq!(decay_user, 1.0, "User category must not decay");
 }
 
@@ -109,11 +109,12 @@ async fn test_t6_bench_ingestion_sets_created_at() -> Result<()> {
     let id = backend.save_episode(&ep).await?;
     let uuid = id.split(':').nth(1).unwrap();
 
-    let mut res = backend.db.query("SELECT created_at FROM type::record('episode', $id);")
+    let mut res = backend.db.query("SELECT VALUE created_at FROM type::record('episode', $id);")
         .bind(("id", uuid))
         .await?;
-    let created_at_opt: Option<String> = res.take(0)?;
-    assert_eq!(created_at_opt, Some("2023-05-20T23:40:00Z".to_string()));
+    let created_at_opt: Option<chrono::DateTime<chrono::Utc>> = res.take(0)?;
+    let expected = "2023-05-20T23:40:00Z".parse::<chrono::DateTime<chrono::Utc>>()?;
+    assert_eq!(created_at_opt, Some(expected));
 
     Ok(())
 }

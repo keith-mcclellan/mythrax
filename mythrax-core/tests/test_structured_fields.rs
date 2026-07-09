@@ -8,6 +8,7 @@ async fn test_concept_prefilter_narrows_candidates() {
 
     // 1. Close but untagged episode
     let ep_close = EpisodeSave {
+        created_at: None,
         title: "Security and authentication overview".to_string(),
         content: "This document describes overall security patterns including auth and tokens.".to_string(),
         entities: vec![],
@@ -28,6 +29,7 @@ async fn test_concept_prefilter_narrows_candidates() {
 
     // 2. Target episode tagged with "oauth"
     let ep_target = EpisodeSave {
+        created_at: None,
         title: "OAuth setup guide".to_string(),
         content: "Steps to configure the oauth provider and client secrets. security patterns".to_string(),
         entities: vec![],
@@ -48,6 +50,7 @@ async fn test_concept_prefilter_narrows_candidates() {
 
     // 3. Unrelated episode
     let ep_unrelated = EpisodeSave {
+        created_at: None,
         title: "Database schema migrations".to_string(),
         content: "SurrealDB tables and indexes for belief states and thought nodes.".to_string(),
         entities: vec![],
@@ -86,6 +89,7 @@ async fn test_files_modified_filter() {
     backend.init().await.unwrap();
 
     let ep1 = EpisodeSave {
+        created_at: None,
         title: "Fix compiler errors in api.rs".to_string(),
         content: "Fixed struct literals and stand-alone commas in api.rs. refactored tests or fixes".to_string(),
         entities: vec![],
@@ -105,6 +109,7 @@ async fn test_files_modified_filter() {
     let id1 = backend.save_episode(&ep1).await.unwrap();
 
     let ep2 = EpisodeSave {
+        created_at: None,
         title: "Update backend tests".to_string(),
         content: "Refactored tests/test_temporal_edges.rs to verify edge invalidations. refactored tests or fixes".to_string(),
         entities: vec![],
@@ -143,6 +148,7 @@ async fn test_structured_filter_never_empties_floor() {
     backend.init().await.unwrap();
 
     let ep = EpisodeSave {
+        created_at: None,
         title: "General note".to_string(),
         content: "Some general content here.".to_string(),
         entities: vec![],

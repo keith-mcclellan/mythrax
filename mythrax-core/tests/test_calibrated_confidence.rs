@@ -9,6 +9,7 @@ async fn test_calibrated_confidence_scaling() -> Result<()> {
 
     // Create a mock episode with confidence 0.50
     let ep = EpisodeSave {
+        created_at: None,
         title: "Calibrated Confidence Test Episode".to_string(),
         content: "Unique content for test scaling similarity".to_string(),
         scope: Some("general".to_string()),
@@ -40,6 +41,7 @@ async fn test_calibrated_confidence_scaling() -> Result<()> {
         true,
         None,
         false,
+        None,
     ).await?;
 
     let results = resp.results;
@@ -65,6 +67,7 @@ async fn test_calibrated_confidence_scaling() -> Result<()> {
         true,
         None,
         false,
+        None,
     ).await?;
 
     let results_disabled = resp_disabled.results;

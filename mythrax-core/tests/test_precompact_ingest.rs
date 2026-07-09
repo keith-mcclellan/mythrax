@@ -116,6 +116,7 @@ async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<(
         true,
         None,
         true,
+        None,
     ).await?;
         let found = response.results.iter().any(|r| r.content.contains(payload));
         assert!(found, "verbatim tool output {} was dropped from array-form content", payload);
@@ -169,6 +170,7 @@ async fn precompact_mines_assistant_turns() -> anyhow::Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
     let found = response.results.iter().any(|r| r.content.contains("troubleshooting process"));
     assert!(found, "assistant turn content was not found in search results");
@@ -226,6 +228,7 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
     let found_short = response_short.results.iter().any(|r| r.content.contains("Sure, OK"));
     assert!(!found_short, "short assistant turn was incorrectly indexed");
@@ -244,6 +247,7 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
     let found_long = response_long.results.iter().any(|r| r.content.contains("Sure thing"));
     assert!(found_long, "long assistant turn was not indexed");

@@ -647,8 +647,23 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let include_artifacts = args.get("include_artifacts").and_then(|v| v.as_bool()).unwrap_or(false);
             let session_id = args.get("session_id").and_then(|v| v.as_str());
             let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
+            let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
 
-            let search_res = state.backend.search(query, scope, false, limit, offset, threshold, token_budget, allow_downward, include_episodes, include_artifacts, session_id, include_archived).await?;
+            let search_res = state.backend.search(
+        query,
+        scope,
+        false,
+        limit,
+        offset,
+        threshold,
+        token_budget,
+        allow_downward,
+        include_episodes,
+        include_artifacts,
+        session_id,
+        include_archived,
+        temporal_anchor,
+    ).await?;
             
             if let Some(sess_id) = session_id {
                 let mut cited_ids = Vec::new();
@@ -721,21 +736,23 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
             let session_id = args.get("session_id").and_then(|v| v.as_str());
             let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
+            let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
 
             let search_res = state.backend.search(
-                query,
-                scope,
-                false,
-                limit,
-                offset,
-                threshold,
-                token_budget,
-                allow_downward,
-                true, // include_episodes
-                false, // include_artifacts
-                session_id,
-                include_archived,
-            ).await?;
+        query,
+        scope,
+        false,
+        limit,
+        offset,
+        threshold,
+        token_budget,
+        allow_downward,
+        true,
+        false,
+        session_id,
+        include_archived,
+        temporal_anchor,
+    ).await?;
 
             // Broad Cheap Projection (BCP): we deliberately filter and only project
             // nodes where tier == "episode" to provide a lightweight, cheap overview index.
@@ -774,19 +791,20 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
                 id.to_string()
             } else if let Some(q) = query {
                 let search_res = state.backend.search(
-                    q,
-                    None,
-                    false,
-                    1,
-                    0,
-                    0.0,
-                    None,
-                    false,
-                    true,
-                    false,
-                    None,
-                    true,
-                ).await?;
+        q,
+        None,
+        false,
+        1,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await?;
                 let best = search_res.results.first().context("No matching anchor episode found for query")?;
                 best.id.clone()
             } else {
@@ -1076,6 +1094,7 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
             }
 
             let episode = EpisodeSave {
+        created_at: None,
                 title,
                 content: content.clone(),
                 entities,
@@ -1468,6 +1487,7 @@ async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             let id = state.backend.save_handoff(&handoff).await?;
 
             let event_ep = EpisodeSave {
+        created_at: None,
                 title: format!("Handoff Event: Parent to Subagent"),
                 content: format!("Handoff registered. Parent: {}, Subagent: {}, Summary: {}, File Path: {}", parent_conversation_id, subagent_conversation_id, handoff.summary, handoff.handoff_file_path),
                 entities: vec![],
@@ -1566,6 +1586,7 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                         missing_count += 1;
                         if fix {
                             let save = EpisodeSave {
+        created_at: None,
                                 title: ep.title.clone(),
                                 content: ep.content.clone(),
                                 entities: vec![],
@@ -1615,6 +1636,7 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
             for ep in all_eps {
                 if ep.embedding.is_none() {
                     let save = EpisodeSave {
+        created_at: None,
                         title: ep.title.clone(),
                         content: ep.content.clone(),
                         entities: vec![],
@@ -1843,6 +1865,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             let path = state.store.vault_root.join(vp);
             if !path.exists() {
                 let save = EpisodeSave {
+        created_at: None,
                     title: ep.title.clone(),
                     content: ep.content.clone(),
                     entities: vec![],
@@ -2022,19 +2045,20 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         } else {
             // Semantic search on handoff summary
             let search_res = state.backend.search(
-                summary,
-                scope,
-                false,
-                15,
-                0,
-                0.55,
-                None,
-                false,
-                true,
-                false,
-                None,
-                true,
-            ).await?;
+        summary,
+        scope,
+        false,
+        15,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await?;
 
             parts.push("## Retrieved Semantic Context\n".to_string());
             for res in search_res.results {
@@ -2064,19 +2088,20 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
         let search_query = query.unwrap_or("general context");
         let search_res = state.backend.search(
-            search_query,
-            Some(&dynamic_scope),
-            false,
-            15,
-            0,
-            0.55,
-            None,
-            false,
-            true,
-            false,
-            Some(session_id),
-            true,
-        ).await?;
+        search_query,
+        Some(&dynamic_scope),
+        false,
+        15,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        false,
+        Some(session_id),
+        true,
+        None,
+    ).await?;
 
         parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));
         let mut high_confidence_memories_found = false;
@@ -2517,6 +2542,7 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
             };
 
             let artifact_ep = EpisodeSave {
+        created_at: None,
                 title: format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
                 content: format!("File updated successfully: {}", rel_path),
                 entities: vec![],
@@ -2622,6 +2648,7 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
             };
 
             let artifact_ep = EpisodeSave {
+        created_at: None,
                 title: format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
                 content: format!("File updated successfully: {}", rel_path),
                 entities: vec![],

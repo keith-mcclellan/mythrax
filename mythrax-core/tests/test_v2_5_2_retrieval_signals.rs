@@ -23,6 +23,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
 
     // 3. Insert an Episode that relates to the Entity
     let ep = EpisodeSave {
+        created_at: None,
         title: "Database Transaction Isolation".to_string(),
         content: "We need to ensure strict session isolation in our database adapter.".to_string(),
         entities: vec![],
@@ -49,7 +50,8 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         true,
         true,
         Some("session_foo"),
-        true
+        true,
+        None,
     ).await?;
 
     // The Episode is not retrieved by the direct keyword/vector search for "RustDB", but is traversed via relates_to edge!
@@ -70,7 +72,8 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         true,
         true,
         Some("session_foo"),
-        true
+        true,
+        None,
     ).await?;
     let found_disabled = resp_disabled.results.iter().any(|r| r.id == ep_id_str);
     assert!(!found_disabled, "Episode should NOT be retrieved when Spreading Activation is disabled");
@@ -96,7 +99,8 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         true,
         true,
         Some("session_bar"),
-        true
+        true,
+        None,
     ).await?;
 
     // Verify that the STM record is injected with working tier, synthetic ID, and utility = 100.0
@@ -115,6 +119,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
 
     // 2. Insert a new Episode for reinforcement testing
     let ep_reinforce = EpisodeSave {
+        created_at: None,
         title: "Memory Leak Diagnostics".to_string(),
         content: "Identify JavaScript memory leaks using Chrome DevTools heap snapshots.".to_string(),
         scope: Some("general".to_string()),
@@ -137,7 +142,8 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         true,
         true,
         None,
-        true
+        true,
+        None,
     ).await?;
 
     // Give the async spawned background task a moment to execute
@@ -171,7 +177,8 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         true,
         true,
         None,
-        true
+        true,
+        None,
     ).await?;
 
     // Give background task a moment
@@ -197,6 +204,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
 
     // 2. Perform a search with two episodes in candidates
     let ep_other = EpisodeSave {
+        created_at: None,
         title: "Random unrelated title".to_string(),
         content: "Totally unrelated document content that does not match transaction isolation.".to_string(),
         scope: Some("general".to_string()),
@@ -218,7 +226,8 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         true,
         true,
         Some("session_foo"),
-        true
+        true,
+        None,
     ).await?;
 
     // Verify that the first candidate (which matches the mock boost) has similarity 0.95
@@ -239,7 +248,8 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         true,
         true,
         Some("session_foo"),
-        true
+        true,
+        None,
     ).await?;
     assert_ne!(resp_no_rerank.results[0].similarity, 0.95f32);
 

@@ -15,6 +15,7 @@ async fn test_user_profile_compilation_and_sorting() {
     // 2. Save episodes with out-of-order and identical timestamps (as done in transaction batching)
     // We name the title with numeric Turn indices.
     let ep1 = EpisodeSave {
+        created_at: None,
         title: format!("{} - Turn 1", session_id),
         content: "I started my study.".to_string(),
         session_id: Some(session_id.to_string()),
@@ -22,6 +23,7 @@ async fn test_user_profile_compilation_and_sorting() {
         ..Default::default()
     };
     let ep2 = EpisodeSave {
+        created_at: None,
         title: format!("{} - Turn 2", session_id),
         content: "I prefer coffee over tea.".to_string(),
         session_id: Some(session_id.to_string()),
@@ -29,6 +31,7 @@ async fn test_user_profile_compilation_and_sorting() {
         ..Default::default()
     };
     let ep10 = EpisodeSave {
+        created_at: None,
         title: format!("{} - Turn 10", session_id),
         content: "I live in Boston.".to_string(),
         session_id: Some(session_id.to_string()),
@@ -36,6 +39,7 @@ async fn test_user_profile_compilation_and_sorting() {
         ..Default::default()
     };
     let ep3 = EpisodeSave {
+        created_at: None,
         title: format!("{} - Turn 3", session_id),
         content: "My occupation is a software engineer.".to_string(),
         session_id: Some(session_id.to_string()),
@@ -80,6 +84,7 @@ async fn test_user_profile_smart_truncation() {
     // User turns:
     // Turn 1: 15 chars
     let ep1 = EpisodeSave {
+        created_at: None,
         title: format!("{} - Turn 1", session_id),
         content: "Hello my friend".to_string(),
         session_id: Some(session_id.to_string()),
@@ -88,6 +93,7 @@ async fn test_user_profile_smart_truncation() {
     };
     // Turn 2: 24 chars
     let ep2 = EpisodeSave {
+        created_at: None,
         title: format!("{} - Turn 2", session_id),
         content: "Weather is nice today so".to_string(),
         session_id: Some(session_id.to_string()),
@@ -96,6 +102,7 @@ async fn test_user_profile_smart_truncation() {
     };
     // Turn 3: 20 chars
     let ep3 = EpisodeSave {
+        created_at: None,
         title: format!("{} - Turn 3", session_id),
         content: "I went for a walk to".to_string(),
         session_id: Some(session_id.to_string()),
@@ -147,6 +154,7 @@ async fn test_dynamic_ladder_boost_scaling() {
     
     // Save a mock episode with query-matching content and title forced to 0.85 similarity
     let ep = EpisodeSave {
+        created_at: None,
         title: "High Similarity Old Node".to_string(),
         content: "Rust database locks and transaction management.".to_string(),
         scope: Some("general".to_string()),
@@ -169,6 +177,7 @@ async fn test_dynamic_ladder_boost_scaling() {
         true,
         None,
         true,
+        None,
     ).await.unwrap();
     assert!(!res.results.is_empty());
     let r = res.results.iter().find(|x| x.id == ep_id).unwrap();
@@ -189,6 +198,7 @@ async fn test_dynamic_ladder_boost_scaling() {
         true,
         None,
         true,
+        None,
     ).await.unwrap();
     let r2 = res2.results.iter().find(|x| x.id == ep_id).unwrap();
     assert_eq!(r2.raw_vector_sim.unwrap(), 1.0f32);
@@ -208,6 +218,7 @@ async fn test_dynamic_ladder_boost_scaling() {
         true,
         None,
         true,
+        None,
     ).await.unwrap();
     let r3 = res3.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r3.raw_vector_sim.unwrap() - 0.925f32).abs() < 1e-5);
@@ -224,6 +235,7 @@ async fn test_dynamic_temporal_decay_floor() {
     
     // Save a mock episode with query-matching content
     let ep = EpisodeSave {
+        created_at: None,
         title: "High Similarity Old Node".to_string(),
         content: "Rust database locks and transaction management.".to_string(),
         scope: Some("general".to_string()),
@@ -252,6 +264,7 @@ async fn test_dynamic_temporal_decay_floor() {
         true,
         None,
         true,
+        None,
     ).await.unwrap();
     let r = res.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r.factor_multiplier.unwrap() - 0.35f32).abs() < 1e-4);
@@ -276,6 +289,7 @@ async fn test_dynamic_temporal_decay_floor() {
         true,
         None,
         true,
+        None,
     ).await.unwrap();
     let r2 = res2.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r2.factor_multiplier.unwrap() - 0.475f32).abs() < 1e-4);

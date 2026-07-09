@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id};
+use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id, parse_haystack_date};
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use surrealdb_types::SurrealValue;
@@ -82,6 +82,10 @@ struct QuestionEntry {
     /// omit it; default to empty so session recall degrades to 0.0 rather than panicking.
     #[serde(default)]
     answer_session_ids: Vec<String>,
+    #[serde(default)]
+    question_date: Option<String>,
+    #[serde(default)]
+    haystack_dates: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -996,7 +1000,11 @@ async fn run_evaluation(
                             "tool" | "computer" | "tool_result" => "tool_execution".to_string(),
                             _ => "agent_thought".to_string(),
                         };
+                        let created_at = q.haystack_dates.as_ref()
+                            .and_then(|dates| dates.get(sess_idx))
+                            .and_then(|d| parse_haystack_date(d));
                         let ep = EpisodeSave {
+                            created_at,
                             title: format!("Session {} - Turn {}", session_id, turn_idx),
                             content: format!("{}: {}", turn.role, turn.content),
                             scope: Some("general".to_string()),
@@ -1099,23 +1107,23 @@ async fn run_evaluation(
             }
 
             let start_query = std::time::Instant::now();
-            let active_session_id = q.answer_session_ids.first()
-                .map(|s| s.as_str())
-                .or_else(|| q.haystack_session_ids.last().map(|s| s.as_str()));
+            let active_session_id = q.haystack_session_ids.last().map(|s| s.as_str());
+            let temporal_anchor = q.question_date.as_ref().and_then(|d| parse_haystack_date(d));
             let search_response = backend
                 .search(
                     &q.question,
                     Some("general"),
-                    false,       // deep_insight
-                    retrieve_k,  // limit: over-fetch to max(k_recall, k_ndcg)
-                    0,           // offset
-                    0.0,         // threshold (allow all)
-                    None,        // token_budget
-                    false,       // allow_downward
-                    true,        // include_episodes
-                    true,        // include_artifacts
-                    active_session_id, // session_id
-                    true,        // include_archived
+                    false,
+                    retrieve_k,
+                    0,
+                    0.0,
+                    None,
+                    false,
+                    true,
+                    true,
+                    active_session_id,
+                    true,
+                    temporal_anchor.as_deref(),
                 )
                 .await
                 .context("Search query failed during evaluation")?;

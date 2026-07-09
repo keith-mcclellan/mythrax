@@ -27,19 +27,20 @@ pub async fn run_agent_recall(
 
     for q in queries {
         let response = backend.search(
-            &q.query,
-            None,
-            deep_insight,
-            limit,
-            0,
-            threshold,
-            None,
-            false,
-            true,
-            true,
-            None,
-            true,
-        ).await?;
+        &q.query,
+        None,
+        deep_insight,
+        limit,
+        0,
+        threshold,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
 
         // Combine result content to search for fragments
         let combined_results: String = response.results.iter()

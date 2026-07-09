@@ -221,19 +221,20 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         let threshold = current_threshold.unwrap_or(0.55) as f32;
 
         let search_res = backend.search(
-            &synthetic_query,
-            Some("all"),
-            false,
-            10,
-            0,
-            threshold,
-            None,
-            false,
-            true,
-            false,
-            None,
-            true,
-        ).await?;
+        &synthetic_query,
+        Some("all"),
+        false,
+        10,
+        0,
+        threshold,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await?;
 
         let found = search_res.results.iter().any(|r| r.id == ep_id);
         if !found {

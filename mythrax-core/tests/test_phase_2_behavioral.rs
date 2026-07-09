@@ -133,6 +133,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
     };
 
     backend.save_episode(&EpisodeSave {
+        created_at: None,
         title: ep1.title.clone(),
         content: ep1.content.clone(),
         entities: vec![],
@@ -146,6 +147,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
     }).await?;
 
     backend.save_episode(&EpisodeSave {
+        created_at: None,
         title: ep2.title.clone(),
         content: ep2.content.clone(),
         entities: vec![],

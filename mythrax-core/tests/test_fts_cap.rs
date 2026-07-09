@@ -18,6 +18,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
 
     for title in &titles_arch {
         let ep = EpisodeSave {
+        created_at: None,
             title: title.to_string(),
             content: content_arch.to_string(),
             scope: Some("general".to_string()),
@@ -35,6 +36,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
 
     for title in &titles_other {
         let ep = EpisodeSave {
+        created_at: None,
             title: title.to_string(),
             content: content_other.to_string(),
             scope: Some("general".to_string()),
@@ -72,6 +74,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
 
     println!("Search Results count (Cap 2): {}", resp_cap_2.results.len());
@@ -95,6 +98,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
     // We need 4 documents with "architecture" to test cap = 3!
     // Let's insert a 4th document with "architecture"
     let ep = EpisodeSave {
+        created_at: None,
         title: "Microservice Node Zeta".to_string(),
         content: content_arch.to_string(),
         scope: Some("general".to_string()),
@@ -118,6 +122,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
 
     println!("Search Results count (Cap 3): {}", resp_cap_3.results.len());

@@ -202,6 +202,7 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
 
     // Seed an episode
     let ep = EpisodeSave {
+        created_at: None,
         title: "Decay Test Episode".to_string(),
         content: "Decay test content.".to_string(),
         entities: vec![],
@@ -232,7 +233,21 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
         .await?;
 
     // 3. Run a search. This will calculate decay on-the-fly and return it
-    let search_res = backend.search("Decay",  Some("decay-test"),  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await?;
+    let search_res = backend.search(
+        "Decay",
+        Some("decay-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await?;
     assert_eq!(search_res.results.len(), 1);
     let returned_utility = search_res.results[0].utility;
     // Decay: 50.0 * e^(-0.05 * 10) = 50.0 * e^(-0.5) = 50.0 * 0.6065 = 30.32
@@ -284,6 +299,7 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
     store.write_file(ep_vault_path, ep_content)?;
 
     let ep = EpisodeSave {
+        created_at: None,
         title: "Decayed Episode".to_string(),
         content: ep_content.to_string(),
         entities: vec![],
@@ -352,6 +368,7 @@ async fn test_auditor_calibration_and_citations() -> Result<()> {
 
     // Seed an episode
     let ep = EpisodeSave {
+        created_at: None,
         title: "Cited Episode".to_string(),
         content: "Cited content.".to_string(),
         entities: vec![],
