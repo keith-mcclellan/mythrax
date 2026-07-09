@@ -11,22 +11,21 @@ fn test_count_human_messages_various_formats() {
 
     // Write a set of messages in JSON lines format:
     // 1. Simple user string content (valid user turn)
-    writeln!(
-        file,
-        r#"{{"role": "user", "content": "hello there"}}"#
-    ).unwrap();
-    
+    writeln!(file, r#"{{"role": "user", "content": "hello there"}}"#).unwrap();
+
     // 2. User with nested structure (valid user turn)
     writeln!(
         file,
         r#"{{"message": {{"role": "user", "content": "how are you"}}}}"#
-    ).unwrap();
+    )
+    .unwrap();
 
     // 3. User with command-message turn (should be ignored)
     writeln!(
         file,
         r#"{{"role": "user", "content": "run some command <command-message>"}}"#
-    ).unwrap();
+    )
+    .unwrap();
 
     // 4. User with array-form content blocks (valid user turn)
     writeln!(
@@ -38,7 +37,8 @@ fn test_count_human_messages_various_formats() {
     writeln!(
         file,
         r#"{{"role": "assistant", "content": "I am an assistant"}}"#
-    ).unwrap();
+    )
+    .unwrap();
 
     let count = count_human_messages(file_path.to_str().unwrap());
     assert_eq!(count, 3); // Message 1, 2, and 4 are valid user turns.

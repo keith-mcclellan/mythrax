@@ -2,25 +2,22 @@
 #![recursion_limit = "512"]
 
 pub mod api;
+pub mod auth;
 pub mod cli;
+pub mod cognitive;
 pub mod contracts;
+pub mod daemon;
 pub mod db;
 pub mod embeddings;
-pub mod secret_filter;
-pub mod store;
-pub mod wal;
-pub mod vault;
-pub mod auth;
-pub mod verify;
+pub mod hooks;
 pub mod llm;
-pub mod cognitive;
 pub mod mcp;
 pub mod mcp_routes;
-pub mod daemon;
-pub mod hooks;
 pub mod retrieval;
+pub mod secret_filter;
+pub mod store;
+pub mod vault;
+pub mod verify;
+pub mod wal;
 
 pub mod bench;
-
-
-

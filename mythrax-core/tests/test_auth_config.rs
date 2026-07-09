@@ -1,6 +1,6 @@
+use mythrax_core::auth::{load_token, verify_token_constant_time};
 use std::fs::File;
 use std::io::Write;
-use mythrax_core::auth::{load_token, verify_token_constant_time};
 use tempfile::tempdir;
 
 #[test]
@@ -27,7 +27,10 @@ fn test_permissions_enforced() {
         std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         let result = load_token(&token_path);
-        assert!(result.is_err(), "Expected error for wider permissions (0644)");
+        assert!(
+            result.is_err(),
+            "Expected error for wider permissions (0644)"
+        );
     }
 }
 
@@ -35,8 +38,14 @@ fn test_permissions_enforced() {
 fn test_constant_time_token_check() {
     assert!(verify_token_constant_time("secure-token", "secure-token"));
     assert!(!verify_token_constant_time("secure-token", "wrong-token"));
-    assert!(!verify_token_constant_time("secure-token", "longer-secure-token"));
-    assert!(!verify_token_constant_time("longer-secure-token", "secure-token"));
+    assert!(!verify_token_constant_time(
+        "secure-token",
+        "longer-secure-token"
+    ));
+    assert!(!verify_token_constant_time(
+        "longer-secure-token",
+        "secure-token"
+    ));
 }
 
 #[test]
@@ -45,5 +54,8 @@ fn test_no_secret_token_fallback() {
     let token_path = dir.path().join("non_existent_token_file");
 
     let result = load_token(&token_path);
-    assert!(result.is_err(), "Expected error when token file does not exist");
+    assert!(
+        result.is_err(),
+        "Expected error when token file does not exist"
+    );
 }

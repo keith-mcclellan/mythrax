@@ -1,6 +1,6 @@
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend, parse_record_id};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend, parse_record_id};
 
 #[tokio::test]
 async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
@@ -50,20 +50,29 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     let rec2 = parse_record_id(&ep2_id)?;
     let rec3 = parse_record_id(&ep3_id)?;
 
-    backend.db.query("RELATE $from -> followed_by -> $to;")
+    backend
+        .db
+        .query("RELATE $from -> followed_by -> $to;")
         .bind(("from", rec0.clone()))
         .bind(("to", rec1.clone()))
-        .await?.check()?;
+        .await?
+        .check()?;
 
-    backend.db.query("RELATE $from -> followed_by -> $to;")
+    backend
+        .db
+        .query("RELATE $from -> followed_by -> $to;")
         .bind(("from", rec1.clone()))
         .bind(("to", rec2.clone()))
-        .await?.check()?;
+        .await?
+        .check()?;
 
-    backend.db.query("RELATE $from -> followed_by -> $to;")
+    backend
+        .db
+        .query("RELATE $from -> followed_by -> $to;")
         .bind(("from", rec2.clone()))
         .bind(("to", rec3.clone()))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     // Allow SurrealDB index
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -71,22 +80,24 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     // Search query matches "Second compile action" (ep1)
     // Query is a procedural question which triggers depth=3 bidirectional expansion
     let query = "What compile actions did I run?";
-    
-    let resp = backend.search(
-        query,
-        Some("general"),
-        true,
-        // deep_insight = true to trigger expansion hydration
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-    ).await?;
+
+    let resp = backend
+        .search(
+            query,
+            Some("general"),
+            true,
+            // deep_insight = true to trigger expansion hydration
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+        )
+        .await?;
 
     let results = resp.results;
     println!("Search Results:");
@@ -102,7 +113,10 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     // Verify ep1 is the primary result
     assert!(!results.is_empty(), "Should return results");
     let primary = &results[0];
-    assert_eq!(primary.id, ep1_id, "Primary result should be Step 1 Compile Action");
+    assert_eq!(
+        primary.id, ep1_id,
+        "Primary result should be Step 1 Compile Action"
+    );
 
     // Recursively collect all returned episode IDs (including related_nodes)
     let mut all_ids = std::collections::HashSet::new();
@@ -116,9 +130,18 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     }
 
     // Verify all neighbors are expanded and returned
-    assert!(all_ids.contains(&ep0_id), "Should return preceding neighbor Step 0");
-    assert!(all_ids.contains(&ep2_id), "Should return succeeding neighbor Step 2");
-    assert!(all_ids.contains(&ep3_id), "Should return succeeding neighbor Step 3 (depth 2)");
+    assert!(
+        all_ids.contains(&ep0_id),
+        "Should return preceding neighbor Step 0"
+    );
+    assert!(
+        all_ids.contains(&ep2_id),
+        "Should return succeeding neighbor Step 2"
+    );
+    assert!(
+        all_ids.contains(&ep3_id),
+        "Should return succeeding neighbor Step 3 (depth 2)"
+    );
 
     Ok(())
 }

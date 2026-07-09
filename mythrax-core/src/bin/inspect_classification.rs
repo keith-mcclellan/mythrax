@@ -1,7 +1,7 @@
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
-use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
 struct QuestionEntry {
@@ -27,7 +27,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("single-session-preference".to_string(), 3),
         ("single-session-user".to_string(), 7),
         ("temporal-reasoning".to_string(), 13),
-    ].into_iter().collect::<HashMap<String, usize>>();
+    ]
+    .into_iter()
+    .collect::<HashMap<String, usize>>();
 
     for q in sorted {
         let limit = limits.get(&q.question_type).cloned().unwrap_or(0);
@@ -38,7 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("{:<30} | {:<30} | {:<20} | {}", "ID", "Dataset Type", "Classified Cat", "Question");
+    println!(
+        "{:<30} | {:<30} | {:<20} | {}",
+        "ID", "Dataset Type", "Classified Cat", "Question"
+    );
     println!("{}", "-".repeat(130));
 
     for q in dev_subset {

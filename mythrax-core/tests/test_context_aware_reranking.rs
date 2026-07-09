@@ -1,5 +1,5 @@
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_user_profile_compilation_and_sorting() {
@@ -9,8 +9,14 @@ async fn test_user_profile_compilation_and_sorting() {
     let session_id = "test_session_123";
 
     // 1. Save STM facts
-    backend.save_stm(session_id, "favorite_color", "blue").await.unwrap();
-    backend.save_stm(session_id, "degree", "physics").await.unwrap();
+    backend
+        .save_stm(session_id, "favorite_color", "blue")
+        .await
+        .unwrap();
+    backend
+        .save_stm(session_id, "degree", "physics")
+        .await
+        .unwrap();
 
     // 2. Save episodes with out-of-order and identical timestamps (as done in transaction batching)
     // We name the title with numeric Turn indices.
@@ -49,7 +55,10 @@ async fn test_user_profile_compilation_and_sorting() {
     backend.save_episode(&ep3).await.unwrap();
 
     // Compile profile with limit=0 (no truncation)
-    backend.save_profile_key("search.user_profile_max_len", "0").await.unwrap();
+    backend
+        .save_profile_key("search.user_profile_max_len", "0")
+        .await
+        .unwrap();
     let profile = backend.compile_user_profile(session_id).await.unwrap();
 
     // The output should sort the user turns chronologically (1 -> 2 -> 3 -> 10)
@@ -61,7 +70,8 @@ async fn test_user_profile_compilation_and_sorting() {
         "I live in Boston.",
         "degree: physics",
         "favorite_color: blue",
-    ].join("\n");
+    ]
+    .join("\n");
 
     assert_eq!(profile.trim(), expected.trim());
 }
@@ -75,7 +85,7 @@ async fn test_user_profile_smart_truncation() {
 
     // STM facts: 40 chars
     backend.save_stm(session_id, "deg", "math").await.unwrap(); // deg: math (9 chars)
-    backend.save_stm(session_id, "fav", "red").await.unwrap();  // fav: red (8 chars)
+    backend.save_stm(session_id, "fav", "red").await.unwrap(); // fav: red (8 chars)
 
     // User turns:
     // Turn 1: 15 chars
@@ -117,7 +127,10 @@ async fn test_user_profile_smart_truncation() {
     // So turns kept: Turn 2, Turn 3.
     // Re-reversed chronologically: Turn 2 -> Turn 3.
     // Expected output: "Weather is nice today so\nI went for a walk to\ndeg: math\nfav: red";
-    backend.save_profile_key("search.user_profile_max_len", "65").await.unwrap();
+    backend
+        .save_profile_key("search.user_profile_max_len", "65")
+        .await
+        .unwrap();
     let profile = backend.compile_user_profile(session_id).await.unwrap();
 
     let expected = "Weather is nice today so\nI went for a walk to\ndeg: math\nfav: red";
@@ -130,8 +143,13 @@ async fn test_pipeline_retrieval_optimizations() {
     backend.init().await.unwrap();
 
     // Verify default TF-IDF pool size configuration can be queried
-    backend.save_profile_key("search.tfidf_pool_size", "100").await.unwrap();
-    let tfidf_pool = backend.get_profile_key("search.tfidf_pool_size").await.unwrap();
+    backend
+        .save_profile_key("search.tfidf_pool_size", "100")
+        .await
+        .unwrap();
+    let tfidf_pool = backend
+        .get_profile_key("search.tfidf_pool_size")
+        .await
+        .unwrap();
     assert_eq!(tfidf_pool.unwrap(), "100");
 }
-

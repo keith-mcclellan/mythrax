@@ -14,7 +14,10 @@ fn test_canonicalized_mount_point_disk_check() {
 
     let massive_bytes = 10 * 1024 * 1024 * 1024 * 1024; // 10 Terabytes
     let res = check_disk_space(&symlink_dir, massive_bytes);
-    assert!(res.is_err(), "Must correctly canonicalize symlink and fail disk space check on partition");
+    assert!(
+        res.is_err(),
+        "Must correctly canonicalize symlink and fail disk space check on partition"
+    );
 }
 
 #[test]

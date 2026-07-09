@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
+use crate::contracts::{WikiNode, WisdomRule};
 use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
-use crate::contracts::{WisdomRule, WikiNode};
+use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillInfo {
@@ -40,7 +40,8 @@ fn parse_skill_file(path: &Path) -> Result<SkillInfo> {
     let scope = if let Some(s) = fm.scope {
         s
     } else if is_meta {
-        let folder_name = path.parent()
+        let folder_name = path
+            .parent()
             .and_then(|p| p.file_name())
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -86,7 +87,7 @@ fn scan_skills_in_dir(dir: &Path) -> Vec<SkillInfo> {
 pub fn scan_all_skills(store: &MarkdownStore) -> Vec<SkillInfo> {
     let home = std::env::var("HOME").unwrap_or_default();
     let global_skills_dir = PathBuf::from(home).join(".gemini/config/skills");
-    
+
     let mut project_skills_dir = PathBuf::from(".agents/skills");
     if !project_skills_dir.exists() {
         project_skills_dir = store.vault_root.join("../.agents/skills");
@@ -148,12 +149,20 @@ impl MetaSkillSynthesizer {
         let mut scope_skills: HashMap<String, Vec<SkillInfo>> = HashMap::new();
 
         for rule in wisdom_rules {
-            let sc = if rule.scope.trim().is_empty() { "general".to_string() } else { rule.scope.clone() };
+            let sc = if rule.scope.trim().is_empty() {
+                "general".to_string()
+            } else {
+                rule.scope.clone()
+            };
             scope_rules.entry(sc).or_default().push(rule);
         }
 
         for node in wiki_nodes {
-            let sc = if node.scope.trim().is_empty() { "general".to_string() } else { node.scope.clone() };
+            let sc = if node.scope.trim().is_empty() {
+                "general".to_string()
+            } else {
+                node.scope.clone()
+            };
             scope_nodes.entry(sc).or_default().push(node);
         }
 
@@ -186,7 +195,8 @@ impl MetaSkillSynthesizer {
                 let text_limit = std::cmp::min(n.content.len(), 3000);
                 prompt_context.push_str(&format!(
                     "- Title: {}\n  Content:\n{}\n\n",
-                    n.name, &n.content[..text_limit]
+                    n.name,
+                    &n.content[..text_limit]
                 ));
             }
 
@@ -217,12 +227,25 @@ impl MetaSkillSynthesizer {
             );
 
             tracing::info!("Synthesizing meta-skill for scope: {}", scope);
-            let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let response = self
+                .llm
+                .completion(db, Some(sys_prompt), &prompt_text)
+                .await?;
             let trimmed = response.trim();
             let stripped = if trimmed.starts_with("```markdown") {
-                trimmed.strip_prefix("```markdown").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                trimmed
+                    .strip_prefix("```markdown")
+                    .unwrap_or(trimmed)
+                    .strip_suffix("```")
+                    .unwrap_or(trimmed)
+                    .trim()
             } else if trimmed.starts_with("```") {
-                trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                trimmed
+                    .strip_prefix("```")
+                    .unwrap_or(trimmed)
+                    .strip_suffix("```")
+                    .unwrap_or(trimmed)
+                    .trim()
             } else {
                 trimmed
             };
@@ -259,20 +282,38 @@ impl MetaSkillSynthesizer {
 
         for i in 0..skills.len() {
             for j in (i + 1)..skills.len() {
-                let sim = 1.0 - crate::cognitive::synthesis::cosine_distance(&embeddings[i], &embeddings[j]);
+                let sim = 1.0
+                    - crate::cognitive::synthesis::cosine_distance(&embeddings[i], &embeddings[j]);
                 if sim > 0.85 {
                     let sys_prompt = "You are a skill merge validator. Review two candidate playbooks and determine if they should be consolidated. Respond ONLY with a JSON object: { \"should_merge\": bool, \"suggested_name\": \"string\", \"reason\": \"string\" }.";
                     let prompt_text = format!(
                         "Playbook 1: {}\nDescription: {}\n\nPlaybook 2: {}\nDescription: {}\n\nValidate if these should merge:",
-                        skills[i].name, skills[i].description, skills[j].name, skills[j].description
+                        skills[i].name,
+                        skills[i].description,
+                        skills[j].name,
+                        skills[j].description
                     );
 
-                    if let Ok(res_str) = self.llm.completion(db, Some(sys_prompt), &prompt_text).await {
+                    if let Ok(res_str) = self
+                        .llm
+                        .completion(db, Some(sys_prompt), &prompt_text)
+                        .await
+                    {
                         let trimmed = res_str.trim();
                         let stripped = if trimmed.starts_with("```json") {
-                            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                            trimmed
+                                .strip_prefix("```json")
+                                .unwrap_or(trimmed)
+                                .strip_suffix("```")
+                                .unwrap_or(trimmed)
+                                .trim()
                         } else if trimmed.starts_with("```") {
-                            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+                            trimmed
+                                .strip_prefix("```")
+                                .unwrap_or(trimmed)
+                                .strip_suffix("```")
+                                .unwrap_or(trimmed)
+                                .trim()
                         } else {
                             trimmed
                         };
@@ -307,7 +348,10 @@ impl MetaSkillSynthesizer {
         } else {
             for sug in &suggestions {
                 let sources = sug["source_skills"].as_array().unwrap();
-                let src_names: Vec<String> = sources.iter().map(|s| s.as_str().unwrap().to_string()).collect();
+                let src_names: Vec<String> = sources
+                    .iter()
+                    .map(|s| s.as_str().unwrap().to_string())
+                    .collect();
                 file_content.push_str(&format!(
                     "## Merge Candidate: {}\n- **Source Skills**: {}\n- **Semantic Similarity**: {:.2}\n- **Reason**: {}\n\n",
                     sug["suggested_target_name"].as_str().unwrap(),
@@ -333,7 +377,15 @@ impl MetaSkillSynthesizer {
         let mut source_playbooks = Vec::new();
 
         for name in source_skills {
-            if let Some(sk) = skills.iter().find(|s| &s.name == name || s.path.parent().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).as_ref() == Some(name)) {
+            if let Some(sk) = skills.iter().find(|s| {
+                &s.name == name
+                    || s.path
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .map(|f| f.to_string_lossy().to_string())
+                        .as_ref()
+                        == Some(name)
+            }) {
                 source_playbooks.push(sk.clone());
             }
         }
@@ -364,12 +416,25 @@ impl MetaSkillSynthesizer {
             target_name, combined_body
         );
 
-        let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+        let response = self
+            .llm
+            .completion(db, Some(sys_prompt), &prompt_text)
+            .await?;
         let trimmed = response.trim();
         let stripped = if trimmed.starts_with("```markdown") {
-            trimmed.strip_prefix("```markdown").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```markdown")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else {
             trimmed
         };
@@ -385,8 +450,15 @@ impl MetaSkillSynthesizer {
         let archive_dir = store.vault_root.join("../.agents/archive/skills");
 
         for sk in source_playbooks {
-            let parent_path = sk.path.parent().context("No parent folder for skill file")?;
-            let folder_name = parent_path.file_name().context("No folder name")?.to_string_lossy().to_string();
+            let parent_path = sk
+                .path
+                .parent()
+                .context("No parent folder for skill file")?;
+            let folder_name = parent_path
+                .file_name()
+                .context("No folder name")?
+                .to_string_lossy()
+                .to_string();
 
             if sk.is_meta {
                 std::fs::create_dir_all(&trash_dir)?;

@@ -1,19 +1,21 @@
-use anyhow::{Result, Context};
-use tokenizers::Tokenizer;
-use std::path::Path;
-use std::io::{Read, Write};
+use anyhow::{Context, Result};
 use std::env;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::Arc;
 #[cfg(not(feature = "mlx"))]
 use std::sync::Mutex;
-use std::sync::Arc;
 use std::sync::OnceLock;
+use tokenizers::Tokenizer;
 
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
-static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>> = OnceLock::new();
+static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>> =
+    OnceLock::new();
 
 pub fn cache_embedding(text: String, embedding: Vec<f32>) {
-    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache_mutex =
+        EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Ok(mut cache) = cache_mutex.lock() {
         cache.insert(text, embedding);
     }
@@ -51,7 +53,8 @@ pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
         // Read key bytes
         let mut key_bytes = vec![0u8; key_len];
         reader.read_exact(&mut key_bytes)?;
-        let key = String::from_utf8(key_bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let key = String::from_utf8(key_bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         // Read number of f32 values
         let mut num_values_buf = [0u8; 4];
@@ -70,7 +73,8 @@ pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
         loaded_cache.insert(key, values);
     }
 
-    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache_mutex =
+        EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Ok(mut cache) = cache_mutex.lock() {
         cache.extend(loaded_cache);
     }
@@ -79,8 +83,11 @@ pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
 }
 
 pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
-    let cache = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    let map = cache.lock().map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
+    let cache =
+        EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let map = cache
+        .lock()
+        .map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
 
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -128,12 +135,14 @@ impl LocalEmbedder {
         if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
             anyhow::bail!("Embedder mocked in test mode");
         }
-        let res = GLOBAL_EMBEDDER.get_or_init(|| {
-            Self::new().map(Arc::new).map_err(|e| e.to_string())
-        });
+        let res =
+            GLOBAL_EMBEDDER.get_or_init(|| Self::new().map(Arc::new).map_err(|e| e.to_string()));
         match res {
             Ok(emb) => Ok(emb.clone()),
-            Err(err) => Err(anyhow::anyhow!("Failed to initialize global embedder: {}", err)),
+            Err(err) => Err(anyhow::anyhow!(
+                "Failed to initialize global embedder: {}",
+                err
+            )),
         }
     }
 
@@ -142,7 +151,7 @@ impl LocalEmbedder {
     pub fn new() -> Result<Self> {
         let home = env::var("HOME").context("HOME env var not set")?;
         let base_path = Path::new(&home).join(".mythrax/models");
-        
+
         let model_path = base_path.join("nomic-embed-text-v1.5.onnx");
         let tokenizer_path = base_path.join("tokenizer.json");
 
@@ -162,7 +171,10 @@ impl LocalEmbedder {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        Ok(Self { session: Mutex::new(session), tokenizer })
+        Ok(Self {
+            session: Mutex::new(session),
+            tokenizer,
+        })
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -177,7 +189,9 @@ impl LocalEmbedder {
             format!("search_document: {}", text)
         };
 
-        let encoding = self.tokenizer.encode(formatted_text, true)
+        let encoding = self
+            .tokenizer
+            .encode(formatted_text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
         let ids = encoding.get_ids();
@@ -200,24 +214,33 @@ impl LocalEmbedder {
 
         // Create 2D inputs [batch_size = 1, seq_len]
         let input_ids = ort::value::Tensor::from_array((vec![1, seq_len], input_ids_data))?;
-        let attention_mask = ort::value::Tensor::from_array((vec![1, seq_len], attention_mask_data))?;
-        let token_type_ids = ort::value::Tensor::from_array((vec![1, seq_len], token_type_ids_data))?;
+        let attention_mask =
+            ort::value::Tensor::from_array((vec![1, seq_len], attention_mask_data))?;
+        let token_type_ids =
+            ort::value::Tensor::from_array((vec![1, seq_len], token_type_ids_data))?;
 
         // Run inference
-        let mut session_lock = self.session.lock().map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
-        let outputs = session_lock.run(ort::inputs![
-            "input_ids" => input_ids,
-            "attention_mask" => attention_mask,
-            "token_type_ids" => token_type_ids,
-        ]).map_err(|e| anyhow::anyhow!("ONNX inference failed: {}", e))?;
+        let mut session_lock = self
+            .session
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
+        let outputs = session_lock
+            .run(ort::inputs![
+                "input_ids" => input_ids,
+                "attention_mask" => attention_mask,
+                "token_type_ids" => token_type_ids,
+            ])
+            .map_err(|e| anyhow::anyhow!("ONNX inference failed: {}", e))?;
 
         // Nomic-embed-text outputs token embeddings under "last_hidden_state"
-        let output_tensor = outputs.get("last_hidden_state")
+        let output_tensor = outputs
+            .get("last_hidden_state")
             .context("Failed to get last_hidden_state output")?;
 
-        let (shape, data) = output_tensor.try_extract_tensor::<f32>()
+        let (shape, data) = output_tensor
+            .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("Failed to extract tensor data: {}", e))?;
-        
+
         // Shape is [batch=1, seq_len, hidden_dim=768]
         if shape.len() != 3 || shape[0] != 1 || shape[1] as usize != seq_len {
             anyhow::bail!("Unexpected embedding output shape: {:?}", shape);
@@ -262,7 +285,9 @@ impl LocalEmbedder {
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
-        let encoding = self.tokenizer.encode(text, true)
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
         Ok(encoding.get_ids().len())
     }
@@ -309,18 +334,24 @@ impl LocalEmbedder {
             return Ok(vec![]);
         }
 
-        let formatted_texts: Vec<String> = texts.iter().map(|text| {
-            if text.contains(':') {
-                text.clone()
-            } else {
-                format!("search_document: {}", text)
-            }
-        }).collect();
+        let formatted_texts: Vec<String> = texts
+            .iter()
+            .map(|text| {
+                if text.contains(':') {
+                    text.clone()
+                } else {
+                    format!("search_document: {}", text)
+                }
+            })
+            .collect();
 
-        let encodings = self.tokenizer.encode_batch(formatted_texts, true)
+        let encodings = self
+            .tokenizer
+            .encode_batch(formatted_texts, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
-        let max_len = encodings.iter()
+        let max_len = encodings
+            .iter()
             .map(|enc| enc.get_ids().len())
             .max()
             .unwrap_or(0)
@@ -351,21 +382,37 @@ impl LocalEmbedder {
             }
         }
 
-        let input_ids = ort::value::Tensor::from_array((vec![batch_size as i64, max_len as i64], input_ids_data))?;
-        let attention_mask = ort::value::Tensor::from_array((vec![batch_size as i64, max_len as i64], attention_mask_data))?;
-        let token_type_ids = ort::value::Tensor::from_array((vec![batch_size as i64, max_len as i64], token_type_ids_data))?;
+        let input_ids = ort::value::Tensor::from_array((
+            vec![batch_size as i64, max_len as i64],
+            input_ids_data,
+        ))?;
+        let attention_mask = ort::value::Tensor::from_array((
+            vec![batch_size as i64, max_len as i64],
+            attention_mask_data,
+        ))?;
+        let token_type_ids = ort::value::Tensor::from_array((
+            vec![batch_size as i64, max_len as i64],
+            token_type_ids_data,
+        ))?;
 
-        let mut session_lock = self.session.lock().map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
-        let outputs = session_lock.run(ort::inputs![
-            "input_ids" => input_ids,
-            "attention_mask" => attention_mask,
-            "token_type_ids" => token_type_ids,
-        ]).map_err(|e| anyhow::anyhow!("ONNX inference failed: {}", e))?;
+        let mut session_lock = self
+            .session
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
+        let outputs = session_lock
+            .run(ort::inputs![
+                "input_ids" => input_ids,
+                "attention_mask" => attention_mask,
+                "token_type_ids" => token_type_ids,
+            ])
+            .map_err(|e| anyhow::anyhow!("ONNX inference failed: {}", e))?;
 
-        let output_tensor = outputs.get("last_hidden_state")
+        let output_tensor = outputs
+            .get("last_hidden_state")
             .context("Failed to get last_hidden_state output")?;
 
-        let (shape, data) = output_tensor.try_extract_tensor::<f32>()
+        let (shape, data) = output_tensor
+            .try_extract_tensor::<f32>()
             .map_err(|e| anyhow::anyhow!("Failed to extract tensor data: {}", e))?;
 
         if shape.len() != 3 || shape[0] as usize != batch_size || shape[1] as usize != max_len {
@@ -437,12 +484,14 @@ impl LocalEmbedder {
         if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
             anyhow::bail!("Embedder mocked in test mode");
         }
-        let res = GLOBAL_EMBEDDER.get_or_init(|| {
-            Self::new().map(Arc::new).map_err(|e| e.to_string())
-        });
+        let res =
+            GLOBAL_EMBEDDER.get_or_init(|| Self::new().map(Arc::new).map_err(|e| e.to_string()));
         match res {
             Ok(emb) => Ok(emb.clone()),
-            Err(err) => Err(anyhow::anyhow!("Failed to initialize global embedder: {}", err)),
+            Err(err) => Err(anyhow::anyhow!(
+                "Failed to initialize global embedder: {}",
+                err
+            )),
         }
     }
 
@@ -458,18 +507,23 @@ impl LocalEmbedder {
     pub fn new() -> Result<Self> {
         let home = env::var("HOME").context("HOME env var not set")?;
         let base_path = Path::new(&home).join(".mythrax/models");
-        
+
         let model_path = base_path.join("model.safetensors");
         let tokenizer_path = base_path.join("tokenizer.json");
 
         if !model_path.exists() || !tokenizer_path.exists() {
-            anyhow::bail!("MLX model.safetensors or tokenizer files not found in ~/.mythrax/models/");
+            anyhow::bail!(
+                "MLX model.safetensors or tokenizer files not found in ~/.mythrax/models/"
+            );
         }
 
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        Ok(Self { model: std::sync::Mutex::new(None), tokenizer })
+        Ok(Self {
+            model: std::sync::Mutex::new(None),
+            tokenizer,
+        })
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -482,7 +536,9 @@ impl LocalEmbedder {
             format!("search_document: {}", text)
         };
 
-        let encoding = self.tokenizer.encode(formatted_text, true)
+        let encoding = self
+            .tokenizer
+            .encode(formatted_text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
         let ids = encoding.get_ids();
@@ -510,7 +566,10 @@ impl LocalEmbedder {
             std::thread::sleep(std::time::Duration::from_millis(1));
         };
 
-        let mut model_lock = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        let mut model_lock = self
+            .model
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
         if model_lock.is_none() {
             println!("!!! RELOADING EMBEDDER SINGLE MODEL !!!");
             tracing::info!("Reloading nomic-embed model lazily into VRAM");
@@ -526,7 +585,8 @@ impl LocalEmbedder {
         let output = model.forward(&input_array, Some(&mask_array))?;
 
         // Mean pool on GPU: sum(x * mask) / max(sum(mask), 1.0)
-        let mask_expanded = mask_array.reshape(&[1, seq_len as i32, 1])?
+        let mask_expanded = mask_array
+            .reshape(&[1, seq_len as i32, 1])?
             .as_dtype(mlx_rs::Dtype::Float32)?;
         let masked_output = output.multiply(&mask_expanded)?;
         let sum_emb = masked_output.sum_axes(&[1], false)?;
@@ -541,15 +601,18 @@ impl LocalEmbedder {
         let normalized = mean_emb.divide(&norm)?;
 
         let normalized = normalized.reshape(&[768])?;
-        normalized.eval()
+        normalized
+            .eval()
             .map_err(|e| anyhow::anyhow!("MLX eval failed: {:?}", e))?;
-        
+
         let vec = normalized.as_slice::<f32>().to_vec();
         Ok(vec)
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
-        let encoding = self.tokenizer.encode(text, true)
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
         Ok(encoding.get_ids().len())
     }
@@ -596,18 +659,24 @@ impl LocalEmbedder {
             return Ok(vec![]);
         }
 
-        let formatted_texts: Vec<String> = texts.iter().map(|text| {
-            if text.contains(':') {
-                text.clone()
-            } else {
-                format!("search_document: {}", text)
-            }
-        }).collect();
+        let formatted_texts: Vec<String> = texts
+            .iter()
+            .map(|text| {
+                if text.contains(':') {
+                    text.clone()
+                } else {
+                    format!("search_document: {}", text)
+                }
+            })
+            .collect();
 
-        let encodings = self.tokenizer.encode_batch(formatted_texts, true)
+        let encodings = self
+            .tokenizer
+            .encode_batch(formatted_texts, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
-        let max_len = encodings.iter()
+        let max_len = encodings
+            .iter()
             .map(|enc| enc.get_ids().len())
             .max()
             .unwrap_or(0)
@@ -636,7 +705,8 @@ impl LocalEmbedder {
         }
 
         let input_array = Array::from_slice(&input_ids_data, &[batch_size as i32, max_len as i32]);
-        let mask_array = Array::from_slice(&attention_mask_data, &[batch_size as i32, max_len as i32]);
+        let mask_array =
+            Array::from_slice(&attention_mask_data, &[batch_size as i32, max_len as i32]);
 
         let _permit = loop {
             if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
@@ -645,7 +715,10 @@ impl LocalEmbedder {
             std::thread::sleep(std::time::Duration::from_millis(1));
         };
 
-        let mut model_lock = self.model.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        let mut model_lock = self
+            .model
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
         if model_lock.is_none() {
             println!("!!! RELOADING EMBEDDER BATCH MODEL !!!");
             tracing::info!("Reloading nomic-embed model lazily into VRAM");
@@ -660,7 +733,8 @@ impl LocalEmbedder {
         let model = model_lock.as_mut().unwrap();
         let output = model.forward(&input_array, Some(&mask_array))?;
 
-        let mask_expanded = mask_array.reshape(&[batch_size as i32, max_len as i32, 1])?
+        let mask_expanded = mask_array
+            .reshape(&[batch_size as i32, max_len as i32, 1])?
             .as_dtype(mlx_rs::Dtype::Float32)?;
         let masked_output = output.multiply(&mask_expanded)?;
         let sum_emb = masked_output.sum_axes(&[1], false)?;
@@ -674,7 +748,8 @@ impl LocalEmbedder {
         let normalized = mean_emb.divide(&norm)?;
 
         // Ensure evaluation triggers calculations on GPU
-        normalized.eval()
+        normalized
+            .eval()
             .map_err(|e| anyhow::anyhow!("MLX eval failed: {:?}", e))?;
 
         let data = normalized.as_slice::<f32>();
@@ -697,10 +772,10 @@ mod tests {
             let s2 = "Algorithm design and data structures are fundamental to computer science.";
             let vec1 = embedder.embed(s1).unwrap();
             let vec2 = embedder.embed(s2).unwrap();
-            
+
             println!("DEBUG: vec1 first 5 = {:?}", &vec1[0..5]);
             println!("DEBUG: vec2 first 5 = {:?}", &vec2[0..5]);
-            
+
             let dot_prod: f32 = vec1.iter().zip(vec2.iter()).map(|(&x, &y)| x * y).sum();
             println!("DEBUG: cosine similarity distinct sentences = {}", dot_prod);
 

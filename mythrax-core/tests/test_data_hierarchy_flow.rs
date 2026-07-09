@@ -1,9 +1,9 @@
 #[cfg(feature = "mlx")]
-use mythrax_core::db::{SurrealBackend, StorageBackend};
+use mythrax_core::contracts::{Entity, EpisodeSave, WikiNode, WisdomRule};
 #[cfg(feature = "mlx")]
-use mythrax_core::llm::{DynamicModelBroker, DYNAMIC_MODEL_BROKER};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 #[cfg(feature = "mlx")]
-use mythrax_core::contracts::{EpisodeSave, WikiNode, WisdomRule, Entity};
+use mythrax_core::llm::{DYNAMIC_MODEL_BROKER, DynamicModelBroker};
 #[cfg(feature = "mlx")]
 use std::sync::Arc;
 
@@ -12,14 +12,17 @@ use std::sync::Arc;
 async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     let home = std::env::var("HOME").unwrap();
     let models_dir = std::path::PathBuf::from(home).join(".mythrax/models");
-    
+
     // Initialize the dynamic model broker
     let broker = DynamicModelBroker::new(models_dir).await.unwrap();
     let broker_arc = Arc::new(broker);
     let _ = DYNAMIC_MODEL_BROKER.set(broker_arc.clone());
 
     // Preload embedding model first so that the files are downloaded to the cache
-    broker_arc.preload_embedding_model("mlx-community/nomic-embed-text-v1.5-mlx").await.unwrap();
+    broker_arc
+        .preload_embedding_model("mlx-community/nomic-embed-text-v1.5-mlx")
+        .await
+        .unwrap();
     assert!(broker_arc.is_embedding_model_loaded());
 
     // Initialize SurrealDB in memory AFTER the embedder is present
@@ -58,8 +61,27 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!ep_id.is_empty(), "Saved episode ID must not be empty");
 
     // Retrieve via search matching general
-    let search_res = backend.search("execution context",  Some("general"),  false,  5,  0,  0.1,  None,  false,  true,  false, None, true).await.unwrap();
-    assert!(!search_res.results.is_empty(), "Must retrieve the ingested episode");
+    let search_res = backend
+        .search(
+            "execution context",
+            Some("general"),
+            false,
+            5,
+            0,
+            0.1,
+            None,
+            false,
+            true,
+            false,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !search_res.results.is_empty(),
+        "Must retrieve the ingested episode"
+    );
     assert_eq!(search_res.results[0].title, "Test Ingestion System Flow");
 
     // 2. RAPTOR Summary Node Generation & Retrieval
@@ -73,11 +95,33 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     };
 
     let raptor_id = backend.save_wiki_node(&raptor_node).await.unwrap();
-    assert!(!raptor_id.is_empty(), "Saved Raptor summary ID must not be empty");
+    assert!(
+        !raptor_id.is_empty(),
+        "Saved Raptor summary ID must not be empty"
+    );
 
     // Retrieve Raptor Summary
-    let search_raptor = backend.search("Raptor Summary",  Some("general"),  false,  5,  0,  0.1,  None,  false,  false,  false, None, true).await.unwrap();
-    assert!(!search_raptor.results.is_empty(), "Must retrieve the Raptor summary node");
+    let search_raptor = backend
+        .search(
+            "Raptor Summary",
+            Some("general"),
+            false,
+            5,
+            0,
+            0.1,
+            None,
+            false,
+            false,
+            false,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !search_raptor.results.is_empty(),
+        "Must retrieve the Raptor summary node"
+    );
     assert!(search_raptor.results[0].title.contains("Raptor Summary"));
 
     // 3. Insight Synthesis (WikiNode)
@@ -91,12 +135,37 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     };
 
     let insight_id = backend.save_wiki_node(&insight_node).await.unwrap();
-    assert!(!insight_id.is_empty(), "Saved insight node ID must not be empty");
+    assert!(
+        !insight_id.is_empty(),
+        "Saved insight node ID must not be empty"
+    );
 
     // Retrieve Insight Node
-    let search_insight = backend.search("permanent wiki nodes",  Some("general"),  false,  5,  0,  0.1,  None,  false,  false,  false, None, true).await.unwrap();
-    assert!(!search_insight.results.is_empty(), "Must retrieve the synthesized insight node");
-    assert_eq!(search_insight.results[0].title, "Insight: System Hierarchical Flow");
+    let search_insight = backend
+        .search(
+            "permanent wiki nodes",
+            Some("general"),
+            false,
+            5,
+            0,
+            0.1,
+            None,
+            false,
+            false,
+            false,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(
+        !search_insight.results.is_empty(),
+        "Must retrieve the synthesized insight node"
+    );
+    assert_eq!(
+        search_insight.results[0].title,
+        "Insight: System Hierarchical Flow"
+    );
 
     // 4. Wisdom Extraction (WisdomRule)
     let wisdom_rule = WisdomRule {
@@ -116,26 +185,44 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         status: Some("active".to_string()),
         superseded_at: None,
         superseded_by: None,
-    
-        rule_type: None,};
+
+        rule_type: None,
+    };
 
     let wisdom_id = backend.save_wisdom_rule(&wisdom_rule).await.unwrap();
-    assert!(!wisdom_id.is_empty(), "Saved wisdom rule ID must not be empty");
+    assert!(
+        !wisdom_id.is_empty(),
+        "Saved wisdom rule ID must not be empty"
+    );
 
     // Retrieve Wisdom Rule
-    let search_wisdom = backend.get_wisdom("WHERE clauses", None, 5, 0, 0.1).await.unwrap();
-    assert!(!search_wisdom.results.is_empty(), "Must retrieve the WisdomRule");
-    assert_eq!(search_wisdom.results[0].action_to_avoid, "injecting raw strings into WHERE clauses");
+    let search_wisdom = backend
+        .get_wisdom("WHERE clauses", None, 5, 0, 0.1)
+        .await
+        .unwrap();
+    assert!(
+        !search_wisdom.results.is_empty(),
+        "Must retrieve the WisdomRule"
+    );
+    assert_eq!(
+        search_wisdom.results[0].action_to_avoid,
+        "injecting raw strings into WHERE clauses"
+    );
 
     // Relate episode to wisdom rule to link the hierarchy
-    backend.relate_nodes(&ep_id, &wisdom_id, None, None, None).await.unwrap();
+    backend
+        .relate_nodes(&ep_id, &wisdom_id, None, None, None)
+        .await
+        .unwrap();
 
     // 5. MCP coding agent request flow routing check
     let temp_store_dir = tempfile::tempdir().expect("Failed to create temp store dir");
     let api_state = mythrax_core::api::ApiState {
         backend: Arc::new(backend),
         auth_token: "test_token".to_string(),
-        store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_store_dir.path().to_path_buf()).unwrap()),
+        store: Arc::new(
+            mythrax_core::store::MarkdownStore::new(temp_store_dir.path().to_path_buf()).unwrap(),
+        ),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
     };
@@ -153,7 +240,10 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     if let Err(ref e) = mcp_res {
         eprintln!("MCP TOOL ERROR: {:?}", e);
     }
-    assert!(mcp_res.is_ok(), "MCP tool complete_code_task call must succeed");
+    assert!(
+        mcp_res.is_ok(),
+        "MCP tool complete_code_task call must succeed"
+    );
     let val = mcp_res.unwrap();
     let text = val["content"][0]["text"].as_str().unwrap();
     assert!(!text.is_empty(), "Response must not be empty");

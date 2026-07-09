@@ -1,13 +1,13 @@
-use std::fs;
-use std::sync::Arc;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend, parse_record_id};
-use mythrax_core::contracts::{EpisodeSave, WikiNode};
 use mythrax_core::cognitive::compactor::Compactor;
 use mythrax_core::cognitive::synthesis::DreamCoordinator;
-use mythrax_core::store::MarkdownStore;
+use mythrax_core::contracts::{EpisodeSave, WikiNode};
+use mythrax_core::db::{StorageBackend, SurrealBackend, parse_record_id};
 use mythrax_core::mcp::McpServer;
+use mythrax_core::store::MarkdownStore;
+use std::fs;
+use std::sync::Arc;
+use tempfile::tempdir;
 
 use std::sync::Mutex;
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -55,7 +55,13 @@ async fn test_zero_touch_correction_and_critic_extraction() -> Result<()> {
     assert!(result.to_string().contains("Episode saved successfully"));
 
     // Call run_llm_critic directly to diagnose any errors synchronously
-    mythrax_core::mcp::run_llm_critic(backend.clone(), store.clone(), "Wait, that was a mistake! You forgot to run the tests first.".to_string(), Some("test-project".to_string())).await?;
+    mythrax_core::mcp::run_llm_critic(
+        backend.clone(),
+        store.clone(),
+        "Wait, that was a mistake! You forgot to run the tests first.".to_string(),
+        Some("test-project".to_string()),
+    )
+    .await?;
 
     // Verify wisdom rule was written to dynamic wisdom directory
     let wisdom_dynamic_dir = vault_root.join("wisdom/dynamic");
@@ -64,11 +70,17 @@ async fn test_zero_touch_correction_and_critic_extraction() -> Result<()> {
     for entry in entries.flatten() {
         files.push(entry.file_name());
     }
-    assert!(!files.is_empty(), "LLM Critic should have saved a wisdom rule file under wisdom/dynamic/");
+    assert!(
+        !files.is_empty(),
+        "LLM Critic should have saved a wisdom rule file under wisdom/dynamic/"
+    );
 
     // Verify registered in SurrealDB with utility = 50.0 and active project scope
     let all_rules = backend.get_all_wisdom_rules().await?;
-    assert!(!all_rules.is_empty(), "Wisdom rule should be registered in the database");
+    assert!(
+        !all_rules.is_empty(),
+        "Wisdom rule should be registered in the database"
+    );
     let rule = &all_rules[0];
     assert_eq!(rule.utility, Some(50.0));
     assert_eq!(rule.scope, "test-project");
@@ -132,44 +144,53 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
         ..Default::default()
     };
 
-    backend.save_episode(&EpisodeSave {
-        title: ep1.title.clone(),
-        content: ep1.content.clone(),
-        entities: vec![],
-        scope: ep1.scope.clone(),
-        vault_path: ep1.vault_path.clone(),
-        node_type: ep1.node_type.clone(),
-        source_episode: None,
-        session_id: None,
-        task_id: None,
-        ..Default::default()
-    }).await?;
+    backend
+        .save_episode(&EpisodeSave {
+            title: ep1.title.clone(),
+            content: ep1.content.clone(),
+            entities: vec![],
+            scope: ep1.scope.clone(),
+            vault_path: ep1.vault_path.clone(),
+            node_type: ep1.node_type.clone(),
+            source_episode: None,
+            session_id: None,
+            task_id: None,
+            ..Default::default()
+        })
+        .await?;
 
-    backend.save_episode(&EpisodeSave {
-        title: ep2.title.clone(),
-        content: ep2.content.clone(),
-        entities: vec![],
-        scope: ep2.scope.clone(),
-        vault_path: ep2.vault_path.clone(),
-        node_type: ep2.node_type.clone(),
-        source_episode: None,
-        session_id: None,
-        task_id: None,
-        ..Default::default()
-    }).await?;
+    backend
+        .save_episode(&EpisodeSave {
+            title: ep2.title.clone(),
+            content: ep2.content.clone(),
+            entities: vec![],
+            scope: ep2.scope.clone(),
+            vault_path: ep2.vault_path.clone(),
+            node_type: ep2.node_type.clone(),
+            source_episode: None,
+            session_id: None,
+            task_id: None,
+            ..Default::default()
+        })
+        .await?;
 
     // Seed embeddings in DB (since save_episode might not generate mock ones)
     let db_eps = backend.get_all_episodes().await?;
     for ep in db_eps {
         let ep_id = ep.id.unwrap();
-        backend.db.query("UPDATE $id SET embedding = $emb;")
+        backend
+            .db
+            .query("UPDATE $id SET embedding = $emb;")
             .bind(("id", parse_record_id(&ep_id)?))
             .bind(("emb", vec![0.1f32; 768]))
-            .await?.check()?;
+            .await?
+            .check()?;
     }
 
     let coordinator = DreamCoordinator::new();
-    coordinator.run_dream(&*backend, &store, Some("deep"), backend.embedder.clone()).await?;
+    coordinator
+        .run_dream(&*backend, &store, Some("deep"), backend.embedder.clone())
+        .await?;
 
     // The mock LLM when prompt contains "Wisdom" will return a procedural rule.
     // Procedural rules should be promoted to Global permanent wisdom and indexed with scope = "general", tier = "permanent".
@@ -180,7 +201,10 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
     for entry in entries.flatten() {
         files.push(entry.file_name());
     }
-    assert!(!files.is_empty(), "DreamCoordinator should have promoted procedural rule to global permanent wisdom");
+    assert!(
+        !files.is_empty(),
+        "DreamCoordinator should have promoted procedural rule to global permanent wisdom"
+    );
 
     let all_rules = backend.get_all_wisdom_rules().await?;
     assert!(!all_rules.is_empty());
@@ -226,7 +250,10 @@ This is standard content.
 @attention-anchor Always use Vanilla CSS
 [ANCHOR: Keep components focused]"#;
 
-    fs::write(vault_root.join("wiki/scope1/insights/anchor_insight.md"), ins_md)?;
+    fs::write(
+        vault_root.join("wiki/scope1/insights/anchor_insight.md"),
+        ins_md,
+    )?;
 
     // Save corresponding WikiNode
     let node = WikiNode {
@@ -246,10 +273,15 @@ This is standard content.
             "Do not suppress compiler warnings"
         ]
     });
-    fs::write(vault_root.join(".handoffs/stm_test_session.json"), serde_json::to_string(&stm_data)?)?;
+    fs::write(
+        vault_root.join(".handoffs/stm_test_session.json"),
+        serde_json::to_string(&stm_data)?,
+    )?;
 
     // 3. Run compaction
-    compactor.compact_scope(&*backend, &store, "scope1", backend.embedder.clone()).await?;
+    compactor
+        .compact_scope(&*backend, &store, "scope1", backend.embedder.clone())
+        .await?;
 
     // 4. Verify that anchors are carried verbatim in the compaction file and the content is cleaned of markers
     let compaction_dir = vault_root.join("wiki/compaction");
@@ -262,9 +294,12 @@ This is standard content.
             break;
         }
     }
-    
-    assert!(!comp_file_content.is_empty(), "Compaction file should be created");
-    
+
+    assert!(
+        !comp_file_content.is_empty(),
+        "Compaction file should be created"
+    );
+
     // Extracted anchors must be appended verbatim
     assert!(comp_file_content.contains("Always use Vanilla CSS"));
     assert!(comp_file_content.contains("Keep components focused"));

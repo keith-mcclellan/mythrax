@@ -68,7 +68,6 @@ pub struct EpisodeSave {
     pub confidence: Option<f32>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResult {
     pub id: String,
@@ -311,4 +310,3 @@ pub struct SymbolicHit {
     pub path_confidence: f32,
     pub hops: usize,
 }
-

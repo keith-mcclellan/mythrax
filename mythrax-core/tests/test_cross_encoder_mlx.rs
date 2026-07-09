@@ -1,8 +1,8 @@
 #![cfg(feature = "mlx")]
 
-use std::path::Path;
-use mythrax_core::llm::MxbaiReranker;
 use mlx_rs::ops::indexing::TryIndexOp;
+use mythrax_core::llm::MxbaiReranker;
+use std::path::Path;
 
 #[test]
 fn test_cross_encoder_mlx_loading_and_scoring() {
@@ -22,10 +22,10 @@ fn test_cross_encoder_mlx_loading_and_scoring() {
     ];
 
     let start = std::time::Instant::now();
-    
+
     // Test the sequential logic
     let mut scores = Vec::new();
-    
+
     // 1. Compute null logits
     let null_text = format!("query: {} document: ", query);
     let null_encoding = reranker.tokenizer.encode(null_text, false).unwrap();
@@ -33,16 +33,32 @@ fn test_cross_encoder_mlx_loading_and_scoring() {
     let null_seq_len = null_ids.len();
     let null_ids_array = mlx_rs::Array::from_slice(&null_ids, &[1, null_seq_len as i32]);
     let null_out = reranker.model.forward(&null_ids_array, None).unwrap();
-    let null_last_hidden = null_out.try_index((0, (null_seq_len - 1) as i32, ..)).unwrap();
+    let null_last_hidden = null_out
+        .try_index((0, (null_seq_len - 1) as i32, ..))
+        .unwrap();
 
     let embed_w = reranker.model.embed_tokens.weight.value.clone();
     let w_0 = embed_w.try_index((15, ..)).unwrap();
     let w_1 = embed_w.try_index((16, ..)).unwrap();
 
-    let null_logit_0 = null_last_hidden.multiply(&w_0).unwrap().sum_axes(&[-1], false).unwrap();
-    let null_logit_1 = null_last_hidden.multiply(&w_1).unwrap().sum_axes(&[-1], false).unwrap();
-    let nl0 = null_logit_0.as_dtype(mlx_rs::Dtype::Float32).unwrap().as_slice::<f32>()[0];
-    let nl1 = null_logit_1.as_dtype(mlx_rs::Dtype::Float32).unwrap().as_slice::<f32>()[0];
+    let null_logit_0 = null_last_hidden
+        .multiply(&w_0)
+        .unwrap()
+        .sum_axes(&[-1], false)
+        .unwrap();
+    let null_logit_1 = null_last_hidden
+        .multiply(&w_1)
+        .unwrap()
+        .sum_axes(&[-1], false)
+        .unwrap();
+    let nl0 = null_logit_0
+        .as_dtype(mlx_rs::Dtype::Float32)
+        .unwrap()
+        .as_slice::<f32>()[0];
+    let nl1 = null_logit_1
+        .as_dtype(mlx_rs::Dtype::Float32)
+        .unwrap()
+        .as_slice::<f32>()[0];
 
     // 2. Loop over passages
     for passage in &passages {
@@ -55,11 +71,25 @@ fn test_cross_encoder_mlx_loading_and_scoring() {
         let out = reranker.model.forward(&ids_array, None).unwrap();
         let last_hidden = out.try_index((0, (seq_len - 1) as i32, ..)).unwrap();
 
-        let logit_0 = last_hidden.multiply(&w_0).unwrap().sum_axes(&[-1], false).unwrap();
-        let logit_1 = last_hidden.multiply(&w_1).unwrap().sum_axes(&[-1], false).unwrap();
+        let logit_0 = last_hidden
+            .multiply(&w_0)
+            .unwrap()
+            .sum_axes(&[-1], false)
+            .unwrap();
+        let logit_1 = last_hidden
+            .multiply(&w_1)
+            .unwrap()
+            .sum_axes(&[-1], false)
+            .unwrap();
 
-        let raw_l0 = logit_0.as_dtype(mlx_rs::Dtype::Float32).unwrap().as_slice::<f32>()[0];
-        let raw_l1 = logit_1.as_dtype(mlx_rs::Dtype::Float32).unwrap().as_slice::<f32>()[0];
+        let raw_l0 = logit_0
+            .as_dtype(mlx_rs::Dtype::Float32)
+            .unwrap()
+            .as_slice::<f32>()[0];
+        let raw_l1 = logit_1
+            .as_dtype(mlx_rs::Dtype::Float32)
+            .unwrap()
+            .as_slice::<f32>()[0];
 
         let l0 = raw_l0 - nl0;
         let l1 = raw_l1 - nl1;
@@ -75,6 +105,12 @@ fn test_cross_encoder_mlx_loading_and_scoring() {
     println!("SCORES: {:?}", scores);
 
     assert_eq!(scores.len(), 3);
-    assert!(scores[0] > scores[1], "Relevant passage must score higher than Moby-Dick");
-    assert!(scores[0] > scores[2], "Relevant passage must score higher than President passage");
+    assert!(
+        scores[0] > scores[1],
+        "Relevant passage must score higher than Moby-Dick"
+    );
+    assert!(
+        scores[0] > scores[2],
+        "Relevant passage must score higher than President passage"
+    );
 }

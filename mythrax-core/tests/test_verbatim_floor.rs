@@ -1,13 +1,15 @@
 use tempfile::tempdir;
 
-use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
-use mythrax_core::contracts::EpisodeSave;
-use mythrax_core::store::MarkdownStore;
 use mythrax_core::cognitive::compactor::Compactor;
+use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
+use mythrax_core::store::MarkdownStore;
 
 #[tokio::test]
 async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
-    unsafe { std::env::set_var("MYTHRAX_MOCK_LLM", "true"); }
+    unsafe {
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
     // 1. Initialize backend + MarkdownStore (tempdir)
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
@@ -62,48 +64,72 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
     let uuid_low = id_low.split(':').nth(1).unwrap();
 
     // 3. Mutate database to set utility (hi = 80.0, low = 1.0 to trigger decay compaction)
-    let response_hi = backend.db.query("UPDATE type::record('episode',$id) MERGE { utility: 80.0 }")
+    let response_hi = backend
+        .db
+        .query("UPDATE type::record('episode',$id) MERGE { utility: 80.0 }")
         .bind(("id", uuid_hi.to_string()))
         .await?;
     response_hi.check()?;
 
-    let response_low = backend.db.query("UPDATE type::record('episode',$id) MERGE { utility: 1.0 }")
+    let response_low = backend
+        .db
+        .query("UPDATE type::record('episode',$id) MERGE { utility: 1.0 }")
         .bind(("id", uuid_low.to_string()))
         .await?;
     response_low.check()?;
 
     // 4. Run Compactor (compact_scope triggers archive_decayed_episodes internally)
     let compactor = Compactor::new();
-    compactor.compact_scope(&backend, &store, "general", None).await?;
+    compactor
+        .compact_scope(&backend, &store, "general", None)
+        .await?;
 
     // 5. ASSERT that the decayed episode is STILL retrievable but demoted
     // Search with threshold 0.0 to retrieve all matches
-    let search_res = backend.search(
-        "Agentic Memory",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-    ).await?;
+    let search_res = backend
+        .search(
+            "Agentic Memory",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+        )
+        .await?;
 
     // The low importance episode must still exist in the results (proving it wasn't deleted)
     let low_retrieved = search_res.results.iter().any(|r| r.id == id_low);
-    assert!(low_retrieved, "Decayed episode was deleted instead of being demoted");
+    assert!(
+        low_retrieved,
+        "Decayed episode was deleted instead of being demoted"
+    );
 
     // The high importance episode must rank above the low importance (demoted) episode
-    let idx_hi = search_res.results.iter().position(|r| r.id == id_hi).unwrap();
-    let idx_low = search_res.results.iter().position(|r| r.id == id_low).unwrap();
-    assert!(idx_hi < idx_low, "Decayed episode ranks above high utility episode");
+    let idx_hi = search_res
+        .results
+        .iter()
+        .position(|r| r.id == id_hi)
+        .unwrap();
+    let idx_low = search_res
+        .results
+        .iter()
+        .position(|r| r.id == id_low)
+        .unwrap();
+    assert!(
+        idx_hi < idx_low,
+        "Decayed episode ranks above high utility episode"
+    );
 
     // Assert that archived is marked true in the database
-    let mut select_res = backend.db.query("SELECT archived FROM type::record('episode',$id)")
+    let mut select_res = backend
+        .db
+        .query("SELECT archived FROM type::record('episode',$id)")
         .bind(("id", uuid_low.to_string()))
         .await?;
     let select_val: Option<serde_json::Value> = select_res.take(0)?;

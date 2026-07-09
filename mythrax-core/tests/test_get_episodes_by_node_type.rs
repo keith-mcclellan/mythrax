@@ -1,8 +1,8 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use std::fs;
+use tempfile::tempdir;
 
 use std::sync::Mutex;
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -41,9 +41,12 @@ async fn test_get_episodes_by_node_type_filtering() -> Result<()> {
     };
     let proc_id = backend.save_episode(&ep_proc).await?;
     let proc_raw_id = proc_id.split(':').nth(1).unwrap().to_string();
-    backend.db.query("UPDATE type::record('episode', $id) SET node_type = 'procedural';")
+    backend
+        .db
+        .query("UPDATE type::record('episode', $id) SET node_type = 'procedural';")
         .bind(("id", proc_raw_id))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     // Create a standard episode
     let ep_std = EpisodeSave {
@@ -54,9 +57,12 @@ async fn test_get_episodes_by_node_type_filtering() -> Result<()> {
     };
     let std_id = backend.save_episode(&ep_std).await?;
     let std_raw_id = std_id.split(':').nth(1).unwrap().to_string();
-    backend.db.query("UPDATE type::record('episode', $id) SET node_type = 'standard';")
+    backend
+        .db
+        .query("UPDATE type::record('episode', $id) SET node_type = 'standard';")
         .bind(("id", std_raw_id))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     // Retrieve episodes by node type
     let proc_episodes = backend.get_episodes_by_node_type("procedural").await?;

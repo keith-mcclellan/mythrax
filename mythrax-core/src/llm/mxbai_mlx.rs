@@ -1,13 +1,13 @@
 #![cfg(feature = "mlx")]
 
+use crate::llm::mlx_weights::{get_embedding, get_linear, get_rms_norm, load_model_weights};
+use anyhow::{Context, Result};
+use mlx_rs::module::Module;
+use mlx_rs::nn::{Embedding, Linear, RmsNorm};
+use mlx_rs::{Array, StreamOrDevice};
 use std::collections::HashMap;
 use std::path::Path;
-use anyhow::{Result, Context};
 use tokenizers::Tokenizer;
-use mlx_rs::{Array, StreamOrDevice};
-use mlx_rs::nn::{Embedding, RmsNorm, Linear};
-use mlx_rs::module::Module;
-use crate::llm::mlx_weights::{get_linear, get_rms_norm, get_embedding, load_model_weights};
 
 pub struct Qwen2Attention {
     pub q_proj: Linear,
@@ -46,11 +46,17 @@ impl Qwen2Attention {
     }
 
     pub fn forward(&mut self, x: &Array, mask: Option<&Array>) -> Result<Array> {
-        let q = self.q_proj.forward(x)
+        let q = self
+            .q_proj
+            .forward(x)
             .map_err(|e| anyhow::anyhow!("Q proj failed: {:?}", e))?;
-        let k = self.k_proj.forward(x)
+        let k = self
+            .k_proj
+            .forward(x)
             .map_err(|e| anyhow::anyhow!("K proj failed: {:?}", e))?;
-        let v = self.v_proj.forward(x)
+        let v = self
+            .v_proj
+            .forward(x)
             .map_err(|e| anyhow::anyhow!("V proj failed: {:?}", e))?;
 
         let shape = q.shape();
@@ -71,7 +77,8 @@ impl Qwen2Attention {
             0,
             None,
             StreamOrDevice::gpu(),
-        ).map_err(|e| anyhow::anyhow!("RoPE Q failed: {:?}", e))?;
+        )
+        .map_err(|e| anyhow::anyhow!("RoPE Q failed: {:?}", e))?;
 
         let k = mlx_rs::fast::rope_device(
             &k,
@@ -82,7 +89,8 @@ impl Qwen2Attention {
             0,
             None,
             StreamOrDevice::gpu(),
-        ).map_err(|e| anyhow::anyhow!("RoPE K failed: {:?}", e))?;
+        )
+        .map_err(|e| anyhow::anyhow!("RoPE K failed: {:?}", e))?;
 
         // Transpose to [batch, heads, seq_len, head_dim]
         let q = q.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())?;
@@ -92,15 +100,28 @@ impl Qwen2Attention {
         // Repeat KV heads if using GQA
         if self.num_heads != self.num_kv_heads {
             let reps = self.num_heads / self.num_kv_heads;
-            k = mlx_rs::ops::repeat_axis_device::<half::f16>(k, reps as i32, 1, StreamOrDevice::gpu())?;
-            v = mlx_rs::ops::repeat_axis_device::<half::f16>(v, reps as i32, 1, StreamOrDevice::gpu())?;
+            k = mlx_rs::ops::repeat_axis_device::<half::f16>(
+                k,
+                reps as i32,
+                1,
+                StreamOrDevice::gpu(),
+            )?;
+            v = mlx_rs::ops::repeat_axis_device::<half::f16>(
+                v,
+                reps as i32,
+                1,
+                StreamOrDevice::gpu(),
+            )?;
         }
 
         let scale = 1.0 / (self.head_dim as f32).sqrt();
 
         // Cast mask to query dtype to avoid type promotion failure (bfloat16 vs float32)
         let cast_mask = match mask {
-            Some(m) => Some(m.as_dtype(q.dtype()).map_err(|e| anyhow::anyhow!("Mask cast failed: {:?}", e))?),
+            Some(m) => Some(
+                m.as_dtype(q.dtype())
+                    .map_err(|e| anyhow::anyhow!("Mask cast failed: {:?}", e))?,
+            ),
             None => None,
         };
 
@@ -112,13 +133,16 @@ impl Qwen2Attention {
             scale,
             cast_mask.as_ref().map(|m| m.into()),
             StreamOrDevice::gpu(),
-        ).map_err(|e| anyhow::anyhow!("SDP Attention failed: {:?}", e))?;
+        )
+        .map_err(|e| anyhow::anyhow!("SDP Attention failed: {:?}", e))?;
 
         // Transpose back to [batch, seq_len, num_heads * head_dim]
         let out = out.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())?;
         let out = out.reshape(&[batch, seq_len, self.num_heads * self.head_dim])?;
 
-        let out = self.o_proj.forward(&out)
+        let out = self
+            .o_proj
+            .forward(&out)
             .map_err(|e| anyhow::anyhow!("O proj failed: {:?}", e))?;
         Ok(out)
     }
@@ -135,17 +159,27 @@ impl Qwen2MLP {
         let gate_proj = get_linear(weights, &format!("{}.gate_proj", prefix), false)?;
         let up_proj = get_linear(weights, &format!("{}.up_proj", prefix), false)?;
         let down_proj = get_linear(weights, &format!("{}.down_proj", prefix), false)?;
-        Ok(Self { gate_proj, up_proj, down_proj })
+        Ok(Self {
+            gate_proj,
+            up_proj,
+            down_proj,
+        })
     }
 
     pub fn forward(&mut self, x: &Array) -> Result<Array> {
-        let g = self.gate_proj.forward(x)
+        let g = self
+            .gate_proj
+            .forward(x)
             .map_err(|e| anyhow::anyhow!("Gate proj failed: {:?}", e))?;
-        let u = self.up_proj.forward(x)
+        let u = self
+            .up_proj
+            .forward(x)
             .map_err(|e| anyhow::anyhow!("Up proj failed: {:?}", e))?;
         let silu_g = g.multiply(&mlx_rs::ops::sigmoid(&g)?)?;
         let activated = silu_g.multiply(&u)?;
-        let out = self.down_proj.forward(&activated)
+        let out = self
+            .down_proj
+            .forward(&activated)
             .map_err(|e| anyhow::anyhow!("Down proj failed: {:?}", e))?;
         Ok(out)
     }
@@ -168,9 +202,24 @@ impl Qwen2DecoderLayer {
         rope_theta: f32,
         rms_norm_eps: f32,
     ) -> Result<Self> {
-        let input_layernorm = get_rms_norm(weights, &format!("{}.input_layernorm.weight", prefix), rms_norm_eps)?;
-        let self_attn = Qwen2Attention::new(weights, &format!("{}.self_attn", prefix), num_heads, num_kv_heads, head_dim, rope_theta)?;
-        let post_attention_layernorm = get_rms_norm(weights, &format!("{}.post_attention_layernorm.weight", prefix), rms_norm_eps)?;
+        let input_layernorm = get_rms_norm(
+            weights,
+            &format!("{}.input_layernorm.weight", prefix),
+            rms_norm_eps,
+        )?;
+        let self_attn = Qwen2Attention::new(
+            weights,
+            &format!("{}.self_attn", prefix),
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            rope_theta,
+        )?;
+        let post_attention_layernorm = get_rms_norm(
+            weights,
+            &format!("{}.post_attention_layernorm.weight", prefix),
+            rms_norm_eps,
+        )?;
         let mlp = Qwen2MLP::new(weights, &format!("{}.mlp", prefix))?;
         Ok(Self {
             input_layernorm,
@@ -204,26 +253,46 @@ impl Qwen2Model {
         let norm = get_rms_norm(weights, "model.norm.weight", rms_norm_eps)?;
         let mut layers = Vec::new();
         for i in 0..num_layers {
-            layers.push(Qwen2DecoderLayer::new(weights, &format!("model.layers.{}", i), num_heads, num_kv_heads, head_dim, rope_theta, rms_norm_eps)?);
+            layers.push(Qwen2DecoderLayer::new(
+                weights,
+                &format!("model.layers.{}", i),
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                rope_theta,
+                rms_norm_eps,
+            )?);
         }
-        Ok(Self { embed_tokens, layers, norm })
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+        })
     }
 
     pub fn forward(&mut self, ids: &Array, mask: Option<&Array>) -> Result<Array> {
-        let mut x = self.embed_tokens.forward(ids)
+        let mut x = self
+            .embed_tokens
+            .forward(ids)
             .map_err(|e| anyhow::anyhow!("Embed forward failed: {:?}", e))?;
         for layer in &mut self.layers {
-            let h = layer.input_layernorm.forward(&x)
+            let h = layer
+                .input_layernorm
+                .forward(&x)
                 .map_err(|e| anyhow::anyhow!("Input norm failed: {:?}", e))?;
             let attn = layer.self_attn.forward(&h, mask)?;
             x = x.add(&attn)?;
 
-            let h = layer.post_attention_layernorm.forward(&x)
+            let h = layer
+                .post_attention_layernorm
+                .forward(&x)
                 .map_err(|e| anyhow::anyhow!("Post attn norm failed: {:?}", e))?;
             let mlp = layer.mlp.forward(&h)?;
             x = x.add(&mlp)?;
         }
-        let out = self.norm.forward(&x)
+        let out = self
+            .norm
+            .forward(&x)
             .map_err(|e| anyhow::anyhow!("Final norm failed: {:?}", e))?;
         Ok(out)
     }
@@ -236,21 +305,40 @@ pub struct MxbaiReranker {
 
 impl MxbaiReranker {
     pub fn load(model_dir: &Path) -> Result<Self> {
-        println!("!!! LOADING CROSS-ENCODER MODEL FROM DISK: {:?} !!!", model_dir);
+        println!(
+            "!!! LOADING CROSS-ENCODER MODEL FROM DISK: {:?} !!!",
+            model_dir
+        );
         let config_path = model_dir.join("config.json");
         let config_str = std::fs::read_to_string(config_path)?;
         let config: serde_json::Value = serde_json::from_str(&config_str)?;
 
-        let num_layers = config["num_hidden_layers"].as_i64().context("num_hidden_layers not found")? as i32;
-        let num_heads = config["num_attention_heads"].as_i64().context("num_attention_heads not found")? as i32;
-        let num_kv_heads = config["num_key_value_heads"].as_i64().context("num_key_value_heads not found")? as i32;
-        let hidden_size = config["hidden_size"].as_i64().context("hidden_size not found")? as i32;
+        let num_layers = config["num_hidden_layers"]
+            .as_i64()
+            .context("num_hidden_layers not found")? as i32;
+        let num_heads = config["num_attention_heads"]
+            .as_i64()
+            .context("num_attention_heads not found")? as i32;
+        let num_kv_heads = config["num_key_value_heads"]
+            .as_i64()
+            .context("num_key_value_heads not found")? as i32;
+        let hidden_size = config["hidden_size"]
+            .as_i64()
+            .context("hidden_size not found")? as i32;
         let head_dim = hidden_size / num_heads;
         let rope_theta = config["rope_theta"].as_f64().unwrap_or(1000000.0) as f32;
         let rms_norm_eps = config["rms_norm_eps"].as_f64().unwrap_or(1e-6) as f32;
 
         let weights = load_model_weights(model_dir)?;
-        let model = Qwen2Model::new(&weights, num_layers, num_heads, num_kv_heads, head_dim, rope_theta, rms_norm_eps)?;
+        let model = Qwen2Model::new(
+            &weights,
+            num_layers,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            rope_theta,
+            rms_norm_eps,
+        )?;
 
         let tokenizer = match Tokenizer::from_file(model_dir.join("tokenizer.json")) {
             Ok(t) => t,
@@ -285,7 +373,9 @@ impl MxbaiReranker {
 
         // 1. Compute null logits for query-only baseline
         let null_text = format!("query: {} document: ", query);
-        let null_encoding = self.tokenizer.encode(null_text, false)
+        let null_encoding = self
+            .tokenizer
+            .encode(null_text, false)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
         let mut null_ids: Vec<i32> = null_encoding.get_ids().iter().map(|&x| x as i32).collect();
         let null_seq_len = null_ids.len();
@@ -294,13 +384,19 @@ impl MxbaiReranker {
         for _ in 0..null_pad_len {
             null_ids.push(151643); // pad_token_id
         }
-        let null_ids_array = mlx_rs::Array::from_slice(&null_ids, &[1, null_seq_len_bucketed as i32]);
+        let null_ids_array =
+            mlx_rs::Array::from_slice(&null_ids, &[1, null_seq_len_bucketed as i32]);
         let null_seq_len_i32 = null_seq_len_bucketed as i32;
-        let null_causal_mask = mlx_rs::ops::full::<f32>(&[null_seq_len_i32, null_seq_len_i32], &mlx_rs::Array::from(f32::NEG_INFINITY))
-            .map_err(|e| anyhow::anyhow!("Full failed: {:?}", e))?;
-        let null_causal_mask = mlx_rs::ops::triu_device(&null_causal_mask, 1, StreamOrDevice::gpu())
-            .map_err(|e| anyhow::anyhow!("Triu failed: {:?}", e))?;
-        let null_mask_4d = null_causal_mask.reshape(&[1, 1, null_seq_len_i32, null_seq_len_i32])
+        let null_causal_mask = mlx_rs::ops::full::<f32>(
+            &[null_seq_len_i32, null_seq_len_i32],
+            &mlx_rs::Array::from(f32::NEG_INFINITY),
+        )
+        .map_err(|e| anyhow::anyhow!("Full failed: {:?}", e))?;
+        let null_causal_mask =
+            mlx_rs::ops::triu_device(&null_causal_mask, 1, StreamOrDevice::gpu())
+                .map_err(|e| anyhow::anyhow!("Triu failed: {:?}", e))?;
+        let null_mask_4d = null_causal_mask
+            .reshape(&[1, 1, null_seq_len_i32, null_seq_len_i32])
             .map_err(|e| anyhow::anyhow!("Reshape failed: {:?}", e))?;
         let null_out = self.model.forward(&null_ids_array, Some(&null_mask_4d))?;
         let null_last_hidden = null_out.try_index((0, (null_seq_len - 1) as i32, ..))?;
@@ -311,8 +407,12 @@ impl MxbaiReranker {
 
         let null_logit_0 = null_last_hidden.multiply(&w_0)?.sum_axes(&[-1], false)?;
         let null_logit_1 = null_last_hidden.multiply(&w_1)?.sum_axes(&[-1], false)?;
-        let nl0 = null_logit_0.as_dtype(mlx_rs::Dtype::Float32)?.as_slice::<f32>()[0];
-        let nl1 = null_logit_1.as_dtype(mlx_rs::Dtype::Float32)?.as_slice::<f32>()[0];
+        let nl0 = null_logit_0
+            .as_dtype(mlx_rs::Dtype::Float32)?
+            .as_slice::<f32>()[0];
+        let nl1 = null_logit_1
+            .as_dtype(mlx_rs::Dtype::Float32)?
+            .as_slice::<f32>()[0];
 
         // 2. Compute logits sequentially for each passage to preserve correct positional RoPE indices
         let mut scores = Vec::with_capacity(passages.len());
@@ -327,7 +427,9 @@ impl MxbaiReranker {
                 passage
             };
             let text = format!("query: {} document: {}", query, truncated_passage);
-            let encoding = self.tokenizer.encode(text, false)
+            let encoding = self
+                .tokenizer
+                .encode(text, false)
                 .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
             let mut ids: Vec<i32> = encoding.get_ids().iter().map(|&x| x as i32).collect();
             let seq_len = ids.len();
@@ -338,11 +440,15 @@ impl MxbaiReranker {
             }
             let ids_array = mlx_rs::Array::from_slice(&ids, &[1, seq_len_bucketed as i32]);
             let seq_len_i32 = seq_len_bucketed as i32;
-            let causal_mask = mlx_rs::ops::full::<f32>(&[seq_len_i32, seq_len_i32], &mlx_rs::Array::from(f32::NEG_INFINITY))
-                .map_err(|e| anyhow::anyhow!("Full failed: {:?}", e))?;
+            let causal_mask = mlx_rs::ops::full::<f32>(
+                &[seq_len_i32, seq_len_i32],
+                &mlx_rs::Array::from(f32::NEG_INFINITY),
+            )
+            .map_err(|e| anyhow::anyhow!("Full failed: {:?}", e))?;
             let causal_mask = mlx_rs::ops::triu_device(&causal_mask, 1, StreamOrDevice::gpu())
                 .map_err(|e| anyhow::anyhow!("Triu failed: {:?}", e))?;
-            let mask_4d = causal_mask.reshape(&[1, 1, seq_len_i32, seq_len_i32])
+            let mask_4d = causal_mask
+                .reshape(&[1, 1, seq_len_i32, seq_len_i32])
                 .map_err(|e| anyhow::anyhow!("Reshape failed: {:?}", e))?;
             let out = self.model.forward(&ids_array, Some(&mask_4d))?;
             let last_hidden = out.try_index((0, (seq_len - 1) as i32, ..))?;

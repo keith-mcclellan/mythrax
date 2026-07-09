@@ -1,10 +1,10 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::cognitive::compactor::Compactor;
+use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::store::MarkdownStore;
+use std::fs;
+use tempfile::tempdir;
 
 use std::sync::Mutex;
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -37,8 +37,12 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
     let compactor = Compactor::new();
 
     // Enable feature and set threshold
-    backend.save_profile_key("compactor.enable_near_duplicate_merging", "true").await?;
-    backend.save_profile_key("compactor.dedup_threshold", "0.90").await?;
+    backend
+        .save_profile_key("compactor.enable_near_duplicate_merging", "true")
+        .await?;
+    backend
+        .save_profile_key("compactor.dedup_threshold", "0.90")
+        .await?;
 
     let embedding = vec![1.0f32; 768];
 
@@ -62,9 +66,14 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
         .await?.check()?;
 
     // Update metrics with access count = 5 for older
-    backend.db.query("UPDATE metrics SET access_count = 5 WHERE target_id = type::record('episode', $id);")
+    backend
+        .db
+        .query(
+            "UPDATE metrics SET access_count = 5 WHERE target_id = type::record('episode', $id);",
+        )
         .bind(("id", older_raw_id.clone()))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     // Create newer episode
     let ep_newer = EpisodeSave {
@@ -86,15 +95,24 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
         .await?.check()?;
 
     // Update metrics with access count = 3 for newer
-    backend.db.query("UPDATE metrics SET access_count = 3 WHERE target_id = type::record('episode', $id);")
+    backend
+        .db
+        .query(
+            "UPDATE metrics SET access_count = 3 WHERE target_id = type::record('episode', $id);",
+        )
         .bind(("id", newer_raw_id.clone()))
-        .await?.check()?;
+        .await?
+        .check()?;
 
     // Run compact_scope
-    compactor.compact_scope(&backend, &store, "test_scope", None).await?;
+    compactor
+        .compact_scope(&backend, &store, "test_scope", None)
+        .await?;
 
     // Verify newer episode is deleted
-    let mut resp = backend.db.query("SELECT * FROM type::record('episode', $id);")
+    let mut resp = backend
+        .db
+        .query("SELECT * FROM type::record('episode', $id);")
         .bind(("id", newer_raw_id.clone()))
         .await?;
     let rows: Vec<serde_json::Value> = resp.take(0)?;
@@ -102,26 +120,39 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
 
     // Verify newer physical file is deleted
     let newer_file = vault_root.join("episodes/newer.md");
-    assert!(!newer_file.exists(), "Newer physical file should be deleted");
+    assert!(
+        !newer_file.exists(),
+        "Newer physical file should be deleted"
+    );
 
     // Verify older episode has merged content
-    let mut resp = backend.db.query("SELECT content FROM type::record('episode', $id);")
+    let mut resp = backend
+        .db
+        .query("SELECT content FROM type::record('episode', $id);")
         .bind(("id", older_raw_id.clone()))
         .await?;
     let rows: Vec<serde_json::Value> = resp.take(0)?;
     let content = rows[0].get("content").and_then(|v| v.as_str()).unwrap();
-    assert_eq!(content, "Older content\nNewer content", "Content should be merged");
+    assert_eq!(
+        content, "Older content\nNewer content",
+        "Content should be merged"
+    );
 
     // Verify older physical file has merged content
     let older_file_content = fs::read_to_string(vault_root.join("episodes/older.md"))?;
     assert_eq!(older_file_content, "Older content\nNewer content");
 
     // Verify older metrics has access count = 8 (5 + 3)
-    let mut resp = backend.db.query("SELECT access_count FROM metrics WHERE target_id = type::record('episode', $id);")
+    let mut resp = backend
+        .db
+        .query("SELECT access_count FROM metrics WHERE target_id = type::record('episode', $id);")
         .bind(("id", older_raw_id))
         .await?;
     let rows: Vec<serde_json::Value> = resp.take(0)?;
-    let access_count = rows[0].get("access_count").and_then(|v| v.as_i64()).unwrap();
+    let access_count = rows[0]
+        .get("access_count")
+        .and_then(|v| v.as_i64())
+        .unwrap();
     assert_eq!(access_count, 8);
 
     Ok(())

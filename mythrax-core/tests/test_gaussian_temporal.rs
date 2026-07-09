@@ -1,12 +1,14 @@
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_gaussian_temporal_decay() -> Result<()> {
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
-    backend.save_profile_key("search.enable_access_reinforcement", "false").await?;
+    backend
+        .save_profile_key("search.enable_access_reinforcement", "false")
+        .await?;
 
     // Create a mock episode with utility 100.0
     let ep = EpisodeSave {
@@ -25,52 +27,66 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
         .await?.check()?;
 
     // 1. Enable Gaussian temporal decay
-    backend.save_profile_key("search.enable_gaussian_temporal", "true").await?;
+    backend
+        .save_profile_key("search.enable_gaussian_temporal", "true")
+        .await?;
 
-    let resp = backend.search(
-        "Unique content for test gaussian temporal decay",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        false,
-    ).await?;
+    let resp = backend
+        .search(
+            "Unique content for test gaussian temporal decay",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            false,
+        )
+        .await?;
 
     let results = resp.results;
     assert!(!results.is_empty(), "Should retrieve the episode");
-    let matched = results.iter().find(|r| r.id == id).expect("Should find the exact episode");
-    
+    let matched = results
+        .iter()
+        .find(|r| r.id == id)
+        .expect("Should find the exact episode");
+
     // Gaussian decay factor for 7 days (168 hours) is exp(-0.5) = 0.60653
     // Decayed utility = 100.0 * 0.60653 = 60.653
     let gaussian_utility = matched.utility;
     println!("DEBUG: gaussian utility = {}", gaussian_utility);
 
     // 2. Disable Gaussian temporal decay (fallback to linear/exponential with -0.05 * delta_t_days)
-    backend.save_profile_key("search.enable_gaussian_temporal", "false").await?;
+    backend
+        .save_profile_key("search.enable_gaussian_temporal", "false")
+        .await?;
 
-    let resp_fallback = backend.search(
-        "Unique content for test gaussian temporal decay",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        false,
-    ).await?;
+    let resp_fallback = backend
+        .search(
+            "Unique content for test gaussian temporal decay",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            false,
+        )
+        .await?;
 
     let results_fallback = resp_fallback.results;
-    let matched_fallback = results_fallback.iter().find(|r| r.id == id).expect("Should find the exact episode");
+    let matched_fallback = results_fallback
+        .iter()
+        .find(|r| r.id == id)
+        .expect("Should find the exact episode");
 
     // Standard decay factor for 7 days is exp(-0.05 * 7) = exp(-0.35) = 0.704688
     // Decayed utility = 100.0 * 0.704688 = 70.4688
@@ -78,8 +94,14 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
     println!("DEBUG: standard utility = {}", standard_utility);
 
     // Assert that the utility scores match the theoretical decay factors
-    assert!((gaussian_utility - 60.653).abs() < 1.0, "Gaussian utility should be around 60.65");
-    assert!((standard_utility - 70.47).abs() < 1.0, "Standard utility should be around 70.47");
+    assert!(
+        (gaussian_utility - 60.653).abs() < 1.0,
+        "Gaussian utility should be around 60.65"
+    );
+    assert!(
+        (standard_utility - 70.47).abs() < 1.0,
+        "Standard utility should be around 70.47"
+    );
 
     Ok(())
 }

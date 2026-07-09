@@ -1,9 +1,9 @@
-use std::io::{BufRead, Write};
-use serde_json::{json, Value};
-use anyhow::{Result, Context};
-use std::sync::Arc;
 use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use std::io::{BufRead, Write};
+use std::sync::Arc;
 
 pub use crate::mcp_routes::run_llm_critic; // Re-export for E0425 in tests
 
@@ -109,41 +109,43 @@ impl McpServer {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(1))
             .build()?;
-        
+
         let ping_url = format!("{}/v1/config/llm", self.daemon_url);
-        
+
         // Try to ping the daemon
-        let ping = client.get(&ping_url)
+        let ping = client
+            .get(&ping_url)
             .header("X-Mythrax-Token", &self.auth_token)
             .send()
             .await;
-        
+
         if let Ok(resp) = ping {
             if resp.status() == reqwest::StatusCode::OK {
                 return Ok(());
             }
         }
-        
+
         // If inactive, spawn daemon in background
         eprintln!("Daemon inactive. Spawning background daemon process...");
-        let current_exe = std::env::current_exe()
-            .unwrap_or_else(|_| std::path::PathBuf::from("mythrax"));
-        
+        let current_exe =
+            std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("mythrax"));
+
         let home = std::env::var("HOME").context("HOME env var not set")?;
         let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");
         std::fs::create_dir_all(&mythrax_dir)?;
         let log_file = mythrax_dir.join("daemon.log");
         let pid_file = mythrax_dir.join("daemon.pid");
-        
+
         let mut cmd = std::process::Command::new(&current_exe);
         cmd.arg("daemon").arg("start");
-        
+
         if let Ok(file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&log_file)
         {
-            let stdout_stdio = file.try_clone()
+            let stdout_stdio = file
+                .try_clone()
                 .map(std::process::Stdio::from)
                 .unwrap_or_else(|_| std::process::Stdio::null());
             cmd.stdout(stdout_stdio);
@@ -152,24 +154,25 @@ impl McpServer {
             cmd.stdout(std::process::Stdio::null());
             cmd.stderr(std::process::Stdio::null());
         }
-        
+
         match cmd.spawn() {
             Ok(child) => {
                 let pid = child.id();
                 let _ = std::fs::write(&pid_file, pid.to_string());
-                
+
                 // Poll port 8090 for up to 15 seconds
                 let poll_client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_millis(200))
                     .build()?;
-                
+
                 let start_time = std::time::Instant::now();
                 let timeout = std::time::Duration::from_secs(15);
                 let mut healthy = false;
-                
+
                 while start_time.elapsed() < timeout {
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    let poll_ping = poll_client.get(&ping_url)
+                    let poll_ping = poll_client
+                        .get(&ping_url)
                         .header("X-Mythrax-Token", &self.auth_token)
                         .send()
                         .await;
@@ -180,12 +183,18 @@ impl McpServer {
                         }
                     }
                 }
-                
+
                 if !healthy {
-                    anyhow::bail!("Timed out waiting for daemon to start on {}", self.daemon_url);
+                    anyhow::bail!(
+                        "Timed out waiting for daemon to start on {}",
+                        self.daemon_url
+                    );
                 }
-                
-                eprintln!("Daemon successfully spawned (PID: {}) and bound to port 8090.", pid);
+
+                eprintln!(
+                    "Daemon successfully spawned (PID: {}) and bound to port 8090.",
+                    pid
+                );
                 Ok(())
             }
             Err(e) => {
@@ -245,14 +254,19 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 "name": name,
                 "arguments": args
             });
-            let resp = client.post(&url)
+            let resp = client
+                .post(&url)
                 .header("X-Mythrax-Token", &self.auth_token)
                 .json(&payload)
                 .send()
                 .await
                 .context("Failed to contact daemon call endpoint")?;
             if resp.status() != reqwest::StatusCode::OK {
-                anyhow::bail!("Daemon returned error status calling tool '{}': {}", name, resp.status());
+                anyhow::bail!(
+                    "Daemon returned error status calling tool '{}': {}",
+                    name,
+                    resp.status()
+                );
             }
             resp.json().await.map_err(Into::into)
         }
@@ -261,24 +275,25 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
     pub async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
         if let Some(ref _local) = self.local_state {
             match method {
-                "initialize" => {
-                    Ok(json!({
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {
-                            "tools": {}
-                        },
-                        "serverInfo": {
-                            "name": "mythrax",
-                            "version": "0.5.0"
-                        }
-                    }))
-                }
+                "initialize" => Ok(json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "mythrax",
+                        "version": "0.5.0"
+                    }
+                })),
                 "tools/list" => {
                     let schema = crate::mcp_routes::get_mcp_tools_schema();
                     Ok(schema)
                 }
                 "tools/call" => {
-                    let name = params.get("name").and_then(|v| v.as_str()).context("Missing tool name in tools/call")?;
+                    let name = params
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .context("Missing tool name in tools/call")?;
                     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                     self.call_tool(name, arguments).await
                 }
@@ -310,43 +325,61 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 "tools/list" => {
                     let client = reqwest::Client::new();
                     let url = format!("{}/v1/mcp/tools", self.daemon_url);
-                    let resp = client.get(&url)
+                    let resp = client
+                        .get(&url)
                         .header("X-Mythrax-Token", &self.auth_token)
                         .send()
                         .await
                         .context("Failed to contact daemon tools endpoint")?;
-                    
+
                     if resp.status() != reqwest::StatusCode::OK {
-                        anyhow::bail!("Daemon returned error status listing tools: {}", resp.status());
+                        anyhow::bail!(
+                            "Daemon returned error status listing tools: {}",
+                            resp.status()
+                        );
                     }
-                    
-                    let tools_list: Value = resp.json().await.context("Failed to parse daemon tools JSON")?;
+
+                    let tools_list: Value = resp
+                        .json()
+                        .await
+                        .context("Failed to parse daemon tools JSON")?;
                     Ok(tools_list)
                 }
                 "tools/call" => {
-                    let name = params.get("name").and_then(|v| v.as_str()).context("Missing tool name in tools/call")?;
+                    let name = params
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .context("Missing tool name in tools/call")?;
                     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-                    
+
                     let client = reqwest::Client::new();
                     let url = format!("{}/v1/mcp/call", self.daemon_url);
-                    
+
                     let payload = json!({
                         "name": name,
                         "arguments": arguments
                     });
-                    
-                    let resp = client.post(&url)
+
+                    let resp = client
+                        .post(&url)
                         .header("X-Mythrax-Token", &self.auth_token)
                         .json(&payload)
                         .send()
                         .await
                         .context("Failed to contact daemon call endpoint")?;
-                    
+
                     if resp.status() != reqwest::StatusCode::OK {
-                        anyhow::bail!("Daemon returned error status calling tool '{}': {}", name, resp.status());
+                        anyhow::bail!(
+                            "Daemon returned error status calling tool '{}': {}",
+                            name,
+                            resp.status()
+                        );
                     }
-                    
-                    let call_result: Value = resp.json().await.context("Failed to parse daemon tool call result JSON")?;
+
+                    let call_result: Value = resp
+                        .json()
+                        .await
+                        .context("Failed to parse daemon tool call result JSON")?;
                     Ok(call_result)
                 }
                 _ => anyhow::bail!("Method not found: {}", method),

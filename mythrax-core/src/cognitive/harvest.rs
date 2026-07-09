@@ -1,10 +1,10 @@
+use crate::contracts::WisdomRule;
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
-use crate::contracts::WisdomRule;
 use anyhow::Result;
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub struct Harvester {
     llm: LLMClient,
@@ -52,9 +52,10 @@ fn scan_skills_in_dir(dir: &Path) -> Vec<SkillInfo> {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let skill_md_path = entry.path().join("SKILL.md");
                 if skill_md_path.exists()
-                    && let Ok(skill) = parse_skill_file(&skill_md_path) {
-                        skills.push(skill);
-                    }
+                    && let Ok(skill) = parse_skill_file(&skill_md_path)
+                {
+                    skills.push(skill);
+                }
             }
         }
     }
@@ -83,7 +84,10 @@ impl Harvester {
         let episodes = db.get_all_episodes().await?;
         let mut combined_text = String::new();
         for ep in episodes {
-            combined_text.push_str(&format!("Episode Title: {}\nContent:\n{}\n\n", ep.title, ep.content));
+            combined_text.push_str(&format!(
+                "Episode Title: {}\nContent:\n{}\n\n",
+                ep.title, ep.content
+            ));
         }
 
         if combined_text.is_empty() {
@@ -92,7 +96,10 @@ impl Harvester {
 
         let sys_prompt = "You are a user profiling cognitive engine. Analyze the development log history and synthesize the user's style preferences, coding habits, development constraints, and frequently preferred architectural paradigms.";
         let prompt_text = format!("Developer log history:\n\n{}", combined_text);
-        let profile_md = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+        let profile_md = self
+            .llm
+            .completion(db, Some(sys_prompt), &prompt_text)
+            .await?;
 
         let relative_path = "wiki/user_profile.md";
         let file_content = format!(
@@ -101,7 +108,8 @@ impl Harvester {
         );
         store.write_file(relative_path, &file_content)?;
 
-        db.save_profile_key("style_preferences", &profile_md).await?;
+        db.save_profile_key("style_preferences", &profile_md)
+            .await?;
         Ok(())
     }
 
@@ -112,7 +120,7 @@ impl Harvester {
     ) -> Result<()> {
         let home = std::env::var("HOME").unwrap_or_default();
         let global_skills_dir = PathBuf::from(home).join(".gemini/config/skills");
-        
+
         let mut project_skills_dir = PathBuf::from(".agents/skills");
         if !project_skills_dir.exists() {
             project_skills_dir = store.vault_root.join("../.agents/skills");
@@ -140,7 +148,10 @@ impl Harvester {
         let mut clusters: HashMap<usize, Vec<SkillInfo>> = HashMap::new();
         for (i, cluster_id) in cluster_assignments.iter().enumerate() {
             if let Some(cid) = cluster_id {
-                clusters.entry(*cid).or_insert_with(Vec::new).push(skills[i].clone());
+                clusters
+                    .entry(*cid)
+                    .or_insert_with(Vec::new)
+                    .push(skills[i].clone());
             }
         }
 
@@ -159,8 +170,14 @@ impl Harvester {
             }
 
             let sys_prompt = "You are a cognitive harvester. Analyze the following developer skills/playbooks and perform a cross-skill interaction analysis. Identify potential conflicts, overlapping constraints, or compounding rules. Formulate resulting Wisdom Rules to resolve conflicts or enforce compounding constraints.";
-            let prompt_text = format!("Skills:\n\n{}Respond ONLY with a JSON array of Wisdom Rules, each containing:\n- target_pattern\n- action_to_avoid\n- causal_explanation\n- prescribed_remedy", skills_prompt);
-            let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let prompt_text = format!(
+                "Skills:\n\n{}Respond ONLY with a JSON array of Wisdom Rules, each containing:\n- target_pattern\n- action_to_avoid\n- causal_explanation\n- prescribed_remedy",
+                skills_prompt
+            );
+            let response = self
+                .llm
+                .completion(db, Some(sys_prompt), &prompt_text)
+                .await?;
 
             #[derive(serde::Deserialize)]
             struct RawWisdom {
@@ -173,11 +190,21 @@ impl Harvester {
             if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&response) {
                 for r in rules {
                     let rule_uuid = uuid::Uuid::new_v4().to_string();
-                    let rule_path = format!("wisdom/skills/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                    let rule_path = format!(
+                        "wisdom/skills/{}_{}.md",
+                        r.target_pattern.replace([' ', '/'], "_"),
+                        &rule_uuid[..8]
+                    );
                     let rule_md = format!(
                         "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"skills\"\nscope: \"general\"\ngenerator_name: \"CrossSkillHarvester\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
-                        r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
-                        r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy
+                        r.target_pattern,
+                        r.action_to_avoid,
+                        r.causal_explanation,
+                        r.prescribed_remedy,
+                        r.target_pattern,
+                        r.action_to_avoid,
+                        r.causal_explanation,
+                        r.prescribed_remedy
                     );
                     store.write_file(&rule_path, &rule_md)?;
 
@@ -212,11 +239,11 @@ impl Harvester {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::db::SurrealBackend;
     use crate::store::MarkdownStore;
     use std::env;
     use std::sync::Mutex;
+    use tempfile::tempdir;
 
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -254,7 +281,9 @@ mod tests {
 
         // If local embedder is not available, skip this test (ONNX models not present)
         if db.embed("test").await.is_err() {
-            println!("Skipping test_targeted_cross_skill_harvesting: model files not present in ~/.mythrax/models/");
+            println!(
+                "Skipping test_targeted_cross_skill_harvesting: model files not present in ~/.mythrax/models/"
+            );
             return;
         }
 
@@ -297,7 +326,11 @@ mod tests {
         // Check that exactly 1 rule was generated (from the cluster of A and B)
         // C is an outlier and should be skipped.
         let rules = db.get_all_wisdom_rules().await.unwrap();
-        assert_eq!(rules.len(), 1, "Expected exactly 1 rule from clustered skills");
+        assert_eq!(
+            rules.len(),
+            1,
+            "Expected exactly 1 rule from clustered skills"
+        );
 
         // Clear skills dir and prepare for the second check: outliers only
         std::fs::remove_dir_all(&skills_dir).unwrap();
@@ -338,7 +371,11 @@ mod tests {
 
         // Check that no rules were generated (outliers don't cluster)
         let rules2 = db2.get_all_wisdom_rules().await.unwrap();
-        assert_eq!(rules2.len(), 0, "Expected no rules from outlier-only skills");
+        assert_eq!(
+            rules2.len(),
+            0,
+            "Expected no rules from outlier-only skills"
+        );
 
         // Restore original env vars
         unsafe {

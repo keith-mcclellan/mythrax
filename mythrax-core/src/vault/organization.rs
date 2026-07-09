@@ -1,6 +1,6 @@
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Result, Context};
 
 /// Resolves a path for writing a file to the vault, handling collisions.
 /// If a collision occurs (the file exists):
@@ -15,8 +15,10 @@ pub fn organize_file(
     content: &str,
 ) -> Result<PathBuf> {
     let category_dir = vault_root.join(category);
-    fs::create_dir_all(&category_dir)
-        .context(format!("Failed to create category directory {:?}", category_dir))?;
+    fs::create_dir_all(&category_dir).context(format!(
+        "Failed to create category directory {:?}",
+        category_dir
+    ))?;
 
     let base_path = category_dir.join(filename);
     if !base_path.exists() {
@@ -26,10 +28,11 @@ pub fn organize_file(
     // Read existing content
     let existing_content = fs::read_to_string(&base_path).ok();
     if let Some(existing) = existing_content
-        && existing == content {
-            // Content is identical, safe to return base path (overwrite is a no-op)
-            return Ok(base_path);
-        }
+        && existing == content
+    {
+        // Content is identical, safe to return base path (overwrite is a no-op)
+        return Ok(base_path);
+    }
 
     // Collision! Resolve by adding a numeric suffix.
     let stem = base_path
@@ -48,13 +51,14 @@ pub fn organize_file(
         if !candidate_path.exists() {
             return Ok(candidate_path);
         }
-        
+
         // If candidate exists, check content equality
         let candidate_content = fs::read_to_string(&candidate_path).ok();
         if let Some(cand_existing) = candidate_content
-            && cand_existing == content {
-                return Ok(candidate_path);
-            }
+            && cand_existing == content
+        {
+            return Ok(candidate_path);
+        }
         counter += 1;
     }
 }
@@ -92,7 +96,8 @@ mod tests {
         let base_path = category_dir.join("test_note.md");
         fs::write(&base_path, "hello world").unwrap();
 
-        let path = organize_file(temp.path(), "episodes", "test_note.md", "different content").unwrap();
+        let path =
+            organize_file(temp.path(), "episodes", "test_note.md", "different content").unwrap();
         assert_eq!(path, category_dir.join("test_note_1.md"));
     }
 }

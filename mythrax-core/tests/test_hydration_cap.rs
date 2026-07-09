@@ -1,12 +1,12 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use serde_json::json;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::store::MarkdownStore;
 use mythrax_core::api::ApiState;
-use mythrax_core::mcp_routes::call_mcp_tool;
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use mythrax_core::mcp_routes::call_mcp_tool;
+use mythrax_core::store::MarkdownStore;
+use serde_json::json;
+use std::fs;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_get_full_hydration_cap() -> Result<()> {
@@ -48,14 +48,14 @@ async fn test_get_full_hydration_cap() -> Result<()> {
     });
 
     let resp = call_mcp_tool(&state, "read", args).await?;
-    
+
     // Parse the output content:
     let content_arr = resp.get("content").unwrap().as_array().unwrap();
     let text = content_arr[0].get("text").unwrap().as_str().unwrap();
-    
+
     let search_results: Vec<mythrax_core::contracts::SearchResult> = serde_json::from_str(text)?;
     let result = &search_results[0];
-    
+
     // It should have truncated content and the truncation marker
     assert!(result.content.len() < 12000);
     assert!(result.content.contains("truncated 2000 chars"));

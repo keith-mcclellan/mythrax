@@ -1,2 +1,2 @@
-pub mod metrics;
 pub mod agent_recall;
+pub mod metrics;

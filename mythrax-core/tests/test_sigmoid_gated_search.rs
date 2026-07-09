@@ -1,6 +1,6 @@
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::{EpisodeSave, WisdomRule};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
@@ -50,8 +50,23 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         .await?.check()?;
 
     // 3. Search for "Rust database locks"
-    let resp = backend.search("Rust database locks",  Some("general"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
-    
+    let resp = backend
+        .search(
+            "Rust database locks",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+        )
+        .await?;
+
     // Assertions
     let results = resp.results;
     assert!(!results.is_empty(), "Should return search results");
@@ -61,10 +76,16 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
 
     assert!(pos_a.is_some(), "High similarity node must be retrieved");
     if let Some(pb) = pos_b {
-        assert!(pos_a.unwrap() < pb, "High similarity node must rank higher than gated low similarity node");
+        assert!(
+            pos_a.unwrap() < pb,
+            "High similarity node must rank higher than gated low similarity node"
+        );
         let score_b = results[pb].similarity;
         println!("DEBUG: score_b = {}", score_b);
-        assert!(score_b <= 0.75, "Low similarity node score must be heavily suppressed by the sigmoid gate");
+        assert!(
+            score_b <= 0.75,
+            "Low similarity node score must be heavily suppressed by the sigmoid gate"
+        );
     }
 
     // 4. Verify Wisdom Rule decay immunity
@@ -85,8 +106,9 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         status: Some("active".to_string()),
         superseded_at: None,
         superseded_by: None,
-    
-        rule_type: None,};
+
+        rule_type: None,
+    };
     let id_r = backend.save_wisdom_rule(&rule).await?;
     let uuid_r = id_r.split(':').nth(1).unwrap();
 
@@ -96,10 +118,28 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         .await?.check()?;
 
     // Search for wisdom
-    let resp_r = backend.search("avoid_concurrency",  Some("general"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let resp_r = backend
+        .search(
+            "avoid_concurrency",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+        )
+        .await?;
     let r_results = resp_r.results;
     let match_rule = r_results.iter().find(|r| r.id == id_r);
-    assert!(match_rule.is_some(), "Wisdom rule must be retrieved despite being 30 days old due to decay immunity");
+    assert!(
+        match_rule.is_some(),
+        "Wisdom rule must be retrieved despite being 30 days old due to decay immunity"
+    );
 
     Ok(())
 }

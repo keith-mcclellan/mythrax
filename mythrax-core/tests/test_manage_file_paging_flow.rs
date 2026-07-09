@@ -1,11 +1,11 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use serde_json::json;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::store::MarkdownStore;
 use mythrax_core::api::ApiState;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::mcp_routes::call_mcp_tool;
+use mythrax_core::store::MarkdownStore;
+use serde_json::json;
+use std::fs;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_manage_file_paging_flow() -> Result<()> {
@@ -18,7 +18,7 @@ async fn test_manage_file_paging_flow() -> Result<()> {
 
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
-    
+
     let file_path = workspace_root.join("src_lib.rs"); // Use .rs extension to trigger virtual paging
 
     // Create initial file content
@@ -38,7 +38,11 @@ pub fn display_val(val: i32) {
     fs::write(&file_path, initial_content)?;
 
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
-    backend.db.query(mythrax_core::db::schema::INIT_SCHEMA).await?.check()?;
+    backend
+        .db
+        .query(mythrax_core::db::schema::INIT_SCHEMA)
+        .await?
+        .check()?;
     backend.init().await?;
 
     let store = std::sync::Arc::new(MarkdownStore::new(&vault_root)?);
@@ -52,32 +56,49 @@ pub fn display_val(val: i32) {
     };
 
     // 1. Test "view" (Virtual Paging) via read tool
-    let view_res = call_mcp_tool(&state, "read", json!({
-        "action": "view",
-        "path": file_path.to_str().unwrap()
-    })).await?;
+    let view_res = call_mcp_tool(
+        &state,
+        "read",
+        json!({
+            "action": "view",
+            "path": file_path.to_str().unwrap()
+        }),
+    )
+    .await?;
 
-    let view_text = view_res.get("content")
+    let view_text = view_res
+        .get("content")
         .and_then(|c| c.as_array())
         .and_then(|arr| arr.get(0))
         .and_then(|obj| obj.get("text"))
         .and_then(|t| t.as_str())
         .unwrap_or("");
 
-    assert!(view_text.contains("[Paged Symbol: Reference page_fn_run_calc]"), "Should contain run_calc placeholder");
-    assert!(view_text.contains("[Paged Symbol: Reference page_fn_display_val]"), "Should contain display_val placeholder");
+    assert!(
+        view_text.contains("[Paged Symbol: Reference page_fn_run_calc]"),
+        "Should contain run_calc placeholder"
+    );
+    assert!(
+        view_text.contains("[Paged Symbol: Reference page_fn_display_val]"),
+        "Should contain display_val placeholder"
+    );
 
     // File on disk must remain untouched
     let disk_content = fs::read_to_string(&file_path)?;
     assert_eq!(disk_content, initial_content);
 
     // 2. Test "replace" (Paging-Aware Contiguous Edit) via write tool
-    let _replace_res = call_mcp_tool(&state, "write", json!({
-        "action": "replace",
-        "path": file_path.to_str().unwrap(),
-        "target_content": "[Paged Symbol: Reference page_fn_run_calc]",
-        "replacement_content": "pub fn run_calc(x: i32) -> i32 { x * 10 }"
-    })).await?;
+    let _replace_res = call_mcp_tool(
+        &state,
+        "write",
+        json!({
+            "action": "replace",
+            "path": file_path.to_str().unwrap(),
+            "target_content": "[Paged Symbol: Reference page_fn_run_calc]",
+            "replacement_content": "pub fn run_calc(x: i32) -> i32 { x * 10 }"
+        }),
+    )
+    .await?;
 
     // File on disk should be updated and contain no placeholders
     let disk_content2 = fs::read_to_string(&file_path)?;
@@ -86,12 +107,18 @@ pub fn display_val(val: i32) {
 
     // 3. Test "multi_replace" (Multi-Block Edit)
     // First, let's re-view to generate placeholders on the new content
-    let view_res2 = call_mcp_tool(&state, "read", json!({
-        "action": "view",
-        "path": file_path.to_str().unwrap()
-    })).await?;
+    let view_res2 = call_mcp_tool(
+        &state,
+        "read",
+        json!({
+            "action": "view",
+            "path": file_path.to_str().unwrap()
+        }),
+    )
+    .await?;
 
-    let view_text2 = view_res2.get("content")
+    let view_text2 = view_res2
+        .get("content")
         .and_then(|c| c.as_array())
         .and_then(|arr| arr.get(0))
         .and_then(|obj| obj.get("text"))
@@ -118,7 +145,9 @@ pub fn display_val(val: i32) {
 
     let disk_content3 = fs::read_to_string(&file_path)?;
     assert!(disk_content3.contains("pub fn run_calc(x: i32) -> i32 { x * 100 }"));
-    assert!(disk_content3.contains("pub fn display_val(val: i32) { println!(\"final: {}\", val); }"));
+    assert!(
+        disk_content3.contains("pub fn display_val(val: i32) { println!(\"final: {}\", val); }")
+    );
     assert!(!disk_content3.contains("[Paged Symbol:"));
 
     Ok(())

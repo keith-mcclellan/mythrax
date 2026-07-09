@@ -1,12 +1,12 @@
 use anyhow::Result;
-use tempfile::tempdir;
-use std::fs;
-use std::env;
-use std::sync::Mutex;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::store::MarkdownStore;
-use mythrax_core::contracts::{WisdomRule, WikiNode};
 use mythrax_core::cognitive::meta_skill::MetaSkillSynthesizer;
+use mythrax_core::contracts::{WikiNode, WisdomRule};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use mythrax_core::store::MarkdownStore;
+use std::env;
+use std::fs;
+use std::sync::Mutex;
+use tempfile::tempdir;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -44,8 +44,9 @@ async fn test_meta_skill_synthesis() -> Result<()> {
         status: None,
         superseded_at: None,
         superseded_by: None,
-    
-        rule_type: None,};
+
+        rule_type: None,
+    };
     backend.save_wisdom_rule(&rule).await?;
 
     let node = WikiNode {
@@ -90,13 +91,17 @@ async fn test_detect_skill_merges() -> Result<()> {
     backend.init().await?;
 
     if backend.embed("test").await.is_err() {
-        println!("Skipping test_detect_skill_merges: model files not present in ~/.mythrax/models/");
+        println!(
+            "Skipping test_detect_skill_merges: model files not present in ~/.mythrax/models/"
+        );
         return Ok(());
     }
 
     // Set HOME to tmp so scan_all_skills looks there for global config if not found
     let original_home = env::var("HOME").ok();
-    unsafe { env::set_var("HOME", tmp.path()); }
+    unsafe {
+        env::set_var("HOME", tmp.path());
+    }
 
     let store = MarkdownStore::new(&vault_root)?;
 
@@ -150,7 +155,9 @@ async fn test_execute_skill_merge() -> Result<()> {
     backend.init().await?;
 
     let original_home = env::var("HOME").ok();
-    unsafe { env::set_var("HOME", tmp.path()); }
+    unsafe {
+        env::set_var("HOME", tmp.path());
+    }
 
     let store = MarkdownStore::new(&vault_root)?;
 
@@ -163,18 +170,21 @@ async fn test_execute_skill_merge() -> Result<()> {
 
     let sk1_content = "---\nname: meta-git-commit\ndescription: git commit instructions\ngenerator_name: MetaSkillSynthesizer\n---\nbody";
     // Custom skill (no generator_name)
-    let sk2_content = "---\nname: custom-git-pull\ndescription: git pull manual instructions\n---\nbody";
+    let sk2_content =
+        "---\nname: custom-git-pull\ndescription: git pull manual instructions\n---\nbody";
 
     fs::write(sk1_dir.join("SKILL.md"), sk1_content)?;
     fs::write(sk2_dir.join("SKILL.md"), sk2_content)?;
 
     let synthesizer = MetaSkillSynthesizer::new();
-    let merged_name = synthesizer.merge_skills(
-        &backend,
-        &store,
-        &["meta-git-commit".to_string(), "custom-git-pull".to_string()],
-        "git-workflow"
-    ).await?;
+    let merged_name = synthesizer
+        .merge_skills(
+            &backend,
+            &store,
+            &["meta-git-commit".to_string(), "custom-git-pull".to_string()],
+            "git-workflow",
+        )
+        .await?;
 
     assert_eq!(merged_name, "meta-git-workflow");
 

@@ -1,18 +1,18 @@
-use notify::{Watcher, RecursiveMode, Event, RecommendedWatcher};
-use std::collections::{HashMap, HashSet};
+use crate::contracts::{Entity, EpisodeSave, WikiNode, WisdomRule};
+use crate::db::StorageBackend;
+use crate::store::MarkdownStore;
+use crate::vault::markdown::{extract_plain_text, parse_frontmatter};
+use crate::vault::organization::organize_file;
+use anyhow::{Context, Result};
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, Duration};
-use tokio::sync::mpsc;
-use anyhow::{Result, Context};
-use crate::store::MarkdownStore;
-use crate::db::StorageBackend;
-use crate::contracts::{EpisodeSave, WisdomRule, Entity, WikiNode};
+use std::time::{Duration, Instant};
 use surrealdb_types::SurrealValue;
-use crate::vault::markdown::{parse_frontmatter, extract_plain_text};
-use crate::vault::organization::organize_file;
+use tokio::sync::mpsc;
 
 pub struct WatchIgnoreList {
     ignored: Mutex<HashMap<PathBuf, Instant>>,
@@ -66,11 +66,12 @@ impl WatchIgnoreList {
             let mut hasher = DefaultHasher::new();
             content.hash(&mut hasher);
             let hash = hasher.finish();
-            
+
             self.ignore_hash(hash);
             self.ignore(path.clone());
-            
-            let rel_path = path.strip_prefix(&store.vault_root)
+
+            let rel_path = path
+                .strip_prefix(&store.vault_root)
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .to_string();
@@ -108,16 +109,21 @@ pub fn start_watching(
     store: Arc<MarkdownStore>,
     dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
 ) -> Result<RecommendedWatcher> {
-    let vault_root = std::fs::canonicalize(&vault_root)
-        .unwrap_or(vault_root);
+    let vault_root = std::fs::canonicalize(&vault_root).unwrap_or(vault_root);
     // Hard monitor limits: max recursion depth 10, max watch limit 50,000 files
     let mut total_files = count_files_recursive(&vault_root, 0);
     let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
-    if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
+    if global_dir.exists()
+        && global_dir != vault_root.join("global")
+        && !global_dir.starts_with(&vault_root)
+    {
         total_files += count_files_recursive(global_dir, 0);
     }
     if total_files > 50000 {
-        return Err(anyhow::anyhow!("Vault exceeds hard limit of 50,000 files (found {})", total_files));
+        return Err(anyhow::anyhow!(
+            "Vault exceeds hard limit of 50,000 files (found {})",
+            total_files
+        ));
     }
 
     // 1. Setup Raw Event Channel
@@ -135,12 +141,16 @@ pub fn start_watching(
 
     // Watch global directory if it exists and is outside the vault
     let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
-    if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
+    if global_dir.exists()
+        && global_dir != vault_root.join("global")
+        && !global_dir.starts_with(&vault_root)
+    {
         watcher.watch(global_dir, RecursiveMode::Recursive)?;
     }
 
     // 2. Setup Write-Behind Coalescing Queue (500ms delay)
-    let (write_tx, mut write_rx) = mpsc::unbounded_channel::<(PathBuf, String, Arc<MarkdownStore>)>();
+    let (write_tx, mut write_rx) =
+        mpsc::unbounded_channel::<(PathBuf, String, Arc<MarkdownStore>)>();
     {
         let mut guard = ignore_list.write_tx.lock().unwrap();
         *guard = Some(write_tx);
@@ -193,13 +203,18 @@ pub fn start_watching(
                     ignore_list_clone.ignore_hash(hash);
                     ignore_list_clone.ignore(path.clone());
 
-                    let rel_path = path.strip_prefix(&store_ref.vault_root)
+                    let rel_path = path
+                        .strip_prefix(&store_ref.vault_root)
                         .unwrap_or(&path)
                         .to_string_lossy()
                         .to_string();
 
                     if let Err(e) = store_ref.write_file(&rel_path, &content) {
-                        tracing::error!("Coalescing queue failed to write file {:?}: {:?}", path, e);
+                        tracing::error!(
+                            "Coalescing queue failed to write file {:?}: {:?}",
+                            path,
+                            e
+                        );
                     }
                 }
             }
@@ -231,15 +246,21 @@ pub fn start_watching(
                 let _permit = sem_c.acquire().await.unwrap();
 
                 if is_remove {
-                    let canonical_root = std::fs::canonicalize(&s_c.vault_root).unwrap_or_else(|_| s_c.vault_root.clone());
+                    let canonical_root = std::fs::canonicalize(&s_c.vault_root)
+                        .unwrap_or_else(|_| s_c.vault_root.clone());
                     let rel_path_str = if let Ok(rel_path) = path.strip_prefix(&canonical_root) {
                         rel_path.to_string_lossy().to_string()
-                    } else if let Ok(rel_path) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+                    } else if let Ok(rel_path) =
+                        path.strip_prefix(Path::new("/Users/keith/mythrax-vault"))
+                    {
                         rel_path.to_string_lossy().to_string()
                     } else {
                         path.to_string_lossy().to_string()
                     };
-                    tracing::info!("File removed from vault, deleting from DB: {}", rel_path_str);
+                    tracing::info!(
+                        "File removed from vault, deleting from DB: {}",
+                        rel_path_str
+                    );
                     if let Err(e) = b_c.delete_by_vault_path(&rel_path_str).await {
                         tracing::error!("Failed to delete file {} from DB: {:?}", rel_path_str, e);
                     }
@@ -290,7 +311,8 @@ pub fn start_watching(
                         let root_to_use = if path.starts_with(&vault_root_clone) {
                             Some(vault_root_clone.as_path())
                         } else {
-                            let global_path = std::path::Path::new("/Users/keith/mythrax-vault/global");
+                            let global_path =
+                                std::path::Path::new("/Users/keith/mythrax-vault/global");
                             if path.starts_with(global_path) {
                                 Some(global_path)
                             } else {
@@ -331,7 +353,10 @@ pub fn start_watching(
                                 content.hash(&mut s);
                                 let hash = s.finish();
                                 if ignore_list_evt.is_hash_ignored(&hash) {
-                                    tracing::debug!("Watcher ignoring path due to hash match: {:?}", path);
+                                    tracing::debug!(
+                                        "Watcher ignoring path due to hash match: {:?}",
+                                        path
+                                    );
                                     continue;
                                 }
                             }
@@ -426,13 +451,16 @@ async fn resolve_target_to_id(
     target: &str,
     surreal_backend: &crate::db::SurrealBackend,
 ) -> Option<surrealdb::types::RecordId> {
-    let cleaned = target.trim_start_matches("[[").trim_end_matches("]]").trim();
+    let cleaned = target
+        .trim_start_matches("[[")
+        .trim_end_matches("]]")
+        .trim();
     if cleaned.contains(':') {
         if let Ok(rec_id) = crate::db::parse_record_id(cleaned) {
             return Some(rec_id);
         }
     }
-    
+
     // Query wiki_node
     let q = "SELECT VALUE id FROM wiki_node WHERE name = $target LIMIT 1;";
     if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
@@ -440,7 +468,7 @@ async fn resolve_target_to_id(
             return Some(id);
         }
     }
-    
+
     // Fallback to episode
     let q = "SELECT VALUE id FROM episode WHERE title = $target LIMIT 1;";
     if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
@@ -448,7 +476,7 @@ async fn resolve_target_to_id(
             return Some(id);
         }
     }
-    
+
     // Fallback to wisdom
     let q = "SELECT VALUE id FROM wisdom WHERE target_pattern = $target LIMIT 1;";
     if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
@@ -456,7 +484,7 @@ async fn resolve_target_to_id(
             return Some(id);
         }
     }
-    
+
     None
 }
 
@@ -481,17 +509,17 @@ pub async fn sync_file_to_db(
     backend: &Arc<dyn StorageBackend>,
     store: &Arc<MarkdownStore>,
 ) -> Result<()> {
-    let content = std::fs::read_to_string(path)
-        .context("Failed to read file for sync")?;
+    let content = std::fs::read_to_string(path).context("Failed to read file for sync")?;
 
     let (yaml_opt, body) = parse_frontmatter(&content);
-    
+
     // Extract plain text for database indexing/embeddings
     let plain_body = extract_plain_text(&body);
 
     // Compute relative path
     let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let canonical_root = std::fs::canonicalize(&store.vault_root).unwrap_or_else(|_| store.vault_root.clone());
+    let canonical_root =
+        std::fs::canonicalize(&store.vault_root).unwrap_or_else(|_| store.vault_root.clone());
     let rel_path = if let Ok(rel) = canonical_path.strip_prefix(&canonical_root) {
         rel.to_string_lossy().to_string()
     } else if let Ok(rel) = canonical_path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
@@ -504,10 +532,17 @@ pub async fn sync_file_to_db(
         let frontmatter: EpisodeFrontmatter = yaml_opt
             .and_then(|y| serde_json::to_value(y).ok())
             .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or(EpisodeFrontmatter { title: None, scope: None, entities: None });
+            .unwrap_or(EpisodeFrontmatter {
+                title: None,
+                scope: None,
+                entities: None,
+            });
 
         let title = frontmatter.title.unwrap_or_else(|| {
-            path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Untitled")
+                .to_string()
         });
 
         let episode = EpisodeSave {
@@ -519,21 +554,21 @@ pub async fn sync_file_to_db(
             source_episode: None,
             session_id: None,
             task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+            node_type: None,
             confidence: None,
         };
 
         backend.save_episode(&episode).await?;
     } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
         if let Some(yaml_val) = yaml_opt {
-            let frontmatter: WisdomFrontmatter = serde_json::from_value(
-                serde_json::to_value(yaml_val).unwrap_or_default()
-            ).context("Failed to parse Wisdom frontmatter")?;
+            let frontmatter: WisdomFrontmatter =
+                serde_json::from_value(serde_json::to_value(yaml_val).unwrap_or_default())
+                    .context("Failed to parse Wisdom frontmatter")?;
 
             let is_global = rel_path.starts_with("global/") || rel_path.contains("/global/");
             let final_tier = if is_global {
@@ -565,7 +600,9 @@ node_type: None,
                 vault_path: Some(rel_path),
                 embedding: None,
                 source_episodes: frontmatter.source_episodes.unwrap_or_default(),
-                generator_name: frontmatter.generator_name.unwrap_or_else(|| "manual".to_string()),
+                generator_name: frontmatter
+                    .generator_name
+                    .unwrap_or_else(|| "manual".to_string()),
                 similarity: None,
                 utility: frontmatter.utility,
                 status: frontmatter.status,
@@ -580,10 +617,17 @@ node_type: None,
         let frontmatter: WikiFrontmatter = yaml_opt
             .and_then(|y| serde_json::to_value(y).ok())
             .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or(WikiFrontmatter { name: None, scope: None, edges: None });
+            .unwrap_or(WikiFrontmatter {
+                name: None,
+                scope: None,
+                edges: None,
+            });
 
         let name = frontmatter.name.unwrap_or_else(|| {
-            path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Untitled")
+                .to_string()
         });
 
         let node = WikiNode {
@@ -597,9 +641,10 @@ node_type: None,
 
         let db_id = backend.save_wiki_node(&node).await?;
 
-        if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+        {
             let from_id = crate::db::parse_record_id(&db_id)?;
-            
+
             // Parse body wikilinks using regex
             let body_links_regex = regex::Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
             let mut body_links = Vec::new();
@@ -613,43 +658,55 @@ node_type: None,
             let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();
             if let Some(ref edges) = frontmatter.edges {
                 for edge in edges {
-                    if let Some(target_id) = resolve_target_to_id(&edge.target, surreal_backend).await {
-                        let relation = edge.relation.clone().unwrap_or_else(|| "related".to_string());
+                    if let Some(target_id) =
+                        resolve_target_to_id(&edge.target, surreal_backend).await
+                    {
+                        let relation = edge
+                            .relation
+                            .clone()
+                            .unwrap_or_else(|| "related".to_string());
                         desired.push((target_id, relation, edge.strength));
                     }
                 }
             }
-            
+
             for link in body_links {
                 if let Some(target_id) = resolve_target_to_id(&link, surreal_backend).await {
-                    if !desired.iter().any(|(tid, rel, _)| tid == &target_id && rel == "related") {
+                    if !desired
+                        .iter()
+                        .any(|(tid, rel, _)| tid == &target_id && rel == "related")
+                    {
                         desired.push((target_id, "related".to_string(), None));
                     }
                 }
             }
 
             // Query existing relations
-            let mut existing_resp = surreal_backend.db.query("SELECT id, relation, out FROM relates_to WHERE in = $from;")
+            let mut existing_resp = surreal_backend
+                .db
+                .query("SELECT id, relation, out FROM relates_to WHERE in = $from;")
                 .bind(("from", from_id.clone()))
                 .await?;
-            
+
             #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
             struct RelatesToRaw {
                 id: surrealdb::types::RecordId,
                 relation: String,
                 out: surrealdb::types::RecordId,
             }
-            
+
             let existing: Vec<RelatesToRaw> = existing_resp.take(0)?;
 
             // Delete removed relations
             for ext in &existing {
-                let is_still_desired = desired.iter().any(|(tid, rel, _)| {
-                    tid == &ext.out && rel == &ext.relation
-                });
+                let is_still_desired = desired
+                    .iter()
+                    .any(|(tid, rel, _)| tid == &ext.out && rel == &ext.relation);
                 if !is_still_desired {
                     let delete_q = "DELETE FROM relates_to WHERE id = $rel_id;";
-                    let _ = surreal_backend.db.query(delete_q)
+                    let _ = surreal_backend
+                        .db
+                        .query(delete_q)
                         .bind(("rel_id", ext.id.clone()))
                         .await;
                 }
@@ -657,12 +714,14 @@ node_type: None,
 
             // Create new relations
             for (tid, rel, strength_opt) in desired {
-                let already_exists = existing.iter().any(|ext| {
-                    &ext.out == &tid && &ext.relation == &rel
-                });
+                let already_exists = existing
+                    .iter()
+                    .any(|ext| &ext.out == &tid && &ext.relation == &rel);
                 if !already_exists {
                     let relate_q = "RELATE $from->relates_to->$to CONTENT { relation: $relation, strength: $strength };";
-                    let _ = surreal_backend.db.query(relate_q)
+                    let _ = surreal_backend
+                        .db
+                        .query(relate_q)
                         .bind(("from", from_id.clone()))
                         .bind(("to", tid))
                         .bind(("relation", rel))
@@ -678,16 +737,17 @@ node_type: None,
 
 /// Helper to slugify a title for filenames
 pub fn slugify(text: &str) -> String {
-    let mut slug = text.to_lowercase()
+    let mut slug = text
+        .to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect::<String>();
-    
+
     while slug.contains("__") {
         slug = slug.replace("__", "_");
     }
     slug = slug.trim_matches('_').to_string();
-    
+
     if slug.is_empty() {
         slug = "note".to_string();
     }
@@ -707,12 +767,13 @@ pub async fn save_episode_bidirectional(
         _ => {
             let slug = slugify(&episode.title);
             let filename = format!("{}.md", slug);
-            
+
             // Format markdown to check for collisions/duplicates
             let markdown = format_episode_markdown(episode);
-            
+
             let resolved_abs = organize_file(&store.vault_root, "episodes", &filename, &markdown)?;
-            resolved_abs.strip_prefix(&store.vault_root)
+            resolved_abs
+                .strip_prefix(&store.vault_root)
                 .unwrap_or(&resolved_abs)
                 .to_string_lossy()
                 .to_string()
@@ -750,12 +811,14 @@ pub async fn save_wisdom_rule_bidirectional(
         _ => {
             let slug = slugify(&rule.target_pattern);
             let filename = format!("{}.md", slug);
-            
+
             let markdown = format_wisdom_markdown(rule);
             let tier_subfolder = format!("wisdom/{}", rule.tier);
-            
-            let resolved_abs = organize_file(&store.vault_root, &tier_subfolder, &filename, &markdown)?;
-            resolved_abs.strip_prefix(&store.vault_root)
+
+            let resolved_abs =
+                organize_file(&store.vault_root, &tier_subfolder, &filename, &markdown)?;
+            resolved_abs
+                .strip_prefix(&store.vault_root)
                 .unwrap_or(&resolved_abs)
                 .to_string_lossy()
                 .to_string()
@@ -796,14 +859,32 @@ pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
 #[allow(dead_code)]
 pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     let mut yaml_val = serde_json::Map::new();
-    yaml_val.insert("target_pattern".to_string(), serde_json::json!(rule.target_pattern));
-    yaml_val.insert("action_to_avoid".to_string(), serde_json::json!(rule.action_to_avoid));
-    yaml_val.insert("causal_explanation".to_string(), serde_json::json!(rule.causal_explanation));
-    yaml_val.insert("prescribed_remedy".to_string(), serde_json::json!(rule.prescribed_remedy));
+    yaml_val.insert(
+        "target_pattern".to_string(),
+        serde_json::json!(rule.target_pattern),
+    );
+    yaml_val.insert(
+        "action_to_avoid".to_string(),
+        serde_json::json!(rule.action_to_avoid),
+    );
+    yaml_val.insert(
+        "causal_explanation".to_string(),
+        serde_json::json!(rule.causal_explanation),
+    );
+    yaml_val.insert(
+        "prescribed_remedy".to_string(),
+        serde_json::json!(rule.prescribed_remedy),
+    );
     yaml_val.insert("tier".to_string(), serde_json::json!(rule.tier));
     yaml_val.insert("scope".to_string(), serde_json::json!(rule.scope));
-    yaml_val.insert("source_episodes".to_string(), serde_json::json!(rule.source_episodes));
-    yaml_val.insert("generator_name".to_string(), serde_json::json!(rule.generator_name));
+    yaml_val.insert(
+        "source_episodes".to_string(),
+        serde_json::json!(rule.source_episodes),
+    );
+    yaml_val.insert(
+        "generator_name".to_string(),
+        serde_json::json!(rule.generator_name),
+    );
     if let Some(utility) = rule.utility {
         yaml_val.insert("utility".to_string(), serde_json::json!(utility));
     }
@@ -811,10 +892,16 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
         yaml_val.insert("status".to_string(), serde_json::json!(status));
     }
     if let Some(superseded_at) = &rule.superseded_at {
-        yaml_val.insert("superseded_at".to_string(), serde_json::json!(superseded_at));
+        yaml_val.insert(
+            "superseded_at".to_string(),
+            serde_json::json!(superseded_at),
+        );
     }
     if let Some(superseded_by) = &rule.superseded_by {
-        yaml_val.insert("superseded_by".to_string(), serde_json::json!(superseded_by));
+        yaml_val.insert(
+            "superseded_by".to_string(),
+            serde_json::json!(superseded_by),
+        );
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
@@ -824,24 +911,44 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use crate::db::SurrealBackend;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_watcher_sync() {
         let temp = tempdir().unwrap();
-        let backend: Arc<dyn StorageBackend> = Arc::new(SurrealBackend::new_in_memory().await.unwrap());
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(SurrealBackend::new_in_memory().await.unwrap());
         backend.init().await.unwrap();
-        
+
         let store = Arc::new(MarkdownStore::new(temp.path()).unwrap());
-        
+
         let relative_path = "episodes/test_note.md";
-        let note_content = "---\ntitle: \"Watcher Test\"\nscope: \"watcher-testing\"\n---\nBody content here.";
+        let note_content =
+            "---\ntitle: \"Watcher Test\"\nscope: \"watcher-testing\"\n---\nBody content here.";
         store.write_file(relative_path, note_content).unwrap();
-        
-        sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
-        
-        let results = backend.search("Body content",  Some("watcher-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+
+        sync_file_to_db(&temp.path().join(relative_path), &backend, &store)
+            .await
+            .unwrap();
+
+        let results = backend
+            .search(
+                "Body content",
+                Some("watcher-testing"),
+                false,
+                1,
+                0,
+                0.55,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Watcher Test");
     }
@@ -849,12 +956,13 @@ mod tests {
     #[tokio::test]
     async fn test_bidirectional_sync_and_loop_prevention() {
         let temp = tempdir().unwrap();
-        let backend: Arc<dyn StorageBackend> = Arc::new(SurrealBackend::new_in_memory().await.unwrap());
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(SurrealBackend::new_in_memory().await.unwrap());
         backend.init().await.unwrap();
-        
+
         let store = Arc::new(MarkdownStore::new(temp.path()).unwrap());
         let ignore_list = Arc::new(WatchIgnoreList::new());
-        
+
         // 1. Save an episode via save_episode_bidirectional
         let episode = EpisodeSave {
             title: "Bidirectional Test".to_string(),
@@ -873,40 +981,74 @@ mod tests {
             node_type: None,
             confidence: None,
         };
-        
-        let ep_id = save_episode_bidirectional(&episode, backend.as_ref(), &store, &ignore_list).await.unwrap();
+
+        let ep_id = save_episode_bidirectional(&episode, backend.as_ref(), &store, &ignore_list)
+            .await
+            .unwrap();
         assert!(ep_id.contains("episode:"));
-        
+
         // Yield to allow the background write-behind queue to flush and update the ignore list
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        
+
         // Check that file was written to vault
         let expected_rel_path = "episodes/bidirectional_test.md";
         let abs_path = temp.path().join(expected_rel_path);
         assert!(abs_path.exists());
-        
+
         // 2. Loop Prevention Check: Check that the written file path is in the ignore list
         assert!(ignore_list.is_ignored(&abs_path));
-        
+
         // Verify content in DB
-        let results = backend.search("bidirectional sync",  Some("bi-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let results = backend
+            .search(
+                "bidirectional sync",
+                Some("bi-testing"),
+                false,
+                1,
+                0,
+                0.55,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Bidirectional Test");
-        
+
         // 3. Watcher side: modify file directly in vault and sync to DB
         // Wait 2.1 seconds so the ignore list entry expires
         tokio::time::sleep(tokio::time::Duration::from_millis(2100)).await;
         assert!(!ignore_list.is_ignored(&abs_path));
-        
+
         // Write new content directly to vault
         let new_content = "---\ntitle: \"Watcher Test Updated\"\nscope: \"bi-testing\"\n---\nNew updated body content.";
         std::fs::write(&abs_path, new_content).unwrap();
-        
+
         // Trigger manual sync
         sync_file_to_db(&abs_path, &backend, &store).await.unwrap();
-        
+
         // Verify DB got updated
-        let results2 = backend.search("updated body",  Some("bi-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let results2 = backend
+            .search(
+                "updated body",
+                Some("bi-testing"),
+                false,
+                1,
+                0,
+                0.55,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
         assert_eq!(results2.results.len(), 1);
         assert_eq!(results2.results[0].title, "Watcher Test Updated");
     }
@@ -914,19 +1056,25 @@ mod tests {
     #[tokio::test]
     async fn test_watcher_sync_skills_tier() {
         let temp = tempdir().unwrap();
-        let backend: Arc<dyn StorageBackend> = Arc::new(SurrealBackend::new_in_memory().await.unwrap());
+        let backend: Arc<dyn StorageBackend> =
+            Arc::new(SurrealBackend::new_in_memory().await.unwrap());
         backend.init().await.unwrap();
-        
+
         let store = Arc::new(MarkdownStore::new(temp.path()).unwrap());
-        
+
         let relative_path = "wisdom/skills/test_skill_rule.md";
         let rule_content = "---\ntarget_pattern: \"test-pattern\"\naction_to_avoid: \"test-action\"\ncausal_explanation: \"test-explanation\"\nprescribed_remedy: \"test-remedy\"\n---\n";
         store.write_file(relative_path, rule_content).unwrap();
-        
-        sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
-        
+
+        sync_file_to_db(&temp.path().join(relative_path), &backend, &store)
+            .await
+            .unwrap();
+
         // Retrieve wisdom rule using get_wisdom with tier "skills"
-        let results = backend.get_wisdom("test-pattern", Some("skills"), 10, 0, 0.0).await.unwrap();
+        let results = backend
+            .get_wisdom("test-pattern", Some("skills"), 10, 0, 0.0)
+            .await
+            .unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].tier, "skills");
         assert_eq!(results.results[0].target_pattern, "test-pattern");

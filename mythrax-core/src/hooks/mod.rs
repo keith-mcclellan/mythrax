@@ -1,7 +1,7 @@
-pub mod shell;
-pub mod precompact;
-pub mod stop;
 pub mod adapters;
+pub mod precompact;
+pub mod shell;
+pub mod stop;
 
 use crate::contracts::HookResult;
 
@@ -27,5 +27,3 @@ pub fn emit_hook_result(res: anyhow::Result<HookResult>) {
         }
     }
 }
-
-

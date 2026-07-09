@@ -25,7 +25,10 @@ fn test_claude_code_payload_negative() {
     });
 
     let res = adapt_payload(payload, "claude");
-    assert!(res.is_err(), "Old invented keys must fail to deserialize or not populate");
+    assert!(
+        res.is_err(),
+        "Old invented keys must fail to deserialize or not populate"
+    );
 }
 
 #[test]
@@ -37,9 +40,15 @@ fn test_codex_payload_maps_to_canonical() {
     });
 
     let res = adapt_payload(payload, "codex");
-    assert!(res.is_err(), "Codex payload must fail with unsupported message");
+    assert!(
+        res.is_err(),
+        "Codex payload must fail with unsupported message"
+    );
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("unsupported in v2.1.0"), "Error must contain unsupported in v2.1.0");
+    assert!(
+        err.contains("unsupported in v2.1.0"),
+        "Error must contain unsupported in v2.1.0"
+    );
 }
 
 #[test]
@@ -51,9 +60,15 @@ fn test_cursor_payload_maps_to_canonical() {
     });
 
     let res = adapt_payload(payload, "cursor");
-    assert!(res.is_err(), "Cursor payload must fail with unsupported message");
+    assert!(
+        res.is_err(),
+        "Cursor payload must fail with unsupported message"
+    );
     let err = res.unwrap_err().to_string();
-    assert!(err.contains("unsupported in v2.1.0"), "Error must contain unsupported in v2.1.0");
+    assert!(
+        err.contains("unsupported in v2.1.0"),
+        "Error must contain unsupported in v2.1.0"
+    );
 }
 
 #[test]

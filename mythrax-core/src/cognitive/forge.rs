@@ -1,11 +1,11 @@
-use std::fs;
-use std::path::Path;
-use anyhow::{Result, Context};
-use serde::{Deserialize, Serialize};
-use crate::contracts::{WikiNode, WisdomRule, ForgedConcept, ForgedRule};
+use crate::contracts::{ForgedConcept, ForgedRule, WikiNode, WisdomRule};
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
 
 pub struct Forge {
     backend: std::sync::Arc<crate::db::SurrealBackend>,
@@ -33,10 +33,18 @@ impl Forge {
 
     /// Ingest a document, chunk it, extract wisdom rules and wiki concepts using LLM,
     /// and save/relate all of them with a single parallel batch embedding pass.
-    pub async fn ingest_document(&self, content: &str, scope: &str, _source_name: &str) -> Result<()> {
+    pub async fn ingest_document(
+        &self,
+        content: &str,
+        scope: &str,
+        _source_name: &str,
+    ) -> Result<()> {
         let normalized_scope = {
             let s = scope.trim().to_lowercase();
-            let cleaned: String = s.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            let cleaned: String = s
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
             if cleaned.is_empty() {
                 "general".to_string()
             } else {
@@ -44,7 +52,10 @@ impl Forge {
             }
         };
 
-        let sanitized_source_name = _source_name.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+        let sanitized_source_name = _source_name.replace(
+            |c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_',
+            "_",
+        );
         let uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
 
         // 1. Chunk the document content using semantic_chunk_text
@@ -72,23 +83,26 @@ impl Forge {
 
         // 3. Collect all texts that need to be embedded across parent, chunks, concepts, and rules
         let mut texts_to_embed = Vec::new();
-        
+
         // Parent text
         texts_to_embed.push(format!("{}: {}", _source_name, content));
-        
+
         // Chunks, concepts, and rules texts
         for (idx, (chunk_text, concepts, rules)) in chunks_data.iter().enumerate() {
             let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
             texts_to_embed.push(format!("{}: {}", chunk_name, chunk_text));
-            
+
             for concept in concepts {
                 texts_to_embed.push(format!("{}: {}", concept.name, concept.content));
             }
-            
+
             for rule in rules {
                 texts_to_embed.push(format!(
                     "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-                    rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                    rule.target_pattern,
+                    rule.action_to_avoid,
+                    rule.causal_explanation,
+                    rule.prescribed_remedy
                 ));
             }
         }
@@ -97,15 +111,23 @@ impl Forge {
         let embeddings = self.backend.embed_batch(&texts_to_embed).await?;
 
         let total_chunks = chunks.len();
-        let chunk_uuids: Vec<String> = (0..total_chunks).map(|_| uuid::Uuid::new_v4().to_string()[..8].to_string()).collect();
+        let chunk_uuids: Vec<String> = (0..total_chunks)
+            .map(|_| uuid::Uuid::new_v4().to_string()[..8].to_string())
+            .collect();
 
         // 5. Save the parent index node as a WikiNode in SurrealDB and write it to the store
-        let parent_path = format!("wiki/{}/parent_{}_{}.md", normalized_scope, sanitized_source_name, uuid_prefix);
-        
+        let parent_path = format!(
+            "wiki/{}/parent_{}_{}.md",
+            normalized_scope, sanitized_source_name, uuid_prefix
+        );
+
         let mut chunks_index = String::new();
         chunks_index.push_str("\n\n## Chunks\n");
         for idx in 0..total_chunks {
-            let chunk_path = format!("wiki/{}/chunk_{}_{}.md", normalized_scope, sanitized_source_name, chunk_uuids[idx]);
+            let chunk_path = format!(
+                "wiki/{}/chunk_{}_{}.md",
+                normalized_scope, sanitized_source_name, chunk_uuids[idx]
+            );
             let chunk_target = chunk_path.strip_suffix(".md").unwrap_or(&chunk_path);
             let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
             chunks_index.push_str(&format!("- [[{}|{}]]\n", chunk_target, chunk_name));
@@ -134,29 +156,45 @@ impl Forge {
         for (idx, (chunk_text, concepts, rules)) in chunks_data.into_iter().enumerate() {
             let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
             let chunk_uuid_prefix = &chunk_uuids[idx];
-            let chunk_path = format!("wiki/{}/chunk_{}_{}.md", normalized_scope, sanitized_source_name, chunk_uuid_prefix);
+            let chunk_path = format!(
+                "wiki/{}/chunk_{}_{}.md",
+                normalized_scope, sanitized_source_name, chunk_uuid_prefix
+            );
 
             let mut nav_callout = String::new();
             nav_callout.push_str("\n\n> [!INFO]- Navigation\n");
             let parent_target = parent_path.strip_suffix(".md").unwrap_or(&parent_path);
-            nav_callout.push_str(&format!("> Parent: [[{}|{}]]\n", parent_target, _source_name));
-            
+            nav_callout.push_str(&format!(
+                "> Parent: [[{}|{}]]\n",
+                parent_target, _source_name
+            ));
+
             let prev_str = if idx > 0 {
-                let prev_path = format!("wiki/{}/chunk_{}_{}", normalized_scope, sanitized_source_name, chunk_uuids[idx - 1]);
+                let prev_path = format!(
+                    "wiki/{}/chunk_{}_{}",
+                    normalized_scope,
+                    sanitized_source_name,
+                    chunk_uuids[idx - 1]
+                );
                 let prev_name = format!("Chunk {}", idx);
                 format!("[[{}|{}]]", prev_path, prev_name)
             } else {
                 "None".to_string()
             };
-            
+
             let next_str = if idx + 1 < total_chunks {
-                let next_path = format!("wiki/{}/chunk_{}_{}", normalized_scope, sanitized_source_name, chunk_uuids[idx + 1]);
+                let next_path = format!(
+                    "wiki/{}/chunk_{}_{}",
+                    normalized_scope,
+                    sanitized_source_name,
+                    chunk_uuids[idx + 1]
+                );
                 let next_name = format!("Chunk {}", idx + 2);
                 format!("[[{}|{}]]", next_path, next_name)
             } else {
                 "None".to_string()
             };
-            
+
             nav_callout.push_str(&format!("> Prev: {} | Next: {}\n", prev_str, next_str));
 
             let chunk_md = format!(
@@ -184,12 +222,21 @@ impl Forge {
             // Save extracted concepts and relate them to the chunk
             let mut concept_ids = Vec::new();
             for concept in concepts {
-                let sanitized_concept_name = concept.name.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+                let sanitized_concept_name = concept.name.replace(
+                    |c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_',
+                    "_",
+                );
                 let concept_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
-                let concept_path = format!("wiki/{}/concept_{}_{}.md", normalized_scope, sanitized_concept_name, concept_uuid_prefix);
+                let concept_path = format!(
+                    "wiki/{}/concept_{}_{}.md",
+                    normalized_scope, sanitized_concept_name, concept_uuid_prefix
+                );
                 let concept_md = format!(
                     "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
-                    concept.name.replace('"', "\\\""), normalized_scope, concept.name, concept.content
+                    concept.name.replace('"', "\\\""),
+                    normalized_scope,
+                    concept.name,
+                    concept.content
                 );
                 self.store.write_file(&concept_path, &concept_md)?;
 
@@ -211,18 +258,27 @@ impl Forge {
 
                 // Relate Concept -> Chunk (relation: "extracted_from")
                 let query = "RELATE $concept_id -> relates_to -> $chunk_id UNIQUE CONTENT { relation: 'extracted_from', created_at: time::now() };";
-                self.backend.db.query(query)
+                self.backend
+                    .db
+                    .query(query)
                     .bind(("concept_id", concept_thing))
                     .bind(("chunk_id", chunk_thing.clone()))
                     .await?
-                    .check().context("Failed to relate concept to chunk")?;
+                    .check()
+                    .context("Failed to relate concept to chunk")?;
             }
 
             // Save extracted rules and relate them to the chunk and concepts
             for rule in rules {
-                let sanitized_rule_name = rule.target_pattern.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+                let sanitized_rule_name = rule.target_pattern.replace(
+                    |c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_',
+                    "_",
+                );
                 let rule_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
-                let rule_path = format!("wisdom/{}/rule_{}_{}.md", normalized_scope, sanitized_rule_name, rule_uuid_prefix);
+                let rule_path = format!(
+                    "wisdom/{}/rule_{}_{}.md",
+                    normalized_scope, sanitized_rule_name, rule_uuid_prefix
+                );
                 let rule_md = format!(
                     "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"forge\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                     rule.target_pattern.replace('"', "\\\""),
@@ -264,21 +320,27 @@ impl Forge {
 
                 // Relate Rule -> Chunk (relation: "extracted_from")
                 let query_rule_chunk = "RELATE $rule_id -> relates_to -> $chunk_id UNIQUE CONTENT { relation: 'extracted_from', created_at: time::now() };";
-                self.backend.db.query(query_rule_chunk)
+                self.backend
+                    .db
+                    .query(query_rule_chunk)
                     .bind(("rule_id", rule_thing.clone()))
                     .bind(("chunk_id", chunk_thing.clone()))
                     .await?
-                    .check().context("Failed to relate rule to chunk")?;
+                    .check()
+                    .context("Failed to relate rule to chunk")?;
 
                 // Relate Rule -> Concept in this chunk
                 for concept_id_str in &concept_ids {
                     let concept_thing = crate::db::parse_record_id(concept_id_str)?;
                     let query_rule_concept = "RELATE $rule_id -> relates_to -> $concept_id UNIQUE CONTENT { created_at: time::now() };";
-                    self.backend.db.query(query_rule_concept)
+                    self.backend
+                        .db
+                        .query(query_rule_concept)
                         .bind(("rule_id", rule_thing.clone()))
                         .bind(("concept_id", concept_thing))
                         .await?
-                        .check().context("Failed to relate rule to concept")?;
+                        .check()
+                        .context("Failed to relate rule to concept")?;
                 }
             }
         }
@@ -288,11 +350,14 @@ impl Forge {
             let chunk_thing = crate::db::parse_record_id(chunk_id_str)?;
             let parent_thing = crate::db::parse_record_id(&parent_id_str)?;
             let query = "RELATE $chunk_id -> relates_to -> $parent_id UNIQUE CONTENT { relation: 'parent', created_at: time::now() };";
-            self.backend.db.query(query)
+            self.backend
+                .db
+                .query(query)
                 .bind(("chunk_id", chunk_thing))
                 .bind(("parent_id", parent_thing))
                 .await?
-                .check().context("Failed to relate chunk to parent")?;
+                .check()
+                .context("Failed to relate chunk to parent")?;
         }
 
         // 8. Establish bidirectional sequential links between adjacent chunks
@@ -302,19 +367,25 @@ impl Forge {
 
             // Chunk N -> Chunk N+1 with relation "next"
             let query_next = "RELATE $chunk_n -> relates_to -> $chunk_n_plus_1 UNIQUE CONTENT { relation: 'next', created_at: time::now() };";
-            self.backend.db.query(query_next)
+            self.backend
+                .db
+                .query(query_next)
                 .bind(("chunk_n", chunk_n_thing.clone()))
                 .bind(("chunk_n_plus_1", chunk_n_plus_1_thing.clone()))
                 .await?
-                .check().context("Failed to relate chunk next")?;
+                .check()
+                .context("Failed to relate chunk next")?;
 
             // Chunk N+1 -> Chunk N with relation "prev"
             let query_prev = "RELATE $chunk_n_plus_1 -> relates_to -> $chunk_n UNIQUE CONTENT { relation: 'prev', created_at: time::now() };";
-            self.backend.db.query(query_prev)
+            self.backend
+                .db
+                .query(query_prev)
                 .bind(("chunk_n_plus_1", chunk_n_plus_1_thing))
                 .bind(("chunk_n", chunk_n_thing))
                 .await?
-                .check().context("Failed to relate chunk prev")?;
+                .check()
+                .context("Failed to relate chunk prev")?;
         }
 
         Ok(())
@@ -336,19 +407,32 @@ impl Forge {
              ]",
             chunk_text
         );
-        
-        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+
+        let res = self
+            .llm
+            .completion(self.backend.as_ref(), Some(system_instruction), &prompt)
+            .await?;
         let trimmed = res.trim();
         let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```json")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else {
             trimmed
         };
-        
-        let concepts: Vec<ForgedConcept> = serde_json::from_str(stripped)
-            .context("Failed to parse concepts JSON")?;
+
+        let concepts: Vec<ForgedConcept> =
+            serde_json::from_str(stripped).context("Failed to parse concepts JSON")?;
         Ok(concepts)
     }
 
@@ -375,19 +459,32 @@ impl Forge {
              ]",
             chunk_text
         );
-        
-        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+
+        let res = self
+            .llm
+            .completion(self.backend.as_ref(), Some(system_instruction), &prompt)
+            .await?;
         let trimmed = res.trim();
         let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```json")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else {
             trimmed
         };
-        
-        let rules: Vec<ForgedRule> = serde_json::from_str(stripped)
-            .context("Failed to parse rules JSON")?;
+
+        let rules: Vec<ForgedRule> =
+            serde_json::from_str(stripped).context("Failed to parse rules JSON")?;
         Ok(rules)
     }
 
@@ -409,12 +506,25 @@ impl Forge {
             content
         );
 
-        let res = self.llm.completion(&*self.backend, Some(system_instruction), &prompt).await?;
+        let res = self
+            .llm
+            .completion(&*self.backend, Some(system_instruction), &prompt)
+            .await?;
         let trimmed = res.trim();
         let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```json")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
+            trimmed
+                .strip_prefix("```")
+                .unwrap_or(trimmed)
+                .strip_suffix("```")
+                .unwrap_or(trimmed)
+                .trim()
         } else {
             trimmed
         };
@@ -425,8 +535,8 @@ impl Forge {
             start_phrase: String,
         }
 
-        let raw_entries: Vec<RawTOCEntry> = serde_json::from_str(stripped)
-            .context("Failed to parse LLM TOC output")?;
+        let raw_entries: Vec<RawTOCEntry> =
+            serde_json::from_str(stripped).context("Failed to parse LLM TOC output")?;
 
         let mut current_entries = Vec::new();
         for entry in raw_entries {
@@ -438,7 +548,10 @@ impl Forge {
                 if let Some(pos) = lower_content.find(&lower_phrase) {
                     current_entries.push((entry.title, pos));
                 } else {
-                    tracing::warn!("Could not locate TOC start phrase: {:?}", entry.start_phrase);
+                    tracing::warn!(
+                        "Could not locate TOC start phrase: {:?}",
+                        entry.start_phrase
+                    );
                 }
             }
         }
@@ -483,10 +596,10 @@ pub fn extract_pdf_text(path: &Path) -> Result<String> {
 /// Chunk text into token-sized chunks (or word fallbacks)
 pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
     use tokenizers::Tokenizer;
-    
+
     let home = std::env::var("HOME").unwrap_or_default();
     let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
-    
+
     if tokenizer_path.exists() {
         if let Ok(tokenizer) = Tokenizer::from_file(&tokenizer_path) {
             if let Ok(encoding) = tokenizer.encode(text, false) {
@@ -508,7 +621,7 @@ pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> 
             }
         }
     }
-    
+
     // Fallback: Word-based chunking
     let words: Vec<&str> = text.split_whitespace().collect();
     let mut chunks = Vec::new();
@@ -534,27 +647,29 @@ pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> 
 #[allow(dead_code)] // public API; wired to CLI in a future PR
 pub fn skeletonize_skill_file(skill_path: &Path) -> Result<()> {
     let content = fs::read_to_string(skill_path).context("Failed to read SKILL.md file")?;
-    
+
     let (skeleton, examples_opt, references_opt) = skeletonize_skill(&content);
-    
-    let skill_dir = skill_path.parent().context("Failed to get skill directory")?;
-    
+
+    let skill_dir = skill_path
+        .parent()
+        .context("Failed to get skill directory")?;
+
     if let Some(examples_content) = examples_opt {
         let examples_dir = skill_dir.join("examples");
         fs::create_dir_all(&examples_dir)?;
         let examples_path = examples_dir.join("examples.md");
         fs::write(&examples_path, examples_content)?;
     }
-    
+
     if let Some(references_content) = references_opt {
         let references_dir = skill_dir.join("references");
         fs::create_dir_all(&references_dir)?;
         let references_path = references_dir.join("references.md");
         fs::write(&references_path, references_content)?;
     }
-    
+
     fs::write(skill_path, skeleton)?;
-    
+
     Ok(())
 }
 
@@ -563,7 +678,7 @@ fn skeletonize_skill(content: &str) -> (String, Option<String>, Option<String>) 
     let lines: Vec<&str> = content.lines().collect();
     let mut frontmatter = String::new();
     let mut i = 0;
-    
+
     // Parse frontmatter
     if i < lines.len() && lines[i].trim() == "---" {
         frontmatter.push_str(lines[i]);
@@ -580,19 +695,19 @@ fn skeletonize_skill(content: &str) -> (String, Option<String>, Option<String>) 
             i += 1;
         }
     }
-    
+
     let mut main_body = String::new();
     let mut examples_body = String::new();
     let mut references_body = String::new();
-    
+
     enum State {
         Main,
         Examples,
         References,
     }
-    
+
     let mut state = State::Main;
-    
+
     while i < lines.len() {
         let line = lines[i];
         if line.starts_with("## Examples") {
@@ -610,7 +725,7 @@ fn skeletonize_skill(content: &str) -> (String, Option<String>, Option<String>) 
         } else if line.starts_with("## ") {
             state = State::Main;
         }
-        
+
         match state {
             State::Main => {
                 main_body.push_str(line);
@@ -627,13 +742,21 @@ fn skeletonize_skill(content: &str) -> (String, Option<String>, Option<String>) 
         }
         i += 1;
     }
-    
+
     let mut updated_content = frontmatter;
     updated_content.push_str(&main_body);
-    
-    let examples_opt = if examples_body.trim().is_empty() { None } else { Some(examples_body) };
-    let references_opt = if references_body.trim().is_empty() { None } else { Some(references_body) };
-    
+
+    let examples_opt = if examples_body.trim().is_empty() {
+        None
+    } else {
+        Some(examples_body)
+    };
+    let references_opt = if references_body.trim().is_empty() {
+        None
+    } else {
+        Some(references_body)
+    };
+
     (updated_content, examples_opt, references_opt)
 }
 
@@ -652,10 +775,10 @@ pub struct LogicalSection {
 
 pub fn count_tokens(text: &str) -> usize {
     use tokenizers::Tokenizer;
-    
+
     let home = std::env::var("HOME").unwrap_or_default();
     let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
-    
+
     if tokenizer_path.exists() {
         if let Ok(tokenizer) = Tokenizer::from_file(&tokenizer_path) {
             if let Ok(encoding) = tokenizer.encode(text, false) {
@@ -663,7 +786,7 @@ pub fn count_tokens(text: &str) -> usize {
             }
         }
     }
-    
+
     // Fallback: Word-based count
     text.split_whitespace().count()
 }
@@ -672,9 +795,9 @@ pub fn parse_markdown_toc(content: &str) -> Vec<TOCEntry> {
     let mut entries = Vec::new();
     let mut current_title: Option<String> = None;
     let mut current_start = 0;
-    
+
     let base_ptr = content.as_ptr() as usize;
-    
+
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('#') {
@@ -682,7 +805,7 @@ pub fn parse_markdown_toc(content: &str) -> Vec<TOCEntry> {
             if hash_count > 0 && trimmed.chars().nth(hash_count) == Some(' ') {
                 let title = trimmed[hash_count..].trim().to_string();
                 let line_offset = line.as_ptr() as usize - base_ptr;
-                
+
                 if let Some(prev_title) = current_title.take() {
                     entries.push(TOCEntry {
                         title: prev_title,
@@ -695,7 +818,7 @@ pub fn parse_markdown_toc(content: &str) -> Vec<TOCEntry> {
             }
         }
     }
-    
+
     if let Some(prev_title) = current_title {
         entries.push(TOCEntry {
             title: prev_title,
@@ -703,7 +826,7 @@ pub fn parse_markdown_toc(content: &str) -> Vec<TOCEntry> {
             end_byte: content.len(),
         });
     }
-    
+
     if entries.is_empty() {
         entries.push(TOCEntry {
             title: "Document Root".to_string(),
@@ -711,7 +834,7 @@ pub fn parse_markdown_toc(content: &str) -> Vec<TOCEntry> {
             end_byte: content.len(),
         });
     }
-    
+
     entries
 }
 
@@ -719,10 +842,13 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
     let mut sections = Vec::new();
     let mut current_batch = Vec::new();
     let mut current_tokens = 0;
-    
+
     let build_grouped_section = |content: &str, batch: &[TOCEntry]| -> LogicalSection {
         if batch.is_empty() {
-            return LogicalSection { title: "Empty Section".to_string(), content: String::new() };
+            return LogicalSection {
+                title: "Empty Section".to_string(),
+                content: String::new(),
+            };
         }
         let start = batch[0].start_byte;
         let end = batch[batch.len() - 1].end_byte;
@@ -740,7 +866,7 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
     for entry in toc {
         let entry_content = &content[entry.start_byte..entry.end_byte];
         let entry_tokens = count_tokens(entry_content);
-        
+
         if entry_tokens > 24000 {
             // Flush current batch
             if !current_batch.is_empty() {
@@ -748,7 +874,7 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
                 current_batch.clear();
                 current_tokens = 0;
             }
-            
+
             // Split the large entry using chunk_text
             // 24k size, 2.4k overlap
             let chunks = chunk_text(entry_content, 24000, 2400);
@@ -771,12 +897,12 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
             current_tokens += entry_tokens;
         }
     }
-    
+
     // Flush remaining
     if !current_batch.is_empty() {
         sections.push(build_grouped_section(content, &current_batch));
     }
-    
+
     // Second pass: Ensure no section exceeds the character limit (20,000 characters)
     let mut final_sections = Vec::new();
     for section in sections {
@@ -792,7 +918,7 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
             final_sections.push(section);
         }
     }
-    
+
     // If no sections produced (guardrail)
     if final_sections.is_empty() {
         final_sections.push(LogicalSection {
@@ -800,6 +926,6 @@ pub fn split_into_logical_sections(content: &str, toc: &[TOCEntry]) -> Vec<Logic
             content: content.to_string(),
         });
     }
-    
+
     final_sections
 }
