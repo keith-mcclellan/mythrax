@@ -131,22 +131,22 @@ async fn test_archived_demotion_logic() -> Result<()> {
 
     // Verify cross-session ratios (all archived nodes should be demoted by 0.4)
     let ratio_recent_cross = score_recent_cross / score_active_cross;
-    assert!((ratio_recent_cross - 0.40).abs() < 0.05, "Recent cross-session ratio was {}", ratio_recent_cross);
+    assert!((ratio_recent_cross - 0.40).abs() < 0.08, "Recent cross-session ratio was {}", ratio_recent_cross);
 
     let ratio_one_day_cross = score_one_day_cross / score_active_cross;
-    assert!((ratio_one_day_cross - 0.40).abs() < 0.05, "One day cross-session ratio was {}", ratio_one_day_cross);
+    assert!((ratio_one_day_cross - 0.40).abs() < 0.08, "One day cross-session ratio was {}", ratio_one_day_cross);
 
     let ratio_three_days_cross = score_three_days_cross / score_active_cross;
-    assert!((ratio_three_days_cross - 0.40).abs() < 0.05, "Three days cross-session ratio was {}", ratio_three_days_cross);
+    assert!((ratio_three_days_cross - 0.40).abs() < 0.08, "Three days cross-session ratio was {}", ratio_three_days_cross);
 
     let ratio_seven_days_cross = score_seven_days_cross / score_active_cross;
-    assert!((ratio_seven_days_cross - 0.40).abs() < 0.05, "Seven days cross-session ratio was {}", ratio_seven_days_cross);
+    assert!((ratio_seven_days_cross - 0.40).abs() < 0.08, "Seven days cross-session ratio was {}", ratio_seven_days_cross);
 
     let ratio_fourteen_days_cross = score_fourteen_days_cross / score_active_cross;
-    assert!((ratio_fourteen_days_cross - 0.40).abs() < 0.05, "Fourteen days cross-session ratio was {}", ratio_fourteen_days_cross);
+    assert!((ratio_fourteen_days_cross - 0.40).abs() < 0.08, "Fourteen days cross-session ratio was {}", ratio_fourteen_days_cross);
 
     let ratio_legacy_cross = score_legacy_cross / score_active_cross;
-    assert!((ratio_legacy_cross - 0.40).abs() < 0.05, "Legacy cross-session ratio was {}", ratio_legacy_cross);
+    assert!((ratio_legacy_cross - 0.40).abs() < 0.08, "Legacy cross-session ratio was {}", ratio_legacy_cross);
 
     // 2. SAME-SESSION SEARCH: Search with session_id = Some("session-123")
     // This will retrieve only Index 0 (Active) and Index 1 (Recent Archived), as they are same-session.

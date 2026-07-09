@@ -21,5 +21,5 @@
   "search.user.ladder_scale": "0.100",
   "search.default.ladder_scale": "0.100",
   "search.active_session_boost": "0.0",
-  "search.bypass_sigmoid_gating": "false"
+  "search.bypass_sigmoid_gating": "true"
 }

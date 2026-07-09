@@ -218,7 +218,7 @@ pub const INIT_SCHEMA: &str = "
         }
     );
 
-    UPSERT type::record('profile', 'search.enable_cross_encoder_rerank') CONTENT { key: 'search.enable_cross_encoder_rerank', value: 'true' };
+    UPSERT type::record('profile', 'search.enable_cross_encoder_rerank') CONTENT { key: 'search.enable_cross_encoder_rerank', value: 'false' };
     UPSERT type::record('profile', 'search.rerank_pool_size') CONTENT { key: 'search.rerank_pool_size', value: '15' };
     UPSERT type::record('profile', 'search.rerank_weight') CONTENT { key: 'search.rerank_weight', value: '0.15' };
     UPSERT type::record('profile', 'search.sigmoid_center') CONTENT { key: 'search.sigmoid_center', value: '0.45' };

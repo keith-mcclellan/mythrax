@@ -250,8 +250,8 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
     ).await?;
     assert_eq!(search_res.results.len(), 1);
     let returned_utility = search_res.results[0].utility;
-    // Decay: 50.0 * e^(-0.05 * 10) = 50.0 * e^(-0.5) = 50.0 * 0.6065 = 30.32
-    assert!(returned_utility < 40.0);
+    println!("DEBUG: returned_utility = {}", returned_utility);
+    assert!(returned_utility < 40.0, "returned_utility is {}", returned_utility);
     assert!(returned_utility > 25.0);
 
     // 4. Verify reinforcement resets it to 50.0

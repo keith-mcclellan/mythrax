@@ -20,10 +20,11 @@ fn match_symbol(line: &str, file_ext: &str) -> Option<(String, String)> {
                 first = words.next()?;
             }
             if matches!(first, "struct" | "fn" | "enum" | "trait" | "impl") {
-                let name = words.next()?;
-                let clean_name = name.split('<').next()?.trim_matches(|c| c == '{' || c == ';' || c == ':');
-                if !clean_name.is_empty() && clean_name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '<' || c == '>') {
-                    return Some((first.to_string(), clean_name.to_string()));
+                let pos = trimmed.find(first)?;
+                let clean_remaining = trimmed[pos + first.len()..].trim_start();
+                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                if len > 0 {
+                    return Some((first.to_string(), clean_remaining[..len].to_string()));
                 }
             }
         }
@@ -34,10 +35,11 @@ fn match_symbol(line: &str, file_ext: &str) -> Option<(String, String)> {
                 first = words.next()?;
             }
             if matches!(first, "class" | "function" | "interface" | "type") {
-                let name = words.next()?;
-                let clean_name = name.trim_matches(|c| c == '{' || c == ';' || c == ':');
-                if !clean_name.is_empty() && clean_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    return Some((first.to_string(), clean_name.to_string()));
+                let pos = trimmed.find(first)?;
+                let clean_remaining = trimmed[pos + first.len()..].trim_start();
+                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                if len > 0 {
+                    return Some((first.to_string(), clean_remaining[..len].to_string()));
                 }
             }
         }
@@ -45,10 +47,11 @@ fn match_symbol(line: &str, file_ext: &str) -> Option<(String, String)> {
             let mut words = trimmed.split_whitespace();
             let first = words.next()?;
             if matches!(first, "class" | "def") {
-                let name = words.next()?;
-                let clean_name = name.split('(').next()?.trim_matches(':');
-                if !clean_name.is_empty() && clean_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    return Some((first.to_string(), clean_name.to_string()));
+                let pos = trimmed.find(first)?;
+                let clean_remaining = trimmed[pos + first.len()..].trim_start();
+                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                if len > 0 {
+                    return Some((first.to_string(), clean_remaining[..len].to_string()));
                 }
             }
         }

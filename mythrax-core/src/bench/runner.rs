@@ -560,13 +560,50 @@ async fn main() -> Result<()> {
             } else {
                 records.iter().map(|r| r.recall_all_turn_at25).sum::<f32>() / records.len() as f32
             };
+            let avg_ceiling_recall_all_turn_at25 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| {
+                    let total = r.gold_corpus_ids.len();
+                    if total == 0 {
+                        1.0f32
+                    } else {
+                        (25.0f32.min(total as f32)) / total as f32
+                    }
+                }).sum::<f32>() / records.len() as f32
+            };
+            let avg_ceiling_ndcg_turn_at10 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| {
+                    if r.gold_corpus_ids.is_empty() {
+                        0.0f32
+                    } else {
+                        1.0f32
+                    }
+                }).sum::<f32>() / records.len() as f32
+            };
+            let avg_ceiling_recall_any_session_at5 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| {
+                    if r.gold_session_ids.is_empty() {
+                        0.0f32
+                    } else {
+                        1.0f32
+                    }
+                }).sum::<f32>() / records.len() as f32
+            };
             println!("-- turn granularity (has_answer) --");
             println!("Recall_Any@{}:            {:.4}", K_RECALL, avg_recall_any_turn);
             println!("Recall_All@{}:            {:.4}", K_RECALL, avg_recall_all_turn);
             println!("Recall_All@25:            {:.4}", avg_recall_all_turn_at25);
+            println!("Recall_All@25 Ceiling:    {:.4}", avg_ceiling_recall_all_turn_at25);
             println!("nDCG@{}:                  {:.4}", K_NDCG, avg_ndcg_turn);
+            println!("nDCG@{} Ceiling:          {:.4}", K_NDCG, avg_ceiling_ndcg_turn_at10);
             println!("-- session granularity (answer_session_ids) --");
             println!("Recall_Any@{} (session):  {:.4}", K_RECALL, avg_recall_any_session);
+            println!("Recall_Any@{} Session Ceiling: {:.4}", K_RECALL, avg_ceiling_recall_any_session_at5);
             println!("Recall_All@{} (session):  {:.4}", K_RECALL, avg_recall_all_session);
             println!("--------------------------------------------------------");
             println!("Per-Question-Type R@{} (turn recall_any):", K_NDCG);

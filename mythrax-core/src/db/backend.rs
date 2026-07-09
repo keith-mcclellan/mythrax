@@ -2836,7 +2836,13 @@ impl StorageBackend for SurrealBackend {
             };
 
             let get_decay_factor = |delta_t_secs: f64| -> f32 {
-                crate::db::backend::get_decay_factor(query_category, delta_t_secs, active_decay_sigma as f64, decay_floor)
+                if enable_gaussian_temporal {
+                    crate::db::backend::get_decay_factor(query_category, delta_t_secs, active_decay_sigma as f64, decay_floor)
+                } else {
+                    let delta_t_days = (delta_t_secs / 86400.0) as f32;
+                    let decay = (-0.05f32 * delta_t_days).exp();
+                    decay.max(decay_floor)
+                }
             };
 
             let mut list = Vec::new();
@@ -2932,16 +2938,19 @@ impl StorageBackend for SurrealBackend {
                 };
                 similarity = similarity + boost;
 
-                let delta_t_secs = if let Some(created) = ep.created_at.as_ref() {
-                    let elapsed = anchor_dt.signed_duration_since(*created);
-                    (elapsed.num_seconds() as f64).max(0.0)
-                } else if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
+                let delta_t_secs = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
                         let elapsed = anchor_dt.signed_duration_since(last_ret.with_timezone(&chrono::Utc));
+                        (elapsed.num_seconds() as f64).max(0.0)
+                    } else if let Some(created) = ep.created_at.as_ref() {
+                        let elapsed = anchor_dt.signed_duration_since(*created);
                         (elapsed.num_seconds() as f64).max(0.0)
                     } else {
                         0.0f64
                     }
+                } else if let Some(created) = ep.created_at.as_ref() {
+                    let elapsed = anchor_dt.signed_duration_since(*created);
+                    (elapsed.num_seconds() as f64).max(0.0)
                 } else {
                     0.0f64
                 };
@@ -3319,8 +3328,23 @@ impl StorageBackend for SurrealBackend {
             } else {
                 candidates = Vec::new();
             }
-        } else if let Some(v_resp) = vector_resp_res {
-            let mut vector_candidates = parse_results(v_resp, true)?;
+        } else {
+            let mut vector_candidates = if let Some(v_resp) = vector_resp_res {
+                parse_results(v_resp, true)?
+            } else {
+                Vec::new()
+            };
+
+            let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
+                val.parse::<usize>().unwrap_or(200)
+            } else {
+                match self.get_profile_key("search.fts_cap").await {
+                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(200),
+                    _ => 200,
+                }
+            };
+            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            keyword_candidates.truncate(fts_cap);
 
             let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
                 Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
@@ -3460,18 +3484,7 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
             }
-            let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
-                val.parse::<usize>().unwrap_or(200)
-            } else {
-                match self.get_profile_key("search.fts_cap").await {
-                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(200),
-                    _ => 200,
-                }
-            };
-            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
-            keyword_candidates.truncate(fts_cap);
-            
-            if is_hybrid_enabled {
+            if is_hybrid_enabled && query_emb.is_some() && !vector_candidates.is_empty() {
                 let mut unique_map = std::collections::HashMap::new();
                 for c in vector_candidates {
                     unique_map.insert(c.id.clone(), c);
@@ -3583,21 +3596,11 @@ impl StorageBackend for SurrealBackend {
                 }
                 stage_6_executed = true;
                 candidates = merged;
+            } else if vector_candidates.is_empty() {
+                candidates = keyword_candidates;
             } else {
                 candidates = reciprocal_rank_fusion(vector_candidates, keyword_candidates, 60);
             }
-        } else {
-            let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
-                val.parse::<usize>().unwrap_or(200)
-            } else {
-                match self.get_profile_key("search.fts_cap").await {
-                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(200),
-                    _ => 200,
-                }
-            };
-            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
-            keyword_candidates.truncate(fts_cap);
-            candidates = keyword_candidates;
         }
 
         if bypass_sigmoid_gating && !stage_6_executed {
