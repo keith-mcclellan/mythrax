@@ -39,6 +39,13 @@ async fn test_t2_temporal_decay_with_anchor() -> Result<()> {
     };
     let id_b = backend.save_episode(&ep_b).await?;
 
+    // Clear last_retrieved_at so temporal decay uses created_at instead of the
+    // save_episode-injected now() timestamp (which is in the future relative to
+    // the test's 2023 temporal_anchor, causing delta_t to clamp to 0).
+    let fix_sql = "UPDATE type::record('episode', $id) SET last_retrieved_at = NONE;";
+    backend.db.query(fix_sql).bind(("id", id_a.strip_prefix("episode:").unwrap_or(&id_a))).await?.check()?;
+    backend.db.query(fix_sql).bind(("id", id_b.strip_prefix("episode:").unwrap_or(&id_b))).await?.check()?;
+
     // Search with temporal_anchor matching a day after Episode B (2023-05-30T23:40:00Z)
     let resp = backend.search(
         "database locks",
@@ -57,7 +64,7 @@ async fn test_t2_temporal_decay_with_anchor() -> Result<()> {
     ).await?;
 
     let results = resp.results;
-    assert!(results.len() >= 2);
+    assert!(results.len() >= 2, "Expected at least 2 results, got {}", results.len());
     let pos_a = results.iter().position(|r| r.id == id_a).expect("Episode A not found");
     let pos_b = results.iter().position(|r| r.id == id_b).expect("Episode B not found");
     assert!(pos_b < pos_a, "Episode B (recent) must rank higher than Episode A (old) when temporal_anchor is used");

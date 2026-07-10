@@ -148,7 +148,7 @@ async fn test_t12_default_category_no_aggressive_decay() -> Result<()> {
     };
     let id_old = backend.save_episode(&ep_old).await?;
     let uuid_old = id_old.split(':').nth(1).unwrap();
-    backend.db.query("UPDATE type::record('episode', $id) MERGE { importance: 1.0 };")
+    backend.db.query("UPDATE type::record('episode', $id) MERGE { importance: 1.0, last_retrieved_at: NONE };")
         .bind(("id", uuid_old))
         .await?.check()?;
 
@@ -162,7 +162,7 @@ async fn test_t12_default_category_no_aggressive_decay() -> Result<()> {
     };
     let id_fresh = backend.save_episode(&ep_fresh).await?;
     let uuid_fresh = id_fresh.split(':').nth(1).unwrap();
-    backend.db.query("UPDATE type::record('episode', $id) MERGE { importance: 1.0 };")
+    backend.db.query("UPDATE type::record('episode', $id) MERGE { importance: 1.0, last_retrieved_at: NONE };")
         .bind(("id", uuid_fresh))
         .await?.check()?;
 
@@ -205,7 +205,7 @@ async fn test_t12_default_category_no_aggressive_decay() -> Result<()> {
     };
     let id_very_old = backend.save_episode(&ep_very_old).await?;
     let uuid_very_old = id_very_old.split(':').nth(1).unwrap();
-    backend.db.query("UPDATE type::record('episode', $id) MERGE { importance: 1.0 };")
+    backend.db.query("UPDATE type::record('episode', $id) MERGE { importance: 1.0, last_retrieved_at: NONE };")
         .bind(("id", uuid_very_old))
         .await?.check()?;
 
@@ -288,23 +288,25 @@ async fn test_t14_tier_boost_after_factor_fix() -> Result<()> {
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
 
-    // Enable sigmoid bypass
+    // Enable sigmoid bypass and disable gamma rerank + calibrated confidence to isolate tier boost factor
     backend.save_profile_key("search.bypass_sigmoid_gating", "true").await?;
+    backend.save_profile_key("search.gamma_rerank", "0.0").await?;
+    backend.save_profile_key("search.enable_calibrated_confidence", "false").await?;
 
-    // Save an episode (1.3x tier boost)
+    // Save an episode (Default category: factor = (0.3*0.5 + 0.3*1.0)/0.6 * 1.0 = 0.75)
     let ep = EpisodeSave {
         title: "Episode Node".to_string(),
-        content: "Database locking".to_string(),
+        content: "Database locking mechanisms are important".to_string(),
         scope: Some("general".to_string()),
         ..Default::default()
     };
     let id_ep = backend.save_episode(&ep).await?;
 
-    // Save a wiki node (1.1x tier boost)
+    // Save a wisdom rule (Default category: factor = (0.5*0.5 + 0.1*1.0)/0.6 * 1.2 = 0.7)
     let rule = WisdomRule {
         target_pattern: "Wiki Node".to_string(),
-        action_to_avoid: "Writing concurrently".to_string(),
-        causal_explanation: "RocksDB process lock".to_string(),
+        action_to_avoid: "database locking conflicts".to_string(),
+        causal_explanation: "concurrent access".to_string(),
         prescribed_remedy: "Use client mode".to_string(),
         tier: "skills".to_string(),
         scope: "general".to_string(),
@@ -314,7 +316,7 @@ async fn test_t14_tier_boost_after_factor_fix() -> Result<()> {
     let id_r = backend.save_wisdom_rule(&rule).await?;
 
     let resp = backend.search(
-        "next lock",
+        "database locking",
         Some("general"),
         false,
         10,
@@ -331,11 +333,20 @@ async fn test_t14_tier_boost_after_factor_fix() -> Result<()> {
 
     let results = resp.results;
 
-    let pos_ep = results.iter().position(|r| r.id == id_ep).expect("Episode not found");
-    let pos_r = results.iter().position(|r| r.id == id_r).expect("Wisdom rule not found");
+    let ep_result = results.iter().find(|r| r.id == id_ep).expect("Episode not found");
+    let wis_result = results.iter().find(|r| r.id == id_r).expect("Wisdom rule not found");
 
-    // Episode has 1.3x tier boost, wiki node has 1.1x boost, so Episode should rank higher.
-    assert!(pos_ep < pos_r, "Episode must rank higher than wiki node due to tier boost");
+    // Verify the factor_multiplier ordering: episode should have higher factor
+    let ep_factor = ep_result.factor_multiplier.unwrap();
+    let wis_factor = wis_result.factor_multiplier.unwrap();
+    assert!(ep_factor > wis_factor,
+        "Episode factor_multiplier ({}) must be > wisdom factor_multiplier ({})",
+        ep_factor, wis_factor);
+
+    // With confounding factors disabled, the higher factor_multiplier should produce higher similarity
+    assert!(ep_result.similarity > wis_result.similarity,
+        "Episode similarity ({}) must be > wisdom similarity ({}) due to higher factor_multiplier",
+        ep_result.similarity, wis_result.similarity);
 
     Ok(())
 }

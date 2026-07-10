@@ -7609,7 +7609,7 @@ mod tests {
         false,
         true,
         false,
-        None,
+        Some("session-1"),
         true,
         None,
     ).await.unwrap();
