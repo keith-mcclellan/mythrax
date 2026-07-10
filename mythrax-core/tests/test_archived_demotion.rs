@@ -8,7 +8,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
     backend.init().await?;
     backend.save_profile_key("search.sigmoid_center", "0.55").await?;
     backend.save_profile_key("search.fusion_sigmoid_center", "0.60").await?;
-    backend.save_profile_key("search.gamma_rerank", "0.10").await?;
+    backend.save_profile_key("search.gamma_rerank", "0.0").await?;
     backend.save_profile_key("search.rerank_pool_size", "25").await?;
     backend.save_profile_key("search.rerank_weight", "0.45").await?;
 
@@ -25,7 +25,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
     ];
 
     let mut ids = Vec::new();
-    for (i, title) in titles.iter().enumerate() {
+    for (i, _title) in titles.iter().enumerate() {
         let session_id = if i == 0 || i == 1 {
             Some("session-123".to_string())
         } else {
@@ -33,7 +33,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
         };
         let ep = EpisodeSave {
         created_at: None,
-            title: title.to_string(),
+            title: "Node".to_string(),
             content: content.to_string(),
             scope: Some("general".to_string()),
             session_id,
