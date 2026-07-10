@@ -553,82 +553,72 @@ impl SurrealBackend {
         let mut relations = Vec::new();
 
         // 3. Map episodes to JSON objects for SurrealQL
-        let mapped_json_array: Vec<serde_json::Value> = episodes
-            .iter()
-            .enumerate()
-            .map(|(i, ep)| {
-                let id_str = Uuid::new_v4().to_string();
-                let metrics_id_str = Uuid::new_v4().to_string();
-                let embedding = embeddings.get(i).cloned().flatten();
-                let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
-                let last_retrieved_at = chrono::Utc::now().to_rfc3339();
+        let mut mapped_json_array: Vec<serde_json::Value> = Vec::with_capacity(episodes.len());
+        for (i, ep) in episodes.iter().enumerate() {
+            let id_str = Uuid::new_v4().to_string();
+            let metrics_id_str = Uuid::new_v4().to_string();
+            let embedding = embeddings.get(i).cloned().flatten();
+            let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
+            let last_retrieved_at = chrono::Utc::now().to_rfc3339();
 
-                // Reconstruct followed_by relationships using local cache and STM
-                if let Some(ref sess_id) = ep.session_id {
-                    let tracking_key = if let Some(ref t_id) = ep.task_id {
-                        format!("_last_episode_id_{}", t_id)
-                    } else {
-                        "_last_episode_id".to_string()
-                    };
-                    let map_key = format!("{}:{}", sess_id, tracking_key);
+            // Reconstruct followed_by relationships using local cache and STM
+            if let Some(ref sess_id) = ep.session_id {
+                let user_prefix = get_user_prefix(sess_id);
+                let tracking_key = if let Some(ref t_id) = ep.task_id {
+                    format!("_last_episode_id_{}", t_id)
+                } else {
+                    "_last_episode_id".to_string()
+                };
+                let map_key = format!("{}:{}", user_prefix, tracking_key);
 
-                    if let Some(last_ep_id) = local_last_eps.get(&map_key).cloned() {
-                        let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(&last_ep_id).to_string();
-                        relations.push(serde_json::json!({
-                            "from_str": last_uuid,
-                            "to_str": id_str.clone(),
-                        }));
-                    } else {
-                        // Bounded check of STM database to bridge sequential batches
-                        let this_self = self.clone();
-                        let sess_id_clone = sess_id.clone();
-                        let tracking_key_clone = tracking_key.clone();
-                        // Run STM lookup blockingly in a local context (since map is called within a sync closure)
-                        if let Ok(stm_map) = tokio::task::block_in_place(move || {
-                            tokio::runtime::Handle::current().block_on(async move {
-                                this_self.get_stm(&sess_id_clone, Some(&tracking_key_clone)).await
-                            })
-                        }) {
-                            if let Some(last_ep_id) = stm_map.get(&tracking_key) {
-                                let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(last_ep_id).to_string();
-                                relations.push(serde_json::json!({
-                                    "from_str": last_uuid,
-                                    "to_str": id_str.clone(),
-                                }));
-                            }
+                if let Some(last_ep_id) = local_last_eps.get(&map_key).cloned() {
+                    let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(&last_ep_id).to_string();
+                    relations.push(serde_json::json!({
+                        "from_str": last_uuid,
+                        "to_str": id_str.clone(),
+                    }));
+                } else {
+                    // Bounded check of STM database to bridge sequential batches
+                    if let Ok(stm_map) = self.get_stm(user_prefix, Some(&tracking_key)).await {
+                        if let Some(last_ep_id) = stm_map.get(&tracking_key) {
+                            let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(last_ep_id).to_string();
+                            relations.push(serde_json::json!({
+                                "from_str": last_uuid,
+                                "to_str": id_str.clone(),
+                            }));
                         }
                     }
-                    local_last_eps.insert(map_key, format!("episode:{}", id_str));
                 }
+                local_last_eps.insert(map_key, format!("episode:{}", id_str));
+            }
 
-                let created_at_val = ep.created_at.clone().unwrap_or_else(|| last_retrieved_at.clone());
+            let created_at_val = ep.created_at.clone().unwrap_or_else(|| last_retrieved_at.clone());
 
-                let mut ep_json = serde_json::json!({
-                    "id_str": id_str,
-                    "metrics_id_str": metrics_id_str,
-                    "title": ep.title,
-                    "content": ep.content,
-                    "scope": ep.scope.clone().unwrap_or_else(|| "general".to_string()),
-                    "vault_path": ep.vault_path.clone().unwrap_or_default(),
-                    "utility": 50.0f32,
-                    "last_retrieved_at": last_retrieved_at,
-                    "word_count": word_count,
-                    "created_at": created_at_val
-                });
+            let mut ep_json = serde_json::json!({
+                "id_str": id_str,
+                "metrics_id_str": metrics_id_str,
+                "title": ep.title,
+                "content": ep.content,
+                "scope": ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+                "vault_path": ep.vault_path.clone().unwrap_or_default(),
+                "utility": 50.0f32,
+                "last_retrieved_at": last_retrieved_at,
+                "word_count": word_count,
+                "created_at": created_at_val
+            });
 
-                let ep_obj = ep_json.as_object_mut().unwrap();
-                if let Some(emb) = embedding {
-                    ep_obj.insert("embedding".to_string(), serde_json::json!(emb));
-                }
-                if let Some(ref sess) = ep.session_id {
-                    ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
-                }
-                let node_type_val = ep.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
-                ep_obj.insert("node_type".to_string(), serde_json::json!(node_type_val));
+            let ep_obj = ep_json.as_object_mut().unwrap();
+            if let Some(emb) = embedding {
+                ep_obj.insert("embedding".to_string(), serde_json::json!(emb));
+            }
+            if let Some(ref sess) = ep.session_id {
+                ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
+            }
+            let node_type_val = ep.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
+            ep_obj.insert("node_type".to_string(), serde_json::json!(node_type_val));
 
-                ep_json
-            })
-            .collect();
+            mapped_json_array.push(ep_json);
+        }
 
         // 4. Record indexing writes for any vault_path present
         for ep in episodes {
@@ -2346,8 +2336,8 @@ impl StorageBackend for SurrealBackend {
         } else {
             true
         };
-        let bound_session_id = if is_session_isolation_enabled {
-            session_id
+        let bound_session_prefix = if is_session_isolation_enabled {
+            session_id.map(|sid| get_user_prefix(sid).to_string())
         } else {
             None
         };
@@ -2548,7 +2538,7 @@ impl StorageBackend for SurrealBackend {
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                          AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (embedding <|200, 200|> $query_embedding);
                         ",
@@ -2562,7 +2552,7 @@ impl StorageBackend for SurrealBackend {
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                          AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (embedding <|200, 200|> $query_embedding);
                     ");
@@ -2626,7 +2616,7 @@ impl StorageBackend for SurrealBackend {
                          FROM episode 
                          WHERE {fts_where_clause}
                            AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                           AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                           AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                            AND ($include_archived = true OR archived = false OR archived = NONE)
                            AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                          ORDER BY bm25_score DESC
@@ -2645,7 +2635,7 @@ impl StorageBackend for SurrealBackend {
                         FROM episode 
                         WHERE {fts_where_clause}
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                          AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                         ORDER BY bm25_score DESC
@@ -2706,7 +2696,7 @@ impl StorageBackend for SurrealBackend {
                     .bind(("query", cleaned_query.as_str()))
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all))
-                    .bind(("session_id", bound_session_id))
+                    .bind(("session_prefix", bound_session_prefix.clone()))
                     .bind(("include_archived", include_archived))
                     .bind(("exclude_execution_logs", exclude_execution_logs));
                 for (i, word) in fts_words.iter().enumerate() {
@@ -2719,7 +2709,7 @@ impl StorageBackend for SurrealBackend {
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all))
                     .bind(("query_embedding", q_vec.clone()))
-                    .bind(("session_id", bound_session_id))
+                    .bind(("session_prefix", bound_session_prefix.clone()))
                     .bind(("include_archived", include_archived))
                     .bind(("exclude_execution_logs", exclude_execution_logs));
                 (Some(vector_fut.await), None)
@@ -2731,14 +2721,14 @@ impl StorageBackend for SurrealBackend {
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
                 .bind(("query_embedding", q_vec.clone()))
-                .bind(("session_id", bound_session_id))
+                .bind(("session_prefix", bound_session_prefix.clone()))
                 .bind(("include_archived", include_archived))
                 .bind(("exclude_execution_logs", exclude_execution_logs));
             let mut keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
-                .bind(("session_id", bound_session_id))
+                .bind(("session_prefix", bound_session_prefix.clone()))
                 .bind(("include_archived", include_archived))
                 .bind(("exclude_execution_logs", exclude_execution_logs));
             for (i, word) in fts_words.iter().enumerate() {
@@ -2752,7 +2742,7 @@ impl StorageBackend for SurrealBackend {
                 .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
-                .bind(("session_id", bound_session_id))
+                .bind(("session_prefix", bound_session_prefix.clone()))
                 .bind(("include_archived", include_archived))
                 .bind(("exclude_execution_logs", exclude_execution_logs));
             for (i, word) in fts_words.iter().enumerate() {
@@ -3832,7 +3822,7 @@ impl StorageBackend for SurrealBackend {
 
 
         if is_session_isolation_enabled {
-            // 2.5) Strict Session Isolation filtering
+            // 2.5) User Prefix Isolation filtering
             let mut active_session_id = session_id.map(|s| s.to_string());
             if active_session_id.is_none() {
                 for c in &candidates {
@@ -3843,13 +3833,23 @@ impl StorageBackend for SurrealBackend {
                 }
             }
             if let Some(ref active_sess) = active_session_id {
-                candidates.retain(|c| c.session_id.is_none() || c.session_id.as_ref() == Some(active_sess));
+                let active_prefix = get_user_prefix(active_sess);
+                candidates.retain(|c| {
+                    c.session_id.is_none() || {
+                        let sess = c.session_id.as_ref().unwrap();
+                        get_user_prefix(sess) == active_prefix
+                    }
+                });
             }
         }
         let mut neighbor_candidates = Vec::new();
         if let Some((cue_type, weight)) = temporal_cue_info {
             candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-            let top_5_primary: Vec<SearchResult> = candidates.iter().take(5).cloned().collect();
+            let pool_size = match self.get_profile_key("search.temporal_expansion_pool_size").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(5),
+                _ => 5,
+            };
+            let top_5_primary: Vec<SearchResult> = candidates.iter().take(pool_size).cloned().collect();
             let primary_ids: Vec<surrealdb::types::RecordId> = top_5_primary.iter()
                 .filter_map(|c| parse_record_id(&c.id).ok())
                 .collect();
@@ -4040,7 +4040,12 @@ impl StorageBackend for SurrealBackend {
                                          if let Some(prim_info) = neighbor_to_primary.get(&neighbor_id_str) {
                                              for (prim_id, prim_score) in prim_info {
                                                  if let Some(primary_cand) = top_5_primary.iter().find(|x| x.id == *prim_id) {
-                                                     if raw.session_id.is_some() && raw.session_id == primary_cand.session_id {
+                                                      let same_user = match (&raw.session_id, &primary_cand.session_id) {
+                                                          (Some(rs), Some(ps)) => get_user_prefix(rs) == get_user_prefix(ps),
+                                                          (None, None) => true,
+                                                          _ => false,
+                                                      };
+                                                      if same_user {
                                                          let neighbor_score = *prim_score;
                                                          
                                                          let neighbor_cand = SearchResult {
@@ -6461,6 +6466,26 @@ pub fn sentence_cosine_similarity(
     }
 
     (dot_product / (norm_query * norm_sentence)) as f32
+}
+
+fn get_user_prefix(session_id: &str) -> &str {
+    if session_id.starts_with("answer_") {
+        let parts: Vec<&str> = session_id.split('_').collect();
+        if parts.len() >= 3 {
+            let len = parts[0].len() + 1 + parts[1].len();
+            &session_id[..len]
+        } else {
+            session_id
+        }
+    } else {
+        let parts: Vec<&str> = session_id.split('_').collect();
+        if parts.len() > 1 {
+            let last_len = parts.last().unwrap().len();
+            &session_id[..session_id.len() - last_len - 1]
+        } else {
+            session_id
+        }
+    }
 }
 
 #[cfg(test)]
