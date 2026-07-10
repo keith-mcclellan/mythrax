@@ -3597,6 +3597,77 @@ impl StorageBackend for SurrealBackend {
                 stage_6_executed = true;
                 candidates = merged;
             } else if vector_candidates.is_empty() {
+                if is_hybrid_enabled && !keyword_candidates.is_empty() {
+                    let mut min_val = f32::MAX;
+                    let mut max_val = f32::MIN;
+                    for c in &keyword_candidates {
+                        let s = c.bm25_score.unwrap_or(0.0);
+                        if s < min_val { min_val = s; }
+                        if s > max_val { max_val = s; }
+                    }
+                    let denom = max_val - min_val;
+
+                    let mut sum_idf = 0.0f32;
+                    let mut query_token_count = 0;
+                    for token in &query_tokens {
+                        let df_t = *global_df.get(token).unwrap_or(&0);
+                        let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
+                        sum_idf += idf;
+                        query_token_count += 1;
+                    }
+                    let avg_idf = if query_token_count > 0 {
+                        sum_idf / query_token_count as f32
+                    } else {
+                        0.0
+                    };
+
+                    let beta = if query_token_count == 0 {
+                        0.2f32
+                    } else {
+                        (0.2f32 + 0.15f32 * (avg_idf - 2.5f32).max(0.0f32)).min(0.8f32)
+                    };
+                    let alpha = 1.0f32 - beta;
+
+                    for c in &mut keyword_candidates {
+                        let raw_bm25 = c.bm25_score.unwrap_or(0.0);
+                        let bm25_norm = if denom > 1e-6 {
+                            (raw_bm25 - min_val) / denom
+                        } else if max_val > 1e-6 {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        let raw_sim = 1.0f32;
+                        let fused = alpha * raw_sim + beta * bm25_norm;
+                        let is_special_candidate = c.tier == "working" || c.source_episode == Some("spreading_activation".to_string());
+                        let is_single_path = raw_sim < 1e-5 || bm25_norm < 1e-5;
+                        let current_center = if is_single_path {
+                            fusion_sigmoid_center - single_path_offset
+                        } else {
+                            fusion_sigmoid_center
+                        };
+                        let new_gate = if bypass_sigmoid_gating || is_special_candidate {
+                            1.0f32
+                        } else {
+                            1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - current_center)).exp())
+                        };
+                        let final_sim = if bypass_sigmoid_gating {
+                            if let Some(factor) = c.factor_multiplier {
+                                fused * factor
+                            } else {
+                                fused
+                            }
+                        } else {
+                            if let Some(factor) = c.factor_multiplier {
+                                fused * factor * new_gate
+                            } else {
+                                fused * new_gate
+                            }
+                        };
+                        c.similarity = final_sim;
+                    }
+                    stage_6_executed = true;
+                }
                 candidates = keyword_candidates;
             } else {
                 candidates = reciprocal_rank_fusion(vector_candidates, keyword_candidates, 60);
