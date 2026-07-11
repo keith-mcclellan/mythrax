@@ -2407,7 +2407,7 @@ impl StorageBackend for SurrealBackend {
             query.to_string()
         };
 
-        let query_category = self.classify_query_db(&cleaned_query).await;
+        let query_category = self.classify_query_db(query).await;
         let enable_profile_expansion = match self
             .get_category_profile_key(query_category, "enable_user_profile_expansion", "search.enable_user_profile_expansion")
             .await
