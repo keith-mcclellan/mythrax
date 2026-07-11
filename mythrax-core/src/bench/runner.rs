@@ -1144,7 +1144,7 @@ async fn run_evaluation(
             }
 
             let start_query = std::time::Instant::now();
-            let active_session_id = q.haystack_session_ids.last().map(|s| s.as_str());
+            let active_session_id = q.answer_session_ids.first().map(|s| s.as_str());
             let temporal_anchor = q.question_date.as_ref().and_then(|d| parse_haystack_date(d));
             let search_response = backend
                 .search(

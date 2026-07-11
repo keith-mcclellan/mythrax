@@ -1633,7 +1633,7 @@ pub struct MetricAccess {
     pub access_count: i64,
 }
 
-fn prepare_fts_query(query: &str) -> Vec<String> {
+fn prepare_fts_query(query: &str, cap: usize) -> Vec<String> {
     let stop_words: std::collections::HashSet<&str> = [
         "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "arent",
         "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
@@ -1677,8 +1677,7 @@ fn prepare_fts_query(query: &str) -> Vec<String> {
             vec![fallback]
         }
     } else {
-        // Cap at 8 FTS predicates to avoid SQL explosion
-        words.into_iter().take(8).collect()
+        words.into_iter().take(cap).collect()
     }
 }
 
@@ -2408,10 +2407,19 @@ impl StorageBackend for SurrealBackend {
             query.to_string()
         };
 
-        let mut fts_words = prepare_fts_query(&cleaned_query);
-        if !user_profile.is_empty() {
+        let query_category = self.classify_query_db(&cleaned_query).await;
+        let enable_profile_expansion = match self
+            .get_category_profile_key(query_category, "enable_user_profile_expansion", "search.enable_user_profile_expansion")
+            .await
+            .as_str()
+        {
+            val if !val.is_empty() => val.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+        let mut fts_words = prepare_fts_query(&cleaned_query, 8);
+        if enable_profile_expansion && !user_profile.is_empty() {
             // Standard query expansion using terms from the compiled user profile (removing stopwords)
-            for word in prepare_fts_query(&user_profile) {
+            for word in prepare_fts_query(&user_profile, 32) {
                 if !fts_words.contains(&word) {
                     fts_words.push(word);
                 }
@@ -2433,8 +2441,6 @@ impl StorageBackend for SurrealBackend {
                 score_parts.join(" + ")
             )
         };
-
-        let query_category = self.classify_query_db(&cleaned_query).await;
 
         let ladder_scale = match self.get_category_profile_key(query_category, "ladder_scale", "search.ladder_scale").await.as_str() {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
@@ -2816,10 +2822,11 @@ impl StorageBackend for SurrealBackend {
             _ => true,
         };
 
-        let active_session_boost = match self.get_profile_key("search.active_session_boost").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.0f32),
-            _ => 0.0f32,
-        };
+        let active_session_boost = self
+            .get_category_profile_key(query_category, "active_session_boost", "search.active_session_boost")
+            .await
+            .parse::<f32>()
+            .unwrap_or(0.0f32);
 
         let gaussian_temporal_sigma = match self.get_profile_key("search.gaussian_temporal_sigma").await {
             Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(168.0f32),
@@ -2926,7 +2933,7 @@ impl StorageBackend for SurrealBackend {
                                 tier: "episode".to_string(),
                                 embedding: None,
                                 vault_path: prev.vault_path.clone(),
-                                source_episode: prev.source_episode.as_ref().map(|t| format_record_id(t)),
+                                source_episode: Some("temporal_neighbor".to_string()),
                                 discovery_tokens: prev.discovery_tokens,
                                 related_nodes: None,
                                 ..Default::default()
@@ -2944,7 +2951,7 @@ impl StorageBackend for SurrealBackend {
                                 tier: "episode".to_string(),
                                 embedding: None,
                                 vault_path: next.vault_path.clone(),
-                                source_episode: next.source_episode.as_ref().map(|t| format_record_id(t)),
+                                source_episode: Some("temporal_neighbor".to_string()),
                                 discovery_tokens: next.discovery_tokens,
                                 related_nodes: None,
                                 ..Default::default()
@@ -4159,7 +4166,7 @@ impl StorageBackend for SurrealBackend {
         let t_rerank_start = t_start.elapsed().as_micros();
 
         if gamma_rerank > 0.0f32 {
-            let search_text = if !user_profile.is_empty() && query_category != QueryCategory::Temporal {
+            let search_text = if enable_profile_expansion && !user_profile.is_empty() && query_category != QueryCategory::Temporal {
                 format!("{} {}", cleaned_query, user_profile)
             } else {
                 cleaned_query.clone()
@@ -4214,10 +4221,13 @@ impl StorageBackend for SurrealBackend {
             merged_candidates.extend(rerank_pool);
 
             if let Some(active_sess) = session_id {
-                if active_session_boost > 0.0f32 && (query_category == QueryCategory::Preference || query_category == QueryCategory::User) {
+                if active_session_boost > 0.0f32 {
+                    let active_prefix = get_user_prefix(active_sess);
                     for c in &mut merged_candidates {
-                        if c.session_id.as_deref() == Some(active_sess) {
-                            c.similarity += active_session_boost;
+                        if let Some(ref c_sess) = c.session_id {
+                            if get_user_prefix(c_sess) == active_prefix {
+                                c.similarity += active_session_boost;
+                            }
                         }
                     }
                 }
@@ -4283,10 +4293,13 @@ impl StorageBackend for SurrealBackend {
             }
         } else {
             if let Some(active_sess) = session_id {
-                if active_session_boost > 0.0f32 && (query_category == QueryCategory::Preference || query_category == QueryCategory::User) {
+                if active_session_boost > 0.0f32 {
+                    let active_prefix = get_user_prefix(active_sess);
                     for c in &mut merged_candidates {
-                        if c.session_id.as_deref() == Some(active_sess) {
-                            c.similarity += active_session_boost;
+                        if let Some(ref c_sess) = c.session_id {
+                            if get_user_prefix(c_sess) == active_prefix {
+                                c.similarity += active_session_boost;
+                            }
                         }
                     }
                 }
@@ -4334,7 +4347,7 @@ impl StorageBackend for SurrealBackend {
                                 }
                             }
                             if let Some(ref mut reranker) = *reranker_guard {
-                                let rerank_query = if !user_profile.is_empty() {
+                                let rerank_query = if enable_profile_expansion && !user_profile.is_empty() {
                                     format!("{} | User History: {}", cleaned_query, user_profile)
                                 } else {
                                     cleaned_query.clone()
@@ -4377,7 +4390,9 @@ impl StorageBackend for SurrealBackend {
             }
             if let Some(ref rels) = item.related_nodes {
                 for rel in rels {
-                    seen_related_ids.insert(rel.id.clone());
+                    if rel.source_episode.as_deref() != Some("temporal_neighbor") {
+                        seen_related_ids.insert(rel.id.clone());
+                    }
                 }
             }
             final_results.push(item);
@@ -6610,15 +6625,22 @@ pub fn sentence_cosine_similarity(
 
 fn get_user_prefix(session_id: &str) -> &str {
     if session_id.starts_with("answer_") {
-        if let Some(second_underscore_offset) = session_id[7..].find('_') {
-            let second_underscore_idx = 7 + second_underscore_offset;
-            &session_id[..second_underscore_idx]
-        } else {
-            session_id
+        let mut s = session_id;
+        if let Some(last_underscore_idx) = s.rfind('_') {
+            let suffix = &s[last_underscore_idx + 1..];
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3 {
+                s = &s[..last_underscore_idx];
+            }
         }
+        s
     } else {
         if let Some(last_underscore_idx) = session_id.rfind('_') {
-            &session_id[..last_underscore_idx]
+            let suffix = &session_id[last_underscore_idx + 1..];
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3 {
+                &session_id[..last_underscore_idx]
+            } else {
+                session_id
+            }
         } else {
             session_id
         }
@@ -6635,7 +6657,7 @@ mod tests {
         assert_eq!(get_user_prefix("user_123"), "user");
         assert_eq!(get_user_prefix("user_123_456"), "user_123");
         assert_eq!(get_user_prefix("answer_user_123"), "answer_user");
-        assert_eq!(get_user_prefix("answer_user_123_456"), "answer_user");
+        assert_eq!(get_user_prefix("answer_user_123_456"), "answer_user_123");
         assert_eq!(get_user_prefix("session"), "session");
         assert_eq!(get_user_prefix("answer_sess"), "answer_sess");
     }

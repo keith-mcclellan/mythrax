@@ -97,12 +97,12 @@ async fn test_t16_cross_session_temporal_expansion() -> Result<()> {
 
     backend.save_profile_key("search.temporal_expansion_pool_size", "5").await?;
 
-    // Ingest sequential sessions of same user prefix: user123_session1 and user123_session2
+    // Ingest sequential sessions of same user prefix: user123_1 and user123_2
     let ep1 = EpisodeSave {
         title: "Turn 1".to_string(),
         content: "First turn: We started by setting up the database.".to_string(),
         scope: Some("general".to_string()),
-        session_id: Some("user123_session1".to_string()),
+        session_id: Some("user123_1".to_string()),
         ..Default::default()
     };
     backend.save_episodes_batch(&[ep1]).await?;
@@ -111,12 +111,12 @@ async fn test_t16_cross_session_temporal_expansion() -> Result<()> {
         title: "Turn 2".to_string(),
         content: "Second turn: We wrote the tests with SearchTerm.".to_string(),
         scope: Some("general".to_string()),
-        session_id: Some("user123_session2".to_string()),
+        session_id: Some("user123_2".to_string()),
         ..Default::default()
     };
     backend.save_episodes_batch(&[ep2]).await?;
 
-    // Search under active session user123_session2, query with Preceding cue "before"
+    // Search under active session user123_2, query with Preceding cue "before"
     let resp = backend.search(
         "SearchTerm before",
         Some("general"),
@@ -133,8 +133,8 @@ async fn test_t16_cross_session_temporal_expansion() -> Result<()> {
         None,
     ).await?;
 
-    // The results should contain Turn 1 from user123_session1 via expansion
-    let found_turn1 = resp.results.iter().any(|r| r.title == "Turn 1" && r.session_id.as_deref() == Some("user123_session1"));
+    // The results should contain Turn 1 from user123_1 via expansion
+    let found_turn1 = resp.results.iter().any(|r| r.title == "Turn 1" && r.session_id.as_deref() == Some("user123_1"));
     assert!(found_turn1, "Should expand and retrieve Turn 1 from previous session of the same user");
 
     Ok(())

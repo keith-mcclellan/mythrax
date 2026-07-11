@@ -15,6 +15,7 @@ struct QuestionEntry {
     category: Option<String>,
     haystack_session_ids: Vec<String>,
     haystack_sessions: Vec<Vec<TurnEntry>>,
+    answer_session_ids: Vec<String>,
     #[serde(default)]
     gold_corpus_ids: Vec<String>,
 }
@@ -287,13 +288,13 @@ async fn main() -> Result<()> {
     println!("Gold IDs: {:?}", gold_corpus_ids);
 
     // Execute Search
-    let last_sess_id = q.haystack_session_ids.last().cloned();
+    let last_sess_id = q.answer_session_ids.first().cloned();
     println!("Executing search for query with active session: {:?}", last_sess_id);
     let results = backend.search(
         &q.question,
         Some("general"),
         false,
-        15,
+        50,
         0,
         0.0,
         None,
@@ -305,8 +306,8 @@ async fn main() -> Result<()> {
         None,
     ).await?;
 
-    println!("\n--- Retrieved Results (Top 10) ---");
-    for (idx, r) in results.results.iter().take(10).enumerate() {
+    println!("\n--- Retrieved Results (Top 50) ---");
+    for (idx, r) in results.results.iter().enumerate() {
         let id_str = r.vault_path.as_ref().unwrap_or(&r.id);
         let is_gold = gold_corpus_ids.contains(id_str);
         let gold_marker = if is_gold { "  [GOLD]  " } else { "          " };

@@ -20,6 +20,7 @@
   "search.temporal.ladder_scale": "0.200",
   "search.user.ladder_scale": "0.100",
   "search.default.ladder_scale": "0.100",
-  "search.active_session_boost": "0.000",
+  "search.active_session_boost": "0.15",
+  "search.preference.enable_user_profile_expansion": "true",
   "search.bypass_sigmoid_gating": "true"
 }

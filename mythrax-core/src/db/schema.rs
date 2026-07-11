@@ -273,6 +273,11 @@ pub const INIT_SCHEMA: &str = "
     UPSERT search_keyword:recommendation CONTENT { word: 'recommendation', category: 'Preference' };
     UPSERT search_keyword:suggestion CONTENT { word: 'suggestion', category: 'Preference' };
     UPSERT search_keyword:accommodation CONTENT { word: 'accommodation', category: 'Preference' };
+    UPSERT search_keyword:recipe CONTENT { word: 'recipe', category: 'Preference' };
+    UPSERT search_keyword:dinner CONTENT { word: 'dinner', category: 'Preference' };
+    UPSERT search_keyword:cook CONTENT { word: 'cook', category: 'Preference' };
+    UPSERT search_keyword:cooking CONTENT { word: 'cooking', category: 'Preference' };
+    UPSERT search_keyword:serve CONTENT { word: 'serve', category: 'Preference' };
 
     UPSERT search_keyword:profile CONTENT { word: 'profile', category: 'User' };
     UPSERT search_keyword:bio CONTENT { word: 'bio', category: 'User' };
