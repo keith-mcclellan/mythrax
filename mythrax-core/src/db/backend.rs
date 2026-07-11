@@ -4344,7 +4344,10 @@ impl StorageBackend for SurrealBackend {
                         let _sem = crate::llm::metal_embedding_semaphore().acquire().await;
                         
                         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/keith".to_string());
-                        let mut model_dir = std::path::PathBuf::from(&home).join(".mythrax/models/mxbai-rerank-large-v2");
+                        let mut model_dir = std::path::PathBuf::from(&home).join(".mythrax/models/Qwen3-Reranker-0.6B");
+                        if !model_dir.exists() {
+                            model_dir = std::path::PathBuf::from(&home).join(".mythrax/models/mxbai-rerank-large-v2");
+                        }
                         if !model_dir.exists() {
                             model_dir = std::path::PathBuf::from(home).join(".mythrax/models/mlx-community_mxbai-rerank-large-v2");
                         }
@@ -4357,10 +4360,15 @@ impl StorageBackend for SurrealBackend {
                                 }
                             }
                             if let Some(ref mut reranker) = *reranker_guard {
-                                let rerank_query = if enable_profile_expansion && !user_profile.is_empty() {
-                                    format!("{} | User History: {}", cleaned_query, user_profile)
+                                let base_query = if query_category == QueryCategory::Temporal || query_category == QueryCategory::User {
+                                    query.to_string()
                                 } else {
                                     cleaned_query.clone()
+                                };
+                                let rerank_query = if enable_profile_expansion && !user_profile.is_empty() {
+                                    format!("{} | User History: {}", base_query, user_profile)
+                                } else {
+                                    base_query
                                 };
                                 if let Ok(scores) = reranker.score_pairs(rerank_query.as_str(), &passages) {
                                     for (i, score) in scores.into_iter().enumerate() {
