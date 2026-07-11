@@ -2444,7 +2444,12 @@ impl StorageBackend for SurrealBackend {
 
         let ladder_scale = match self.get_category_profile_key(query_category, "ladder_scale", "search.ladder_scale").await.as_str() {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
-            _ => 0.0f32,
+            _ => match query_category {
+                QueryCategory::Temporal => 0.3605f32,
+                QueryCategory::Preference => 0.2852f32,
+                QueryCategory::User => 0.1333f32,
+                QueryCategory::Default => 0.1500f32,
+            },
         };
 
         let decay_floor = match self.get_category_profile_key(query_category, "temporal_decay_floor", "search.temporal_decay_floor").await.as_str() {
@@ -2478,7 +2483,12 @@ impl StorageBackend for SurrealBackend {
         #[allow(unused_variables)]
         let rerank_weight = match self.get_category_profile_key(query_category, "rerank_weight", "search.rerank_weight").await.as_str() {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.15f32),
-            _ => 0.15f32,
+            _ => match query_category {
+                QueryCategory::Temporal => 0.2500f32,
+                QueryCategory::Preference => 0.2500f32,
+                QueryCategory::User => 0.2000f32,
+                QueryCategory::Default => 0.2000f32,
+            },
         };
 
         let w_imp_ep = match self.get_profile_key("search.weight_importance_episode").await {
@@ -2826,16 +2836,16 @@ impl StorageBackend for SurrealBackend {
             .get_category_profile_key(query_category, "active_session_boost", "search.active_session_boost")
             .await
             .parse::<f32>()
-            .unwrap_or(0.0f32);
+            .unwrap_or(0.3556f32);
 
         let gaussian_temporal_sigma = match self.get_profile_key("search.gaussian_temporal_sigma").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(168.0f32),
-            _ => 168.0f32,
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(375.0f32),
+            _ => 375.0f32,
         };
 
         let temporal_gaussian_sigma = match self.get_profile_key("search.temporal.gaussian_sigma").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(720.0f32),
-            _ => 720.0f32,
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(375.0f32),
+            _ => 375.0f32,
         };
 
         let active_decay_sigma = if query_category == QueryCategory::Temporal {
@@ -3890,8 +3900,8 @@ impl StorageBackend for SurrealBackend {
         if let Some((cue_type, weight)) = temporal_cue_info {
             candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
             let pool_size = match self.get_profile_key("search.temporal_expansion_pool_size").await {
-                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(5),
-                _ => 5,
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(8),
+                _ => 8,
             };
             let top_5_primary: Vec<SearchResult> = candidates.iter().take(pool_size).cloned().collect();
             let primary_id_to_prefix: std::collections::HashMap<&str, Option<&str>> = top_5_primary.iter()
@@ -4188,8 +4198,8 @@ impl StorageBackend for SurrealBackend {
             let query_tokens_set: std::collections::HashSet<&str> = query_tokens.iter().map(|s| s.as_str()).collect();
 
             let tfidf_pool_size = match self.get_profile_key("search.tfidf_pool_size").await {
-                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(100),
-                _ => 100,
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(84),
+                _ => 84,
             };
             let effective_pool = tfidf_pool_size.max(20);
             let pool_len = merged_candidates.len().min(effective_pool);
