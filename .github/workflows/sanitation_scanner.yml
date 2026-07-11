@@ -1,0 +1,60 @@
+name: Code Sanitation Scanner
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Create mythrax-core/clippy.toml if missing
+        run: |
+          if [ ! -f "mythrax-core/clippy.toml" ]; then
+            echo 'cognitive-complexity-threshold = 15' > mythrax-core/clippy.toml
+          fi
+
+      - name: Run Sanitation Scanner
+        run: |
+          chmod +x scripts/sanitation_scanner.py
+          ./scripts/sanitation_scanner.py
+        env:
+          GITHUB_ACTIONS: true
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+
+      - name: Comment PR
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # If it's a push event, this logic assumes we find an associated PR.
+          # For pull_request event, we just comment on the PR directly.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            gh pr comment ${{ github.event.pull_request.number }} -F sanitation_scorecard.md
+          else
+            # Try to find associated PR for this push
+            PR_URL=$(gh pr list --search "${{ github.sha }}" --json url --jq '.[0].url')
+            if [ -n "$PR_URL" ]; then
+              gh pr comment $PR_URL -F sanitation_scorecard.md
+            fi
+          fi
