@@ -88,7 +88,7 @@ impl ArborExecutor {
             c
         } else {
             let mut args = Vec::new();
-            let mut current_arg = String::new();
+            let mut current_arg = String::with_capacity(32);
             let mut in_quotes = false;
             let mut quote_char = '\0';
             for c in test_command.chars() {
@@ -103,8 +103,8 @@ impl ArborExecutor {
                     }
                     ' ' | '\t' if !in_quotes => {
                         if !current_arg.is_empty() {
-                            args.push(current_arg.clone());
-                            current_arg.clear();
+                            // PERF: Replace string to avoid unnecessary cloning and clearing allocations
+                            args.push(std::mem::replace(&mut current_arg, String::with_capacity(32)));
                         }
                     }
                     _ => {
