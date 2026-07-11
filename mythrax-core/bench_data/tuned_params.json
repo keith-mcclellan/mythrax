@@ -9,7 +9,7 @@
   "search.user.rerank_weight": "0.0988",
   "search.default.rerank_weight": "0.5000",
   "search.temporal.rerank_weight": "0.0988",
-  "search.enable_cross_encoder_rerank": "true",
+  "search.enable_cross_encoder_rerank": "false",
   "search.spreading_activation_attenuation": "0.30",
   "search.rerank_pool_size": "40",
   "search.ladder_scale": "0.000",

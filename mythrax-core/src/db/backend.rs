@@ -2848,11 +2848,22 @@ impl StorageBackend for SurrealBackend {
             _ => 375.0f32,
         };
 
-        let active_decay_sigma = if query_category == QueryCategory::Temporal {
+        let mut active_decay_sigma = if query_category == QueryCategory::Temporal {
             temporal_gaussian_sigma
         } else {
             gaussian_temporal_sigma
         };
+
+        if query_category == QueryCategory::Temporal {
+            if let Some((ref cue_type, _)) = temporal_cue_info {
+                match cue_type {
+                    TemporalCueType::Preceding | TemporalCueType::Succeeding | TemporalCueType::Procedural => {
+                        active_decay_sigma = 1_000_000.0f32;
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         let bypass_sigmoid_gating = match self.get_profile_key("search.bypass_sigmoid_gating").await {
             Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
@@ -4247,11 +4258,7 @@ impl StorageBackend for SurrealBackend {
             
 
             
-            let tfidf_exit_size = if enable_cross_encoder_rerank {
-                rerank_pool_size
-            } else {
-                rerank_pool_size.max(75)
-            };
+            let tfidf_exit_size = rerank_pool_size.max(75);
 
             let limit = tfidf_exit_size;
             if merged_candidates.len() > limit {
