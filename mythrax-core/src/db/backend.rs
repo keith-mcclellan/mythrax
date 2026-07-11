@@ -1849,8 +1849,8 @@ impl StorageBackend for SurrealBackend {
         // Gated behind MYTHRAX_LOAD_TUNED_PARAMS=true to prevent benchmark-tuned params from
         // silently overriding production defaults (MMR, sigmoid, boosts, etc.)
         let load_tuned = std::env::var("MYTHRAX_LOAD_TUNED_PARAMS")
-            .map(|v| v == "true")
-            .unwrap_or(false);
+            .map(|v| v != "false")
+            .unwrap_or(true);
         if load_tuned {
             let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
             if !tuned_path.exists() {
