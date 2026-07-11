@@ -69,6 +69,7 @@ async fn test_schema_upgrades_exist() -> Result<()> {
 
     // 5. Verify that schemafull relates_to table has strict IN and OUT constraints
     let ep_save = EpisodeSave {
+        created_at: None,
         title: "Source Episode".to_string(),
         content: "Source content".to_string(),
         entities: vec![],
@@ -102,6 +103,7 @@ async fn test_schema_upgrades_exist() -> Result<()> {
 
     // 6. Verify the existence of importance and last_retrieved_at fields on nodes
     let ep_imp = EpisodeSave {
+        created_at: None,
         title: "Important Episode".to_string(),
         content: "Important content".to_string(),
         entities: vec![],

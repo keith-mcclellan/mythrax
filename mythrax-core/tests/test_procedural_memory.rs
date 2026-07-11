@@ -42,6 +42,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
 
     // Procedural
     let ep_proc = EpisodeSave {
+        created_at: None,
         title: "Procedural Ep".to_string(),
         content: "Some procedural content".to_string(),
         scope: Some("test_scope".to_string()),
@@ -58,6 +59,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
 
     // Standard (not procedural)
     let ep_std = EpisodeSave {
+        created_at: None,
         title: "Standard Ep".to_string(),
         content: "Some standard content".to_string(),
         scope: Some("test_scope".to_string()),
@@ -95,6 +97,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
     // Insert 505 procedural episodes in a new scope
     for k in 0..505 {
         let ep = EpisodeSave {
+        created_at: None,
             title: format!("Proc Cap {}", k),
             content: format!("Content {}", k),
             scope: Some("cap_scope".to_string()),

@@ -2,6 +2,45 @@
 
 This file tracks the retrieval performance of the Mythrax Memory System releases.
 
+## v2.6.0 (2026-07-11)
+
+**Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.
+- **Dataset ID:** `xiaowu0162/longmemeval-cleaned`
+- **Pinned Revision (commit SHA):** `98d7416c24c778c2fee6e6f3006e7a073259d48f`
+- **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
+- **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
+- **Mythrax Git Commit:** `v2.6.0` (Correctness Fixes, Category-Restricted Profile Expansion & Tiered Ternary Search Parameters)
+
+### Key Improvements in v2.6.0
+- **Category-Restricted Profile Expansion**: Restricts user profile query expansion to `Preference` queries via feature flag, solving distractor noise pollution and speeding up searches.
+- **Variable-Cap FTS Tokenizer**: Refactored `prepare_fts_query` to support variable token caps (8 for queries, 32 for user profile expansion), capturing newer user preferences.
+- **Query Classification Argument Fix**: Passed raw queries rather than stripped queries to `classify_query_db`, resolving temporal query misclassifications.
+- **Tuned Fallback Defaults**: Swept 15 parameters using a Multi-Objective Tiered Ternary Search, embedding optimal values (decay sigmas `375.0`, TF-IDF pool size `84`, active session boost `0.3556`) as native Rust fallback defaults.
+
+### Performance Metrics Side-by-Side
+
+| Metric | v2.5.2 (Untuned) | v2.6.0 (Optimized Defaults) | Change | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Recall_Any@5 (turn)** | `0.8200` | **`0.8800`** | `+7.32%` | **Improved** |
+| **Recall_All@5 (turn)** | `0.5480` | **`0.6660`** | `+21.53%` | **Improved** |
+| **nDCG@10 (turn)** | `0.6247` | **`0.7189`** | `+15.08%` | **Improved** |
+| **Recall_Any@5 (session)** | `0.9680` | **`1.0000`** | `+3.31%` | **Improved (Ceiling)** |
+| **Recall_All@5 (session)** | `0.7560` | **`0.8740`** | `+15.61%` | **Improved** |
+| **Avg Query Latency** | ~125ms | **`84.66ms`** | `-32.27%` | **Speedup** |
+
+### Per-Question-Type R@10 (turn recall_any)
+
+| Question Type | Sample Count (n) | v2.5.2 (Untuned) | v2.6.0 (Optimized Defaults) | Change |
+| :--- | :---: | :---: | :---: | :---: |
+| **knowledge-update** | `78` | `0.9231` | **`0.9231`** | `0.00%` |
+| **multi-session** | `133` | `0.8647` | **`0.9098`** | `+5.22%` |
+| **single-session-assistant** | `56` | `0.9821` | **`1.0000`** | `+1.82%` |
+| **single-session-preference** | `30` | `0.6667` | **`0.9333`** | `+40.00%` |
+| **single-session-user** | `70` | `0.9000` | **`0.8857`** | `-1.59%` |
+| **temporal-reasoning** | `133` | `0.9023` | **`0.9549`** | `+5.83%` |
+
+---
+
 ## v2.5.2 (2026-07-04)
 
 **Metric:** LongMemEval *retrieval* (Recall@k / NDCG@k) — NOT QA accuracy.

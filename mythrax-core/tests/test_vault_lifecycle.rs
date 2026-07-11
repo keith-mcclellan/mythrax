@@ -17,6 +17,7 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
 
     // 2. Save an episode
     let ep = EpisodeSave {
+        created_at: None,
         title: "Persistence Test".to_string(),
         content: "Verifying persistent storage in rocksdb.".to_string(),
         entities: vec![],
@@ -113,6 +114,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     // Reprocess check
     // Save a stub with None embedding
     let save_stub = EpisodeSave {
+        created_at: None,
         title: "Stub note".to_string(),
         content: "Some dummy content.".to_string(),
         entities: vec![],
@@ -143,6 +145,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     for ep in all_eps_for_reprocess {
         if ep.embedding.is_none() {
             let s = EpisodeSave {
+        created_at: None,
                 title: ep.title.clone(),
                 content: ep.content.clone(),
                 entities: vec![],

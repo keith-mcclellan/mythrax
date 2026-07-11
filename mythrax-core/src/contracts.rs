@@ -66,6 +66,7 @@ pub struct EpisodeSave {
     pub node_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    pub created_at: Option<String>,
 }
 
 

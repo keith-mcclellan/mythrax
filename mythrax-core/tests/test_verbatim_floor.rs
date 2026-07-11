@@ -16,6 +16,7 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
 
     // 2. Save two episodes with similar content
     let ep_hi = EpisodeSave {
+        created_at: None,
         title: "Agentic Memory Systems Architecture".to_string(),
         content: "Core design details of agentic memory layers, focusing on episodic retrieval and bitemporal graphs.".to_string(),
         entities: vec![],
@@ -33,6 +34,7 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
     
         confidence: None,};
     let ep_low = EpisodeSave {
+        created_at: None,
         title: "Backup Notes on Agentic Memory".to_string(),
         content: "Draft backup notes describing basic episodic retrieval concepts and simple graph structures.".to_string(),
         entities: vec![],
@@ -91,6 +93,7 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
 
     // The low importance episode must still exist in the results (proving it wasn't deleted)

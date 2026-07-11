@@ -160,6 +160,7 @@ pub async fn mine_transcript(
                     };
                     let title = format!("Verbatim {} Turn ({})", r, session);
                     let ep = EpisodeSave {
+        created_at: None,
                         title,
                         content: extracted,
                         entities: vec![],

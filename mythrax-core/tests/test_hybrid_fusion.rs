@@ -11,6 +11,7 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
     // Save some episodes
     // Ep 1: strong lexical match for "basement pipes", but unrelated to vector topic
     let ep1 = EpisodeSave {
+        created_at: None,
         title: "basement pipes".to_string(),
         content: "Draft notes about rusty metal pipes located in the old cold basement.".to_string(),
         entities: vec![],
@@ -30,6 +31,7 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
     
     // Ep 2: strong semantic match for "artificial intelligence", but no mention of "basement pipes"
     let ep2 = EpisodeSave {
+        created_at: None,
         title: "agentic systems".to_string(),
         content: "Deep research on neural architectures and advanced agentic memory consolidation models.".to_string(),
         entities: vec![],
@@ -54,11 +56,39 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
     // Query: "basement pipes"
     // With hybrid OFF, the vector search is performed.
     backend.save_profile_key("retrieval.hybrid", "false").await?;
-    let _res_off = backend.search("basement pipes",  Some("general"),  false,  5,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let _res_off = backend.search(
+        "basement pipes",
+        Some("general"),
+        false,
+        5,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
     
     // 2. Search with hybrid ON
     backend.save_profile_key("retrieval.hybrid", "true").await?;
-    let res_on = backend.search("basement pipes",  Some("general"),  false,  5,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let res_on = backend.search(
+        "basement pipes",
+        Some("general"),
+        false,
+        5,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
     
     // If hybrid is ON, the lexical match (Ep 1) should rank highly (and be returned as a high-scoring result)
     // because of its 100% lexical term overlap.

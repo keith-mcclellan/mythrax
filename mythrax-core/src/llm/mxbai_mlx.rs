@@ -18,6 +18,8 @@ pub struct Qwen2Attention {
     pub num_kv_heads: i32,
     pub head_dim: i32,
     pub rope_theta: f32,
+    pub q_norm: Option<RmsNorm>,
+    pub k_norm: Option<RmsNorm>,
 }
 
 impl Qwen2Attention {
@@ -28,11 +30,19 @@ impl Qwen2Attention {
         num_kv_heads: i32,
         head_dim: i32,
         rope_theta: f32,
+        rms_norm_eps: f32,
     ) -> Result<Self> {
-        let q_proj = get_linear(weights, &format!("{}.q_proj", prefix), true)?;
-        let k_proj = get_linear(weights, &format!("{}.k_proj", prefix), true)?;
-        let v_proj = get_linear(weights, &format!("{}.v_proj", prefix), true)?;
-        let o_proj = get_linear(weights, &format!("{}.o_proj", prefix), false)?;
+        let q_has_bias = weights.contains_key(&format!("{}.q_proj.bias", prefix));
+        let k_has_bias = weights.contains_key(&format!("{}.k_proj.bias", prefix));
+        let v_has_bias = weights.contains_key(&format!("{}.v_proj.bias", prefix));
+        let o_has_bias = weights.contains_key(&format!("{}.o_proj.bias", prefix));
+
+        let q_proj = get_linear(weights, &format!("{}.q_proj", prefix), q_has_bias)?;
+        let k_proj = get_linear(weights, &format!("{}.k_proj", prefix), k_has_bias)?;
+        let v_proj = get_linear(weights, &format!("{}.v_proj", prefix), v_has_bias)?;
+        let o_proj = get_linear(weights, &format!("{}.o_proj", prefix), o_has_bias)?;
+        let q_norm = get_rms_norm(weights, &format!("{}.q_norm.weight", prefix), rms_norm_eps).ok();
+        let k_norm = get_rms_norm(weights, &format!("{}.k_norm.weight", prefix), rms_norm_eps).ok();
         Ok(Self {
             q_proj,
             k_proj,
@@ -42,6 +52,8 @@ impl Qwen2Attention {
             num_kv_heads,
             head_dim,
             rope_theta,
+            q_norm,
+            k_norm,
         })
     }
 
@@ -57,9 +69,16 @@ impl Qwen2Attention {
         let batch = shape[0];
         let seq_len = shape[1];
 
-        let q = q.reshape(&[batch, seq_len, self.num_heads, self.head_dim])?;
-        let k = k.reshape(&[batch, seq_len, self.num_kv_heads, self.head_dim])?;
+        let mut q = q.reshape(&[batch, seq_len, self.num_heads, self.head_dim])?;
+        let mut k = k.reshape(&[batch, seq_len, self.num_kv_heads, self.head_dim])?;
         let v = v.reshape(&[batch, seq_len, self.num_kv_heads, self.head_dim])?;
+
+        if let Some(ref mut q_norm) = self.q_norm {
+            q = q_norm.forward(&q).map_err(|e| anyhow::anyhow!("Q norm forward failed: {:?}", e))?;
+        }
+        if let Some(ref mut k_norm) = self.k_norm {
+            k = k_norm.forward(&k).map_err(|e| anyhow::anyhow!("K norm forward failed: {:?}", e))?;
+        }
 
         // Apply RoPE
         let q = mlx_rs::fast::rope_device(
@@ -169,7 +188,7 @@ impl Qwen2DecoderLayer {
         rms_norm_eps: f32,
     ) -> Result<Self> {
         let input_layernorm = get_rms_norm(weights, &format!("{}.input_layernorm.weight", prefix), rms_norm_eps)?;
-        let self_attn = Qwen2Attention::new(weights, &format!("{}.self_attn", prefix), num_heads, num_kv_heads, head_dim, rope_theta)?;
+        let self_attn = Qwen2Attention::new(weights, &format!("{}.self_attn", prefix), num_heads, num_kv_heads, head_dim, rope_theta, rms_norm_eps)?;
         let post_attention_layernorm = get_rms_norm(weights, &format!("{}.post_attention_layernorm.weight", prefix), rms_norm_eps)?;
         let mlp = Qwen2MLP::new(weights, &format!("{}.mlp", prefix))?;
         Ok(Self {
@@ -245,7 +264,10 @@ impl MxbaiReranker {
         let num_heads = config["num_attention_heads"].as_i64().context("num_attention_heads not found")? as i32;
         let num_kv_heads = config["num_key_value_heads"].as_i64().context("num_key_value_heads not found")? as i32;
         let hidden_size = config["hidden_size"].as_i64().context("hidden_size not found")? as i32;
-        let head_dim = hidden_size / num_heads;
+        let head_dim = match config["head_dim"].as_i64() {
+            Some(hd) => hd as i32,
+            None => hidden_size / num_heads,
+        };
         let rope_theta = config["rope_theta"].as_f64().unwrap_or(1000000.0) as f32;
         let rms_norm_eps = config["rms_norm_eps"].as_f64().unwrap_or(1e-6) as f32;
 

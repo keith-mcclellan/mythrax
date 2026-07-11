@@ -511,6 +511,7 @@ pub async fn sync_file_to_db(
         });
 
         let episode = EpisodeSave {
+        created_at: None,
             title,
             content: plain_body,
             entities: frontmatter.entities.unwrap_or_default(),
@@ -600,14 +601,8 @@ node_type: None,
         if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
             let from_id = crate::db::parse_record_id(&db_id)?;
             
-            // Parse body wikilinks using regex
-            let body_links_regex = regex::Regex::new(r"\[\[([^\]]+)\]\]").unwrap();
-            let mut body_links = Vec::new();
-            for cap in body_links_regex.captures_iter(&body) {
-                let target_str = cap.get(1).unwrap().as_str();
-                let clean_target = target_str.split('|').next().unwrap_or(target_str).trim();
-                body_links.push(clean_target.to_string());
-            }
+            // Parse body wikilinks using zero-regex robust scanner
+            let body_links = crate::parser::extract_wiki_links(&body);
 
             // Resolve desired relations
             let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();
@@ -841,7 +836,21 @@ mod tests {
         
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
-        let results = backend.search("Body content",  Some("watcher-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let results = backend.search(
+        "Body content",
+        Some("watcher-testing"),
+        false,
+        1,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Watcher Test");
     }
@@ -857,6 +866,7 @@ mod tests {
         
         // 1. Save an episode via save_episode_bidirectional
         let episode = EpisodeSave {
+        created_at: None,
             title: "Bidirectional Test".to_string(),
             content: "This is some bidirectional sync body content.".to_string(),
             entities: vec![],
@@ -889,7 +899,21 @@ mod tests {
         assert!(ignore_list.is_ignored(&abs_path));
         
         // Verify content in DB
-        let results = backend.search("bidirectional sync",  Some("bi-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let results = backend.search(
+        "bidirectional sync",
+        Some("bi-testing"),
+        false,
+        1,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Bidirectional Test");
         
@@ -906,7 +930,21 @@ mod tests {
         sync_file_to_db(&abs_path, &backend, &store).await.unwrap();
         
         // Verify DB got updated
-        let results2 = backend.search("updated body",  Some("bi-testing"),  false,  1,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let results2 = backend.search(
+        "updated body",
+        Some("bi-testing"),
+        false,
+        1,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results2.results.len(), 1);
         assert_eq!(results2.results[0].title, "Watcher Test Updated");
     }

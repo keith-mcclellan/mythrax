@@ -16,6 +16,7 @@ async fn test_soft_thresholding_and_hook_injection() {
 
     // Create a "borderline" episode (low confidence/score)
     let episode = mythrax_core::contracts::EpisodeSave {
+        created_at: None,
         title: "Borderline Note".to_string(),
         content: "Soft threshold test content".to_string(),
         entities: vec![],

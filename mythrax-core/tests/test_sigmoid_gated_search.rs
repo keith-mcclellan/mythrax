@@ -12,6 +12,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
 
     // 1. Insert Mock Episode A: High similarity (0.85), low importance (2.0), old (created 10 days ago)
     let ep_a = EpisodeSave {
+        created_at: None,
         title: "High Similarity Old Node".to_string(),
         content: "Rust database locks and transaction management.".to_string(),
         entities: vec![],
@@ -32,6 +33,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
 
     // 2. Insert Mock Episode B: Low similarity (0.50), high importance (10.0), extremely recent (0 days ago)
     let ep_b = EpisodeSave {
+        created_at: None,
         title: "Low Similarity Recent Node".to_string(),
         content: "Completely unrelated text about cooking recipes and kitchen tools.".to_string(),
         entities: vec![],
@@ -50,7 +52,21 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         .await?.check()?;
 
     // 3. Search for "Rust database locks"
-    let resp = backend.search("Rust database locks",  Some("general"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let resp = backend.search(
+        "Rust database locks",
+        Some("general"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
     
     // Assertions
     let results = resp.results;
@@ -96,7 +112,21 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         .await?.check()?;
 
     // Search for wisdom
-    let resp_r = backend.search("avoid_concurrency",  Some("general"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let resp_r = backend.search(
+        "avoid_concurrency",
+        Some("general"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
     let r_results = resp_r.results;
     let match_rule = r_results.iter().find(|r| r.id == id_r);
     assert!(match_rule.is_some(), "Wisdom rule must be retrieved despite being 30 days old due to decay immunity");

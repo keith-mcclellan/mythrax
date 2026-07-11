@@ -1,4 +1,3 @@
-use regex::Regex;
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
@@ -8,35 +7,73 @@ pub struct Symbol {
     pub content: String,
 }
 
+fn match_symbol(line: &str, file_ext: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match file_ext {
+        "rs" => {
+            let mut words = trimmed.split_whitespace();
+            let mut first = words.next()?;
+            if first == "pub" {
+                first = words.next()?;
+            }
+            if matches!(first, "struct" | "fn" | "enum" | "trait" | "impl") {
+                let pos = trimmed.find(first)?;
+                let clean_remaining = trimmed[pos + first.len()..].trim_start();
+                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                if len > 0 {
+                    return Some((first.to_string(), clean_remaining[..len].to_string()));
+                }
+            }
+        }
+        "ts" | "tsx" | "js" | "jsx" => {
+            let mut words = trimmed.split_whitespace();
+            let mut first = words.next()?;
+            if first == "export" {
+                first = words.next()?;
+            }
+            if matches!(first, "class" | "function" | "interface" | "type") {
+                let pos = trimmed.find(first)?;
+                let clean_remaining = trimmed[pos + first.len()..].trim_start();
+                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                if len > 0 {
+                    return Some((first.to_string(), clean_remaining[..len].to_string()));
+                }
+            }
+        }
+        "py" => {
+            let mut words = trimmed.split_whitespace();
+            let first = words.next()?;
+            if matches!(first, "class" | "def") {
+                let pos = trimmed.find(first)?;
+                let clean_remaining = trimmed[pos + first.len()..].trim_start();
+                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                if len > 0 {
+                    return Some((first.to_string(), clean_remaining[..len].to_string()));
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
 pub fn extract_symbols(content: &str, file_ext: &str) -> Vec<Symbol> {
     let mut symbols = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
 
-    // Regexes
-    let rust_re = Regex::new(r"^(?:pub\s+)?(struct|fn|enum|trait|impl)\s+([a-zA-Z0-9_<>]+)").unwrap();
-    let ts_re = Regex::new(r"^(?:export\s+)?(class|function|interface|type)\s+([a-zA-Z0-9_]+)").unwrap();
-    let py_re = Regex::new(r"^(class|def)\s+([a-zA-Z0-9_]+)").unwrap();
-
-    let re = match file_ext {
-        "rs" => &rust_re,
-        "ts" | "tsx" | "js" | "jsx" => &ts_re,
-        "py" => &py_re,
-        _ => return symbols,
-    };
-
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if let Some(cap) = re.captures(trimmed) {
-            let kind = cap.get(1).unwrap().as_str().to_string();
-            let name = cap.get(2).unwrap().as_str().to_string();
-
+        if let Some((kind, name)) = match_symbol(trimmed, file_ext) {
             // Extract block: collect lines until the next line that matches a symbol
             let mut block_lines = Vec::new();
             block_lines.push(*line);
             
             for next_line in lines.iter().skip(i + 1) {
                 let next_trimmed = next_line.trim();
-                if re.is_match(next_trimmed) {
+                if match_symbol(next_trimmed, file_ext).is_some() {
                     break;
                 }
                 block_lines.push(*next_line);
@@ -115,10 +152,17 @@ pub async fn intercept_and_restore_symbols(
     let mut restored = text.to_string();
     
     // Find all occurrences of "page_[a-zA-Z0-9_]+"
-    let re = Regex::new(r"page_[a-zA-Z0-9_]+").unwrap();
-    let mut page_ids: Vec<String> = re.find_iter(text)
-        .map(|m| m.as_str().to_string())
-        .collect();
+    let mut page_ids = Vec::new();
+    let mut start = 0;
+    while let Some(idx) = text[start..].find("page_") {
+        let absolute_idx = start + idx;
+        let suffix = &text[absolute_idx + 5..];
+        let len = suffix.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+        if len > 0 {
+            page_ids.push(format!("page_{}", &suffix[..len]));
+        }
+        start = absolute_idx + 5 + len;
+    }
     
     // Deduplicate page IDs
     page_ids.sort();

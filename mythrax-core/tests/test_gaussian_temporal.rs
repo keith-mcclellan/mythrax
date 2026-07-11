@@ -10,6 +10,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
 
     // Create a mock episode with utility 100.0
     let ep = EpisodeSave {
+        created_at: None,
         title: "Gaussian Temporal Test Episode".to_string(),
         content: "Unique content for test gaussian temporal decay".to_string(),
         scope: Some("general".to_string()),
@@ -40,6 +41,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
         true,
         None,
         false,
+        None,
     ).await?;
 
     let results = resp.results;
@@ -67,6 +69,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
         true,
         None,
         false,
+        None,
     ).await?;
 
     let results_fallback = resp_fallback.results;

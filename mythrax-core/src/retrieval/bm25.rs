@@ -168,13 +168,24 @@ impl OkapiBM25 {
 use std::sync::OnceLock;
 use rust_stemmers::{Algorithm, Stemmer};
 
+thread_local! {
+    static STEM_CACHE: std::cell::RefCell<std::collections::HashMap<String, String>> = std::cell::RefCell::new(std::collections::HashMap::with_capacity(2048));
+}
+
 pub fn stem(word: &str) -> String {
     if word.len() <= 2 || word.contains('-') {
         return word.to_string();
     }
-    static STEMMER: OnceLock<Stemmer> = OnceLock::new();
-    let stemmer = STEMMER.get_or_init(|| Stemmer::create(Algorithm::English));
-    stemmer.stem(word).to_string()
+    STEM_CACHE.with(|cache| {
+        if let Some(s) = cache.borrow().get(word) {
+            return s.clone();
+        }
+        static STEMMER: OnceLock<Stemmer> = OnceLock::new();
+        let stemmer = STEMMER.get_or_init(|| Stemmer::create(Algorithm::English));
+        let stemmed = stemmer.stem(word).to_string();
+        cache.borrow_mut().insert(word.to_string(), stemmed.clone());
+        stemmed
+    })
 }
 
 pub fn tokenize(text: &str) -> Vec<String> {
@@ -187,7 +198,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn is_stop_word(w: &str) -> bool {
+pub fn is_stop_word(w: &str) -> bool {
     matches!(
         w,
         "a" | "about"

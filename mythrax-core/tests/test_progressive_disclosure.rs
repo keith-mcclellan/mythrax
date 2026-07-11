@@ -56,6 +56,7 @@ async fn test_search_index_omits_content() -> Result<()> {
     // Save a few test episodes
     for i in 1..=3 {
         let ep = EpisodeSave {
+        created_at: None,
             title: format!("Episode Title {}", i),
             content: format!("This is the long content for episode number {}. It contains details that should not be returned in a compact index query.", i),
             entities: vec![],
@@ -115,6 +116,7 @@ async fn test_get_full_hydrates() -> Result<()> {
     let (state, backend, _tmp) = setup_test_state().await?;
 
     let ep = EpisodeSave {
+        created_at: None,
         title: "Unique Hydration Test".to_string(),
         content: "Detailed secret documentation that must be hydrated.".to_string(),
         entities: vec![],
@@ -173,6 +175,7 @@ async fn test_timeline_orders_neighbors() -> Result<()> {
     let mut ids = Vec::new();
     for i in 1..=5 {
         let ep = EpisodeSave {
+        created_at: None,
             title: format!("Timeline Episode {}", i),
             content: format!("Content for sequential timeline episode {}", i),
             entities: vec![],
@@ -253,6 +256,7 @@ async fn test_index_then_full_token_savings() -> Result<()> {
     let mut ids = Vec::new();
     for i in 1..=10 {
         let ep = EpisodeSave {
+        created_at: None,
             title: format!("Big Episode Title {}", i),
             content: format!("Start of episode {}. {}", i, long_text),
             entities: vec![],

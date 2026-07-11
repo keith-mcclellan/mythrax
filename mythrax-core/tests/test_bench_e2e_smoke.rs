@@ -34,6 +34,7 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
     ];
     for (corpus_id, title, content) in &fixtures {
         let ep = EpisodeSave {
+        created_at: None,
             title: title.to_string(),
             content: content.to_string(),
             scope: Some("general".to_string()),
@@ -59,6 +60,7 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
         true,
         None,
         true,
+        None,
     )
         .await?;
 

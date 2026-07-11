@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id};
+use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id, parse_haystack_date};
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use surrealdb_types::SurrealValue;
@@ -82,6 +82,10 @@ struct QuestionEntry {
     /// omit it; default to empty so session recall degrades to 0.0 rather than panicking.
     #[serde(default)]
     answer_session_ids: Vec<String>,
+    #[serde(default)]
+    question_date: Option<String>,
+    #[serde(default)]
+    haystack_dates: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,6 +122,7 @@ struct QuestionResultRecord {
     recall_all_turn_at5: f32,
     ndcg_turn_at10: f32,
     recall_any_turn_at10: f32,
+    recall_all_turn_at25: f32,
     // session-granularity (answer_session_ids)
     recall_any_session_at5: f32,
     recall_all_session_at5: f32,
@@ -550,12 +555,55 @@ async fn main() -> Result<()> {
             println!("p95 Query Latency:        {:.2}ms", p95_latency);
             println!("Published:                {}", published);
             println!("Total Questions:          {}", target_questions.len());
+            let avg_recall_all_turn_at25 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| r.recall_all_turn_at25).sum::<f32>() / records.len() as f32
+            };
+            let avg_ceiling_recall_all_turn_at25 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| {
+                    let total = r.gold_corpus_ids.len();
+                    if total == 0 {
+                        1.0f32
+                    } else {
+                        (25.0f32.min(total as f32)) / total as f32
+                    }
+                }).sum::<f32>() / records.len() as f32
+            };
+            let avg_ceiling_ndcg_turn_at10 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| {
+                    if r.gold_corpus_ids.is_empty() {
+                        0.0f32
+                    } else {
+                        1.0f32
+                    }
+                }).sum::<f32>() / records.len() as f32
+            };
+            let avg_ceiling_recall_any_session_at5 = if records.is_empty() {
+                0.0f32
+            } else {
+                records.iter().map(|r| {
+                    if r.gold_session_ids.is_empty() {
+                        0.0f32
+                    } else {
+                        1.0f32
+                    }
+                }).sum::<f32>() / records.len() as f32
+            };
             println!("-- turn granularity (has_answer) --");
             println!("Recall_Any@{}:            {:.4}", K_RECALL, avg_recall_any_turn);
             println!("Recall_All@{}:            {:.4}", K_RECALL, avg_recall_all_turn);
+            println!("Recall_All@25:            {:.4}", avg_recall_all_turn_at25);
+            println!("Recall_All@25 Ceiling:    {:.4}", avg_ceiling_recall_all_turn_at25);
             println!("nDCG@{}:                  {:.4}", K_NDCG, avg_ndcg_turn);
+            println!("nDCG@{} Ceiling:          {:.4}", K_NDCG, avg_ceiling_ndcg_turn_at10);
             println!("-- session granularity (answer_session_ids) --");
             println!("Recall_Any@{} (session):  {:.4}", K_RECALL, avg_recall_any_session);
+            println!("Recall_Any@{} Session Ceiling: {:.4}", K_RECALL, avg_ceiling_recall_any_session_at5);
             println!("Recall_All@{} (session):  {:.4}", K_RECALL, avg_recall_all_session);
             println!("--------------------------------------------------------");
             println!("Per-Question-Type R@{} (turn recall_any):", K_NDCG);
@@ -707,6 +755,7 @@ async fn main() -> Result<()> {
                      ### Turn granularity (has_answer)\n\
                      - **Recall_Any@{}:** `{:.4}`\n\
                      - **Recall_All@{}:** `{:.4}`\n\
+                     - **Recall_All@25:** `{:.4}`\n\
                      - **nDCG@{}:** `{:.4}`\n\
                      ### Session granularity (answer_session_ids)\n\
                      - **Recall_Any@{} (session):** `{:.4}`\n\
@@ -725,6 +774,14 @@ async fn main() -> Result<()> {
                     chrono::Utc::now().to_rfc3339(),
                     K_RECALL, avg_recall_any_turn,
                     K_RECALL, avg_recall_all_turn,
+                    {
+                         let avg_recall_all_turn_at25 = if records.is_empty() {
+                             0.0f32
+                         } else {
+                             records.iter().map(|r| r.recall_all_turn_at25).sum::<f32>() / records.len() as f32
+                         };
+                         avg_recall_all_turn_at25
+                    },
                     K_NDCG, avg_ndcg_turn,
                     K_RECALL, avg_recall_any_session,
                     K_RECALL, avg_recall_all_session,
@@ -787,7 +844,7 @@ async fn run_evaluation(
     published: bool,
     note: &str,
 ) -> Result<(f32, f32, f32, f32, f32, f64, f64, Vec<QuestionResultRecord>)> {
-    let retrieve_k = std::cmp::max(K_RECALL, K_NDCG);
+    let retrieve_k = std::cmp::max(25, std::cmp::max(K_RECALL, K_NDCG));
     let mut records = Vec::new();
     let mut sum_recall_any_turn = 0.0f32;
     let mut sum_recall_all_turn = 0.0f32;
@@ -980,7 +1037,11 @@ async fn run_evaluation(
                             "tool" | "computer" | "tool_result" => "tool_execution".to_string(),
                             _ => "agent_thought".to_string(),
                         };
+                        let created_at = q.haystack_dates.as_ref()
+                            .and_then(|dates| dates.get(sess_idx))
+                            .and_then(|d| parse_haystack_date(d));
                         let ep = EpisodeSave {
+                            created_at,
                             title: format!("Session {} - Turn {}", session_id, turn_idx),
                             content: format!("{}: {}", turn.role, turn.content),
                             scope: Some("general".to_string()),
@@ -1083,23 +1144,23 @@ async fn run_evaluation(
             }
 
             let start_query = std::time::Instant::now();
-            let active_session_id = q.answer_session_ids.first()
-                .map(|s| s.as_str())
-                .or_else(|| q.haystack_session_ids.last().map(|s| s.as_str()));
+            let active_session_id = q.answer_session_ids.first().map(|s| s.as_str());
+            let temporal_anchor = q.question_date.as_ref().and_then(|d| parse_haystack_date(d));
             let search_response = backend
                 .search(
                     &q.question,
                     Some("general"),
-                    false,       // deep_insight
-                    retrieve_k,  // limit: over-fetch to max(k_recall, k_ndcg)
-                    0,           // offset
-                    0.0,         // threshold (allow all)
-                    None,        // token_budget
-                    false,       // allow_downward
-                    true,        // include_episodes
-                    true,        // include_artifacts
-                    active_session_id, // session_id
-                    true,        // include_archived
+                    false,
+                    retrieve_k,
+                    0,
+                    0.0,
+                    None,
+                    false,
+                    true,
+                    true,
+                    active_session_id,
+                    true,
+                    temporal_anchor.as_deref(),
                 )
                 .await
                 .context("Search query failed during evaluation")?;
@@ -1126,6 +1187,13 @@ async fn run_evaluation(
                 &correct_turn_ids,
                 &retrieved_corpus_ids,
                 K_NDCG,
+            );
+
+            let turn25 = evaluate_retrieval(
+                &turn_rankings,
+                &correct_turn_ids,
+                &retrieved_corpus_ids,
+                25,
             );
 
             // Compute nDCG@10 (turn-granularity)
@@ -1170,6 +1238,7 @@ async fn run_evaluation(
                 recall_all_turn_at5: turn5.recall_all,
                 ndcg_turn_at10: ndcg10,
                 recall_any_turn_at10: turn10.recall_any,
+                recall_all_turn_at25: turn25.recall_all,
                 recall_any_session_at5: sess5.recall_any,
                 recall_all_session_at5: sess5.recall_all,
                 retrieved_corpus_ids,

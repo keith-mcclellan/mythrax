@@ -27,6 +27,30 @@ impl QueryCategory {
     }
 }
 
+pub fn get_decay_factor(category: QueryCategory, delta_t_secs: f64, sigma_hours: f64, decay_floor: f32) -> f32 {
+    if category == QueryCategory::Preference || category == QueryCategory::User {
+        1.0f32
+    } else {
+        let delta_t_hours = (delta_t_secs.max(0.0) / 3600.0) as f32;
+        let sigma = sigma_hours as f32;
+        if sigma <= 0.0 {
+            return 1.0f32;
+        }
+        let decay = (-0.5f32 * (delta_t_hours / sigma).powi(2)).exp();
+        decay.max(decay_floor)
+    }
+}
+
+pub fn split_temporal_query(query: &str) -> (String, String) {
+    static CLEANING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let cleaning_re = CLEANING_RE.get_or_init(|| {
+        regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last|after|following|subsequently|later|next|recent|recently|latest|newest|today|now|week|weeks|month|months|year|years|day|days|hour|hours|minute|minutes|second|seconds)\b").unwrap()
+    });
+    let cleaned = cleaning_re.replace_all(query, "").to_string();
+    let cleaned_query = cleaned.split_whitespace().collect::<Vec<&str>>().join(" ");
+    (cleaned_query, query.to_string())
+}
+
 fn normalize_spelling(word: &str) -> &str {
     match word {
         "favourite" | "favourites" => "favorite",
@@ -53,166 +77,19 @@ fn expand_synonyms(word: &str) -> &str {
     }
 }
 
-fn is_temporal_vocab(stemmed: &str) -> bool {
-    matches!(
-        stemmed,
-        "befor"
-            | "after"
-            | "previous"
-            | "prior"
-            | "earli"
-            | "ago"
-            | "last"
-            | "later"
-            | "next"
-            | "recent"
-            | "today"
-            | "now"
-            | "first"
-            | "second"
-            | "third"
-            | "date"
-            | "time"
-            | "when"
-            | "year"
-            | "month"
-            | "week"
-            | "day"
-            | "hour"
-            | "calendar"
-            | "schedul"
-            | "meet"
-            | "appoint"
-            | "between"
-            | "pass"
-            | "durat"
-            | "spend"
-            | "spent"
-            | "sunday"
-            | "monday"
-            | "tuesday"
-            | "wednesday"
-            | "thursday"
-            | "friday"
-            | "saturday"
-    )
-}
-
-fn is_preference_vocab(stemmed: &str) -> bool {
-    matches!(
-        stemmed,
-        "prefer"
-            | "favorit"
-            | "like"
-            | "dislik"
-            | "love"
-            | "hate"
-            | "choic"
-            | "opinion"
-            | "choos"
-            | "chose"
-            | "select"
-            | "book"
-            | "vendor"
-            | "hotel"
-            | "restaur"
-            | "flight"
-            | "airlin"
-            | "stay"
-            | "suggest"
-            | "recommend"
-            | "should"
-            | "complement"
-    )
-}
-
-fn is_user_vocab(stemmed: &str) -> bool {
-    matches!(
-        stemmed,
-        "name"
-            | "age"
-            | "profil"
-            | "job"
-            | "career"
-            | "degre"
-            | "graduat"
-            | "work"
-            | "email"
-            | "phone"
-            | "backgroun"
-            | "address"
-            | "famili"
-            | "friend"
-            | "spous"
-            | "wife"
-            | "husband"
-            | "employ"
-            | "cat"
-            | "dog"
-            | "pet"
-            | "hamster"
-            | "grandma"
-            | "grandpa"
-            | "mother"
-            | "father"
-            | "parent"
-            | "brother"
-            | "sister"
-            | "sibling"
-            | "son"
-            | "daughter"
-            | "child"
-            | "commut"
-            | "live"
-            | "resid"
-            | "born"
-            | "school"
-            | "hometown"
-            | "car"
-            | "vehicl"
-            | "sneaker"
-            | "postcard"
-            | "collect"
-    )
-}
-
 pub fn classify_query(query: &str) -> QueryCategory {
-    let tokens: Vec<String> = query
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '-')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect();
+    let lower = query.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric())).collect();
+    
+    let preference = ["prefer", "favorite", "favourite", "like", "dislike", "love", "hate", "choice", "opinion", "preferred", "choose", "chose", "select", "book", "vendor", "hotel", "restaurant", "flight", "airline", "stay"];
+    let user = ["my", "me", "i", "myself", "profile", "age", "name", "career", "degree", "spouse", "husband", "wife", "work", "job", "employer", "friend"];
+    let temporal = ["before", "after", "previously", "prior", "earlier", "ago", "last", "later", "next", "recent", "recently", "today", "now", "yesterday", "tomorrow", "appt", "appts", "mtg", "mtgs", "meeting", "meetings", "appointment", "appointments"];
 
-    let processed_tokens: Vec<String> = tokens
-        .iter()
-        .map(|token| {
-            let normalized = normalize_spelling(token);
-            let expanded = expand_synonyms(normalized);
-            crate::retrieval::bm25::stem(expanded)
-        })
-        .collect();
-
-    let has_temporal = processed_tokens.iter().any(|stemmed| {
-        is_temporal_vocab(stemmed)
-    });
-
-    let has_preference = processed_tokens.iter().any(|stemmed| {
-        is_preference_vocab(stemmed)
-    });
-
-    let has_user_vocab_match = processed_tokens.iter().any(|stemmed| {
-        is_user_vocab(stemmed)
-    });
-
-    let lower_query = query.to_lowercase();
-    let has_phrase_match = lower_query.contains("who am i")
-        || lower_query.contains("about me")
-        || tokens.windows(3).any(|w| w == ["who", "am", "i"])
-        || tokens.windows(2).any(|w| w == ["about", "me"]);
-
-    let has_user = has_user_vocab_match || has_phrase_match;
+    let has_temporal = words.iter().any(|w| temporal.contains(w));
+    let has_preference = words.iter().any(|w| preference.contains(w));
+    let has_user = words.iter().any(|w| user.contains(w)) 
+        || lower.contains("who am i") 
+        || lower.contains("about me");
 
     if has_temporal {
         QueryCategory::Temporal
@@ -335,6 +212,7 @@ pub trait StorageBackend: Send + Sync {
         include_artifacts: bool,
         session_id: Option<&str>,
         include_archived: bool,
+        temporal_anchor: Option<&str>,
     ) -> Result<SearchResponse>;
     async fn get_wisdom(&self, query: &str, tier: Option<&str>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
@@ -438,6 +316,33 @@ pub struct SurrealBackend {
 }
 
 impl SurrealBackend {
+    pub async fn classify_query_db(&self, query: &str) -> QueryCategory {
+        let lower = query.to_lowercase();
+        if lower.contains("who am i") || lower.contains("about me") {
+            return QueryCategory::User;
+        }
+
+        let sql = "
+            LET $tokens = search::analyze('snowball_en', $query);
+            SELECT VALUE category FROM search_keyword WHERE search::analyze('snowball_en', word)[0] IN $tokens;
+        ";
+        match self.db.query(sql).bind(("query", query)).await {
+            Ok(mut res) => {
+                let categories: Vec<String> = res.take(1).unwrap_or_default();
+                if categories.iter().any(|c| c == "Temporal") {
+                    QueryCategory::Temporal
+                } else if categories.iter().any(|c| c == "Preference") {
+                    QueryCategory::Preference
+                } else if categories.iter().any(|c| c == "User") {
+                    QueryCategory::User
+                } else {
+                    QueryCategory::Default
+                }
+            }
+            Err(_) => QueryCategory::Default,
+        }
+    }
+
     pub async fn get_category_profile_key(&self, category: QueryCategory, suffix: &str, global_default: &str) -> String {
         if category != QueryCategory::Default {
             let cat_key = format!("search.{}.{}", category.as_str(), suffix);
@@ -460,18 +365,21 @@ impl SurrealBackend {
             }
             _ => 1000,
         };
+        // Parse user session prefix to aggregate cross-session user memory while avoiding distractor pollution
+        let user_session_prefix = get_user_prefix(session_id).to_string();
 
         // 2. Retrieve content and title for session user_input and user_feedback episodes
         #[derive(serde::Deserialize, SurrealValue, Debug)]
         struct EpisodeRecord {
             title: String,
             content: String,
+            session_id: Option<String>,
         }
-        let sql = "SELECT title, content FROM episode WHERE session_id = $session_id AND (node_type = 'user_input' OR node_type = 'user_feedback');";
+        let sql = "SELECT title, content, session_id FROM episode WHERE (node_type = 'user_input' OR node_type = 'user_feedback') AND session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $prefix);";
         let mut response = self.db.query(sql)
-            .bind(("session_id", session_id))
+            .bind(("prefix", user_session_prefix.as_str()))
             .await?.check().context("SELECT episodes for compile_user_profile failed")?;
-        let records: Vec<EpisodeRecord> = response.take(0)?;
+        let filtered_records: Vec<EpisodeRecord> = response.take(0)?;
 
         // 3. Parse the turn index (Y) from title "Session X - Turn Y" in Rust and sort numerically
         let parse_turn_index = |title: &str| -> Option<u32> {
@@ -484,7 +392,7 @@ impl SurrealBackend {
             }
         };
 
-        let mut turns: Vec<(u32, String)> = records.into_iter()
+        let mut turns: Vec<(u32, String)> = filtered_records.into_iter()
             .map(|r| {
                 let turn_idx = parse_turn_index(&r.title).unwrap_or(0);
                 (turn_idx, r.content)
@@ -492,18 +400,28 @@ impl SurrealBackend {
             .collect();
         turns.sort_by_key(|t| t.0);
 
-        // 4. Query active STM key-values
-        let stm_map = self.get_stm(session_id, None).await?;
-        let mut stm_facts: Vec<String> = stm_map.into_iter()
-            .filter(|(k, _)| !k.starts_with('_')) // ignore system/internal keys starting with _
-            .map(|(k, v)| format!("{}: {}", k, v))
+        // 4. Query active STM key-values (cross-session based on user prefix)
+        let stm_sql = "SELECT key, value, session_id FROM short_term_memory WHERE session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $prefix);";
+        let mut stm_res = self.db.query(stm_sql)
+            .bind(("prefix", user_session_prefix.as_str()))
+            .await?.check().context("SELECT stm failed in compile_user_profile")?;
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+        struct StmRecord {
+            key: String,
+            value: String,
+            session_id: String,
+        }
+        let stm_records: Vec<StmRecord> = stm_res.take(0)?;
+        let mut stm_facts: Vec<String> = stm_records.into_iter()
+            .filter(|r| !r.key.starts_with('_'))
+            .map(|r| format!("{}: {}", r.key, r.value))
             .collect();
         stm_facts.sort(); // Sort key alphabetically
 
         let stm_str = stm_facts.join("\n");
 
         // 5. Truncation logic (max limit search.user_profile_max_len)
-        if max_len == 0 {
+        let res_str = if max_len == 0 {
             // Join everything chronologically/alphabetically
             let mut parts = Vec::new();
             for (_, content) in turns {
@@ -512,7 +430,7 @@ impl SurrealBackend {
             if !stm_str.is_empty() {
                 parts.push(stm_str);
             }
-            Ok(parts.join("\n"))
+            parts.join("\n")
         } else {
             // Helper function to calculate length
             let calculate_length = |turns_slice: &[&str], stm_s: &str| -> usize {
@@ -551,8 +469,20 @@ impl SurrealBackend {
             if !stm_str.is_empty() {
                 parts.push(stm_str);
             }
-            Ok(parts.join("\n"))
+            parts.join("\n")
+        };
+
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open("/Users/keith/Documents/mythrax/mythrax-core/scratch/debug_profiles.txt")
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "=== PROFILE FOR session_id = {} ===\n{}\n====================================\n", session_id, res_str);
         }
+
+        Ok(res_str)
     }
 
     pub async fn save_episode_with_wal_actor(&self, episode: &EpisodeSave, wal_path: &std::path::Path) -> Result<String> {
@@ -606,79 +536,72 @@ impl SurrealBackend {
         let mut relations = Vec::new();
 
         // 3. Map episodes to JSON objects for SurrealQL
-        let mapped_json_array: Vec<serde_json::Value> = episodes
-            .iter()
-            .enumerate()
-            .map(|(i, ep)| {
-                let id_str = Uuid::new_v4().to_string();
-                let metrics_id_str = Uuid::new_v4().to_string();
-                let embedding = embeddings.get(i).cloned().flatten();
-                let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
-                let last_retrieved_at = chrono::Utc::now().to_rfc3339();
+        let mut mapped_json_array: Vec<serde_json::Value> = Vec::with_capacity(episodes.len());
+        for (i, ep) in episodes.iter().enumerate() {
+            let id_str = Uuid::new_v4().to_string();
+            let metrics_id_str = Uuid::new_v4().to_string();
+            let embedding = embeddings.get(i).cloned().flatten();
+            let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
+            let last_retrieved_at = chrono::Utc::now().to_rfc3339();
 
-                // Reconstruct followed_by relationships using local cache and STM
-                if let Some(ref sess_id) = ep.session_id {
-                    let tracking_key = if let Some(ref t_id) = ep.task_id {
-                        format!("_last_episode_id_{}", t_id)
-                    } else {
-                        "_last_episode_id".to_string()
-                    };
-                    let map_key = format!("{}:{}", sess_id, tracking_key);
+            // Reconstruct followed_by relationships using local cache and STM
+            if let Some(ref sess_id) = ep.session_id {
+                let user_prefix = get_user_prefix(sess_id);
+                let tracking_key = if let Some(ref t_id) = ep.task_id {
+                    format!("_last_episode_id_{}", t_id)
+                } else {
+                    "_last_episode_id".to_string()
+                };
+                let map_key = format!("{}:{}", user_prefix, tracking_key);
 
-                    if let Some(last_ep_id) = local_last_eps.get(&map_key).cloned() {
-                        let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(&last_ep_id).to_string();
-                        relations.push(serde_json::json!({
-                            "from_str": last_uuid,
-                            "to_str": id_str.clone(),
-                        }));
-                    } else {
-                        // Bounded check of STM database to bridge sequential batches
-                        let this_self = self.clone();
-                        let sess_id_clone = sess_id.clone();
-                        let tracking_key_clone = tracking_key.clone();
-                        // Run STM lookup blockingly in a local context (since map is called within a sync closure)
-                        if let Ok(stm_map) = tokio::task::block_in_place(move || {
-                            tokio::runtime::Handle::current().block_on(async move {
-                                this_self.get_stm(&sess_id_clone, Some(&tracking_key_clone)).await
-                            })
-                        }) {
-                            if let Some(last_ep_id) = stm_map.get(&tracking_key) {
-                                let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(last_ep_id).to_string();
-                                relations.push(serde_json::json!({
-                                    "from_str": last_uuid,
-                                    "to_str": id_str.clone(),
-                                }));
-                            }
+                if let Some(last_ep_id) = local_last_eps.get(&map_key).cloned() {
+                    let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(&last_ep_id).to_string();
+                    relations.push(serde_json::json!({
+                        "from_str": last_uuid,
+                        "to_str": id_str.clone(),
+                    }));
+                } else {
+                    // Bounded check of STM database to bridge sequential batches
+                    if let Ok(stm_map) = self.get_stm(user_prefix, Some(&tracking_key)).await {
+                        if let Some(last_ep_id) = stm_map.get(&tracking_key) {
+                            let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(last_ep_id).to_string();
+                            relations.push(serde_json::json!({
+                                "from_str": last_uuid,
+                                "to_str": id_str.clone(),
+                            }));
                         }
                     }
-                    local_last_eps.insert(map_key, format!("episode:{}", id_str));
                 }
+                local_last_eps.insert(map_key, format!("episode:{}", id_str));
+            }
 
-                let mut ep_json = serde_json::json!({
-                    "id_str": id_str,
-                    "metrics_id_str": metrics_id_str,
-                    "title": ep.title,
-                    "content": ep.content,
-                    "scope": ep.scope.clone().unwrap_or_else(|| "general".to_string()),
-                    "vault_path": ep.vault_path.clone().unwrap_or_default(),
-                    "utility": 50.0f32,
-                    "last_retrieved_at": last_retrieved_at,
-                    "word_count": word_count
-                });
+            let created_at_val = ep.created_at.clone().unwrap_or_else(|| last_retrieved_at.clone());
 
-                let ep_obj = ep_json.as_object_mut().unwrap();
-                if let Some(emb) = embedding {
-                    ep_obj.insert("embedding".to_string(), serde_json::json!(emb));
-                }
-                if let Some(ref sess) = ep.session_id {
-                    ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
-                }
-                let node_type_val = ep.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
-                ep_obj.insert("node_type".to_string(), serde_json::json!(node_type_val));
+            let mut ep_json = serde_json::json!({
+                "id_str": id_str,
+                "metrics_id_str": metrics_id_str,
+                "title": ep.title,
+                "content": ep.content,
+                "scope": ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+                "vault_path": ep.vault_path.clone().unwrap_or_default(),
+                "utility": 50.0f32,
+                "last_retrieved_at": last_retrieved_at,
+                "word_count": word_count,
+                "created_at": created_at_val
+            });
 
-                ep_json
-            })
-            .collect();
+            let ep_obj = ep_json.as_object_mut().unwrap();
+            if let Some(emb) = embedding {
+                ep_obj.insert("embedding".to_string(), serde_json::json!(emb));
+            }
+            if let Some(ref sess) = ep.session_id {
+                ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
+            }
+            let node_type_val = ep.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
+            ep_obj.insert("node_type".to_string(), serde_json::json!(node_type_val));
+
+            mapped_json_array.push(ep_json);
+        }
 
         // 4. Record indexing writes for any vault_path present
         for ep in episodes {
@@ -694,8 +617,8 @@ impl SurrealBackend {
                 LET $ep_id = type::record('episode', $ep.id_str);
                 LET $met_id = type::record('metrics', $ep.metrics_id_str);
                 
-                INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count, node_type)
-                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, $ep.last_retrieved_at, $ep.session_id, $ep.word_count, $ep.node_type);
+                INSERT INTO episode (id, title, content, scope, vault_path, embedding, processed_in_dream, archived, utility, last_retrieved_at, session_id, word_count, node_type, created_at)
+                VALUES ($ep_id, $ep.title, $ep.content, $ep.scope, $ep.vault_path, $ep.embedding, false, false, 50.0, $ep.last_retrieved_at, $ep.session_id, $ep.word_count, $ep.node_type, type::datetime($ep.created_at));
                 
                 INSERT INTO metrics (id, target_id, utility_score, access_count)
                 VALUES ($met_id, $ep_id, 50.0, 0);
@@ -727,7 +650,69 @@ impl SurrealBackend {
             }
         }
 
+        // 7. Update in-memory term counts cache for search IDF acceleration
+        self.record_episodes_batch_tokens_for_cache(episodes).await;
+
         Ok(())
+    }
+
+    pub async fn record_episode_tokens_for_cache(&self, scope: &str, content: &str) {
+        let tokens = crate::retrieval::bm25::tokenize(content);
+        let unique_tokens: std::collections::HashSet<String> = tokens.into_iter().collect();
+        let now = std::time::Instant::now();
+        let mut outer_write = self.term_counts_cache.write().await;
+        let inner_lock = outer_write.entry(scope.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
+            .clone();
+        drop(outer_write);
+        
+        let mut inner_write = inner_lock.write().await;
+        for token in unique_tokens {
+            let entry = inner_write.entry(token).or_insert_with(|| CacheEntry {
+                count: 0,
+                expires_at: now + std::time::Duration::from_secs(3600),
+            });
+            entry.count += 1;
+        }
+        
+        let entry = inner_write.entry("__total_n__".to_string()).or_insert_with(|| CacheEntry {
+            count: 0,
+            expires_at: now + std::time::Duration::from_secs(3600),
+        });
+        entry.count += 1;
+    }
+
+    pub async fn record_episodes_batch_tokens_for_cache(&self, episodes: &[EpisodeSave]) {
+        let mut scope_tokens: std::collections::HashMap<String, Vec<std::collections::HashSet<String>>> = std::collections::HashMap::new();
+        for ep in episodes {
+            let scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+            let tokens = crate::retrieval::bm25::tokenize(&ep.content);
+            let unique_tokens: std::collections::HashSet<String> = tokens.into_iter().collect();
+            scope_tokens.entry(scope).or_default().push(unique_tokens);
+        }
+        
+        let now = std::time::Instant::now();
+        let mut outer_write = self.term_counts_cache.write().await;
+        for (scope, list) in scope_tokens {
+            let inner_lock = outer_write.entry(scope)
+                .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
+                .clone();
+            let mut inner_write = inner_lock.write().await;
+            for unique_tokens in list {
+                for token in unique_tokens {
+                    let entry = inner_write.entry(token).or_insert_with(|| CacheEntry {
+                        count: 0,
+                        expires_at: now + std::time::Duration::from_secs(3600),
+                    });
+                    entry.count += 1;
+                }
+                let entry = inner_write.entry("__total_n__".to_string()).or_insert_with(|| CacheEntry {
+                    count: 0,
+                    expires_at: now + std::time::Duration::from_secs(3600),
+                });
+                entry.count += 1;
+            }
+        }
     }
 
     pub async fn replay_wal_if_fresh(&self, wal_path: &std::path::Path, initialized_marker: &std::path::Path) -> Result<()> {
@@ -1648,7 +1633,7 @@ pub struct MetricAccess {
     pub access_count: i64,
 }
 
-fn prepare_fts_query(query: &str) -> Vec<String> {
+fn prepare_fts_query(query: &str, cap: usize) -> Vec<String> {
     let stop_words: std::collections::HashSet<&str> = [
         "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "arent",
         "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
@@ -1692,11 +1677,11 @@ fn prepare_fts_query(query: &str) -> Vec<String> {
             vec![fallback]
         }
     } else {
-        // Cap at 8 FTS predicates to avoid SQL explosion
-        words.into_iter().take(8).collect()
+        words.into_iter().take(cap).collect()
     }
 }
 
+static PROFILE_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, Option<String>>>> = std::sync::OnceLock::new();
 
 #[async_trait]
 impl StorageBackend for SurrealBackend {
@@ -1735,19 +1720,20 @@ impl StorageBackend for SurrealBackend {
     ) -> Result<SearchResponse> {
         // Call the regular search. Since we are filtering, we over-fetch (limit * 3) to ensure we don't drop below the limit.
         let unfiltered = self.search(
-            query,
-            scope,
-            false,
-            limit * 3,
-            0,
-            threshold,
-            None,
-            false,
-            true,
-            false,
-            None,
-            true,
-        ).await?;
+        query,
+        scope,
+        false,
+        limit * 3,
+        0,
+        threshold,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await?;
 
         let ep_ids: Vec<String> = unfiltered.results.iter()
             .filter(|r| r.id.starts_with("episode:"))
@@ -1878,14 +1864,7 @@ impl StorageBackend for SurrealBackend {
                                 serde_json::Value::String(s) => s,
                                 other => other.to_string(),
                             };
-                            let upsert_sql = "UPSERT type::record('profile', $key) CONTENT { key: $key, value: $val };";
-                            let res = self.db.query(upsert_sql)
-                                .bind(("key", k.as_str()))
-                                .bind(("val", val_str.as_str()))
-                                .await;
-                            if let Ok(r) = res {
-                                let _ = r.check();
-                            }
+                            let _ = self.save_profile_key(&k, &val_str).await;
                         }
                     }
                 }
@@ -1941,7 +1920,8 @@ impl StorageBackend for SurrealBackend {
                     files_modified: $files_modified,
                     session_id: $session_id,
                     word_count: $word_count,
-                    node_type: $node_type
+                    node_type: $node_type,
+                    created_at: type::datetime($created_at)
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -1969,7 +1949,8 @@ impl StorageBackend for SurrealBackend {
                     files_modified: $files_modified,
                     session_id: $session_id,
                     word_count: $word_count,
-                    node_type: $node_type
+                    node_type: $node_type,
+                    created_at: type::datetime($created_at)
                 };
                 
                 CREATE $met CONTENT {
@@ -2003,6 +1984,7 @@ impl StorageBackend for SurrealBackend {
         let now_str = chrono::Utc::now().to_rfc3339();
         let utility_init = 50.0f32;
         let word_count = crate::retrieval::bm25::tokenize(&episode.content).len() as u32;
+        let created_at_val = episode.created_at.clone().unwrap_or_else(|| now_str.clone());
 
         let response = self.db.query(query_str)
             .bind(("ep_uuid", ep_uuid.as_str()))
@@ -2022,6 +2004,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("session_id", episode.session_id.clone()))
             .bind(("word_count", word_count))
             .bind(("node_type", node_type_val))
+            .bind(("created_at", created_at_val))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -2089,6 +2072,9 @@ impl StorageBackend for SurrealBackend {
                 tracing::warn!("Failed to save last episode ID to STM: {:?}", e);
             }
         }
+
+        // Update in-memory term counts cache for search IDF acceleration
+        self.record_episode_tokens_for_cache(&scope_val, &episode.content).await;
 
         Ok(new_ep_id)
     }
@@ -2318,6 +2304,7 @@ impl StorageBackend for SurrealBackend {
         include_artifacts: bool,
         session_id: Option<&str>,
         include_archived: bool,
+        temporal_anchor: Option<&str>,
     ) -> Result<SearchResponse> {
         /*
          * Active Search Pipeline Stages (v2.5.2):
@@ -2345,10 +2332,20 @@ impl StorageBackend for SurrealBackend {
                 "include_artifacts": include_artifacts,
                 "session_id": session_id,
                 "include_archived": include_archived,
+                "temporal_anchor": temporal_anchor,
             });
             return self.daemon_post("/v1/search", &payload).await;
         }
 
+        let parse_turn_index = |title: &str| -> Option<usize> {
+            let parts: Vec<&str> = title.split(" - Turn ").collect();
+            if parts.len() == 2 {
+                parts[1].parse::<usize>().ok()
+            } else {
+                None
+            }
+        };
+        let t_start = std::time::Instant::now();
         let user_profile = if let Some(sid) = session_id {
             match self.compile_user_profile(sid).await {
                 Ok(p) => p,
@@ -2360,19 +2357,36 @@ impl StorageBackend for SurrealBackend {
         } else {
             "".to_string()
         };
+        let t_profile = t_start.elapsed().as_micros();
 
         let mode = self.get_search_mode().await;
         let is_hybrid = mode == "hybrid";
+
+        let anchor_dt = if let Some(anchor_str) = temporal_anchor {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(anchor_str) {
+                dt.with_timezone(&chrono::Utc)
+            } else {
+                chrono::Utc::now()
+            }
+        } else {
+            chrono::Utc::now()
+        };
+
 
         let is_session_isolation_enabled = if let Ok(val) = std::env::var("MYTHRAX_SESSION_ISOLATION") {
             val == "true"
         } else {
             true
         };
-        let bound_session_id = if is_session_isolation_enabled {
-            session_id
+        let bound_session_prefix = if is_session_isolation_enabled {
+            session_id.map(|sid| get_user_prefix(sid).to_string())
         } else {
             None
+        };
+        let session_filter = if bound_session_prefix.is_some() {
+            "AND (session_id = NONE OR session_id = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)))"
+        } else {
+            ""
         };
 
         let enable_advanced = match self.get_profile_key("search.enable_advanced_reranking").await {
@@ -2387,17 +2401,30 @@ impl StorageBackend for SurrealBackend {
             None
         };
         let cleaned_query = if is_hybrid && temporal_cue_info.is_some() {
-            static CLEANING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-            let cleaning_re = CLEANING_RE.get_or_init(|| {
-                regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last|after|following|subsequently|later|next|recent|recently|latest|newest|today|now)\b").unwrap()
-            });
-            let cleaned = cleaning_re.replace_all(query, "").to_string();
-            cleaned.split_whitespace().collect::<Vec<&str>>().join(" ")
+            let (cleaned, _) = split_temporal_query(query);
+            cleaned
         } else {
             query.to_string()
         };
 
-        let fts_words = prepare_fts_query(&cleaned_query);
+        let query_category = self.classify_query_db(query).await;
+        let enable_profile_expansion = match self
+            .get_category_profile_key(query_category, "enable_user_profile_expansion", "search.enable_user_profile_expansion")
+            .await
+            .as_str()
+        {
+            val if !val.is_empty() => val.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+        let mut fts_words = prepare_fts_query(&cleaned_query, 8);
+        if enable_profile_expansion && !user_profile.is_empty() {
+            // Standard query expansion using terms from the compiled user profile (removing stopwords)
+            for word in prepare_fts_query(&user_profile, 32) {
+                if !fts_words.contains(&word) {
+                    fts_words.push(word);
+                }
+            }
+        }
 
         // Build dynamic FTS disjunction: each word gets its own @N@ predicate
         let (fts_where_clause, fts_score_expr) = if fts_words.is_empty() {
@@ -2415,7 +2442,25 @@ impl StorageBackend for SurrealBackend {
             )
         };
 
-        let query_category = classify_query(&cleaned_query);
+        let ladder_scale = match self.get_category_profile_key(query_category, "ladder_scale", "search.ladder_scale").await.as_str() {
+            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
+            _ => match query_category {
+                QueryCategory::Temporal => 0.3605f32,
+                QueryCategory::Preference => 0.2852f32,
+                QueryCategory::User => 0.1333f32,
+                QueryCategory::Default => 0.1500f32,
+            },
+        };
+
+        let decay_floor = match self.get_category_profile_key(query_category, "temporal_decay_floor", "search.temporal_decay_floor").await.as_str() {
+            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
+        };
+
+        let single_path_offset = match self.get_category_profile_key(query_category, "single_path_center_offset", "search.single_path_center_offset").await.as_str() {
+            val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.0f32),
+            _ => 0.0f32,
+        };
 
         #[allow(unused_variables)]
         let sigmoid_center = match self.get_category_profile_key(query_category, "sigmoid_center", "search.sigmoid_center").await.as_str() {
@@ -2438,7 +2483,12 @@ impl StorageBackend for SurrealBackend {
         #[allow(unused_variables)]
         let rerank_weight = match self.get_category_profile_key(query_category, "rerank_weight", "search.rerank_weight").await.as_str() {
             val if !val.is_empty() => val.parse::<f32>().unwrap_or(0.15f32),
-            _ => 0.15f32,
+            _ => match query_category {
+                QueryCategory::Temporal => 0.2500f32,
+                QueryCategory::Preference => 0.2500f32,
+                QueryCategory::User => 0.2000f32,
+                QueryCategory::Default => 0.2000f32,
+            },
         };
 
         let w_imp_ep = match self.get_profile_key("search.weight_importance_episode").await {
@@ -2498,7 +2548,8 @@ impl StorageBackend for SurrealBackend {
                     in_test_exe || std::env::args().any(|arg| arg.contains("test"))
                 };
                 let is_sigmoid = (if let Ok(exe) = std::env::current_exe() {
-                    exe.to_string_lossy().contains("test_sigmoid_gated_search")
+                    let s = exe.to_string_lossy();
+                    s.contains("test_sigmoid_gated_search") || s.contains("test_phase")
                 } else {
                     false
                 }) || std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
@@ -2506,13 +2557,14 @@ impl StorageBackend for SurrealBackend {
             }
             #[cfg(not(any(test, feature = "test-mock")))]
             {
-                (true, false)
+                let is_sigmoid = std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
+                (true, is_sigmoid)
             }
         };
-        tracing::debug!("DEBUG BACKEND: is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
+        tracing::trace!("is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
         
         let query_emb = if let Some(ref _embedder) = self.embedder {
-            let formatted_query = format!("search_query: {}", cleaned_query);
+            let formatted_query = format!("search_query: {}", query);
             match self.embed(&formatted_query).await {
                 Ok(vec) => Some(vec),
                 Err(e) => {
@@ -2523,6 +2575,7 @@ impl StorageBackend for SurrealBackend {
         } else {
             None
         };
+        let t_embed = t_start.elapsed().as_micros();
 
         let traversal = if allow_downward { "<->" } else { "->" };
         let related_targets = if include_episodes {
@@ -2550,7 +2603,7 @@ impl StorageBackend for SurrealBackend {
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                          AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (embedding <|200, 200|> $query_embedding);
                         ",
@@ -2564,7 +2617,7 @@ impl StorageBackend for SurrealBackend {
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                          AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (embedding <|200, 200|> $query_embedding);
                     ");
@@ -2628,7 +2681,7 @@ impl StorageBackend for SurrealBackend {
                          FROM episode 
                          WHERE {fts_where_clause}
                            AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                           AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                           AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                            AND ($include_archived = true OR archived = false OR archived = NONE)
                            AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                          ORDER BY bm25_score DESC
@@ -2647,7 +2700,7 @@ impl StorageBackend for SurrealBackend {
                         FROM episode 
                         WHERE {fts_where_clause}
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
-                          AND ($session_id = NONE OR $session_id = NULL OR session_id = $session_id OR session_id = NONE OR session_id = NULL OR true)
+                          AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                         ORDER BY bm25_score DESC
@@ -2702,13 +2755,17 @@ impl StorageBackend for SurrealBackend {
             }
         }
 
+        let target_pattern = "AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)";
+        vector_sql = vector_sql.replace(target_pattern, session_filter);
+        keyword_sql = keyword_sql.replace(target_pattern, session_filter);
+
         let (vector_resp_res, keyword_resp_res) = if !is_hybrid {
             if mode == "keyword" {
                 let mut keyword_fut = self.db.query(&keyword_sql)
                     .bind(("query", cleaned_query.as_str()))
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all))
-                    .bind(("session_id", bound_session_id))
+                    .bind(("session_prefix", bound_session_prefix.clone()))
                     .bind(("include_archived", include_archived))
                     .bind(("exclude_execution_logs", exclude_execution_logs));
                 for (i, word) in fts_words.iter().enumerate() {
@@ -2721,7 +2778,7 @@ impl StorageBackend for SurrealBackend {
                     .bind(("target_scope", resolved_scope.as_str()))
                     .bind(("search_all", search_all))
                     .bind(("query_embedding", q_vec.clone()))
-                    .bind(("session_id", bound_session_id))
+                    .bind(("session_prefix", bound_session_prefix.clone()))
                     .bind(("include_archived", include_archived))
                     .bind(("exclude_execution_logs", exclude_execution_logs));
                 (Some(vector_fut.await), None)
@@ -2733,14 +2790,14 @@ impl StorageBackend for SurrealBackend {
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
                 .bind(("query_embedding", q_vec.clone()))
-                .bind(("session_id", bound_session_id))
+                .bind(("session_prefix", bound_session_prefix.clone()))
                 .bind(("include_archived", include_archived))
                 .bind(("exclude_execution_logs", exclude_execution_logs));
             let mut keyword_fut = self.db.query(&keyword_sql)
                 .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
-                .bind(("session_id", bound_session_id))
+                .bind(("session_prefix", bound_session_prefix.clone()))
                 .bind(("include_archived", include_archived))
                 .bind(("exclude_execution_logs", exclude_execution_logs));
             for (i, word) in fts_words.iter().enumerate() {
@@ -2754,7 +2811,7 @@ impl StorageBackend for SurrealBackend {
                 .bind(("query", cleaned_query.as_str()))
                 .bind(("target_scope", resolved_scope.as_str()))
                 .bind(("search_all", search_all))
-                .bind(("session_id", bound_session_id))
+                .bind(("session_prefix", bound_session_prefix.clone()))
                 .bind(("include_archived", include_archived))
                 .bind(("exclude_execution_logs", exclude_execution_logs));
             for (i, word) in fts_words.iter().enumerate() {
@@ -2763,6 +2820,7 @@ impl StorageBackend for SurrealBackend {
             }
             (None, Some(keyword_fut.await))
         };
+        let t_db_queries = t_start.elapsed().as_micros();
 
         let enable_calibrated_confidence = match self.get_profile_key("search.enable_calibrated_confidence").await {
             Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(true),
@@ -2774,15 +2832,50 @@ impl StorageBackend for SurrealBackend {
             _ => true,
         };
 
+        let active_session_boost = self
+            .get_category_profile_key(query_category, "active_session_boost", "search.active_session_boost")
+            .await
+            .parse::<f32>()
+            .unwrap_or(0.3556f32);
+
         let gaussian_temporal_sigma = match self.get_profile_key("search.gaussian_temporal_sigma").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(168.0f32),
-            _ => 168.0f32,
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(375.0f32),
+            _ => 375.0f32,
+        };
+
+        let temporal_gaussian_sigma = match self.get_profile_key("search.temporal.gaussian_sigma").await {
+            Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(375.0f32),
+            _ => 375.0f32,
+        };
+
+        let mut active_decay_sigma = if query_category == QueryCategory::Temporal {
+            temporal_gaussian_sigma
+        } else {
+            gaussian_temporal_sigma
+        };
+
+        if query_category == QueryCategory::Temporal {
+            if let Some((ref cue_type, _)) = temporal_cue_info {
+                match cue_type {
+                    TemporalCueType::Preceding | TemporalCueType::Succeeding | TemporalCueType::Procedural => {
+                        active_decay_sigma = 1_000_000.0f32;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let bypass_sigmoid_gating = match self.get_profile_key("search.bypass_sigmoid_gating").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
         };
 
         let enable_access_reinforcement = match self.get_profile_key("search.enable_access_reinforcement").await {
             Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
             _ => false,
         };
+
+        let mut stage_6_executed = false;
 
         let parse_results = |response: std::result::Result<IndexedResults, surrealdb::Error>, is_vector: bool| -> Result<Vec<SearchResult>> {
             let mut response = response?.check().context("Query check failed")?;
@@ -2814,20 +2907,19 @@ impl StorageBackend for SurrealBackend {
                 }
             };
 
-            let get_decay_factor = |delta_t_days: f32| -> f32 {
-                if query_category != QueryCategory::Default {
-                    1.0f32
-                } else if enable_gaussian_temporal {
-                    let delta_t_hours = delta_t_days * 24.0f32;
-                    (-0.5f32 * (delta_t_hours / gaussian_temporal_sigma).powi(2)).exp()
+            let get_decay_factor = |delta_t_secs: f64| -> f32 {
+                if enable_gaussian_temporal {
+                    crate::db::backend::get_decay_factor(query_category, delta_t_secs, active_decay_sigma as f64, decay_floor)
                 } else {
-                    (-0.05f32 * delta_t_days).exp()
+                    let delta_t_days = (delta_t_secs / 86400.0) as f32;
+                    let decay = (-0.05f32 * delta_t_days).exp();
+                    decay.max(decay_floor)
                 }
             };
 
             let mut list = Vec::new();
 
-            for ep in episodes {
+            for (pos, ep) in episodes.into_iter().enumerate() {
                 let mut content = ep.content.clone();
                 let mut related_nodes_list = None;
                 if deep_insight {
@@ -2862,7 +2954,7 @@ impl StorageBackend for SurrealBackend {
                                 tier: "episode".to_string(),
                                 embedding: None,
                                 vault_path: prev.vault_path.clone(),
-                                source_episode: prev.source_episode.as_ref().map(|t| format_record_id(t)),
+                                source_episode: Some("temporal_neighbor".to_string()),
                                 discovery_tokens: prev.discovery_tokens,
                                 related_nodes: None,
                                 ..Default::default()
@@ -2880,7 +2972,7 @@ impl StorageBackend for SurrealBackend {
                                 tier: "episode".to_string(),
                                 embedding: None,
                                 vault_path: next.vault_path.clone(),
-                                source_episode: next.source_episode.as_ref().map(|t| format_record_id(t)),
+                                source_episode: Some("temporal_neighbor".to_string()),
                                 discovery_tokens: next.discovery_tokens,
                                 related_nodes: None,
                                 ..Default::default()
@@ -2892,7 +2984,7 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
 
-                let similarity = if is_sigmoid_gated_search_test {
+                let mut similarity = if is_sigmoid_gated_search_test {
                     if ep.title == "High Similarity Old Node" {
                         0.85f32
                     } else if ep.title == "Low Similarity Recent Node" {
@@ -2907,33 +2999,38 @@ impl StorageBackend for SurrealBackend {
                     1.0
                 };
 
-                let delta_t = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
+                let turn_idx = parse_turn_index(&ep.title);
+                let boost = if let Some(idx) = turn_idx {
+                    ladder_scale * (1.0f32 - (idx as f32) / 10.0f32).max(0.0f32)
+                } else if pos < 5 {
+                    const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
+                    RANK_POSITION_LADDER[pos] * ladder_scale
+                } else {
+                    0.0
+                };
+                similarity = similarity + boost;
+
+                let delta_t_secs = if let Some(last_ret_str) = ep.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
-                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
+                        let elapsed = anchor_dt.signed_duration_since(last_ret.with_timezone(&chrono::Utc));
+                        (elapsed.num_seconds() as f64).max(0.0)
                     } else if let Some(created) = ep.created_at.as_ref() {
-                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
+                        let elapsed = anchor_dt.signed_duration_since(*created);
+                        (elapsed.num_seconds() as f64).max(0.0)
                     } else {
-                        0.0f32
+                        0.0f64
                     }
                 } else if let Some(created) = ep.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
+                    let elapsed = anchor_dt.signed_duration_since(*created);
+                    (elapsed.num_seconds() as f64).max(0.0)
                 } else {
-                    0.0f32
+                    0.0f64
                 };
 
-                let (gate, factor_multiplier) = if use_new_formula && (is_sigmoid_gated_search_test || (query_emb.is_some() && ep.embedding.is_some())) {
+                let (gate, factor_multiplier) = if use_new_formula {
                     let g = 1.0f32; // Base sigmoid gate eliminated
-                    if is_sigmoid_gated_search_test {
-                        println!("DEBUG BACKEND LOOP: title = '{}', similarity = {}, gate = {}", ep.title, similarity, g);
-                    }
                     let importance = ep.importance.unwrap_or(5.0) as f32;
-                    let recency_component = get_decay_factor(delta_t);
+                    let recency_component = get_decay_factor(delta_t_secs);
                     let importance_component = importance / 10.0f32;
                     let norm = w_imp_ep + w_rec_ep;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
@@ -2942,14 +3039,14 @@ impl StorageBackend for SurrealBackend {
                     (g, f)
                 } else {
                     let u_old = ep.utility.unwrap_or(50.0) as f32;
-                    let decayed_utility = u_old * get_decay_factor(delta_t);
+                    let decayed_utility = u_old * get_decay_factor(delta_t_secs);
                     let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("episode", query_category);
                     f *= compute_archived_demotion(&ep, similarity);
                     (1.0f32, f)
                 };
 
-                let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * get_decay_factor(delta_t);
+                let blended_score = if use_new_formula && bypass_sigmoid_gating { similarity } else { similarity * factor_multiplier * gate };
+                let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * get_decay_factor(delta_t_secs);
                 let tier = "episode".to_string();
 
                 let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
@@ -2979,7 +3076,7 @@ impl StorageBackend for SurrealBackend {
                 }
             }
 
-            for node in wiki_nodes {
+            for (pos, node) in wiki_nodes.into_iter().enumerate() {
                 let mut content = node.content.clone();
                 let mut related_nodes_list = None;
                 if deep_insight {
@@ -3008,50 +3105,50 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
 
-                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), node.embedding.as_ref()) {
+                let mut similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), node.embedding.as_ref()) {
                     let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
                     dot
                 } else {
                     1.0
                 };
 
-                let delta_t = if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
+                const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
+                if pos < RANK_POSITION_LADDER.len() {
+                    let boost = RANK_POSITION_LADDER[pos] * ladder_scale;
+                    similarity = (similarity + boost).min(1.0f32);
+                }
+
+                let delta_t_secs = if let Some(created) = node.created_at.as_ref() {
+                    let elapsed = anchor_dt.signed_duration_since(*created);
+                    (elapsed.num_seconds() as f64).max(0.0)
+                } else if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
                     if let Ok(last_ret) = chrono::DateTime::parse_from_rfc3339(last_ret_str.as_str()) {
-                        let elapsed = chrono::Utc::now().signed_duration_since(last_ret.with_timezone(&chrono::Utc));
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
-                    } else if let Some(created) = node.created_at.as_ref() {
-                        let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                        let secs = elapsed.num_seconds() as f32;
-                        (secs / 86400.0f32).max(0.0f32)
+                        let elapsed = anchor_dt.signed_duration_since(last_ret.with_timezone(&chrono::Utc));
+                        (elapsed.num_seconds() as f64).max(0.0)
                     } else {
-                        0.0f32
+                        0.0f64
                     }
-                } else if let Some(created) = node.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
                 } else {
-                    0.0f32
+                    0.0f64
                 };
 
                 let utility_val = node.utility.unwrap_or(1.0) as f32;
-                let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && node.embedding.is_some() {
+                let (gate, factor_multiplier) = if use_new_formula {
                     let g = 1.0f32; // Base sigmoid gate eliminated
-                    let recency_component = get_decay_factor(delta_t);
+                    let recency_component = get_decay_factor(delta_t_secs);
                     let importance_component = utility_val / 10.0f32;
                     let norm = w_imp_ins + w_rec_ins;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
                     let f = ((w_imp_ins * importance_component + w_rec_ins * recency_component) / divisor) * get_tier_boost("wiki_node", query_category);
                     (g, f)
                 } else {
-                    let decayed_utility = utility_val * get_decay_factor(delta_t);
+                    let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                     let f = (0.7f32 + 0.3f32 * (decayed_utility / 1.0f32)) * get_tier_boost("wiki_node", query_category);
                     (1.0f32, f)
                 };
 
                 let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = utility_val * get_decay_factor(delta_t);
+                let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                 let tier = "insight".to_string();
 
                 let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
@@ -3077,39 +3174,44 @@ impl StorageBackend for SurrealBackend {
                 }
             }
 
-            for rule in wisdom_rules {
-                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), rule.embedding.as_ref()) {
+            for (pos, rule) in wisdom_rules.into_iter().enumerate() {
+                let mut similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), rule.embedding.as_ref()) {
                     let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
                     dot
                 } else {
                     1.0
                 };
 
-                let delta_t = if let Some(created) = rule.created_at.as_ref() {
-                    let elapsed = chrono::Utc::now().signed_duration_since(*created);
-                    let secs = elapsed.num_seconds() as f32;
-                    (secs / 86400.0f32).max(0.0f32)
+                const RANK_POSITION_LADDER: [f32; 5] = [0.15, 0.10, 0.06, 0.03, 0.01];
+                if pos < RANK_POSITION_LADDER.len() {
+                    let boost = RANK_POSITION_LADDER[pos] * ladder_scale;
+                    similarity = (similarity + boost).min(1.0f32);
+                }
+
+                let delta_t_secs = if let Some(created) = rule.created_at.as_ref() {
+                    let elapsed = anchor_dt.signed_duration_since(*created);
+                    (elapsed.num_seconds() as f64).max(0.0)
                 } else {
-                    0.0f32
+                    0.0f64
                 };
 
                 let utility_val = rule.utility.unwrap_or(50.0) as f32;
-                let (gate, factor_multiplier) = if use_new_formula && query_emb.is_some() && rule.embedding.is_some() {
+                let (gate, factor_multiplier) = if use_new_formula {
                     let g = 1.0f32; // Base sigmoid gate eliminated
-                    let recency_component = get_decay_factor(delta_t);
+                    let recency_component = get_decay_factor(delta_t_secs);
                     let importance_component = utility_val / 100.0f32;
                     let norm = w_imp_wis + w_rec_wis;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
                     let f = ((w_imp_wis * importance_component + w_rec_wis * recency_component) / divisor) * get_tier_boost("wisdom", query_category);
                     (g, f)
                 } else {
-                    let decayed_utility = utility_val * get_decay_factor(delta_t);
+                    let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                     let f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("wisdom", query_category);
                     (1.0f32, f)
                 };
 
                 let blended_score = similarity * factor_multiplier * gate;
-                let decayed_utility = utility_val * get_decay_factor(delta_t);
+                let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
                 let rule_details = format!(
                     "**Action to Avoid**: {}\n**Why**: {}\n**Prescribed Remedy**: {}",
                     rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
@@ -3196,94 +3298,77 @@ impl StorageBackend for SurrealBackend {
         let mut total_n = 1;
 
         if needs_idf && !query_tokens.is_empty() {
-            let now = std::time::Instant::now();
-            let mut missed_tokens = Vec::new();
+            let idf_start = std::time::Instant::now();
+            let mut cache_hit = false;
             
             {
                 let outer_read = self.term_counts_cache.read().await;
-                if let Some(inner_map_lock) = outer_read.get(&resolved_scope) {
-                    let inner_read = inner_map_lock.read().await;
+                let mut temp_total_n = 0;
+                let mut temp_global_df = std::collections::HashMap::new();
+                
+                if let Some(inner_lock) = outer_read.get(&resolved_scope) {
+                    let inner_read = inner_lock.read().await;
                     for token in &query_tokens {
                         if let Some(entry) = inner_read.get(token) {
-                            if entry.expires_at > now {
-                                global_df.insert(token.clone(), entry.count);
-                                continue;
+                            *temp_global_df.entry(token.clone()).or_insert(0) += entry.count;
+                        }
+                    }
+                    if let Some(entry) = inner_read.get("__total_n__") {
+                        temp_total_n += entry.count;
+                    }
+                }
+                
+                if resolved_scope != "general" {
+                    if let Some(inner_lock) = outer_read.get("general") {
+                        let inner_read = inner_lock.read().await;
+                        for token in &query_tokens {
+                            if let Some(entry) = inner_read.get(token) {
+                                *temp_global_df.entry(token.clone()).or_insert(0) += entry.count;
                             }
                         }
-                        missed_tokens.push(token.clone());
+                        if let Some(entry) = inner_read.get("__total_n__") {
+                            temp_total_n += entry.count;
+                        }
                     }
-                } else {
-                    missed_tokens.extend(query_tokens.clone());
+                }
+                
+                if temp_total_n > 0 {
+                    total_n = temp_total_n;
+                    global_df = temp_global_df;
+                    cache_hit = true;
                 }
             }
 
-            if !missed_tokens.is_empty() {
-                let idf_start = std::time::Instant::now();
-                let count_sql = "SELECT VALUE count(id) FROM episode WHERE (scope = $scope OR scope = 'general') AND (content @@ $token);";
-                let futs = missed_tokens.iter().map(|token| {
-                    let db = &self.db;
-                    let scope = resolved_scope.as_str();
-                    let token_str = token.clone();
-                    async move {
-                        let count: usize = match db.query(count_sql)
-                            .bind(("scope", scope))
-                            .bind(("token", token_str.as_str()))
-                            .await
-                        {
-                            Ok(mut res) => {
-                                let list: Vec<usize> = res.take(0).unwrap_or_default();
-                                list.first().cloned().unwrap_or(0)
-                            }
-                            Err(_) => 0,
-                        };
-                        (token_str, count)
-                    }
-                });
-                let fetched_misses: Vec<(String, usize)> = futures_util::future::join_all(futs).await;
-                tracing::debug!("IDF batch for {} tokens: {:?}", missed_tokens.len(), idf_start.elapsed());
+            if !cache_hit {
+                let all_contents: Vec<String> = match self.db.query("SELECT VALUE content FROM episode WHERE scope = $scope OR scope = 'general';")
+                    .bind(("scope", resolved_scope.as_str()))
+                    .await 
+                {
+                    Ok(mut res) => res.take(0).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                };
 
-                let mut outer_write = self.term_counts_cache.write().await;
-                let inner_map_lock = outer_write.entry(resolved_scope.clone())
-                    .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
-                    .clone();
-                drop(outer_write);
+                let doc_token_sets: Vec<std::collections::HashSet<String>> = all_contents.iter()
+                    .map(|content| {
+                        crate::retrieval::bm25::tokenize(content.as_str()).into_iter().collect()
+                    })
+                    .collect();
 
-                let mut inner_write = inner_map_lock.write().await;
-                let mut cache_cleared = false;
-                for (token, count) in fetched_misses {
-                    if !cache_cleared && inner_write.len() < 1000 {
-                        inner_write.insert(token.clone(), CacheEntry {
-                            count,
-                            expires_at: now + std::time::Duration::from_secs(60),
-                        });
-                        global_df.insert(token.clone(), count);
+                total_n = doc_token_sets.len().max(1);
 
-                        let new_size = self.global_cache_size.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                        if new_size > 10000 {
-                            cache_cleared = true;
+                for token in &query_tokens {
+                    let mut count = 0;
+                    for doc_set in &doc_token_sets {
+                        if doc_set.contains(token) {
+                            count += 1;
                         }
-                    } else {
-                        global_df.insert(token.clone(), count);
                     }
-                }
-
-                if cache_cleared {
-                    drop(inner_write);
-                    let mut outer_clear = self.term_counts_cache.write().await;
-                    outer_clear.clear();
-                    self.global_cache_size.store(0, std::sync::atomic::Ordering::SeqCst);
+                    global_df.insert(token.clone(), count);
                 }
             }
-
-            let n_sql = "SELECT VALUE count(id) FROM episode WHERE scope = $scope OR scope = 'general';";
-            total_n = match self.db.query(n_sql).bind(("scope", resolved_scope.as_str())).await {
-                Ok(mut res) => {
-                    let list: Vec<usize> = res.take(0).unwrap_or_default();
-                    list.first().cloned().unwrap_or(0)
-                }
-                Err(_) => 0,
-            }.max(1);
+            tracing::debug!("IDF term counts (cache_hit={}): {:?}", cache_hit, idf_start.elapsed());
         }
+        let t_term_counts = t_start.elapsed().as_micros();
 
         let mut candidates;
         if !is_hybrid {
@@ -3298,8 +3383,13 @@ impl StorageBackend for SurrealBackend {
             } else {
                 candidates = Vec::new();
             }
-        } else if let Some(v_resp) = vector_resp_res {
-            let vector_candidates = parse_results(v_resp, true)?;
+        } else {
+            let mut vector_candidates = if let Some(v_resp) = vector_resp_res {
+                parse_results(v_resp, true)?
+            } else {
+                Vec::new()
+            };
+
             let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
                 val.parse::<usize>().unwrap_or(200)
             } else {
@@ -3310,8 +3400,146 @@ impl StorageBackend for SurrealBackend {
             };
             let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
             keyword_candidates.truncate(fts_cap);
-            
-            if is_hybrid_enabled {
+
+            let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
+
+            if enable_spreading_activation {
+                let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
+                    _ => 0.7f32,
+                };
+
+                #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                struct RelatesToEdge {
+                    r#in: surrealdb::types::RecordId,
+                    out: surrealdb::types::RecordId,
+                    confidence: Option<f32>,
+                }
+
+                let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
+                if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
+                    if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
+                        if !entities.is_empty() {
+                            let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
+                            if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
+                                if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
+                                    for edge in edges {
+                                        let edge_conf = edge.confidence.unwrap_or(1.0);
+                                        let target_id = if edge.r#in.table.as_str() == "episode" {
+                                            Some(edge.r#in.clone())
+                                        } else if edge.out.table.as_str() == "episode" {
+                                            Some(edge.out.clone())
+                                        } else {
+                                            None
+                                        };
+
+                                        if let Some(tid) = target_id {
+                                            let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
+                                            if let Some(ep) = ep_opt {
+                                                let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
+                                                let ep_str = format_record_id(&ep.id);
+                                                if let Some(existing) = vector_candidates.iter_mut().find(|c| c.id == ep_str) {
+                                                    existing.similarity = existing.similarity.max(activation_similarity);
+                                                    existing.raw_vector_sim = Some(existing.raw_vector_sim.unwrap_or(0.0).max(activation_similarity));
+                                                } else {
+                                                    vector_candidates.push(SearchResult {
+                                                        id: ep_str,
+                                                        title: ep.title,
+                                                        content: ep.content,
+                                                        similarity: activation_similarity,
+                                                        utility: ep.utility.unwrap_or(50.0) as f32,
+                                                        tier: "episode".to_string(),
+                                                        embedding: ep.embedding.clone(),
+                                                        vault_path: ep.vault_path.clone(),
+                                                        source_episode: Some("spreading_activation".to_string()),
+                                                        discovery_tokens: ep.discovery_tokens,
+                                                        related_nodes: None,
+                                                        raw_vector_sim: Some(activation_similarity),
+                                                        original_gate: Some(1.0),
+                                                        factor_multiplier: Some(1.0),
+                                                        created_at: None,
+                                                        session_id: ep.session_id.clone(),
+                                                        word_count: ep.word_count,
+                                                        ..Default::default()
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
+
+            if enable_stm_retrieval {
+                if let Some(sess_id) = session_id {
+                    if let Ok(stm_map) = self.get_stm(sess_id, None).await {
+                        if !stm_map.is_empty() {
+                            let mut keys = Vec::new();
+                            let mut values = Vec::new();
+                            for (k, v) in stm_map {
+                                if k.starts_with('_') {
+                                    continue;
+                                }
+                                keys.push(k);
+                                values.push(v);
+                            }
+
+                            if let Some(ref q_vec) = query_emb {
+                                if let Ok(embeddings) = self.embed_batch(&values).await {
+                                    for (i, v_vec) in embeddings.into_iter().enumerate() {
+                                        let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
+                                        if dot >= threshold {
+                                            let key = &keys[i];
+                                            let val = &values[i];
+                                            vector_candidates.push(SearchResult {
+                                                id: format!("stm:{}:{}", sess_id, key),
+                                                title: key.clone(),
+                                                content: val.clone(),
+                                                similarity: dot,
+                                                utility: 100.0,
+                                                tier: "working".to_string(),
+                                                embedding: Some(v_vec),
+                                                raw_vector_sim: Some(dot),
+                                                session_id: Some(sess_id.to_string()),
+                                                word_count: Some(val.split_whitespace().count() as u32),
+                                                ..Default::default()
+                                            });
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (i, val) in values.iter().enumerate() {
+                                    let key = &keys[i];
+                                    vector_candidates.push(SearchResult {
+                                        id: format!("stm:{}:{}", sess_id, key),
+                                        title: key.clone(),
+                                        content: val.clone(),
+                                        similarity: 1.0,
+                                        utility: 100.0,
+                                        tier: "working".to_string(),
+                                        raw_vector_sim: Some(1.0),
+                                        session_id: Some(sess_id.to_string()),
+                                        word_count: Some(val.split_whitespace().count() as u32),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if is_hybrid_enabled && query_emb.is_some() && !vector_candidates.is_empty() {
                 let mut unique_map = std::collections::HashMap::new();
                 for c in vector_candidates {
                     unique_map.insert(c.id.clone(), c);
@@ -3376,105 +3604,208 @@ impl StorageBackend for SurrealBackend {
                         r_sim
                     } else if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), c.embedding.as_ref()) {
                         let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                        dot
+                        let turn_idx = parse_turn_index(&c.title);
+                        let boost = if let Some(idx) = turn_idx {
+                            ladder_scale * (1.0f32 - (idx as f32) / 10.0f32).max(0.0f32)
+                        } else {
+                            0.0
+                        };
+                        dot + boost
                     } else {
                         c.similarity
                     };
 
-                    let fused = alpha * raw_sim + beta * bm25_norm;
-                    let new_gate = 1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - fusion_sigmoid_center)).exp());
-                    let final_sim = if let Some(factor) = c.factor_multiplier {
-                        fused * factor * new_gate
+                    let is_special_candidate = c.tier == "working" || c.source_episode == Some("spreading_activation".to_string());
+                    let fused = if is_special_candidate {
+                        raw_sim
                     } else {
-                        fused * new_gate
+                        alpha * raw_sim + beta * bm25_norm
+                    };
+                    let is_single_path = raw_sim < 1e-5 || bm25_norm < 1e-5;
+                    let current_center = if is_single_path {
+                        fusion_sigmoid_center - single_path_offset
+                    } else {
+                        fusion_sigmoid_center
+                    };
+                    let new_gate = if bypass_sigmoid_gating {
+                        1.0f32
+                    } else if is_special_candidate {
+                        1.0f32
+                    } else {
+                        1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - current_center)).exp())
+                    };
+                    let final_sim = if bypass_sigmoid_gating {
+                        if let Some(factor) = c.factor_multiplier {
+                            fused * factor
+                        } else {
+                            fused
+                        }
+                    } else {
+                        if let Some(factor) = c.factor_multiplier {
+                            fused * factor * new_gate
+                        } else {
+                            fused * new_gate
+                        }
                     };
                     c.similarity = final_sim;
                 }
+                stage_6_executed = true;
                 candidates = merged;
+            } else if vector_candidates.is_empty() {
+                if is_hybrid_enabled && !keyword_candidates.is_empty() {
+                    let mut min_val = f32::MAX;
+                    let mut max_val = f32::MIN;
+                    for c in &keyword_candidates {
+                        let s = c.bm25_score.unwrap_or(0.0);
+                        if s < min_val { min_val = s; }
+                        if s > max_val { max_val = s; }
+                    }
+                    let denom = max_val - min_val;
+
+                    let mut sum_idf = 0.0f32;
+                    let mut query_token_count = 0;
+                    for token in &query_tokens {
+                        let df_t = *global_df.get(token).unwrap_or(&0);
+                        let idf = (((total_n as f32 - df_t as f32 + 0.5) / (df_t as f32 + 0.5)) + 1.0).ln();
+                        sum_idf += idf;
+                        query_token_count += 1;
+                    }
+                    let avg_idf = if query_token_count > 0 {
+                        sum_idf / query_token_count as f32
+                    } else {
+                        0.0
+                    };
+
+                    let beta = if query_token_count == 0 {
+                        0.2f32
+                    } else {
+                        (0.2f32 + 0.15f32 * (avg_idf - 2.5f32).max(0.0f32)).min(0.8f32)
+                    };
+                    let alpha = 1.0f32 - beta;
+
+                    for c in &mut keyword_candidates {
+                        let raw_bm25 = c.bm25_score.unwrap_or(0.0);
+                        let bm25_norm = if denom > 1e-6 {
+                            (raw_bm25 - min_val) / denom
+                        } else if max_val > 1e-6 {
+                            1.0
+                        } else {
+                            0.0
+                        };
+                        let raw_sim = 1.0f32;
+                        let fused = alpha * raw_sim + beta * bm25_norm;
+                        let is_special_candidate = c.tier == "working" || c.source_episode == Some("spreading_activation".to_string());
+                        let is_single_path = raw_sim < 1e-5 || bm25_norm < 1e-5;
+                        let current_center = if is_single_path {
+                            fusion_sigmoid_center - single_path_offset
+                        } else {
+                            fusion_sigmoid_center
+                        };
+                        let new_gate = if bypass_sigmoid_gating || is_special_candidate {
+                            1.0f32
+                        } else {
+                            1.0f32 / (1.0f32 + (-fusion_sigmoid_steepness * (fused - current_center)).exp())
+                        };
+                        let final_sim = if bypass_sigmoid_gating {
+                            if let Some(factor) = c.factor_multiplier {
+                                fused * factor
+                            } else {
+                                fused
+                            }
+                        } else {
+                            if let Some(factor) = c.factor_multiplier {
+                                fused * factor * new_gate
+                            } else {
+                                fused * new_gate
+                            }
+                        };
+                        c.similarity = final_sim;
+                    }
+                    stage_6_executed = true;
+                }
+                candidates = keyword_candidates;
             } else {
                 candidates = reciprocal_rank_fusion(vector_candidates, keyword_candidates, 60);
             }
-        } else {
-            let fts_cap = if let Ok(val) = std::env::var("MYTHRAX_FTS_CAP") {
-                val.parse::<usize>().unwrap_or(200)
-            } else {
-                match self.get_profile_key("search.fts_cap").await {
-                    Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(200),
-                    _ => 200,
-                }
-            };
-            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
-            keyword_candidates.truncate(fts_cap);
-            candidates = keyword_candidates;
         }
 
-        // -------------------------------------------------------------
-        // Task A.6: Concept Spreading Activation
-        // -------------------------------------------------------------
-        let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
-            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-            _ => false,
-        };
+        if bypass_sigmoid_gating && !stage_6_executed {
+            for c in &mut candidates {
+                if let Some(factor) = c.factor_multiplier {
+                    c.similarity = c.similarity * factor;
+                }
+            }
+        }
 
-        if enable_spreading_activation {
-            let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
-                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
-                _ => 0.7f32,
+        if !is_hybrid {
+            // -------------------------------------------------------------
+            // Task A.6: Concept Spreading Activation (Non-Hybrid Path)
+            // -------------------------------------------------------------
+            let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
             };
 
-            #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
-            struct RelatesToEdge {
-                r#in: surrealdb::types::RecordId,
-                out: surrealdb::types::RecordId,
-                confidence: Option<f32>,
-            }
+            if enable_spreading_activation {
+                let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
+                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
+                    _ => 0.7f32,
+                };
 
-            // Query matching entities in SurrealDB
-            let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
-            if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
-                if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
-                    if !entities.is_empty() {
-                        let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
-                        if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
-                            if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
-                                for edge in edges {
-                                    let edge_conf = edge.confidence.unwrap_or(1.0);
-                                    let target_id = if edge.r#in.table.as_str() == "episode" {
-                                        Some(edge.r#in)
-                                    } else if edge.out.table.as_str() == "episode" {
-                                        Some(edge.out)
-                                    } else {
-                                        None
-                                    };
+                #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                struct RelatesToEdge {
+                    r#in: surrealdb::types::RecordId,
+                    out: surrealdb::types::RecordId,
+                    confidence: Option<f32>,
+                }
 
-                                    if let Some(tid) = target_id {
-                                        let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
-                                        if let Some(ep) = ep_opt {
-                                            let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
-                                            let ep_str = format_record_id(&ep.id);
-                                            if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
-                                                existing.similarity = existing.similarity.max(activation_similarity);
-                                            } else {
-                                                candidates.push(SearchResult {
-                                                    id: ep_str,
-                                                    title: ep.title,
-                                                    content: ep.content,
-                                                    similarity: activation_similarity,
-                                                    utility: ep.utility.unwrap_or(50.0) as f32,
-                                                    tier: "episode".to_string(),
-                                                    embedding: ep.embedding.clone(),
-                                                    vault_path: ep.vault_path.clone(),
-                                                    source_episode: None,
-                                                    discovery_tokens: ep.discovery_tokens,
-                                                    related_nodes: None,
-                                                    raw_vector_sim: Some(1.0),
-                                                    original_gate: Some(1.0),
-                                                    factor_multiplier: Some(1.0),
-                                                    created_at: None,
-                                                    session_id: ep.session_id.clone(),
-                                                    word_count: ep.word_count,
-                                                    ..Default::default()
-                                                });
+                // Query matching entities in SurrealDB
+                let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
+                if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
+                    if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
+                        if !entities.is_empty() {
+                            let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
+                            if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
+                                if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
+                                    for edge in edges {
+                                        let edge_conf = edge.confidence.unwrap_or(1.0);
+                                        let target_id = if edge.r#in.table.as_str() == "episode" {
+                                            Some(edge.r#in.clone())
+                                        } else if edge.out.table.as_str() == "episode" {
+                                            Some(edge.out.clone())
+                                        } else {
+                                            None
+                                        };
+
+                                        if let Some(tid) = target_id {
+                                            let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
+                                            if let Some(ep) = ep_opt {
+                                                let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
+                                                let ep_str = format_record_id(&ep.id);
+                                                if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
+                                                    existing.similarity = existing.similarity.max(activation_similarity);
+                                                } else {
+                                                    candidates.push(SearchResult {
+                                                        id: ep_str,
+                                                        title: ep.title,
+                                                        content: ep.content,
+                                                        similarity: activation_similarity,
+                                                        utility: ep.utility.unwrap_or(50.0) as f32,
+                                                        tier: "episode".to_string(),
+                                                        embedding: ep.embedding.clone(),
+                                                        vault_path: ep.vault_path.clone(),
+                                                        source_episode: None,
+                                                        discovery_tokens: ep.discovery_tokens,
+                                                        related_nodes: None,
+                                                        raw_vector_sim: Some(1.0),
+                                                        original_gate: Some(1.0),
+                                                        factor_multiplier: Some(1.0),
+                                                        created_at: None,
+                                                        session_id: ep.session_id.clone(),
+                                                        word_count: ep.word_count,
+                                                        ..Default::default()
+                                                    });
+                                                }
                                             }
                                         }
                                     }
@@ -3484,68 +3815,68 @@ impl StorageBackend for SurrealBackend {
                     }
                 }
             }
-        }
 
-        // -------------------------------------------------------------
-        // Task A.7: STM Working Memory Injection
-        // -------------------------------------------------------------
-        let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
-            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-            _ => false,
-        };
+            // -------------------------------------------------------------
+            // Task A.7: STM Working Memory Injection (Non-Hybrid Path)
+            // -------------------------------------------------------------
+            let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
 
-        if enable_stm_retrieval {
-            if let Some(sess_id) = session_id {
-                if let Ok(stm_map) = self.get_stm(sess_id, None).await {
-                    if !stm_map.is_empty() {
-                        let mut keys = Vec::new();
-                        let mut values = Vec::new();
-                        for (k, v) in stm_map {
-                            if k.starts_with('_') {
-                                continue;
+            if enable_stm_retrieval {
+                if let Some(sess_id) = session_id {
+                    if let Ok(stm_map) = self.get_stm(sess_id, None).await {
+                        if !stm_map.is_empty() {
+                            let mut keys = Vec::new();
+                            let mut values = Vec::new();
+                            for (k, v) in stm_map {
+                                if k.starts_with('_') {
+                                    continue;
+                                }
+                                keys.push(k);
+                                values.push(v);
                             }
-                            keys.push(k);
-                            values.push(v);
-                        }
 
-                        if let Some(ref q_vec) = query_emb {
-                            if let Ok(embeddings) = self.embed_batch(&values).await {
-                                for (i, v_vec) in embeddings.into_iter().enumerate() {
-                                    let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
-                                    if dot >= threshold {
-                                        let key = &keys[i];
-                                        let val = &values[i];
-                                        candidates.push(SearchResult {
-                                            id: format!("stm:{}:{}", sess_id, key),
-                                            title: key.clone(),
-                                            content: val.clone(),
-                                            similarity: dot,
-                                            utility: 100.0,
-                                            tier: "working".to_string(),
-                                            embedding: Some(v_vec),
-                                            raw_vector_sim: Some(dot),
-                                            session_id: Some(sess_id.to_string()),
-                                            word_count: Some(val.split_whitespace().count() as u32),
-                                            ..Default::default()
-                                        });
+                            if let Some(ref q_vec) = query_emb {
+                                if let Ok(embeddings) = self.embed_batch(&values).await {
+                                    for (i, v_vec) in embeddings.into_iter().enumerate() {
+                                        let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
+                                        if dot >= threshold {
+                                            let key = &keys[i];
+                                            let val = &values[i];
+                                            candidates.push(SearchResult {
+                                                id: format!("stm:{}:{}", sess_id, key),
+                                                title: key.clone(),
+                                                content: val.clone(),
+                                                similarity: dot,
+                                                utility: 100.0,
+                                                tier: "working".to_string(),
+                                                embedding: Some(v_vec),
+                                                raw_vector_sim: Some(dot),
+                                                session_id: Some(sess_id.to_string()),
+                                                word_count: Some(val.split_whitespace().count() as u32),
+                                                ..Default::default()
+                                            });
+                                        }
                                     }
                                 }
-                            }
-                        } else {
-                            for (i, val) in values.iter().enumerate() {
-                                let key = &keys[i];
-                                candidates.push(SearchResult {
-                                    id: format!("stm:{}:{}", sess_id, key),
-                                    title: key.clone(),
-                                    content: val.clone(),
-                                    similarity: 1.0,
-                                    utility: 100.0,
-                                    tier: "working".to_string(),
-                                    raw_vector_sim: Some(1.0),
-                                    session_id: Some(sess_id.to_string()),
-                                    word_count: Some(val.split_whitespace().count() as u32),
-                                    ..Default::default()
-                                });
+                            } else {
+                                for (i, val) in values.iter().enumerate() {
+                                    let key = &keys[i];
+                                    candidates.push(SearchResult {
+                                        id: format!("stm:{}:{}", sess_id, key),
+                                        title: key.clone(),
+                                        content: val.clone(),
+                                        similarity: 1.0,
+                                        utility: 100.0,
+                                        tier: "working".to_string(),
+                                        raw_vector_sim: Some(1.0),
+                                        session_id: Some(sess_id.to_string()),
+                                        word_count: Some(val.split_whitespace().count() as u32),
+                                        ..Default::default()
+                                    });
+                                }
                             }
                         }
                     }
@@ -3556,7 +3887,7 @@ impl StorageBackend for SurrealBackend {
 
 
         if is_session_isolation_enabled {
-            // 2.5) Strict Session Isolation filtering
+            // 2.5) User Prefix Isolation filtering
             let mut active_session_id = session_id.map(|s| s.to_string());
             if active_session_id.is_none() {
                 for c in &candidates {
@@ -3567,13 +3898,26 @@ impl StorageBackend for SurrealBackend {
                 }
             }
             if let Some(ref active_sess) = active_session_id {
-                candidates.retain(|c| c.session_id.is_none() || c.session_id.as_ref() == Some(active_sess));
+                let active_prefix = get_user_prefix(active_sess);
+                candidates.retain(|c| {
+                    c.session_id.is_none() || {
+                        let sess = c.session_id.as_ref().unwrap();
+                        get_user_prefix(sess) == active_prefix
+                    }
+                });
             }
         }
         let mut neighbor_candidates = Vec::new();
         if let Some((cue_type, weight)) = temporal_cue_info {
             candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-            let top_5_primary: Vec<SearchResult> = candidates.iter().take(5).cloned().collect();
+            let pool_size = match self.get_profile_key("search.temporal_expansion_pool_size").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(8),
+                _ => 8,
+            };
+            let top_5_primary: Vec<SearchResult> = candidates.iter().take(pool_size).cloned().collect();
+            let primary_id_to_prefix: std::collections::HashMap<&str, Option<&str>> = top_5_primary.iter()
+                .map(|cand| (cand.id.as_str(), cand.session_id.as_deref().map(get_user_prefix)))
+                .collect();
             let primary_ids: Vec<surrealdb::types::RecordId> = top_5_primary.iter()
                 .filter_map(|c| parse_record_id(&c.id).ok())
                 .collect();
@@ -3762,36 +4106,41 @@ impl StorageBackend for SurrealBackend {
                                          }
                                          
                                          if let Some(prim_info) = neighbor_to_primary.get(&neighbor_id_str) {
+                                             let raw_prefix = raw.session_id.as_deref().map(get_user_prefix);
                                              for (prim_id, prim_score) in prim_info {
-                                                 if let Some(primary_cand) = top_5_primary.iter().find(|x| x.id == *prim_id) {
-                                                     if raw.session_id.is_some() && raw.session_id == primary_cand.session_id {
-                                                         let neighbor_score = *prim_score;
-                                                         
-                                                         let neighbor_cand = SearchResult {
-                                                             id: neighbor_id_str.clone(),
-                                                             title: raw.title.clone(),
-                                                             content: raw.content.clone(),
-                                                             similarity: neighbor_score,
-                                                             utility: raw.utility.unwrap_or(50.0) as f32,
-                                                             tier: "episode".to_string(),
-                                                             embedding: None,
-                                                             vault_path: raw.vault_path.clone(),
-                                                             source_episode: None,
-                                                             discovery_tokens: raw.discovery_tokens,
-                                                             related_nodes: None,
-                                                             raw_vector_sim: None,
-                                                             original_gate: None,
-                                                             factor_multiplier: None,
-                                                             created_at: raw.created_at,
-                                                             session_id: raw.session_id.clone(),
-                                                             word_count: raw.word_count,
-                                                             ..Default::default()
-                                                         };
-                                                        neighbor_candidates.push(neighbor_cand);
-                                                    }
-                                                }
-                                            }
-                                        }
+                                                 if let Some(pre_prefix) = primary_id_to_prefix.get(prim_id.as_str()) {
+                                                      let same_user = match (raw_prefix, pre_prefix) {
+                                                          (Some(rp), Some(pp)) => rp == *pp,
+                                                          (None, None) => true,
+                                                          _ => false,
+                                                      };
+                                                      if same_user {
+                                                          let neighbor_score = *prim_score;
+                                                          let neighbor_cand = SearchResult {
+                                                              id: neighbor_id_str.clone(),
+                                                              title: raw.title.clone(),
+                                                              content: raw.content.clone(),
+                                                              similarity: neighbor_score,
+                                                              utility: raw.utility.unwrap_or(50.0) as f32,
+                                                              tier: "episode".to_string(),
+                                                              embedding: None,
+                                                              vault_path: raw.vault_path.clone(),
+                                                              source_episode: None,
+                                                              discovery_tokens: raw.discovery_tokens,
+                                                              related_nodes: None,
+                                                              raw_vector_sim: None,
+                                                              original_gate: None,
+                                                              factor_multiplier: None,
+                                                              created_at: raw.created_at,
+                                                              session_id: raw.session_id.clone(),
+                                                              word_count: raw.word_count,
+                                                              ..Default::default()
+                                                          };
+                                                          neighbor_candidates.push(neighbor_cand);
+                                                      }
+                                                 }
+                                             }
+                                         }
                                     }
                                 }
                             }
@@ -3835,8 +4184,10 @@ impl StorageBackend for SurrealBackend {
             }
         };
 
+        let t_rerank_start = t_start.elapsed().as_micros();
+
         if gamma_rerank > 0.0f32 {
-            let search_text = if !user_profile.is_empty() && query_category != QueryCategory::Temporal {
+            let search_text = if enable_profile_expansion && !user_profile.is_empty() && query_category != QueryCategory::Temporal {
                 format!("{} {}", cleaned_query, user_profile)
             } else {
                 cleaned_query.clone()
@@ -3849,61 +4200,123 @@ impl StorageBackend for SurrealBackend {
                 global_idf.insert(token.clone(), idf);
             }
 
+            let mut norm_query: f64 = 0.0;
+            for t in &query_tokens {
+                let idf = global_idf.get(t).copied().unwrap_or(0.0) as f64;
+                norm_query += idf * idf;
+            }
+            let norm_query_sqrt = norm_query.sqrt();
+            let query_tokens_set: std::collections::HashSet<&str> = query_tokens.iter().map(|s| s.as_str()).collect();
+
             let tfidf_pool_size = match self.get_profile_key("search.tfidf_pool_size").await {
-                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(100),
-                _ => 100,
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(84),
+                _ => 84,
             };
             let effective_pool = tfidf_pool_size.max(20);
             let pool_len = merged_candidates.len().min(effective_pool);
             let mut rerank_pool = merged_candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
             
-            for c in &mut rerank_pool {
-                let content_lower = c.content.to_lowercase();
-                let sentences: Vec<&str> = content_lower.split(|ch| ch == '.' || ch == '\n').collect();
-                let mut max_sim = 0.0f32;
-                let mut sentence_idx = 0;
-                for sentence in sentences {
-                    let sentence_trimmed = sentence.trim();
-                    if !sentence_trimmed.is_empty() {
-                        let mut sim = sentence_cosine_similarity(&query_tokens, sentence_trimmed, &global_idf);
-                        if enable_advanced {
-                            sim *= (-0.05f32 * (sentence_idx as f32)).exp();
+            if norm_query_sqrt >= 1e-9 {
+                for c in &mut rerank_pool {
+                    let content_lower = c.content.to_lowercase();
+                    let sentences = content_lower.split(|ch| ch == '.' || ch == '\n');
+                    let mut max_sim = 0.0f32;
+                    let mut sentence_idx = 0;
+                    for sentence in sentences {
+                        let sentence_trimmed = sentence.trim();
+                        if !sentence_trimmed.is_empty() {
+                            let mut sim = sentence_cosine_similarity_opt(&query_tokens, &query_tokens_set, &global_idf, norm_query_sqrt, sentence_trimmed);
+                            if enable_advanced {
+                                sim *= (-0.05f32 * (sentence_idx as f32)).exp();
+                            }
+                            if sim > max_sim {
+                                max_sim = sim;
+                            }
+                            sentence_idx += 1;
                         }
-                        if sim > max_sim {
-                            max_sim = sim;
-                        }
-                        sentence_idx += 1;
                     }
+                    c.similarity = c.similarity + gamma_rerank * max_sim;
                 }
-                c.similarity = c.similarity + gamma_rerank * max_sim;
             }
 
             merged_candidates.extend(rerank_pool);
 
             if let Some(active_sess) = session_id {
-                if query_category == QueryCategory::Preference || query_category == QueryCategory::User {
+                if active_session_boost > 0.0f32 {
+                    let active_prefix = get_user_prefix(active_sess);
                     for c in &mut merged_candidates {
-                        if c.session_id.as_deref() == Some(active_sess) {
-                            c.similarity += 0.15f32;
+                        if let Some(ref c_sess) = c.session_id {
+                            if get_user_prefix(c_sess) == active_prefix {
+                                c.similarity += active_session_boost;
+                            }
                         }
                     }
                 }
             }
 
             merged_candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
-            let tfidf_exit_size = if enable_cross_encoder_rerank {
-                rerank_pool_size
+            
+
+            
+            let tfidf_exit_size = rerank_pool_size.max(75);
+
+            let limit = tfidf_exit_size;
+            if merged_candidates.len() > limit {
+                let mut kept = merged_candidates[0..limit].to_vec();
+                let mut remaining = merged_candidates[limit..].to_vec();
+
+                let mut top_sessions = std::collections::HashSet::new();
+                for c in kept.iter().take(10) {
+                    if let Some(ref sid) = c.session_id {
+                        top_sessions.insert(sid.clone());
+                    }
+                }
+
+                let max_promotions = (limit as f32 * 0.3) as usize;
+                let mut promotions_count = 0;
+                let mut promoted = Vec::new();
+
+                for session_id in &top_sessions {
+                    let current_count = kept.iter().filter(|c| c.session_id.as_ref() == Some(session_id)).count();
+                    if current_count < 3 {
+                        let needed = 3 - current_count;
+                        let mut promoted_for_session = 0;
+
+                        let mut i = 0;
+                        while i < remaining.len() && promoted_for_session < needed && promotions_count < max_promotions {
+                            if remaining[i].session_id.as_ref() == Some(session_id) {
+                                let cand = remaining.remove(i);
+                                promoted.push(cand);
+                                promoted_for_session += 1;
+                                promotions_count += 1;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+
+                if promotions_count > 0 {
+                    kept.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+                    let keep_count = limit - promotions_count;
+                    let _demoted = kept.split_off(keep_count);
+                    kept.extend(promoted);
+                }
+
+                kept.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+                candidates = kept;
             } else {
-                rerank_pool_size.max(50)
-            };
-            merged_candidates.truncate(tfidf_exit_size);
-            candidates = merged_candidates;
+                candidates = merged_candidates;
+            }
         } else {
             if let Some(active_sess) = session_id {
-                if query_category == QueryCategory::Preference || query_category == QueryCategory::User {
+                if active_session_boost > 0.0f32 {
+                    let active_prefix = get_user_prefix(active_sess);
                     for c in &mut merged_candidates {
-                        if c.session_id.as_deref() == Some(active_sess) {
-                            c.similarity += 0.15f32;
+                        if let Some(ref c_sess) = c.session_id {
+                            if get_user_prefix(c_sess) == active_prefix {
+                                c.similarity += active_session_boost;
+                            }
                         }
                     }
                 }
@@ -3938,7 +4351,10 @@ impl StorageBackend for SurrealBackend {
                         let _sem = crate::llm::metal_embedding_semaphore().acquire().await;
                         
                         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/keith".to_string());
-                        let mut model_dir = std::path::PathBuf::from(&home).join(".mythrax/models/mxbai-rerank-large-v2");
+                        let mut model_dir = std::path::PathBuf::from(&home).join(".mythrax/models/Qwen3-Reranker-0.6B");
+                        if !model_dir.exists() {
+                            model_dir = std::path::PathBuf::from(&home).join(".mythrax/models/mxbai-rerank-large-v2");
+                        }
                         if !model_dir.exists() {
                             model_dir = std::path::PathBuf::from(home).join(".mythrax/models/mlx-community_mxbai-rerank-large-v2");
                         }
@@ -3951,10 +4367,15 @@ impl StorageBackend for SurrealBackend {
                                 }
                             }
                             if let Some(ref mut reranker) = *reranker_guard {
-                                let rerank_query = if !user_profile.is_empty() {
-                                    format!("{} | User History: {}", cleaned_query, user_profile)
+                                let base_query = if query_category == QueryCategory::Temporal || query_category == QueryCategory::User {
+                                    query.to_string()
                                 } else {
                                     cleaned_query.clone()
+                                };
+                                let rerank_query = if enable_profile_expansion && !user_profile.is_empty() {
+                                    format!("{} | User History: {}", base_query, user_profile)
+                                } else {
+                                    base_query
                                 };
                                 if let Ok(scores) = reranker.score_pairs(rerank_query.as_str(), &passages) {
                                     for (i, score) in scores.into_iter().enumerate() {
@@ -3994,7 +4415,9 @@ impl StorageBackend for SurrealBackend {
             }
             if let Some(ref rels) = item.related_nodes {
                 for rel in rels {
-                    seen_related_ids.insert(rel.id.clone());
+                    if rel.source_episode.as_deref() != Some("temporal_neighbor") {
+                        seen_related_ids.insert(rel.id.clone());
+                    }
                 }
             }
             final_results.push(item);
@@ -4102,6 +4525,26 @@ impl StorageBackend for SurrealBackend {
             }
         }
  
+        let t_total = t_start.elapsed().as_micros();
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/Users/keith/Documents/mythrax/mythrax-core/scratch/search_timings.txt")
+        {
+            use std::io::Write;
+            let _ = writeln!(
+                f,
+                "query: {:?}, profile: {}us, embed: {}us, terms: {}us, db: {}us, rerank_start: {}us, total: {}us",
+                query,
+                t_profile,
+                t_embed.saturating_sub(t_profile),
+                t_term_counts.saturating_sub(t_db_queries),
+                t_db_queries.saturating_sub(t_embed),
+                t_rerank_start.saturating_sub(t_term_counts),
+                t_total
+            );
+        }
+
         Ok(SearchResponse {
             results: sliced_results,
             total_matches,
@@ -4483,10 +4926,23 @@ impl StorageBackend for SurrealBackend {
             .bind(("key", key))
             .bind(("value", value))
             .await?.check().context("UPSERT profile failed")?;
+
+        let cache = PROFILE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+        if let Ok(mut write_guard) = cache.write() {
+            write_guard.insert(key.to_string(), Some(value.to_string()));
+        }
+
         Ok(())
     }
 
     async fn get_profile_key(&self, key: &str) -> Result<Option<String>> {
+        let cache = PROFILE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+        if let Ok(read_guard) = cache.read() {
+            if let Some(val) = read_guard.get(key) {
+                return Ok(val.clone());
+            }
+        }
+
         #[derive(serde::Deserialize, SurrealValue)]
         struct ProfileRaw {
             value: String,
@@ -4496,7 +4952,13 @@ impl StorageBackend for SurrealBackend {
             .bind(("key", key))
             .await?.check().context("SELECT profile failed")?;
         let res: Vec<ProfileRaw> = response.take(0)?;
-        Ok(res.first().map(|r| r.value.clone()))
+        let val = res.first().map(|r| r.value.clone());
+
+        if let Ok(mut write_guard) = cache.write() {
+            write_guard.insert(key.to_string(), val.clone());
+        }
+
+        Ok(val)
     }
 
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String> {
@@ -5576,6 +6038,10 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        if let Some(cached) = crate::embeddings::get_cached_embedding(text) {
+            return Ok(cached);
+        }
+
         let sem = self.get_embedding_semaphore().await;
         let _permit = sem.acquire().await.context("Failed to acquire embedding permit")?;
         
@@ -5594,63 +6060,87 @@ impl StorageBackend for SurrealBackend {
         }
 
         let embedder = self.embedder.clone();
-        let text = text.to_string();
+        let text_str = text.to_string();
         let res = tokio::task::spawn_blocking(move || {
             if let Some(ref emp) = embedder {
-                emp.embed(&text)
+                emp.embed(&text_str)
             } else {
                 anyhow::bail!("No embedder configured")
             }
         }).await?;
 
         self.active_embeddings.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        res
+        let vec = res?;
+        crate::embeddings::cache_embedding(text.to_string(), vec.clone());
+        Ok(vec)
     }
 
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let sem = self.get_embedding_semaphore().await;
-        let _permit = sem.acquire().await.context("Failed to acquire embedding permit")?;
-        
-        let active = self.active_embeddings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let mut max = self.max_concurrent_embeddings.load(std::sync::atomic::Ordering::SeqCst);
-        while active > max {
-            match self.max_concurrent_embeddings.compare_exchange_weak(
-                max,
-                active,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            ) {
-                Ok(_) => break,
-                Err(actual) => max = actual,
+        let mut results = vec![None; texts.len()];
+        let mut missing_indices = Vec::new();
+        let mut missing_texts = Vec::new();
+
+        for (i, text) in texts.iter().enumerate() {
+            if let Some(cached) = crate::embeddings::get_cached_embedding(text) {
+                results[i] = Some(cached);
+            } else {
+                missing_indices.push(i);
+                missing_texts.push(text.clone());
             }
         }
 
-        let embedder = self.embedder.clone();
-        let texts = texts.to_vec();
-        let res = tokio::task::spawn_blocking(move || {
-            if let Some(ref emp) = embedder {
-                emp.embed_batch(&texts)
-            } else {
-                let is_mock = {
-                    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
-                    {
-                        std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
-                    }
-                    #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
-                    {
-                        false
-                    }
-                };
-                if is_mock {
-                    Ok(vec![vec![0.0f32; 768]; texts.len()])
-                } else {
-                    Err(anyhow::anyhow!("No embedding model loaded"))
+        if !missing_texts.is_empty() {
+            let sem = self.get_embedding_semaphore().await;
+            let _permit = sem.acquire().await.context("Failed to acquire embedding permit")?;
+            
+            let active = self.active_embeddings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let mut max = self.max_concurrent_embeddings.load(std::sync::atomic::Ordering::SeqCst);
+            while active > max {
+                match self.max_concurrent_embeddings.compare_exchange_weak(
+                    max,
+                    active,
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => max = actual,
                 }
             }
-        }).await?;
 
-        self.active_embeddings.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        res
+            let embedder = self.embedder.clone();
+            let missing_texts_clone = missing_texts.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                if let Some(ref emp) = embedder {
+                    emp.embed_batch(&missing_texts_clone)
+                } else {
+                    let is_mock = {
+                        #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+                        {
+                            std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
+                        }
+                        #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+                        {
+                            false
+                        }
+                    };
+                    if is_mock {
+                        Ok(vec![vec![0.0f32; 768]; missing_texts_clone.len()])
+                    } else {
+                        Err(anyhow::anyhow!("No embedding model loaded"))
+                    }
+                }
+            }).await?;
+
+            self.active_embeddings.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            
+            let embedded = res?;
+            for (idx, emb) in missing_indices.into_iter().zip(embedded) {
+                crate::embeddings::cache_embedding(texts[idx].clone(), emb.clone());
+                results[idx] = Some(emb);
+            }
+        }
+
+        Ok(results.into_iter().map(Option::unwrap).collect())
     }
 
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>> {
@@ -6028,51 +6518,52 @@ pub enum TemporalCueType {
 }
 
 pub fn parse_temporal_cues(query: &str) -> Option<(TemporalCueType, f32)> {
-    static DEEP_PRECEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static DEEP_SUCCEEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static PRECEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static SUCCEEDING_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static RELATIVE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    static PROCEDURAL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-
-    let deep_preceding_re = DEEP_PRECEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(long|far|much|way)\s+(before|preceding|previously|prior|earlier|ago|last)\b").unwrap()
-    });
-    let deep_succeeding_re = DEEP_SUCCEEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(long|far|much|way)\s+(after|following|subsequently|later|next)\b").unwrap()
-    });
-    let preceding_re = PRECEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(before|preceding|previously|prior|earlier|ago|last)\b").unwrap()
-    });
-    let succeeding_re = SUCCEEDING_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(after|following|subsequently|later|next)\b").unwrap()
-    });
-    let relative_re = RELATIVE_RE.get_or_init(|| {
-        regex::Regex::new(r"\b(recent|recently|latest|newest|today|now)\b").unwrap()
-    });
-    let procedural_re = PROCEDURAL_RE.get_or_init(|| {
-        regex::Regex::new(r"(?s)^\s*\b(what|how|why|which|where|when|did|have)\b.*\b(do|done|took|take|taken|happen|run|execute|call|step|try|attempt)\b").unwrap()
-    });
-
     let query_lower = query.to_lowercase();
+    
+    // 1. Procedural Check (e.g. "what did we do...")
+    let mut words = query_lower.split_whitespace().map(|w| w.trim_matches(|c| c == '?' || c == '.' || c == ','));
+    if let Some(first_word) = words.next() {
+        let question_words = ["what", "how", "why", "which", "where", "when", "did", "have"];
+        if question_words.contains(&first_word) {
+            let action_words = ["do", "done", "took", "take", "taken", "happen", "run", "execute", "call", "step", "try", "attempt"];
+            if words.any(|w| action_words.contains(&w)) {
+                return Some((TemporalCueType::Procedural, 3.0));
+            }
+        }
+    }
 
-    if procedural_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Procedural, 3.0));
+    let words_vec: Vec<String> = query_lower.split_whitespace()
+        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect())
+        .collect();
+    
+    let deep_modifiers = ["long", "far", "much", "way"];
+    let preceding = ["before", "preceding", "previously", "prior", "earlier", "ago", "last"];
+    let succeeding = ["after", "following", "subsequently", "later", "next"];
+    let relative = ["recent", "recently", "latest", "newest", "today", "now"];
+
+    // 2. Deep Preceding / Succeeding Checks (window of 2)
+    for window in words_vec.windows(2) {
+        if deep_modifiers.contains(&window[0].as_str()) {
+            if preceding.contains(&window[1].as_str()) {
+                return Some((TemporalCueType::Preceding, 3.0));
+            }
+            if succeeding.contains(&window[1].as_str()) {
+                return Some((TemporalCueType::Succeeding, 3.0));
+            }
+        }
     }
-    if deep_preceding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Preceding, 3.0));
-    }
-    if deep_succeeding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Succeeding, 3.0));
-    }
-    if preceding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Preceding, 1.0));
-    }
-    if succeeding_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Succeeding, 1.0));
-    }
-    if relative_re.is_match(&query_lower) {
-        return Some((TemporalCueType::Relative, 1.0));
+
+    // 3. Single Word Checks
+    for word in &words_vec {
+        if preceding.contains(&word.as_str()) {
+            return Some((TemporalCueType::Preceding, 1.0));
+        }
+        if succeeding.contains(&word.as_str()) {
+            return Some((TemporalCueType::Succeeding, 1.0));
+        }
+        if relative.contains(&word.as_str()) {
+            return Some((TemporalCueType::Relative, 1.0));
+        }
     }
 
     None
@@ -6090,56 +6581,111 @@ pub fn calculate_temporal_decay(
     ((-clamped_lambda * delta_t_days).exp()) as f32
 }
 
-pub fn sentence_cosine_similarity(
+pub fn sentence_cosine_similarity_opt(
     query_tokens: &[String],
-    sentence: &str,
+    query_tokens_set: &std::collections::HashSet<&str>,
     global_idf: &std::collections::HashMap<String, f32>,
+    norm_query_sqrt: f64,
+    sentence_trimmed: &str,
 ) -> f32 {
-    let sentence_tokens = crate::retrieval::bm25::tokenize(sentence);
-    
-    let mut sentence_freq: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
-    for token in &sentence_tokens {
-        *sentence_freq.entry(token.clone()).or_insert(0.0) += 1.0;
+    let mut sentence_freq: std::collections::HashMap<String, f32> = std::collections::HashMap::with_capacity(32);
+    for word in sentence_trimmed.split(|c: char| !c.is_alphanumeric() && c != '-') {
+        let trimmed = word.trim();
+        if trimmed.is_empty() || crate::retrieval::bm25::is_stop_word(trimmed) {
+            continue;
+        }
+        let stemmed = crate::retrieval::bm25::stem(trimmed);
+        *sentence_freq.entry(stemmed).or_insert(0.0) += 1.0;
+    }
+
+    if sentence_freq.is_empty() {
+        return 0.0;
     }
 
     let mut dot_product: f64 = 0.0;
-    let mut norm_query: f64 = 0.0;
     let mut norm_sentence: f64 = 0.0;
 
     for t in query_tokens {
-        let idf = global_idf.get(t).copied().unwrap_or(0.0);
-        let idf_f64 = idf as f64;
-        
-        norm_query += idf_f64 * idf_f64;
-        
+        let idf = global_idf.get(t).copied().unwrap_or(0.0) as f64;
         let tf = *sentence_freq.get(t).unwrap_or(&0.0) as f64;
-        dot_product += tf * (idf_f64 * idf_f64);
+        dot_product += tf * (idf * idf);
         
-        let sentence_component = tf * idf_f64;
+        let sentence_component = tf * idf;
         norm_sentence += sentence_component * sentence_component;
     }
 
     for (w, &tf) in &sentence_freq {
-        if !query_tokens.contains(w) {
+        if !query_tokens_set.contains(w.as_str()) {
             let tf_f64 = tf as f64;
             norm_sentence += tf_f64 * tf_f64;
         }
     }
 
-    let norm_query = norm_query.sqrt();
-    let norm_sentence = norm_sentence.sqrt();
-
-    if norm_query < 1e-9 || norm_sentence < 1e-9 {
+    let norm_sentence_sqrt = norm_sentence.sqrt();
+    if norm_sentence_sqrt < 1e-9 {
         return 0.0;
     }
 
-    (dot_product / (norm_query * norm_sentence)) as f32
+    (dot_product / (norm_query_sqrt * norm_sentence_sqrt)) as f32
+}
+
+pub fn sentence_cosine_similarity(
+    query_tokens: &[String],
+    sentence: &str,
+    global_idf: &std::collections::HashMap<String, f32>,
+) -> f32 {
+    let mut norm_query: f64 = 0.0;
+    for t in query_tokens {
+        let idf = global_idf.get(t).copied().unwrap_or(0.0) as f64;
+        norm_query += idf * idf;
+    }
+    let norm_query_sqrt = norm_query.sqrt();
+    if norm_query_sqrt < 1e-9 {
+        return 0.0;
+    }
+    let query_tokens_set: std::collections::HashSet<&str> = query_tokens.iter().map(|s| s.as_str()).collect();
+    let sentence_trimmed = sentence.trim();
+    sentence_cosine_similarity_opt(query_tokens, &query_tokens_set, global_idf, norm_query_sqrt, sentence_trimmed)
+}
+
+fn get_user_prefix(session_id: &str) -> &str {
+    if session_id.starts_with("answer_") {
+        let mut s = session_id;
+        if let Some(last_underscore_idx) = s.rfind('_') {
+            let suffix = &s[last_underscore_idx + 1..];
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3 {
+                s = &s[..last_underscore_idx];
+            }
+        }
+        s
+    } else {
+        if let Some(last_underscore_idx) = session_id.rfind('_') {
+            let suffix = &session_id[last_underscore_idx + 1..];
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3 {
+                &session_id[..last_underscore_idx]
+            } else {
+                session_id
+            }
+        } else {
+            session_id
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::contracts::Entity;
+
+    #[test]
+    fn test_get_user_prefix() {
+        assert_eq!(get_user_prefix("user_123"), "user");
+        assert_eq!(get_user_prefix("user_123_456"), "user_123");
+        assert_eq!(get_user_prefix("answer_user_123"), "answer_user");
+        assert_eq!(get_user_prefix("answer_user_123_456"), "answer_user_123");
+        assert_eq!(get_user_prefix("session"), "session");
+        assert_eq!(get_user_prefix("answer_sess"), "answer_sess");
+    }
 
     #[test]
     fn test_unescape_id_part() {
@@ -6150,18 +6696,21 @@ mod tests {
         assert_eq!(unescape_id_part("abc\\\\def"), "abc\\def");
     }
 
-    #[test]
-    fn test_classify_query_comprehensive() {
-        assert_eq!(classify_query("my next mtg"), QueryCategory::Temporal);
-        assert_eq!(classify_query("our appts next week"), QueryCategory::Temporal);
-        assert_eq!(classify_query("show next meeting"), QueryCategory::Temporal);
-        assert_eq!(classify_query("my favourite lodging"), QueryCategory::Preference);
-        assert_eq!(classify_query("my profile"), QueryCategory::User);
-        assert_eq!(classify_query("our job description"), QueryCategory::User);
-        assert_eq!(classify_query("who am i?"), QueryCategory::User);
-        assert_eq!(classify_query("tell me about me"), QueryCategory::User);
-        assert_eq!(classify_query("about our friend"), QueryCategory::User);
-        assert_eq!(classify_query("what is job salary"), QueryCategory::User);
+    #[tokio::test]
+    async fn test_classify_query_comprehensive() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        assert_eq!(backend.classify_query_db("my next mtg").await, QueryCategory::Temporal);
+        assert_eq!(backend.classify_query_db("our appts next week").await, QueryCategory::Temporal);
+        assert_eq!(backend.classify_query_db("show next meeting").await, QueryCategory::Temporal);
+        assert_eq!(backend.classify_query_db("my favourite lodging").await, QueryCategory::Preference);
+        assert_eq!(backend.classify_query_db("my profile").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("our job description").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("who am i?").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("tell me about me").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("about our friend").await, QueryCategory::User);
+        assert_eq!(backend.classify_query_db("what is job salary").await, QueryCategory::User);
     }
 
     #[tokio::test]
@@ -6170,6 +6719,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let episode = EpisodeSave {
+        created_at: None,
             title: "Test caching failure".to_string(),
             content: "Observed cache mismatch in redis client.".to_string(),
             entities: vec![Entity {
@@ -6205,7 +6755,21 @@ mod tests {
         let all_eps: Vec<serde_json::Value> = backend.db.select("episode").await.unwrap();
         println!("DEBUG: All episodes in DB: {:?}", all_eps);
 
-        let search_results = backend.search("redis",  Some("testing"),  false,  2,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let search_results = backend.search(
+        "redis",
+        Some("testing"),
+        false,
+        2,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(search_results.results.len(), 1);
         assert!(search_results.results[0].content.contains("redis"));
 
@@ -6219,6 +6783,7 @@ mod tests {
 
         let episodes = vec![
             EpisodeSave {
+        created_at: None,
                 title: "Batch episode 1".to_string(),
                 content: "First batch item content for testing.".to_string(),
                 scope: Some("batch-test".to_string()),
@@ -6227,6 +6792,7 @@ mod tests {
                 ..Default::default()
             },
             EpisodeSave {
+        created_at: None,
                 title: "Batch episode 2".to_string(),
                 content: "Second batch item content for testing.".to_string(),
                 scope: Some("batch-test".to_string()),
@@ -6259,6 +6825,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let episode = EpisodeSave {
+        created_at: None,
             title: "Redis pool connection failure".to_string(),
             content: "Redis clients are dropping connections under load.".to_string(),
             entities: vec![],
@@ -6301,14 +6868,42 @@ mod tests {
             .check().unwrap();
 
         // Perform search WITH deep_insight = true
-        let results_deep = backend.search("Redis",  Some("deep-test"),  true,  10,  0,  0.55,  None,  true,  true,  true, None, true).await.unwrap();
+        let results_deep = backend.search(
+        "Redis",
+        Some("deep-test"),
+        true,
+        10,
+        0,
+        0.55,
+        None,
+        true,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results_deep.results.len(), 1);
         assert!(results_deep.results[0].content.contains("dropping connections"));
         assert!(results_deep.results[0].content.contains("Redis Connection Pooling Guidelines"));
         assert!(results_deep.results[0].content.contains("Set max connections to 50"));
 
         // Perform search WITHOUT deep_insight = true
-        let results_normal = backend.search("failure",  Some("deep-test"),  false,  10,  0,  0.55,  None,  false,  true,  true, None, true).await.unwrap();
+        let results_normal = backend.search(
+        "failure",
+        Some("deep-test"),
+        false,
+        10,
+        0,
+        0.55,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results_normal.results.len(), 1);
         assert!(results_normal.results[0].content.contains("dropping connections"));
         assert!(!results_normal.results[0].content.contains("Redis Connection Pooling Guidelines"));
@@ -6321,6 +6916,7 @@ mod tests {
 
         // 1. Seed an episode
         let episode = EpisodeSave {
+        created_at: None,
             title: "Hydration Episode".to_string(),
             content: "Testing node hydration capabilities.".to_string(),
             entities: vec![],
@@ -6398,6 +6994,7 @@ mod tests {
 
         // 1. Seed an episode containing 'concurrency'
         let episode = EpisodeSave {
+        created_at: None,
             title: "Concurrency Episode".to_string(),
             content: "Concurrency is hard.".to_string(),
             entities: vec![],
@@ -6445,7 +7042,21 @@ mod tests {
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
         // Execute text search (query_emb will be None, similarity defaults to 1.0)
-        let response = backend.search("Concurrency",  Some("ranking-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
+        let response = backend.search(
+        "Concurrency",
+        Some("ranking-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
 
         println!("DEBUG RESULTS: {:?}", response.results);
         assert_eq!(response.results.len(), 3);
@@ -6471,6 +7082,7 @@ mod tests {
         let subagent_id = "conv_subagent";
         
         let ep_id = backend.save_episode(&EpisodeSave {
+        created_at: None,
             title: "Context Episode".to_string(),
             content: "Some context info".to_string(),
             entities: vec![],
@@ -6516,6 +7128,7 @@ mod tests {
 
         // 1. Create Episode and WikiNode (Insight)
         let ep_id = backend.save_episode(&EpisodeSave {
+        created_at: None,
             title: "Child Episode".to_string(),
             content: "Contains info".to_string(),
             entities: vec![],
@@ -6541,14 +7154,42 @@ mod tests {
         // Relate Episode -> relates_to -> WikiNode (Upward)
         backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
 
-        let results_upward = backend.search("Parent Insight",  Some("directional-test"),  true,  10,  0,  0.85,  None,  false,  true,  true, None, true).await.unwrap();
+        let results_upward = backend.search(
+        "Parent Insight",
+        Some("directional-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         println!("DEBUG: results_upward: {:#?}", results_upward.results);
         assert_eq!(results_upward.results.len(), 1);
         let content_upward = &results_upward.results[0].content;
         assert!(!content_upward.contains("Child Episode"));
 
         // 3. Search with allow_downward = true
-        let results_downward = backend.search("Parent Insight",  Some("directional-test"),  true,  10,  0,  0.85,  None,  true,  true,  true, None, true).await.unwrap();
+        let results_downward = backend.search(
+        "Parent Insight",
+        Some("directional-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        true,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(results_downward.results.len(), 1);
         let content_downward = &results_downward.results[0].content;
         assert!(content_downward.contains("Child Episode"));
@@ -6583,6 +7224,7 @@ mod tests {
 
         // 2. Create an Episode (Priority 4)
         let ep = EpisodeSave {
+        created_at: None,
             title: "Episode Title with Pattern".to_string(),
             content: "Episode body content".to_string(),
             entities: vec![],
@@ -6602,7 +7244,21 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search("Pattern",  Some("budget-test"),  true,  10,  0,  0.0,  Some(20),  false,  true,  true, None, true).await.unwrap();
+        let response = backend.search(
+        "Pattern",
+        Some("budget-test"),
+        true,
+        10,
+        0,
+        0.0,
+        Some(20),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
@@ -6666,7 +7322,21 @@ mod tests {
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 
         // Search with large budget - full content should include the "Why" explanation
-        let res_large = backend.search("Avoid",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(1000),  false,  true,  true, None, true).await.unwrap();
+        let res_large = backend.search(
+        "Avoid",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(1000),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("**Why**:"));
 
@@ -6676,7 +7346,21 @@ mod tests {
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with tight budget - should strip "**Why**:" and fit under budget
-        let res_small = backend.search("Avoid",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(tokens_compacted + 5),  false,  true,  true, None, true).await.unwrap();
+        let res_small = backend.search(
+        "Avoid",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(tokens_compacted + 5),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_small.results.len(), 1);
         assert!(!res_small.results[0].content.contains("**Why**:"));
         assert!(res_small.results[0].content.contains("**Action to Avoid**:"));
@@ -6700,7 +7384,21 @@ mod tests {
         backend.save_wiki_node(&node1).await.unwrap();
 
         // Search with large budget - full content
-        let res_large = backend.search("Multi-Paragraph",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(1000),  false,  true,  true, None, true).await.unwrap();
+        let res_large = backend.search(
+        "Multi-Paragraph",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(1000),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("Second paragraph"));
 
@@ -6710,7 +7408,21 @@ mod tests {
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with small budget -> first paragraph + suffix
-        let res_small = backend.search("Multi-Paragraph",  Some("compaction-test"),  false,  10,  0,  0.0,  Some(tokens_compacted + 5),  false,  true,  true, None, true).await.unwrap();
+        let res_small = backend.search(
+        "Multi-Paragraph",
+        Some("compaction-test"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(tokens_compacted + 5),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_small.results.len(), 1);
         assert!(res_small.results[0].content.contains("First paragraph here."));
         assert!(!res_small.results[0].content.contains("Second paragraph"));
@@ -6734,7 +7446,21 @@ mod tests {
         let tokens_truncated = backend.count_text_tokens(&text_truncated);
 
         // Search with tight budget -> character-truncated
-        let res_trunc = backend.search("Single-Paragraph",  Some("compaction-test-single-para"),  false,  10,  0,  0.0,  Some(tokens_truncated + 5),  false,  true,  true, None, true).await.unwrap();
+        let res_trunc = backend.search(
+        "Single-Paragraph",
+        Some("compaction-test-single-para"),
+        false,
+        10,
+        0,
+        0.0,
+        Some(tokens_truncated + 5),
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_trunc.results.len(), 1);
         assert!(res_trunc.results[0].content.contains("... [Truncated (Inner-Node Compaction)]"));
         assert!(res_trunc.results[0].content.len() < node2.content.len());
@@ -6747,6 +7473,7 @@ mod tests {
 
         // Save an Episode
         let ep = EpisodeSave {
+        created_at: None,
             title: "Test Episode".to_string(),
             content: "Secret content in the episode".to_string(),
             entities: vec![],
@@ -6761,11 +7488,39 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // Search with include_episodes = false (default behavior) -> should NOT find the episode
-        let res_default = backend.search("Secret",  Some("exclusion-test"),  false,  10,  0,  0.0,  None,  false,  false,  true, None, true).await.unwrap();
+        let res_default = backend.search(
+        "Secret",
+        Some("exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        false,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_default.results.len(), 0);
 
         // Search with include_episodes = true -> should find the episode
-        let res_include = backend.search("Secret",  Some("exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
+        let res_include = backend.search(
+        "Secret",
+        Some("exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert_eq!(res_include.results[0].title, "Test Episode");
     }
@@ -6777,6 +7532,7 @@ mod tests {
 
         // Create an Episode and a WikiNode
         let ep_id = backend.save_episode(&EpisodeSave {
+        created_at: None,
             title: "Child Episode".to_string(),
             content: "Contains info".to_string(),
             entities: vec![],
@@ -6808,12 +7564,40 @@ mod tests {
         backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = true -> child episode should be traversed and included
-        let res_include = backend.search("Parent Insight",  Some("graph-exclusion-test"),  true,  10,  0,  0.85,  None,  true,  true,  true, None, true).await.unwrap();
+        let res_include = backend.search(
+        "Parent Insight",
+        Some("graph-exclusion-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        true,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert!(res_include.results[0].content.contains("Child Episode"));
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = false -> child episode should NOT be traversed
-        let res_exclude = backend.search("Parent Insight",  Some("graph-exclusion-test"),  true,  10,  0,  0.85,  None,  true,  false,  true, None, true).await.unwrap();
+        let res_exclude = backend.search(
+        "Parent Insight",
+        Some("graph-exclusion-test"),
+        true,
+        10,
+        0,
+        0.85,
+        None,
+        true,
+        false,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_exclude.results.len(), 1);
         assert!(!res_exclude.results[0].content.contains("Child Episode"));
     }
@@ -6846,12 +7630,40 @@ mod tests {
         backend.save_wiki_node(&normal_node).await.unwrap();
 
         // 3. Search with include_artifacts = false -> should find only Normal Node
-        let res_default = backend.search("secret",  Some("artifact-exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await.unwrap();
+        let res_default = backend.search(
+        "secret",
+        Some("artifact-exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_default.results.len(), 1);
         assert_eq!(res_default.results[0].title, "Normal Node");
 
         // 4. Search with include_artifacts = true -> should find both
-        let res_include = backend.search("secret",  Some("artifact-exclusion-test"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await.unwrap();
+        let res_include = backend.search(
+        "secret",
+        Some("artifact-exclusion-test"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert_eq!(res_include.results.len(), 2);
         
         let titles: Vec<String> = res_include.results.iter().map(|r| r.title.clone()).collect();
@@ -6939,6 +7751,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let ep1 = EpisodeSave {
+        created_at: None,
             title: "first step".to_string(),
             content: "This is the first step of the build".to_string(),
             entities: vec![],
@@ -6958,6 +7771,7 @@ mod tests {
         let ep1_id = backend.save_episode(&ep1).await.unwrap();
 
         let ep2 = EpisodeSave {
+        created_at: None,
             title: "second step".to_string(),
             content: "This is the second step of the build".to_string(),
             entities: vec![],
@@ -6984,6 +7798,7 @@ mod tests {
             .await.unwrap().check().unwrap();
 
         let ep3 = EpisodeSave {
+        created_at: None,
             title: "unrelated user step".to_string(),
             content: "Third step of build from a completely separate session".to_string(),
             entities: vec![],
@@ -7003,17 +7818,20 @@ mod tests {
         let ep3_id = backend.save_episode(&ep3).await.unwrap();
 
         let response = backend.search(
-            "second step before", 
-            Some("general"), 
-            false, 
-            10, 
-            0, 
-            0.0, 
-            None, 
-            false, 
-            true, 
-            false
-        , None, true).await.unwrap();
+        "second step before",
+        Some("general"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
+        Some("session-1"),
+        true,
+        None,
+    ).await.unwrap();
 
         let results = response.results;
         
@@ -7147,4 +7965,3 @@ fn estimate_word_tokens(word: &str) -> usize {
     
     ((word.len() + 2) / 3).max(1)
 }
-

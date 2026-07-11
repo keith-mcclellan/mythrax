@@ -26,6 +26,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
 
     // Save three episodes with different scopes
     let ep_target = EpisodeSave {
+        created_at: None,
         title: "Target Project Episode".to_string(),
         content: "This content is specific to the active target scope.".to_string(),
         entities: vec![],
@@ -39,6 +40,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
     backend.save_episode(&ep_target).await?;
 
     let ep_general = EpisodeSave {
+        created_at: None,
         title: "General Scope Episode".to_string(),
         content: "This content is globally applicable across scopes.".to_string(),
         entities: vec![],
@@ -52,6 +54,7 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
     backend.save_episode(&ep_general).await?;
 
     let ep_other = EpisodeSave {
+        created_at: None,
         title: "Other Project Episode".to_string(),
         content: "This content belongs to a completely different project scope.".to_string(),
         entities: vec![],
@@ -66,7 +69,21 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
 
     // Search with scope: None -> should resolve to target scope "myawesomeproject"
     // Search should return both target scope and general scope, but exclude other scopes.
-    let resp = backend.search("Episode",  None,  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let resp = backend.search(
+        "Episode",
+        None,
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
     let found_titles: Vec<String> = resp.results.iter().map(|r| r.title.clone()).collect();
 
     assert!(found_titles.contains(&"Target Project Episode".to_string()));
@@ -74,7 +91,21 @@ async fn test_auto_scoping_and_filtering() -> Result<()> {
     assert!(!found_titles.contains(&"Other Project Episode".to_string()));
 
     // Search with wildcard scope "all" -> should return everything
-    let resp_all = backend.search("Episode",  Some("all"),  false,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let resp_all = backend.search(
+        "Episode",
+        Some("all"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
     let all_titles: Vec<String> = resp_all.results.iter().map(|r| r.title.clone()).collect();
 
     assert!(all_titles.contains(&"Target Project Episode".to_string()));
@@ -99,6 +130,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
     let task_id = "test_task_888".to_string();
 
     let ep1 = EpisodeSave {
+        created_at: None,
         title: "Step 1 Initial Setup".to_string(),
         content: "We initialized the system configuration.".to_string(),
         entities: vec![],
@@ -112,6 +144,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
     let ep1_id = backend.save_episode(&ep1).await?;
 
     let ep2 = EpisodeSave {
+        created_at: None,
         title: "Step 2 Core Logic".to_string(),
         content: "We implemented the core algorithm flow.".to_string(),
         entities: vec![],
@@ -125,6 +158,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
     let ep2_id = backend.save_episode(&ep2).await?;
 
     let ep3 = EpisodeSave {
+        created_at: None,
         title: "Step 3 Final Testing".to_string(),
         content: "We verified the algorithm output.".to_string(),
         entities: vec![],
@@ -139,7 +173,21 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
 
     // Verify that sequential save created the followed_by links.
     // Querying with deep_insight: true and include_episodes: true on "Core Logic" should return Step 1 and Step 3 as related nodes.
-    let resp = backend.search("Core Logic",  None,  true,  10,  0,  0.0,  None,  false,  true,  true, None, true).await?;
+    let resp = backend.search(
+        "Core Logic",
+        None,
+        true,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
     let results = resp.results;
     assert!(!results.is_empty());
 

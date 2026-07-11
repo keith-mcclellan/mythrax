@@ -60,6 +60,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
 
     // Create an unprocessed episode so run_dream doesn't exit early
     let dummy_ep = EpisodeSave {
+        created_at: None,
         title: "Dummy Ep".to_string(),
         content: "Dummy content".to_string(),
         scope: Some("scope_A".to_string()),

@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod mcp_routes;
 pub mod daemon;
 pub mod hooks;
+pub mod parser;
 pub mod retrieval;
 
 pub mod bench;

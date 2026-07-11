@@ -9,6 +9,7 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
 
     // Create 4 sequential episodes
     let ep0 = EpisodeSave {
+        created_at: None,
         title: "Step 0 CLI Start".to_string(),
         content: "First command line interface run. Initialized repo successfully.".to_string(),
         scope: Some("general".to_string()),
@@ -18,6 +19,7 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     let ep0_id = backend.save_episode(&ep0).await?;
 
     let ep1 = EpisodeSave {
+        created_at: None,
         title: "Step 1 Compile Action".to_string(),
         content: "Second compile action. Compiling main module now.".to_string(),
         scope: Some("general".to_string()),
@@ -27,6 +29,7 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     let ep1_id = backend.save_episode(&ep1).await?;
 
     let ep2 = EpisodeSave {
+        created_at: None,
         title: "Step 2 Dev Deploy".to_string(),
         content: "Third deployment script step. Deploying dev server.".to_string(),
         scope: Some("general".to_string()),
@@ -36,6 +39,7 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     let ep2_id = backend.save_episode(&ep2).await?;
 
     let ep3 = EpisodeSave {
+        created_at: None,
         title: "Step 3 Health Verify".to_string(),
         content: "Fourth verification curl. Checked localhost health status page.".to_string(),
         scope: Some("general".to_string()),
@@ -76,7 +80,6 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
         query,
         Some("general"),
         true,
-        // deep_insight = true to trigger expansion hydration
         10,
         0,
         0.0,
@@ -86,6 +89,7 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
         true,
         None,
         true,
+        None,
     ).await?;
 
     let results = resp.results;

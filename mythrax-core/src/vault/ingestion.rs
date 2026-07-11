@@ -3,7 +3,6 @@ use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
-use regex::Regex;
 
 fn ingest_cursor(path: &Path) -> Result<String> {
     let conn = rusqlite::Connection::open(path)?;
@@ -335,27 +334,29 @@ pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
 
 pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(log_path).ok()?;
-    
-    // Regex to match paths like /Documents/<scope>, /repos/<scope>, etc.
-    let re = Regex::new(r#"/(?:Documents|repos|workspace|workspaces|projects)/([^/\s"',\\]+)"#).ok()?;
-    
     let mut scopes: Vec<String> = Vec::new();
+    let folder_prefixes = ["/Documents/", "/repos/", "/workspace/", "/workspaces/", "/projects/"];
     
-    for cap in re.captures_iter(&content) {
-        if let Some(scope_match) = cap.get(1) {
-            let scope = scope_match.as_str();
-            // Normalize scope
-            let normalized: String = scope
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-                .map(|c| c.to_ascii_lowercase())
-                .collect::<String>()
-                .trim_matches('.')
-                .to_string();
-            
-            if !normalized.is_empty() {
-                scopes.push(normalized);
+    for prefix in &folder_prefixes {
+        let mut start = 0;
+        while let Some(idx) = content[start..].find(prefix) {
+            let absolute_start = start + idx + prefix.len();
+            let suffix = &content[absolute_start..];
+            let len = suffix.chars().take_while(|c| *c != '/' && !c.is_whitespace() && *c != '"' && *c != '\'' && *c != ',' && *c != '\\').count();
+            if len > 0 {
+                let scope = &suffix[..len];
+                let normalized: String = scope
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect::<String>()
+                    .trim_matches('.')
+                    .to_string();
+                if !normalized.is_empty() {
+                    scopes.push(normalized);
+                }
             }
+            start = absolute_start + len;
         }
     }
 
@@ -579,6 +580,7 @@ pub async fn bulk_ingest_vault(
                     
                     if store.write_file(&parent_relative_path, &parent_content).is_ok() {
                         let parent_ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                             title: parent_title.clone(),
                             content: parent_content,
                             entities: vec![],
@@ -654,6 +656,7 @@ confidence: None,
 
                     if store.write_file(&relative_path, &note_content).is_ok() {
                         let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                             title: part_title.clone(),
                             content: note_content,
                             entities: vec![],
@@ -774,6 +777,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -820,6 +824,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -871,6 +876,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -920,6 +926,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -969,6 +976,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -1015,6 +1023,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -1066,6 +1075,7 @@ confidence: None,
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],
@@ -1111,6 +1121,7 @@ confidence: None,
                         
                         if store.write_file(&relative_path, &note_content).is_ok() {
                             let ep_save = crate::contracts::EpisodeSave {
+        created_at: None,
                                 title,
                                 content: note_content,
                                 entities: vec![],

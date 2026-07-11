@@ -138,6 +138,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
         false,
         None,
         true,
+        None,
     ).await?;
     assert!(search_res.total_matches > 0, "Mined episode containing verification token should be retrievable");
 

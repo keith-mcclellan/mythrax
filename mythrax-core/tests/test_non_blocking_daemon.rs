@@ -23,6 +23,7 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
         let wal_clone = wal_path.clone();
         let handle = tokio::spawn(async move {
             let episode = EpisodeSave {
+        created_at: None,
                 title: format!("Concurrent Episode {}", i),
                 content: format!("Content {}", i),
                 entities: vec![],
@@ -51,6 +52,7 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
 
     // 3. Save a duplicate update to verify WAL compaction
     let duplicate_episode = EpisodeSave {
+        created_at: None,
         title: "Concurrent Episode 0".to_string(), // Duplicate ID/Title
         content: "Updated Content 0".to_string(),
         entities: vec![],
@@ -99,7 +101,21 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
 
     // Verify all 10 episodes were successfully recovered
     for i in 0..10 {
-        let search_res = recovered_backend.search(&format!("Concurrent Episode {}", i),  None,  false,  10,  0,  0.0,  None,  false,  true,  false, None, true).await.unwrap();
+        let search_res = recovered_backend.search(
+        &format!("Concurrent Episode {}", i),
+        None,
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        false,
+        None,
+        true,
+        None,
+    ).await.unwrap();
         assert!(!search_res.results.is_empty(), "Episode {} must be recovered successfully", i);
     }
 }

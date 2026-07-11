@@ -96,29 +96,48 @@ fn parse_log_timestamp(line: &str) -> Option<SystemTime> {
 }
 
 fn parse_timestamp_str(s: &str) -> Option<SystemTime> {
-    // Check if it is a UNIX timestamp
-    let re_unix = regex::Regex::new(r"\b(\d{10})\b").ok()?;
-    if let Some(cap) = re_unix.captures(s)
-        && let Some(m) = cap.get(1)
-            && let Ok(secs) = m.as_str().parse::<u64>() {
-                return Some(UNIX_EPOCH + std::time::Duration::from_secs(secs));
+    use chrono::{Datelike, Timelike};
+
+    // 1. Scan for UNIX timestamp (10 consecutive digits bounded by word boundaries)
+    let mut start = 0;
+    while let Some(idx) = s[start..].find(|c: char| c.is_ascii_digit()) {
+        let absolute_idx = start + idx;
+        let digits_len = s[absolute_idx..].chars().take_while(|c| c.is_ascii_digit()).count();
+        if digits_len == 10 {
+            let prev_char = s[..absolute_idx].chars().next_back();
+            let next_char = s[absolute_idx + 10..].chars().next();
+            let prev_boundary = prev_char.map_or(true, |c| !c.is_alphanumeric());
+            let next_boundary = next_char.map_or(true, |c| !c.is_alphanumeric());
+            if prev_boundary && next_boundary {
+                if let Ok(secs) = s[absolute_idx..absolute_idx + 10].parse::<u64>() {
+                    return Some(UNIX_EPOCH + std::time::Duration::from_secs(secs));
+                }
             }
-
-    // Try RFC3339 / ISO8601 pattern
-    let re_iso = regex::Regex::new(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})").ok()?;
-    if let Some(caps) = re_iso.captures(s) {
-        let year = caps.get(1)?.as_str().parse::<i32>().ok()?;
-        let month = caps.get(2)?.as_str().parse::<u32>().ok()?;
-        let day = caps.get(3)?.as_str().parse::<u32>().ok()?;
-        let hour = caps.get(4)?.as_str().parse::<u32>().ok()?;
-        let min = caps.get(5)?.as_str().parse::<u32>().ok()?;
-        let sec = caps.get(6)?.as_str().parse::<u32>().ok()?;
-
-        let days_since_epoch = days_from_civil(year, month, day) - days_from_civil(1970, 1, 1);
-        let seconds = days_since_epoch * 86400 + (hour as i64) * 3600 + (min as i64) * 60 + (sec as i64);
-        if seconds >= 0 {
-            return Some(UNIX_EPOCH + std::time::Duration::from_secs(seconds as u64));
         }
+        start = absolute_idx + digits_len;
+    }
+
+    // 2. Scan for flexible ISO-8601 date pattern
+    let mut start = 0;
+    while let Some(dash_idx) = s[start..].find(|c| c == '-' || c == '/') {
+        let absolute_dash = start + dash_idx;
+        if absolute_dash >= 4 {
+            let start_idx = absolute_dash - 4;
+            if s[start_idx..absolute_dash].chars().all(|c| c.is_ascii_digit()) {
+                let mut parse_slice = &s[start_idx..];
+                if let Ok(dt) = crate::parser::parse_flexible_date(&mut parse_slice) {
+                    let days_since_epoch = days_from_civil(dt.date().year(), dt.date().month(), dt.date().day()) - days_from_civil(1970, 1, 1);
+                    let seconds = days_since_epoch * 86400 
+                        + (dt.time().hour() as i64) * 3600 
+                        + (dt.time().minute() as i64) * 60 
+                        + (dt.time().second() as i64);
+                    if seconds >= 0 {
+                        return Some(UNIX_EPOCH + std::time::Duration::from_secs(seconds as u64));
+                    }
+                }
+            }
+        }
+        start = absolute_dash + 1;
     }
 
     None

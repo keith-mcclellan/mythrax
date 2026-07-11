@@ -12,6 +12,7 @@ async fn test_episode_save_roundtrips_discovery_tokens() {
 
     // 1. Check with Some value
     let ep_some = EpisodeSave {
+        created_at: None,
         title: "Some Discovery".to_string(),
         content: "Test content".to_string(),
         entities: vec![],
@@ -32,6 +33,7 @@ async fn test_episode_save_roundtrips_discovery_tokens() {
 
     // 2. Check with None value
     let ep_none = EpisodeSave {
+        created_at: None,
         title: "None Discovery".to_string(),
         content: "Test content 2".to_string(),
         entities: vec![],
@@ -85,6 +87,7 @@ async fn test_token_economics_savings() {
 
     // Episode 1: title (9) + content (391) = 400 chars. read_tokens = 100. discovery_tokens = Some(1000).
     let ep1 = EpisodeSave {
+        created_at: None,
         title: "Episode 1".to_string(),
         content: "a".repeat(391),
         entities: vec![],
@@ -105,6 +108,7 @@ async fn test_token_economics_savings() {
 
     // Episode 2: title (9) + content (391) = 400 chars. read_tokens = 100. discovery_tokens = Some(500).
     let ep2 = EpisodeSave {
+        created_at: None,
         title: "Episode 2".to_string(),
         content: "b".repeat(391),
         entities: vec![],
@@ -125,6 +129,7 @@ async fn test_token_economics_savings() {
 
     // Episode 3: has None/zero discovery tokens (will not be in distilled_context_nodes, so not hydrated)
     let ep3 = EpisodeSave {
+        created_at: None,
         title: "Episode 3".to_string(),
         content: "c".repeat(391),
         entities: vec![],
@@ -189,6 +194,7 @@ async fn test_zero_discovery_no_divide_by_zero() {
 
     // Episode with Some(0) discovery tokens
     let ep = EpisodeSave {
+        created_at: None,
         title: "Episode 1".to_string(),
         content: "Test".to_string(),
         entities: vec![],
