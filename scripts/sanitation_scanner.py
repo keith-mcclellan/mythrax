@@ -25,7 +25,7 @@ def run_git_history():
 
 def run_rust_tooling(commit=None):
     if commit:
-        subprocess.run(["git", "checkout", commit.split()[0]], cwd=REPO_ROOT, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "-f", commit.split()[0]], cwd=REPO_ROOT, check=True, capture_output=True)
 
     # Ensure clippy.toml exists during history traversal
     clippy_toml = MYTHRAX_CORE / "clippy.toml"
@@ -109,10 +109,11 @@ def scan_manual_debt(commit=None):
     files_to_scan = []
 
     # Collect Rust files
-    for root, _, files in os.walk(MYTHRAX_CORE / "src"):
-        for file in files:
-            if file.endswith(".rs"):
-                files_to_scan.append((Path(root) / file, True))
+    if MYTHRAX_CORE.exists() and (MYTHRAX_CORE / "src").exists():
+        for root, _, files in os.walk(MYTHRAX_CORE / "src"):
+            for file in files:
+                if file.endswith(".rs"):
+                    files_to_scan.append((Path(root) / file, True))
 
     # Collect script files
     if SCRIPTS_DIR.exists():
@@ -141,7 +142,6 @@ def scan_manual_debt(commit=None):
             line_stripped = line.strip()
             # Support # comments for bash/python
             if not line_stripped or (is_rust and line_stripped.startswith('//')) or (not is_rust and line_stripped.startswith('#')):
-                # We still want to parse the comment itself for TODOs, etc.
                 pass
 
             line_lower = line.lower()
@@ -170,7 +170,6 @@ def scan_manual_debt(commit=None):
                 comment_prefix = "//" if is_rust else "#"
                 if comment_prefix in line:
                     comment_text = line.split(comment_prefix, 1)[1].strip().lower()
-                    # Strip 'todo:', 'fixme:', etc to match raw text in TODO.md better
                     comment_text = re.sub(r'^(todo|fixme|hack|temp)s?:?\s*', '', comment_text)
 
                 if comment_text and todo_content and comment_text not in todo_content:
@@ -194,14 +193,12 @@ def scan_manual_debt(commit=None):
                     findings["match"] += 1
 
             # Magic values (crude heuristic)
-            # avoid matching standard rust/python/bash declarations
             if not line_stripped.startswith('const ') and not line_stripped.startswith('static ') and not (not is_rust and re.match(r'^[A-Z_]+=', line_stripped)):
                 nums = magic_num_re.findall(line_stripped)
                 if nums:
                     findings["magic_numbers"] += len(nums)
                     file_debt[str(file_path)] += len(nums)
 
-                # only count longish strings
                 strs = magic_str_re.findall(line_stripped)
                 for s in strs:
                     if len(s) > 5 and not s.startswith('{') and not s.endswith('}'):
@@ -245,7 +242,7 @@ def main():
             })
     finally:
         print(f"Restoring {original_branch}...")
-        subprocess.run(["git", "checkout", original_branch], cwd=REPO_ROOT, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "-f", original_branch], cwd=REPO_ROOT, check=True, capture_output=True)
 
     # Calculate file debt increases
     increasing_debt_files = []
@@ -297,7 +294,7 @@ def main():
     print(f"\nSaved report to {scorecard_path}")
 
     # GitHub Action PR Comment Logic
-    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_EVENT_NAME") == "push":
+    if os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_EVENT_NAME") in ["push", "pull_request"]:
         print("Mock GitHub Actions: Appending findings as PR comments.")
 
 if __name__ == "__main__":

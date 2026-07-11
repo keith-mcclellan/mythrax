@@ -47,14 +47,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # If it's a push event, this logic assumes we find an associated PR.
-          # For pull_request event, we just comment on the PR directly.
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            gh pr comment ${{ github.event.pull_request.number }} -F sanitation_scorecard.md
+            gh pr comment ${{ github.event.pull_request.number }} -F sanitation_scorecard.md || true
           else
-            # Try to find associated PR for this push
             PR_URL=$(gh pr list --search "${{ github.sha }}" --json url --jq '.[0].url')
             if [ -n "$PR_URL" ]; then
-              gh pr comment $PR_URL -F sanitation_scorecard.md
+              gh pr comment $PR_URL -F sanitation_scorecard.md || true
             fi
           fi
