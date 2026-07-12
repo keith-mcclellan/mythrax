@@ -2,6 +2,7 @@ import json
 import sys
 import subprocess
 import os
+import time
 
 # Change directory to mythrax-core
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -60,14 +61,59 @@ print(f'Current Avg Latency:   {avg_latency:.2f}ms (Baseline: {baseline["avg_lat
 precision_tolerance = -0.0001
 latency_tolerance_ratio = 1.15 # Max 15% latency degradation
 
+passed = True
+
 if (avg_recall - baseline['recall_any_5']) < precision_tolerance:
     print('REJECT: Recall_Any@5 has regressed!')
-    sys.exit(1)
+    passed = False
 if (avg_ndcg - baseline['ndcg_10']) < precision_tolerance:
     print('REJECT: nDCG@10 has regressed!')
-    sys.exit(1)
+    passed = False
 if avg_latency > (baseline['avg_latency_ms'] * latency_tolerance_ratio):
     print(f'REJECT: Average latency has regressed beyond 15% limit! ({avg_latency:.2f}ms vs baseline {baseline["avg_latency_ms"]:.2f}ms)')
+    passed = False
+
+commit_hash = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+timestamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+# Write history log
+try:
+    with open('bench_data/dev25_history.jsonl', 'a') as history_file:
+        history_file.write(json.dumps({
+            "commit": commit_hash,
+            "timestamp": timestamp,
+            "recall_any_5": avg_recall,
+            "ndcg_10": avg_ndcg,
+            "avg_latency_ms": avg_latency,
+            "status": "PASS" if passed else "REJECT",
+            "evidence": results_path
+        }) + "\n")
+except Exception as e:
+    print(f"Warning: Failed to write history file: {e}")
+
+# Write active state
+try:
+    with open('bench_data/dev25_state.json', 'w') as state_file:
+        json.dump({
+            "active_commit": commit_hash,
+            "status": "PASS" if passed else "REJECT",
+            "confirmed_by": f"confirmed:{results_path}",
+            "metrics": {
+                "recall_any_5": avg_recall,
+                "ndcg_10": avg_ndcg,
+                "avg_latency_ms": avg_latency
+            },
+            "delta": {
+                "recall_any_5": avg_recall - baseline['recall_any_5'],
+                "ndcg_10": avg_ndcg - baseline['ndcg_10'],
+                "avg_latency_ms": avg_latency - baseline['avg_latency_ms']
+            },
+            "updated_at": timestamp
+        }, state_file, indent=2)
+except Exception as e:
+    print(f"Warning: Failed to write state file: {e}")
+
+if not passed:
     sys.exit(1)
 
 print('PASS: dev25 benchmark regression check passed.')
