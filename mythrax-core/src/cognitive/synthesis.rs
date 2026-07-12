@@ -1132,7 +1132,7 @@ impl DreamCoordinator {
                             .unwrap_or(Path::new(&ins.vault_path))
                             .to_string_lossy()
                             .to_string();
-                        println!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
+                        tracing::debug!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
                         let _ = db.delete_by_vault_path(&rel_path).await;
                     }
                 }

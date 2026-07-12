@@ -472,11 +472,19 @@ impl SurrealBackend {
             parts.join("\n")
         };
 
+        let mut file_path = std::path::PathBuf::from("scratch/debug_profiles.txt");
+        if !file_path.parent().map(|p| p.exists()).unwrap_or(false) {
+            file_path = std::path::PathBuf::from("mythrax-core/scratch/debug_profiles.txt");
+        }
+        if let Some(parent) = file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .append(true)
-            .open("/Users/keith/Documents/mythrax/mythrax-core/scratch/debug_profiles.txt")
+            .open(file_path)
         {
             use std::io::Write;
             let _ = writeln!(file, "=== PROFILE FOR session_id = {} ===\n{}\n====================================\n", session_id, res_str);
@@ -4526,10 +4534,18 @@ impl StorageBackend for SurrealBackend {
         }
  
         let t_total = t_start.elapsed().as_micros();
+        let mut file_path = std::path::PathBuf::from("scratch/search_timings.txt");
+        if !file_path.parent().map(|p| p.exists()).unwrap_or(false) {
+            file_path = std::path::PathBuf::from("mythrax-core/scratch/search_timings.txt");
+        }
+        if let Some(parent) = file_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/Users/keith/Documents/mythrax/mythrax-core/scratch/search_timings.txt")
+            .open(file_path)
         {
             use std::io::Write;
             let _ = writeln!(

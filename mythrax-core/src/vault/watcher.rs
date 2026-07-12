@@ -101,6 +101,16 @@ fn count_files_recursive(path: &Path, depth: usize) -> usize {
     }
 }
 
+fn get_vault_paths() -> (PathBuf, PathBuf) {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/Users/keith".to_string());
+    let home_path = PathBuf::from(home);
+    let vault_root = home_path.join("mythrax-vault");
+    let global_dir = vault_root.join("global");
+    (vault_root, global_dir)
+}
+
 pub fn start_watching(
     vault_root: PathBuf,
     ignore_list: Arc<WatchIgnoreList>,
@@ -112,9 +122,9 @@ pub fn start_watching(
         .unwrap_or(vault_root);
     // Hard monitor limits: max recursion depth 10, max watch limit 50,000 files
     let mut total_files = count_files_recursive(&vault_root, 0);
-    let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
+    let (_, global_dir) = get_vault_paths();
     if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
-        total_files += count_files_recursive(global_dir, 0);
+        total_files += count_files_recursive(&global_dir, 0);
     }
     if total_files > 50000 {
         return Err(anyhow::anyhow!("Vault exceeds hard limit of 50,000 files (found {})", total_files));
@@ -134,9 +144,9 @@ pub fn start_watching(
     watcher.watch(&vault_root, RecursiveMode::Recursive)?;
 
     // Watch global directory if it exists and is outside the vault
-    let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
+    let (_, global_dir) = get_vault_paths();
     if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
-        watcher.watch(global_dir, RecursiveMode::Recursive)?;
+        watcher.watch(&global_dir, RecursiveMode::Recursive)?;
     }
 
     // 2. Setup Write-Behind Coalescing Queue (500ms delay)
@@ -234,7 +244,7 @@ pub fn start_watching(
                     let canonical_root = std::fs::canonicalize(&s_c.vault_root).unwrap_or_else(|_| s_c.vault_root.clone());
                     let rel_path_str = if let Ok(rel_path) = path.strip_prefix(&canonical_root) {
                         rel_path.to_string_lossy().to_string()
-                    } else if let Ok(rel_path) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+                    } else if let Ok(rel_path) = path.strip_prefix(&get_vault_paths().0) {
                         rel_path.to_string_lossy().to_string()
                     } else {
                         path.to_string_lossy().to_string()
@@ -266,6 +276,7 @@ pub fn start_watching(
                 Ok(mut event) => {
                     // Filter events inside the callback
                     event.paths.retain(|path| {
+                        let (_, global_path) = get_vault_paths();
                         // Discard symbolic links
                         let is_sym = std::fs::symlink_metadata(path)
                             .map(|m| m.file_type().is_symlink())
@@ -290,9 +301,8 @@ pub fn start_watching(
                         let root_to_use = if path.starts_with(&vault_root_clone) {
                             Some(vault_root_clone.as_path())
                         } else {
-                            let global_path = std::path::Path::new("/Users/keith/mythrax-vault/global");
-                            if path.starts_with(global_path) {
-                                Some(global_path)
+                            if path.starts_with(&global_path) {
+                                Some(global_path.as_path())
                             } else {
                                 None
                             }
@@ -494,7 +504,7 @@ pub async fn sync_file_to_db(
     let canonical_root = std::fs::canonicalize(&store.vault_root).unwrap_or_else(|_| store.vault_root.clone());
     let rel_path = if let Ok(rel) = canonical_path.strip_prefix(&canonical_root) {
         rel.to_string_lossy().to_string()
-    } else if let Ok(rel) = canonical_path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+    } else if let Ok(rel) = canonical_path.strip_prefix(&get_vault_paths().0) {
         rel.to_string_lossy().to_string()
     } else {
         canonical_path.to_string_lossy().to_string()

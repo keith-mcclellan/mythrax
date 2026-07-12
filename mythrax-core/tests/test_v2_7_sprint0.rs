@@ -295,3 +295,31 @@ async fn test_meta_skill_malformed_llm_json() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_no_hardcoded_user_paths() {
+    let mut backend_path = std::path::PathBuf::from("src/db/backend.rs");
+    if !backend_path.exists() {
+        backend_path = std::path::PathBuf::from("mythrax-core/src/db/backend.rs");
+    }
+    
+    let mut watcher_path = std::path::PathBuf::from("src/vault/watcher.rs");
+    if !watcher_path.exists() {
+        watcher_path = std::path::PathBuf::from("mythrax-core/src/vault/watcher.rs");
+    }
+
+    assert!(backend_path.exists(), "backend.rs does not exist at {:?}", backend_path);
+    assert!(watcher_path.exists(), "watcher.rs does not exist at {:?}", watcher_path);
+
+    let backend_content = std::fs::read_to_string(&backend_path).unwrap();
+    let watcher_content = std::fs::read_to_string(&watcher_path).unwrap();
+
+    assert!(
+        !backend_content.contains("/Users/keith/"),
+        "backend.rs contains hardcoded /Users/keith/ path!"
+    );
+    assert!(
+        !watcher_content.contains("/Users/keith/"),
+        "watcher.rs contains hardcoded /Users/keith/ path!"
+    );
+}
