@@ -337,7 +337,7 @@ impl Forge {
             chunk_text
         );
         
-        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+        let res = self.llm.routed_completion(self.backend.as_ref(), &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_instruction), &prompt).await?;
         let stripped = crate::llm::strip_code_fences(&res);
         
         let concepts: Vec<ForgedConcept> = serde_json::from_str(&stripped)
@@ -369,7 +369,7 @@ impl Forge {
             chunk_text
         );
         
-        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+        let res = self.llm.routed_completion(self.backend.as_ref(), &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_instruction), &prompt).await?;
         let stripped = crate::llm::strip_code_fences(&res);
         
         let rules: Vec<ForgedRule> = serde_json::from_str(&stripped)
@@ -395,7 +395,7 @@ impl Forge {
             content
         );
 
-        let res = self.llm.completion(&*self.backend, Some(system_instruction), &prompt).await?;
+        let res = self.llm.routed_completion(&*self.backend, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_instruction), &prompt).await?;
         let stripped = crate::llm::strip_code_fences(&res);
 
         #[derive(Deserialize)]

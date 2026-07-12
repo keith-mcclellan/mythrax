@@ -205,7 +205,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         );
 
         let system_prompt = "You are a calibration assistant that generates synthetic search queries.";
-        let synthetic_query = match client.completion(backend, Some(system_prompt), &prompt).await {
+        let synthetic_query = match client.routed_completion(backend, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_prompt), &prompt).await {
             Ok(res) => res.trim().to_string(),
             Err(e) => {
                 println!("Failed to generate synthetic query: {:?}", e);

@@ -52,7 +52,7 @@ impl Compactor {
             } else {
                 let compact_diff = if git_diff.len() > 200 {
                     let summary_prompt = format!("Summarize this git diff briefly (under 50 words):\n\n{}", git_diff);
-                    self.llm.completion(db, Some("You are a code summarizer."), &summary_prompt).await.unwrap_or_else(|_| "Git diff summary failed".to_string())
+                    self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some("You are a code summarizer."), &summary_prompt).await.unwrap_or_else(|_| "Git diff summary failed".to_string())
                 } else {
                     git_diff.to_string()
                 };
@@ -69,7 +69,7 @@ impl Compactor {
         }
 
         let sys_prompt = "You are a master systems architect. Analyze the sequence of checkpoints and summarize the transitions between them, detailing how the codebase evolved, what errors were resolved, and the progression of active changes.";
-        let summary = self.llm.completion(db, Some(sys_prompt), &prompt_content).await?;
+        let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_content).await?;
         Ok(summary)
     }
 
@@ -497,7 +497,7 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -560,7 +560,7 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -670,7 +670,7 @@ impl Compactor {
 
         let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.";
         let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
-        let global_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+        let global_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
         let global_summary = page_markdown_code_blocks(db, &global_summary).await?;
 
         let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -832,7 +832,7 @@ impl Compactor {
                     // 2. Generate high-level Raptor summary using the LLM
                     let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.";
                     let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
-                    if let Ok(summary) = self.llm.completion(db, Some(sys_prompt), &prompt).await {
+                    if let Ok(summary) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
                         // 3. Save as wiki Raptor summary node
                         let uuid = uuid::Uuid::new_v4().to_string();
                         let wiki_rel = format!("wiki/archive/raptor_summary_{}.md", &uuid[..8]);

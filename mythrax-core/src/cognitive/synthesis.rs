@@ -274,7 +274,7 @@ impl DreamCoordinator {
                 existing_node.content
             );
 
-            if let Ok(resp_str) = self.llm.completion(db, Some(sys_prompt), &user_prompt).await {
+            if let Ok(resp_str) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &user_prompt).await {
                 #[derive(serde::Deserialize)]
                 struct ContradictionResponse {
                     contradicts: bool,
@@ -561,7 +561,7 @@ impl DreamCoordinator {
                             "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}",
                             ins.content, ep.title, display_content
                         );
-                        let updated_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+                        let updated_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
 
                         let mut source_ep_links = Vec::new();
                         let mut eps_to_link = Vec::new();
@@ -693,7 +693,7 @@ impl DreamCoordinator {
                     events_text
                 );
 
-                let llm_res = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+                let llm_res = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
                 
                 #[derive(serde::Deserialize)]
                 struct ClusterAnalysis {
@@ -750,7 +750,7 @@ impl DreamCoordinator {
                     events_text
                 );
 
-                if let Ok(wisdom_res) = self.llm.completion(db, Some(sys_wisdom), &prompt_wisdom).await {
+                if let Ok(wisdom_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_wisdom), &prompt_wisdom).await {
                     #[derive(serde::Deserialize)]
                     struct RawWisdom {
                         target_pattern: String,
@@ -1035,7 +1035,7 @@ impl DreamCoordinator {
                                 events_text
                             );
                             
-                            if let Ok(llm_res) = self.llm.completion(db, Some(sys_prompt), &prompt_text).await {
+                            if let Ok(llm_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await {
                                 #[derive(serde::Deserialize)]
                                 struct ClusterAnalysis {
                                     title: String,
@@ -1333,7 +1333,7 @@ impl DreamCoordinator {
                     insights_with_scope_labels
                 );
 
-                if let Ok(resp_str) = self.llm.completion(db, Some(sys_prompt), &user_prompt).await {
+                if let Ok(resp_str) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &user_prompt).await {
                     #[derive(serde::Deserialize)]
                     struct GeneralizationResponse {
                         target_pattern: String,
@@ -1536,7 +1536,7 @@ pub async fn save_wisdom_rule_with_deduplication(
             );
 
             let llm = crate::llm::LLMClient::new();
-            match llm.completion(db, Some(system_prompt), &prompt).await {
+            match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(system_prompt), &prompt).await {
                 Ok(res) => {
                     let stripped = crate::llm::strip_code_fences(&res);
 

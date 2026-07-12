@@ -130,7 +130,7 @@ impl Harvester {
 
             let sys_prompt = "You are a cognitive harvester. Analyze the following developer skills/playbooks and perform a cross-skill interaction analysis. Identify potential conflicts, overlapping constraints, or compounding rules. Formulate resulting Wisdom Rules to resolve conflicts or enforce compounding constraints.";
             let prompt_text = format!("Skills:\n\n{}Respond ONLY with a JSON array of Wisdom Rules, each containing:\n- target_pattern\n- action_to_avoid\n- causal_explanation\n- prescribed_remedy", skills_prompt);
-            let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let response = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &prompt_text).await?;
 
             #[derive(serde::Deserialize)]
             struct RawWisdom {

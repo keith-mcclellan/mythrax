@@ -412,11 +412,11 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             wisdom_injection
         );
 
-        self.completion(db, Some(&system_prompt), &prompt).await
+        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(&system_prompt), &prompt).await
     }
 
     async fn evaluate_run(&self, db: &dyn StorageBackend, run_logs: &str) -> Result<String> {
-        self.completion(db, Some("You are a critic assistant that evaluates run logs and outputs JSON."), run_logs).await
+        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some("You are a critic assistant that evaluates run logs and outputs JSON."), run_logs).await
     }
 
     async fn abstract_insights(&self, db: &dyn StorageBackend, parent_insight: Option<&str>, child_insight: &str) -> Result<String> {
@@ -426,7 +426,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
              Summarize and merge these into a single updated insight containing all key takeaways.",
             parent_insight, child_insight
         );
-        self.completion(db, Some("You are a summarization assistant."), &prompt).await
+        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some("You are a summarization assistant."), &prompt).await
     }
 }
 
