@@ -66,6 +66,9 @@ passed = True
 if (avg_recall - baseline['recall_any_5']) < precision_tolerance:
     print('REJECT: Recall_Any@5 has regressed!')
     passed = False
+if (avg_recall_all - baseline['recall_all_5']) < precision_tolerance:
+    print('REJECT: Recall_All@5 has regressed!')
+    passed = False
 if (avg_ndcg - baseline['ndcg_10']) < precision_tolerance:
     print('REJECT: nDCG@10 has regressed!')
     passed = False
@@ -83,6 +86,7 @@ try:
             "commit": commit_hash,
             "timestamp": timestamp,
             "recall_any_5": avg_recall,
+            "recall_all_5": avg_recall_all,
             "ndcg_10": avg_ndcg,
             "avg_latency_ms": avg_latency,
             "status": "PASS" if passed else "REJECT",
@@ -100,11 +104,13 @@ try:
             "confirmed_by": f"confirmed:{results_path}",
             "metrics": {
                 "recall_any_5": avg_recall,
+                "recall_all_5": avg_recall_all,
                 "ndcg_10": avg_ndcg,
                 "avg_latency_ms": avg_latency
             },
             "delta": {
                 "recall_any_5": avg_recall - baseline['recall_any_5'],
+                "recall_all_5": avg_recall_all - baseline['recall_all_5'],
                 "ndcg_10": avg_ndcg - baseline['ndcg_10'],
                 "avg_latency_ms": avg_latency - baseline['avg_latency_ms']
             },
