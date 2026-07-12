@@ -76,7 +76,7 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
     // Query is a procedural question which triggers depth=3 bidirectional expansion
     let query = "What compile actions did I run?";
     
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         query,
         Some("general"),
         true,
@@ -90,7 +90,7 @@ async fn test_procedural_cue_neighbor_expansion() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     println!("Search Results:");

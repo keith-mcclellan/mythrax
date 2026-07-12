@@ -26,7 +26,7 @@ pub async fn run_agent_recall(
     let mut scores_by_type: std::collections::HashMap<String, Vec<bool>> = std::collections::HashMap::new();
 
     for q in queries {
-        let response = backend.search(
+        let response = backend.search(crate::contracts::SearchParams::from_positional(
         &q.query,
         None,
         deep_insight,
@@ -40,7 +40,7 @@ pub async fn run_agent_recall(
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
         // Combine result content to search for fragments
         let combined_results: String = response.results.iter()

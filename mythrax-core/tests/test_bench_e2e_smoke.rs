@@ -47,7 +47,7 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
 
     // The runner's exact search call signature.
     let response = backend
-        .search(
+        .search(mythrax_core::contracts::SearchParams::from_positional(
         "advanced memory bitemporal",
         Some("general"),
         false,
@@ -61,7 +61,7 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
         None,
         true,
         None,
-    )
+    ))
         .await?;
 
     assert!(response.total_matches > 0);

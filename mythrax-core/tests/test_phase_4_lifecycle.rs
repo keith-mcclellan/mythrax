@@ -233,7 +233,7 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
         .await?;
 
     // 3. Run a search. This will calculate decay on-the-fly and return it
-    let search_res = backend.search(
+    let search_res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Decay",
         Some("decay-test"),
         false,
@@ -247,7 +247,7 @@ async fn test_biological_episode_decay_and_reinforcement() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     assert_eq!(search_res.results.len(), 1);
     let returned_utility = search_res.results[0].utility;
     println!("DEBUG: returned_utility = {}", returned_utility);

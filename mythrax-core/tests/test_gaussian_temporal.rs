@@ -29,7 +29,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
     backend.save_profile_key("search.enable_gaussian_temporal", "true").await?;
     backend.save_profile_key("search.gaussian_temporal_sigma", "168.0").await?;
 
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Unique content for test gaussian temporal decay",
         Some("general"),
         false,
@@ -43,7 +43,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
         None,
         false,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     assert!(!results.is_empty(), "Should retrieve the episode");
@@ -57,7 +57,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
     // 2. Disable Gaussian temporal decay (fallback to linear/exponential with -0.05 * delta_t_days)
     backend.save_profile_key("search.enable_gaussian_temporal", "false").await?;
 
-    let resp_fallback = backend.search(
+    let resp_fallback = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Unique content for test gaussian temporal decay",
         Some("general"),
         false,
@@ -71,7 +71,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
         None,
         false,
         None,
-    ).await?;
+    )).await?;
 
     let results_fallback = resp_fallback.results;
     let matched_fallback = results_fallback.iter().find(|r| r.id == id).expect("Should find the exact episode");

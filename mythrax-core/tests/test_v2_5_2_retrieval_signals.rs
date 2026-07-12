@@ -38,7 +38,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     backend.relate_nodes(&entity_id, &ep_id_str, None, None, Some(0.8)).await?;
 
     // 5. Search for "RustDB"
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "RustDB",
         Some("general"),
         false,
@@ -52,7 +52,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         Some("session_foo"),
         true,
         None,
-    ).await?;
+    )).await?;
 
     // The Episode is not retrieved by the direct keyword/vector search for "RustDB", but is traversed via relates_to edge!
     let found_activation = resp.results.iter().any(|r| r.id == ep_id_str);
@@ -60,7 +60,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
 
     // Let's verify that disabling the feature prevents it from being retrieved
     backend.save_profile_key("search.enable_spreading_activation", "false").await?;
-    let resp_disabled = backend.search(
+    let resp_disabled = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "RustDB",
         Some("general"),
         false,
@@ -74,7 +74,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         Some("session_foo"),
         true,
         None,
-    ).await?;
+    )).await?;
     let found_disabled = resp_disabled.results.iter().any(|r| r.id == ep_id_str);
     assert!(!found_disabled, "Episode should NOT be retrieved when Spreading Activation is disabled");
 
@@ -87,7 +87,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     backend.save_stm("session_bar", "context_guard", "Avoid concurrent RocksDB process lock by starting in client mode").await?;
 
     // 3. Search under "session_bar" with a query related to the STM content
-    let resp_stm = backend.search(
+    let resp_stm = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "RocksDB process lock client mode",
         Some("general"),
         false,
@@ -101,7 +101,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         Some("session_bar"),
         true,
         None,
-    ).await?;
+    )).await?;
 
     // Verify that the STM record is injected with working tier, synthetic ID, and utility = 100.0
     let match_stm = resp_stm.results.iter().find(|r| r.id == "stm:session_bar:context_guard");
@@ -130,7 +130,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     let ep_re_uuid = ep_re_id.split(':').nth(1).unwrap();
 
     // 3. Perform a search to retrieve the episode
-    let _resp_re = backend.search(
+    let _resp_re = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Memory Leak Diagnostics",
         Some("general"),
         false,
@@ -144,7 +144,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     // Give the async spawned background task a moment to execute
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -165,7 +165,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     assert_eq!(initial_row.utility_score, 50.0);
 
     // 4. Perform search again to increment access count and trigger reinforcement logic
-    let _resp_re2 = backend.search(
+    let _resp_re2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Memory Leak Diagnostics",
         Some("general"),
         false,
@@ -179,7 +179,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     // Give background task a moment
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -214,7 +214,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     };
     let _ep_other_id = backend.save_episode(&ep_other).await?;
 
-    let resp_rerank = backend.search(
+    let resp_rerank = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Database Transaction Isolation",
         Some("general"),
         false,
@@ -228,7 +228,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         Some("session_foo"),
         true,
         None,
-    ).await?;
+    )).await?;
 
     // Verify that the first candidate (which matches the mock boost) has similarity 0.95
     assert!(!resp_rerank.results.is_empty());
@@ -236,7 +236,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     
     // Disabling the reranker should run without setting similarity to 0.95
     backend.save_profile_key("search.enable_cross_encoder_rerank", "false").await?;
-    let resp_no_rerank = backend.search(
+    let resp_no_rerank = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Database Transaction Isolation",
         Some("general"),
         false,
@@ -250,7 +250,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         Some("session_foo"),
         true,
         None,
-    ).await?;
+    )).await?;
     assert_ne!(resp_no_rerank.results[0].similarity, 0.95f32);
 
     Ok(())

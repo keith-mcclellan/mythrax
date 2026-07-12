@@ -455,3 +455,93 @@ pub struct SymbolicHit {
     pub hops: usize,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchParams {
+    pub query: String,
+    pub scope: Option<String>,
+    pub deep_insight: bool,
+    pub limit: usize,
+    pub offset: usize,
+    pub threshold: f32,
+    pub token_budget: Option<usize>,
+    pub allow_downward: bool,
+    pub include_episodes: bool,
+    pub include_artifacts: bool,
+    pub session_id: Option<String>,
+    pub include_archived: bool,
+    pub temporal_anchor: Option<String>,
+}
+
+impl Default for SearchParams {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            scope: None,
+            deep_insight: false,
+            limit: 15,
+            offset: 0,
+            threshold: 0.55,
+            token_budget: None,
+            allow_downward: false,
+            include_episodes: false,
+            include_artifacts: false,
+            session_id: None,
+            include_archived: false,
+            temporal_anchor: None,
+        }
+    }
+}
+
+impl SearchParams {
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            ..Self::default()
+        }
+    }
+    pub fn from_positional(
+        query: &str,
+        scope: Option<&str>,
+        deep_insight: bool,
+        limit: usize,
+        offset: usize,
+        threshold: f32,
+        token_budget: Option<usize>,
+        allow_downward: bool,
+        include_episodes: bool,
+        include_artifacts: bool,
+        session_id: Option<&str>,
+        include_archived: bool,
+        temporal_anchor: Option<&str>,
+    ) -> Self {
+        Self {
+            query: query.to_string(),
+            scope: scope.map(|s| s.to_string()),
+            deep_insight,
+            limit,
+            offset,
+            threshold,
+            token_budget,
+            allow_downward,
+            include_episodes,
+            include_artifacts,
+            session_id: session_id.map(|s| s.to_string()),
+            include_archived,
+            temporal_anchor: temporal_anchor.map(|s| s.to_string()),
+        }
+    }
+    // Builder methods
+    pub fn scope(mut self, scope: impl Into<String>) -> Self { self.scope = Some(scope.into()); self }
+    pub fn deep_insight(mut self, val: bool) -> Self { self.deep_insight = val; self }
+    pub fn limit(mut self, val: usize) -> Self { self.limit = val; self }
+    pub fn offset(mut self, val: usize) -> Self { self.offset = val; self }
+    pub fn threshold(mut self, val: f32) -> Self { self.threshold = val; self }
+    pub fn token_budget(mut self, val: usize) -> Self { self.token_budget = Some(val); self }
+    pub fn allow_downward(mut self, val: bool) -> Self { self.allow_downward = val; self }
+    pub fn include_episodes(mut self, val: bool) -> Self { self.include_episodes = val; self }
+    pub fn include_artifacts(mut self, val: bool) -> Self { self.include_artifacts = val; self }
+    pub fn session_id(mut self, id: impl Into<String>) -> Self { self.session_id = Some(id.into()); self }
+    pub fn include_archived(mut self, val: bool) -> Self { self.include_archived = val; self }
+    pub fn temporal_anchor(mut self, anchor: impl Into<String>) -> Self { self.temporal_anchor = Some(anchor.into()); self }
+}
+

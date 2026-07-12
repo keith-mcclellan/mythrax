@@ -479,7 +479,7 @@ async fn test_spreading_activation_batch_set_equivalence() -> Result<()> {
     backend.relate_nodes(&entity_id, &ep2_id, None, None, Some(0.6)).await?;
 
     // Run the batch query version by searching
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "RustDB",
         Some("general"),
         false,
@@ -493,7 +493,7 @@ async fn test_spreading_activation_batch_set_equivalence() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     // Find our episodes in the search results
     let r1 = resp.results.iter().find(|r| r.id == ep1_id).expect("ep1 should be found");
@@ -507,6 +507,84 @@ async fn test_spreading_activation_batch_set_equivalence() -> Result<()> {
     assert!((r2.similarity - 0.42).abs() < 1e-4);
 
     Ok(())
+}
+
+#[test]
+fn test_search_params_struct() {
+    use mythrax_core::contracts::SearchParams;
+
+    let default_params = SearchParams::default();
+    assert_eq!(default_params.query, "");
+    assert_eq!(default_params.scope, None);
+    assert_eq!(default_params.deep_insight, false);
+    assert_eq!(default_params.limit, 15);
+    assert_eq!(default_params.offset, 0);
+    assert_eq!(default_params.threshold, 0.55);
+    assert_eq!(default_params.token_budget, None);
+    assert_eq!(default_params.allow_downward, false);
+    assert_eq!(default_params.include_episodes, false);
+    assert_eq!(default_params.include_artifacts, false);
+    assert_eq!(default_params.session_id, None);
+    assert_eq!(default_params.include_archived, false);
+    assert_eq!(default_params.temporal_anchor, None);
+
+    let params = SearchParams::new("test_query")
+        .scope("my_scope")
+        .deep_insight(true)
+        .limit(20)
+        .offset(5)
+        .threshold(0.8)
+        .token_budget(1000)
+        .allow_downward(true)
+        .include_episodes(true)
+        .include_artifacts(true)
+        .session_id("session_123")
+        .include_archived(true)
+        .temporal_anchor("anchor_time");
+
+    assert_eq!(params.query, "test_query");
+    assert_eq!(params.scope, Some("my_scope".to_string()));
+    assert_eq!(params.deep_insight, true);
+    assert_eq!(params.limit, 20);
+    assert_eq!(params.offset, 5);
+    assert_eq!(params.threshold, 0.8);
+    assert_eq!(params.token_budget, Some(1000));
+    assert_eq!(params.allow_downward, true);
+    assert_eq!(params.include_episodes, true);
+    assert_eq!(params.include_artifacts, true);
+    assert_eq!(params.session_id, Some("session_123".to_string()));
+    assert_eq!(params.include_archived, true);
+    assert_eq!(params.temporal_anchor, Some("anchor_time".to_string()));
+
+    let positional = SearchParams::from_positional(
+        "pos_query",
+        Some("pos_scope"),
+        true,
+        25,
+        10,
+        0.7,
+        Some(500),
+        true,
+        true,
+        true,
+        Some("pos_session"),
+        true,
+        Some("pos_anchor"),
+    );
+
+    assert_eq!(positional.query, "pos_query");
+    assert_eq!(positional.scope, Some("pos_scope".to_string()));
+    assert_eq!(positional.deep_insight, true);
+    assert_eq!(positional.limit, 25);
+    assert_eq!(positional.offset, 10);
+    assert_eq!(positional.threshold, 0.7);
+    assert_eq!(positional.token_budget, Some(500));
+    assert_eq!(positional.allow_downward, true);
+    assert_eq!(positional.include_episodes, true);
+    assert_eq!(positional.include_artifacts, true);
+    assert_eq!(positional.session_id, Some("pos_session".to_string()));
+    assert_eq!(positional.include_archived, true);
+    assert_eq!(positional.temporal_anchor, Some("pos_anchor".to_string()));
 }
 
 

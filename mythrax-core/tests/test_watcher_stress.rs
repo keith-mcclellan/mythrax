@@ -69,7 +69,7 @@ async fn test_watcher_upstream_filtering_coalescing_and_bounded_pool() {
     let mut bulk_indexed = false;
     for _ in 0..80 {
         if !coalesced_indexed {
-            if let Ok(query_res) = backend.search(
+            if let Ok(query_res) = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Write 4",
         None,
         false,
@@ -83,14 +83,14 @@ async fn test_watcher_upstream_filtering_coalescing_and_bounded_pool() {
         None,
         true,
         None,
-    ).await {
+    )).await {
                 if !query_res.results.is_empty() {
                     coalesced_indexed = true;
                 }
             }
         }
         if !bulk_indexed {
-            if let Ok(query_res) = backend.search(
+            if let Ok(query_res) = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Bulk Content 19",
         None,
         false,
@@ -104,7 +104,7 @@ async fn test_watcher_upstream_filtering_coalescing_and_bounded_pool() {
         None,
         true,
         None,
-    ).await {
+    )).await {
                 if !query_res.results.is_empty() {
                     bulk_indexed = true;
                 }

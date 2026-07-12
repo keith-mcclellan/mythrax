@@ -220,7 +220,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         let current_threshold: Option<f64> = resp.take(0).ok().and_then(|v: Vec<f64>| v.into_iter().next());
         let threshold = current_threshold.unwrap_or(0.55) as f32;
 
-        let search_res = backend.search(
+        let search_res = backend.search(crate::contracts::SearchParams::from_positional(
         &synthetic_query,
         Some("all"),
         false,
@@ -234,7 +234,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
         let found = search_res.results.iter().any(|r| r.id == ep_id);
         if !found {

@@ -653,7 +653,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
             let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
 
-            let search_res = state.backend.search(
+            let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
         query,
         scope,
         false,
@@ -667,7 +667,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
         session_id,
         include_archived,
         temporal_anchor,
-    ).await?;
+    )).await?;
             
             if let Some(sess_id) = session_id {
                 let mut cited_ids = Vec::new();
@@ -742,7 +742,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
             let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
 
-            let search_res = state.backend.search(
+            let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
         query,
         scope,
         false,
@@ -756,7 +756,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
         session_id,
         include_archived,
         temporal_anchor,
-    ).await?;
+    )).await?;
 
             // Broad Cheap Projection (BCP): we deliberately filter and only project
             // nodes where tier == "episode" to provide a lightweight, cheap overview index.
@@ -794,7 +794,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
             let resolved_anchor_id = if let Some(id) = anchor_id {
                 id.to_string()
             } else if let Some(q) = query {
-                let search_res = state.backend.search(
+                let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
         q,
         None,
         false,
@@ -808,7 +808,7 @@ async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
                 let best = search_res.results.first().context("No matching anchor episode found for query")?;
                 best.id.clone()
             } else {
@@ -1995,7 +1995,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
         } else {
             // Semantic search on handoff summary
-            let search_res = state.backend.search(
+            let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
         summary,
         scope,
         false,
@@ -2009,7 +2009,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
             parts.push("## Retrieved Semantic Context\n".to_string());
             for res in search_res.results {
@@ -2038,7 +2038,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         let dynamic_scope = folder_name;
 
         let search_query = query.unwrap_or("general context");
-        let search_res = state.backend.search(
+        let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
         search_query,
         Some(&dynamic_scope),
         false,
@@ -2052,7 +2052,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         Some(session_id),
         true,
         None,
-    ).await?;
+    )).await?;
 
         parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));
         let mut high_confidence_memories_found = false;

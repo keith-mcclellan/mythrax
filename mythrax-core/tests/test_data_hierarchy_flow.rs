@@ -59,7 +59,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!ep_id.is_empty(), "Saved episode ID must not be empty");
 
     // Retrieve via search matching general
-    let search_res = backend.search(
+    let search_res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "execution context",
         Some("general"),
         false,
@@ -73,7 +73,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     assert!(!search_res.results.is_empty(), "Must retrieve the ingested episode");
     assert_eq!(search_res.results[0].title, "Test Ingestion System Flow");
 
@@ -91,7 +91,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!raptor_id.is_empty(), "Saved Raptor summary ID must not be empty");
 
     // Retrieve Raptor Summary
-    let search_raptor = backend.search(
+    let search_raptor = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Raptor Summary",
         Some("general"),
         false,
@@ -105,7 +105,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     assert!(!search_raptor.results.is_empty(), "Must retrieve the Raptor summary node");
     assert!(search_raptor.results[0].title.contains("Raptor Summary"));
 
@@ -123,7 +123,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!insight_id.is_empty(), "Saved insight node ID must not be empty");
 
     // Retrieve Insight Node
-    let search_insight = backend.search(
+    let search_insight = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "permanent wiki nodes",
         Some("general"),
         false,
@@ -137,7 +137,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     assert!(!search_insight.results.is_empty(), "Must retrieve the synthesized insight node");
     assert_eq!(search_insight.results[0].title, "Insight: System Hierarchical Flow");
 

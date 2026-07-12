@@ -68,7 +68,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
     coordinator.run_dream(&*backend, &store, Some("incremental"), None).await?;
 
     // Assertion 1: Verify the new turns are mined into the database
-    let search_res = backend.search(
+    let search_res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "SWEEP_TEST_VERIFICATION_TOKEN",
         Some("general"),
         false,
@@ -82,7 +82,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     assert!(search_res.total_matches > 0, "Mined episode containing verification token should be retrievable");
 
     // Assertion 2: The key _last_swept_at is stashed in STM
@@ -131,7 +131,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
     coordinator.run_dream(&*backend, &store, Some("incremental"), None).await?;
 
     // Assert that the new content was mined
-    let search_res = backend.search(
+    let search_res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "ADDITIONAL_TEST_TOKEN",
         Some("general"),
         false,
@@ -145,7 +145,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     assert!(search_res.total_matches > 0, "Second mined episode should be retrievable");
 
     // Assert that _last_swept_at has changed/updated

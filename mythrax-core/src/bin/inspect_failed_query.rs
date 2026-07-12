@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
     // Execute Search
     let last_sess_id = q.answer_session_ids.first().cloned();
     println!("Executing search for query with active session: {:?}", last_sess_id);
-    let results = backend.search(
+    let results = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         &q.question,
         Some("general"),
         false,
@@ -304,7 +304,7 @@ async fn main() -> Result<()> {
         last_sess_id.as_deref(),
         false,
         None,
-    ).await?;
+    )).await?;
 
     println!("\n--- Retrieved Results (Top 50) ---");
     for (idx, r) in results.results.iter().enumerate() {

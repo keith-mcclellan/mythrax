@@ -59,7 +59,7 @@ async fn test_t7_session_diversity_promotion() -> Result<()> {
     }
 
     // Search for "Rust database locks"
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -73,7 +73,7 @@ async fn test_t7_session_diversity_promotion() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     // Assert: under-represented Session A gets promoted to at least 3 turns in top-10

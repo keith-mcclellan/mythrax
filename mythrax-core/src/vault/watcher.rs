@@ -833,7 +833,7 @@ mod tests {
         
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
-        let results = backend.search(
+        let results = backend.search(crate::contracts::SearchParams::from_positional(
         "Body content",
         Some("watcher-testing"),
         false,
@@ -847,7 +847,7 @@ mod tests {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Watcher Test");
     }
@@ -884,7 +884,7 @@ mod tests {
         assert!(ignore_list.is_ignored(&abs_path));
         
         // Verify content in DB
-        let results = backend.search(
+        let results = backend.search(crate::contracts::SearchParams::from_positional(
         "bidirectional sync",
         Some("bi-testing"),
         false,
@@ -898,7 +898,7 @@ mod tests {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Bidirectional Test");
         
@@ -915,7 +915,7 @@ mod tests {
         sync_file_to_db(&abs_path, &backend, &store).await.unwrap();
         
         // Verify DB got updated
-        let results2 = backend.search(
+        let results2 = backend.search(crate::contracts::SearchParams::from_positional(
         "updated body",
         Some("bi-testing"),
         false,
@@ -929,7 +929,7 @@ mod tests {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
         assert_eq!(results2.results.len(), 1);
         assert_eq!(results2.results[0].title, "Watcher Test Updated");
     }

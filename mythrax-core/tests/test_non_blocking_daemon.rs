@@ -101,7 +101,7 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
 
     // Verify all 10 episodes were successfully recovered
     for i in 0..10 {
-        let search_res = recovered_backend.search(
+        let search_res = recovered_backend.search(mythrax_core::contracts::SearchParams::from_positional(
         &format!("Concurrent Episode {}", i),
         None,
         false,
@@ -115,7 +115,7 @@ async fn test_thread_safe_wal_concurrency_and_robust_replay_marker_compaction() 
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
         assert!(!search_res.results.is_empty(), "Episode {} must be recovered successfully", i);
     }
 }

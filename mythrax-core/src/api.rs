@@ -139,7 +139,7 @@ async fn search_handler(
     let include_archived = payload.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
     let temporal_anchor = payload.get("temporal_anchor").and_then(|v| v.as_str());
 
-    match state.backend.search(
+    match state.backend.search(crate::contracts::SearchParams::from_positional(
         query,
         scope,
         deep_insight,
@@ -153,7 +153,7 @@ async fn search_handler(
         session_id,
         include_archived,
         temporal_anchor,
-    ).await {
+    )).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => {
             tracing::error!("Search failed: {:?}", e);

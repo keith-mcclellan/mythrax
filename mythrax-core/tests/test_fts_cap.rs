@@ -61,7 +61,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
         std::env::set_var("MYTHRAX_FTS_CAP", "2");
     }
 
-    let resp_cap_2 = backend.search(
+    let resp_cap_2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "architecture",
         Some("general"),
         false,
@@ -75,7 +75,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     println!("Search Results count (Cap 2): {}", resp_cap_2.results.len());
     for (i, r) in resp_cap_2.results.iter().enumerate() {
@@ -109,7 +109,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
     // Allow SurrealDB FTS to index
     tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
-    let resp_cap_3 = backend.search(
+    let resp_cap_3 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "architecture",
         Some("general"),
         false,
@@ -123,7 +123,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     println!("Search Results count (Cap 3): {}", resp_cap_3.results.len());
     for (i, r) in resp_cap_3.results.iter().enumerate() {

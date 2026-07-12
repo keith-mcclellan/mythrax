@@ -1174,7 +1174,7 @@ async fn run_evaluation(
             let active_session_id = q.answer_session_ids.first().map(|s| s.as_str());
             let temporal_anchor = q.question_date.as_ref().and_then(|d| parse_haystack_date(d));
             let search_response = backend
-                .search(
+                .search(crate::contracts::SearchParams::from_positional(
                     &q.question,
                     Some("general"),
                     false,
@@ -1188,7 +1188,7 @@ async fn run_evaluation(
                     active_session_id,
                     true,
                     temporal_anchor.as_deref(),
-                )
+                ))
                 .await
                 .context("Search query failed during evaluation")?;
             let query_latency_ms = start_query.elapsed().as_secs_f64() * 1000.0;

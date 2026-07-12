@@ -51,7 +51,7 @@ async fn test_t5_fusion_no_sigmoid_in_pipeline() -> Result<()> {
         .await?.check()?;
 
     // Search
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -65,7 +65,7 @@ async fn test_t5_fusion_no_sigmoid_in_pipeline() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     assert!(!results.is_empty());
@@ -101,7 +101,7 @@ async fn test_t8_factor_multiplier_single_application() -> Result<()> {
         .bind(("id", uuid))
         .await?.check()?;
 
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -115,7 +115,7 @@ async fn test_t8_factor_multiplier_single_application() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     assert!(!results.is_empty());
@@ -169,7 +169,7 @@ async fn test_t12_default_category_no_aggressive_decay() -> Result<()> {
     // Search with Default category query (e.g. "what is the weather in Tokyo")
     // Wait, we search for "database locking" to retrieve both. But we want to ensure the classification is Default.
     // So we can make the query classification Default. "what is database locking" classifies as Default.
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "what is database locking",
         Some("general"),
         false,
@@ -183,7 +183,7 @@ async fn test_t12_default_category_no_aggressive_decay() -> Result<()> {
         None,
         true,
         Some("2023-05-30T23:40:00Z"),
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     assert!(results.len() >= 2);
@@ -209,7 +209,7 @@ async fn test_t12_default_category_no_aggressive_decay() -> Result<()> {
         .bind(("id", uuid_very_old))
         .await?.check()?;
 
-    let resp2 = backend.search(
+    let resp2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "what is database locking",
         Some("general"),
         false,
@@ -223,7 +223,7 @@ async fn test_t12_default_category_no_aggressive_decay() -> Result<()> {
         None,
         true,
         Some("2023-05-30T23:40:00Z"),
-    ).await?;
+    )).await?;
 
     let r_very_old = resp2.results.iter().find(|r| r.id == id_very_old).expect("Very old episode not found");
     let r_fresh2 = resp2.results.iter().find(|r| r.id == id_fresh).expect("Fresh episode not found");
@@ -260,7 +260,7 @@ async fn test_t13_bm25_outlier_stability() -> Result<()> {
     };
     let id_b = backend.save_episode(&ep_b).await?;
 
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -274,7 +274,7 @@ async fn test_t13_bm25_outlier_stability() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     assert!(results.iter().any(|r| r.id == id_a));
@@ -315,7 +315,7 @@ async fn test_t14_tier_boost_after_factor_fix() -> Result<()> {
     };
     let id_r = backend.save_wisdom_rule(&rule).await?;
 
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "database locking",
         Some("general"),
         false,
@@ -329,7 +329,7 @@ async fn test_t14_tier_boost_after_factor_fix() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
 
