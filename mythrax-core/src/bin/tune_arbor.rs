@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tempfile::tempdir;
 use mythrax_core::db::backend::{SurrealBackend, StorageBackend};
 use mythrax_core::store::MarkdownStore;
 use mythrax_core::vault::watcher::WatchIgnoreList;
@@ -15,8 +14,10 @@ async fn main() -> anyhow::Result<()> {
     backend.set_search_mode("hybrid").await;
 
     // 2. Setup MarkdownStore and WatchIgnoreList
-    let vault_dir = tempdir()?;
-    let store = Arc::new(MarkdownStore::new(vault_dir.path())?);
+    let mut vault_path = std::env::temp_dir();
+    vault_path.push(format!("tune_arbor_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&vault_path)?;
+    let store = Arc::new(MarkdownStore::new(&vault_path)?);
     let ignore = WatchIgnoreList::new();
 
     // 3. Mine the synthetic transcript
@@ -57,5 +58,6 @@ async fn main() -> anyhow::Result<()> {
     }
 
     println!("\nTuning sweep complete!");
+    let _ = std::fs::remove_dir_all(&vault_path);
     Ok(())
 }
