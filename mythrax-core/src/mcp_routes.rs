@@ -2682,8 +2682,9 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
 
 async fn get_node_scope(backend: &SurrealBackend, id: &str) -> String {
     if let Ok(rec_id) = parse_record_id(id) {
-        let sql = format!("SELECT scope FROM {};", rec_id.table);
-        if let Ok(mut response) = backend.db.query(&sql).bind(("id", rec_id)).await {
+        // SECURITY: Prevent SQL injection by using parameterized query and securely binding the id.
+        let sql = "SELECT scope FROM $id;";
+        if let Ok(mut response) = backend.db.query(sql).bind(("id", rec_id)).await {
             if let Ok(Some(scope)) = response.take::<Option<String>>(0) {
                 return scope;
             }
