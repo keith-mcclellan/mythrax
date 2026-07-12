@@ -31,6 +31,14 @@ pub fn strip_nulls(value: &mut Value) {
     }
 }
 
+pub fn truncate_summary(ep_content: &str) -> String {
+    if let Some((idx, _)) = ep_content.char_indices().nth(200) {
+        format!("{}...", &ep_content[..idx])
+    } else {
+        ep_content.to_string()
+    }
+}
+
 async fn format_episode_or_parent(
     backend: &dyn StorageBackend,
     db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
@@ -67,11 +75,7 @@ async fn format_episode_or_parent(
         }
     }
 
-    let summary = if ep_content.len() > 200 {
-        format!("{}...", &ep_content[..200])
-    } else {
-        ep_content.to_string()
-    };
+    let summary = truncate_summary(ep_content);
     Ok(format!(
         "#### 📑 Memory Card: {}\n- **ID**: `{}`\n- **Scope**: `{}`\n- **Summary**: {}\n*For follow-up queries on this memory, use:* `get_memory_nodes [\"{}\"]`\n",
         ep_title, ep_id, ep_scope.unwrap_or("general"), summary, ep_id

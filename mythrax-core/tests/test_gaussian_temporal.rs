@@ -27,6 +27,7 @@ async fn test_gaussian_temporal_decay() -> Result<()> {
 
     // 1. Enable Gaussian temporal decay
     backend.save_profile_key("search.enable_gaussian_temporal", "true").await?;
+    backend.save_profile_key("search.gaussian_temporal_sigma", "168.0").await?;
 
     let resp = backend.search(
         "Unique content for test gaussian temporal decay",

@@ -22,15 +22,18 @@ impl SecretFilter {
                             
                             // Find matching quotes
                             if let Some(q_start) = trimmed_val.find(|c| c == '\'' || c == '"') {
-                                let quote_char = trimmed_val.chars().nth(q_start).unwrap();
-                                if let Some(q_end) = trimmed_val[q_start + 1..].find(quote_char) {
-                                    let rest = &trimmed_val[q_start + 1 + q_end + 1..];
-                                    
-                                    // Extract prefix up to quote start
-                                    let line_offset = line.find(trimmed_val).unwrap();
-                                    let prefix = &line[..line_offset + q_start];
-                                    
-                                    processed_line = format!("{}\"[REDACTED]\"{}", prefix, rest);
+                                if let Some(&quote_byte) = trimmed_val.as_bytes().get(q_start) {
+                                    let quote_char = quote_byte as char;
+                                    if let Some(q_end) = trimmed_val[q_start + 1..].find(quote_char) {
+                                        let rest = &trimmed_val[q_start + 1 + q_end + 1..];
+                                        
+                                        // Extract prefix up to quote start
+                                        if let Some(line_offset) = line.find(trimmed_val) {
+                                            let prefix = &line[..line_offset + q_start];
+                                            
+                                            processed_line = format!("{}\"[REDACTED]\"{}", prefix, rest);
+                                        }
+                                    }
                                 }
                             }
                         }

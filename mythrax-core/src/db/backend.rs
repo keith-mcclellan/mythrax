@@ -6139,8 +6139,14 @@ impl StorageBackend for SurrealBackend {
                 results[idx] = Some(emb);
             }
         }
-
-        Ok(results.into_iter().map(Option::unwrap).collect())
+        let mut final_results = Vec::with_capacity(results.len());
+        for opt in results {
+            match opt {
+                Some(vec) => final_results.push(vec),
+                None => anyhow::bail!("Embedding batch returned mismatched results or missing embedding"),
+            }
+        }
+        Ok(final_results)
     }
 
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>> {

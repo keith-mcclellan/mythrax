@@ -140,11 +140,11 @@ struct QuestionResultRecord {
 fn resolve_scored_file(split: &str) -> Result<&'static str> {
     let file = match split {
         // BI-1: publishable run scores the REAL long-context haystack, not gold-evidence-only.
-        "full500" | "internal-gate" | "dev50" => "longmemeval_s_cleaned.json",
+        "full500" | "internal-gate" | "dev50" | "dev25" => "longmemeval_s_cleaned.json",
         // Explicit upper-bound diagnostic ONLY. Never published.
         "oracle" => "longmemeval_oracle.json",
         other => anyhow::bail!(
-            "SPEC-GAP: unknown split '{}'. Use full500 | oracle | internal-gate | dev50",
+            "SPEC-GAP: unknown split '{}'. Use full500 | oracle | internal-gate | dev50 | dev25",
             other
         ),
     };
@@ -318,6 +318,33 @@ async fn main() -> Result<()> {
         }
         println!(
             "dev50: deterministic stratified dev split of {} questions.",
+            dev_subset.len()
+        );
+        dev_subset
+    } else if args.split == "dev25" {
+        let mut sorted = questions;
+        sorted.sort_by(|a, b| a.question_id.cmp(&b.question_id));
+        let mut dev_subset = Vec::new();
+        let mut counts = std::collections::HashMap::new();
+        let limits = [
+            ("knowledge-update".to_string(), 4),
+            ("multi-session".to_string(), 6),
+            ("single-session-assistant".to_string(), 3),
+            ("single-session-preference".to_string(), 1),
+            ("single-session-user".to_string(), 4),
+            ("temporal-reasoning".to_string(), 7),
+        ].into_iter().collect::<std::collections::HashMap<String, usize>>();
+
+        for q in sorted {
+            let limit = limits.get(&q.question_type).cloned().unwrap_or(0);
+            let count = counts.entry(q.question_type.clone()).or_insert(0);
+            if *count < limit {
+                dev_subset.push(q);
+                *count += 1;
+            }
+        }
+        println!(
+            "dev25: deterministic stratified dev split of {} questions.",
             dev_subset.len()
         );
         dev_subset
