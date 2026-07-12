@@ -316,6 +316,164 @@ pub struct SurrealBackend {
 }
 
 impl SurrealBackend {
+    async fn apply_spreading_activation(
+        &self,
+        cleaned_query: &str,
+        candidates: &mut Vec<SearchResult>,
+        is_hybrid: bool,
+    ) -> Result<()> {
+        let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+
+        if enable_spreading_activation {
+            let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
+                _ => 0.7f32,
+            };
+
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+            struct RelatesToEdge {
+                r#in: surrealdb::types::RecordId,
+                out: surrealdb::types::RecordId,
+                confidence: Option<f32>,
+            }
+
+            let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
+            if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query)).await {
+                if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
+                    if !entities.is_empty() {
+                        let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
+                        if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
+                            if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
+                                for edge in edges {
+                                    let edge_conf = edge.confidence.unwrap_or(1.0);
+                                    let target_id = if edge.r#in.table.as_str() == "episode" {
+                                        Some(edge.r#in.clone())
+                                    } else if edge.out.table.as_str() == "episode" {
+                                        Some(edge.out.clone())
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(tid) = target_id {
+                                        let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
+                                        if let Some(ep) = ep_opt {
+                                            let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
+                                            let ep_str = format_record_id(&ep.id);
+                                            if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
+                                                existing.similarity = existing.similarity.max(activation_similarity);
+                                                if is_hybrid {
+                                                    existing.raw_vector_sim = Some(existing.raw_vector_sim.unwrap_or(0.0).max(activation_similarity));
+                                                }
+                                            } else {
+                                                candidates.push(SearchResult {
+                                                    id: ep_str,
+                                                    title: ep.title,
+                                                    content: ep.content,
+                                                    similarity: activation_similarity,
+                                                    utility: ep.utility.unwrap_or(50.0) as f32,
+                                                    tier: "episode".to_string(),
+                                                    embedding: ep.embedding.clone(),
+                                                    vault_path: ep.vault_path.clone(),
+                                                    source_episode: if is_hybrid { Some("spreading_activation".to_string()) } else { None },
+                                                    discovery_tokens: ep.discovery_tokens,
+                                                    related_nodes: None,
+                                                    raw_vector_sim: if is_hybrid { Some(activation_similarity) } else { Some(1.0) },
+                                                    original_gate: Some(1.0),
+                                                    factor_multiplier: Some(1.0),
+                                                    created_at: None,
+                                                    session_id: ep.session_id.clone(),
+                                                    word_count: ep.word_count,
+                                                    ..Default::default()
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn inject_stm_candidates(
+        &self,
+        session_id: Option<&str>,
+        query_emb: Option<&Vec<f32>>,
+        threshold: f32,
+        candidates: &mut Vec<SearchResult>,
+    ) -> Result<()> {
+        let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+
+        if enable_stm_retrieval {
+            if let Some(sess_id) = session_id {
+                if let Ok(stm_map) = self.get_stm(sess_id, None).await {
+                    if !stm_map.is_empty() {
+                        let mut keys = Vec::new();
+                        let mut values = Vec::new();
+                        for (k, v) in stm_map {
+                            if k.starts_with('_') {
+                                continue;
+                            }
+                            keys.push(k);
+                            values.push(v);
+                        }
+
+                        if let Some(q_vec) = query_emb {
+                            if let Ok(embeddings) = self.embed_batch(&values).await {
+                                for (i, v_vec) in embeddings.into_iter().enumerate() {
+                                    let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
+                                    if dot >= threshold {
+                                        let key = &keys[i];
+                                        let val = &values[i];
+                                        candidates.push(SearchResult {
+                                            id: format!("stm:{}:{}", sess_id, key),
+                                            title: key.clone(),
+                                            content: val.clone(),
+                                            similarity: dot,
+                                            utility: 100.0,
+                                            tier: "working".to_string(),
+                                            embedding: Some(v_vec),
+                                            raw_vector_sim: Some(dot),
+                                            session_id: Some(sess_id.to_string()),
+                                            word_count: Some(val.split_whitespace().count() as u32),
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
+                            }
+                        } else {
+                            for (i, val) in values.iter().enumerate() {
+                                let key = &keys[i];
+                                candidates.push(SearchResult {
+                                    id: format!("stm:{}:{}", sess_id, key),
+                                    title: key.clone(),
+                                    content: val.clone(),
+                                    similarity: 1.0,
+                                    utility: 100.0,
+                                    tier: "working".to_string(),
+                                    raw_vector_sim: Some(1.0),
+                                    session_id: Some(sess_id.to_string()),
+                                    word_count: Some(val.split_whitespace().count() as u32),
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn classify_query_db(&self, query: &str) -> QueryCategory {
         let lower = query.to_lowercase();
         if lower.contains("who am i") || lower.contains("about me") {
@@ -3409,144 +3567,8 @@ impl StorageBackend for SurrealBackend {
             let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
             keyword_candidates.truncate(fts_cap);
 
-            let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
-                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-                _ => false,
-            };
-
-            if enable_spreading_activation {
-                let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
-                    _ => 0.7f32,
-                };
-
-                #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
-                struct RelatesToEdge {
-                    r#in: surrealdb::types::RecordId,
-                    out: surrealdb::types::RecordId,
-                    confidence: Option<f32>,
-                }
-
-                let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
-                if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
-                    if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
-                        if !entities.is_empty() {
-                            let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
-                            if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
-                                if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
-                                    for edge in edges {
-                                        let edge_conf = edge.confidence.unwrap_or(1.0);
-                                        let target_id = if edge.r#in.table.as_str() == "episode" {
-                                            Some(edge.r#in.clone())
-                                        } else if edge.out.table.as_str() == "episode" {
-                                            Some(edge.out.clone())
-                                        } else {
-                                            None
-                                        };
-
-                                        if let Some(tid) = target_id {
-                                            let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
-                                            if let Some(ep) = ep_opt {
-                                                let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
-                                                let ep_str = format_record_id(&ep.id);
-                                                if let Some(existing) = vector_candidates.iter_mut().find(|c| c.id == ep_str) {
-                                                    existing.similarity = existing.similarity.max(activation_similarity);
-                                                    existing.raw_vector_sim = Some(existing.raw_vector_sim.unwrap_or(0.0).max(activation_similarity));
-                                                } else {
-                                                    vector_candidates.push(SearchResult {
-                                                        id: ep_str,
-                                                        title: ep.title,
-                                                        content: ep.content,
-                                                        similarity: activation_similarity,
-                                                        utility: ep.utility.unwrap_or(50.0) as f32,
-                                                        tier: "episode".to_string(),
-                                                        embedding: ep.embedding.clone(),
-                                                        vault_path: ep.vault_path.clone(),
-                                                        source_episode: Some("spreading_activation".to_string()),
-                                                        discovery_tokens: ep.discovery_tokens,
-                                                        related_nodes: None,
-                                                        raw_vector_sim: Some(activation_similarity),
-                                                        original_gate: Some(1.0),
-                                                        factor_multiplier: Some(1.0),
-                                                        created_at: None,
-                                                        session_id: ep.session_id.clone(),
-                                                        word_count: ep.word_count,
-                                                        ..Default::default()
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
-                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-                _ => false,
-            };
-
-            if enable_stm_retrieval {
-                if let Some(sess_id) = session_id {
-                    if let Ok(stm_map) = self.get_stm(sess_id, None).await {
-                        if !stm_map.is_empty() {
-                            let mut keys = Vec::new();
-                            let mut values = Vec::new();
-                            for (k, v) in stm_map {
-                                if k.starts_with('_') {
-                                    continue;
-                                }
-                                keys.push(k);
-                                values.push(v);
-                            }
-
-                            if let Some(ref q_vec) = query_emb {
-                                if let Ok(embeddings) = self.embed_batch(&values).await {
-                                    for (i, v_vec) in embeddings.into_iter().enumerate() {
-                                        let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
-                                        if dot >= threshold {
-                                            let key = &keys[i];
-                                            let val = &values[i];
-                                            vector_candidates.push(SearchResult {
-                                                id: format!("stm:{}:{}", sess_id, key),
-                                                title: key.clone(),
-                                                content: val.clone(),
-                                                similarity: dot,
-                                                utility: 100.0,
-                                                tier: "working".to_string(),
-                                                embedding: Some(v_vec),
-                                                raw_vector_sim: Some(dot),
-                                                session_id: Some(sess_id.to_string()),
-                                                word_count: Some(val.split_whitespace().count() as u32),
-                                                ..Default::default()
-                                            });
-                                        }
-                                    }
-                                }
-                            } else {
-                                for (i, val) in values.iter().enumerate() {
-                                    let key = &keys[i];
-                                    vector_candidates.push(SearchResult {
-                                        id: format!("stm:{}:{}", sess_id, key),
-                                        title: key.clone(),
-                                        content: val.clone(),
-                                        similarity: 1.0,
-                                        utility: 100.0,
-                                        tier: "working".to_string(),
-                                        raw_vector_sim: Some(1.0),
-                                        session_id: Some(sess_id.to_string()),
-                                        word_count: Some(val.split_whitespace().count() as u32),
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            self.apply_spreading_activation(cleaned_query.as_str(), &mut vector_candidates, true).await?;
+            self.inject_stm_candidates(session_id, query_emb.as_ref(), threshold, &mut vector_candidates).await?;
             if is_hybrid_enabled && query_emb.is_some() && !vector_candidates.is_empty() {
                 let mut unique_map = std::collections::HashMap::new();
                 for c in vector_candidates {
@@ -3749,147 +3771,8 @@ impl StorageBackend for SurrealBackend {
             // -------------------------------------------------------------
             // Task A.6: Concept Spreading Activation (Non-Hybrid Path)
             // -------------------------------------------------------------
-            let enable_spreading_activation = match self.get_profile_key("search.enable_spreading_activation").await {
-                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-                _ => false,
-            };
-
-            if enable_spreading_activation {
-                let spreading_activation_attenuation = match self.get_profile_key("search.spreading_activation_attenuation").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().unwrap_or(0.7f32),
-                    _ => 0.7f32,
-                };
-
-                #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
-                struct RelatesToEdge {
-                    r#in: surrealdb::types::RecordId,
-                    out: surrealdb::types::RecordId,
-                    confidence: Option<f32>,
-                }
-
-                // Query matching entities in SurrealDB
-                let query_entities_sql = "SELECT id FROM entity WHERE name = $query OR name @@ $query OR summary @@ $query;";
-                if let Ok(mut entity_res) = self.db.query(query_entities_sql).bind(("query", cleaned_query.as_str())).await {
-                    if let Ok(entities) = entity_res.take::<Vec<surrealdb::types::RecordId>>(0) {
-                        if !entities.is_empty() {
-                            let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
-                            if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
-                                if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
-                                    for edge in edges {
-                                        let edge_conf = edge.confidence.unwrap_or(1.0);
-                                        let target_id = if edge.r#in.table.as_str() == "episode" {
-                                            Some(edge.r#in.clone())
-                                        } else if edge.out.table.as_str() == "episode" {
-                                            Some(edge.out.clone())
-                                        } else {
-                                            None
-                                        };
-
-                                        if let Some(tid) = target_id {
-                                            let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
-                                            if let Some(ep) = ep_opt {
-                                                let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
-                                                let ep_str = format_record_id(&ep.id);
-                                                if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
-                                                    existing.similarity = existing.similarity.max(activation_similarity);
-                                                } else {
-                                                    candidates.push(SearchResult {
-                                                        id: ep_str,
-                                                        title: ep.title,
-                                                        content: ep.content,
-                                                        similarity: activation_similarity,
-                                                        utility: ep.utility.unwrap_or(50.0) as f32,
-                                                        tier: "episode".to_string(),
-                                                        embedding: ep.embedding.clone(),
-                                                        vault_path: ep.vault_path.clone(),
-                                                        source_episode: None,
-                                                        discovery_tokens: ep.discovery_tokens,
-                                                        related_nodes: None,
-                                                        raw_vector_sim: Some(1.0),
-                                                        original_gate: Some(1.0),
-                                                        factor_multiplier: Some(1.0),
-                                                        created_at: None,
-                                                        session_id: ep.session_id.clone(),
-                                                        word_count: ep.word_count,
-                                                        ..Default::default()
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // -------------------------------------------------------------
-            // Task A.7: STM Working Memory Injection (Non-Hybrid Path)
-            // -------------------------------------------------------------
-            let enable_stm_retrieval = match self.get_profile_key("search.enable_stm_retrieval").await {
-                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-                _ => false,
-            };
-
-            if enable_stm_retrieval {
-                if let Some(sess_id) = session_id {
-                    if let Ok(stm_map) = self.get_stm(sess_id, None).await {
-                        if !stm_map.is_empty() {
-                            let mut keys = Vec::new();
-                            let mut values = Vec::new();
-                            for (k, v) in stm_map {
-                                if k.starts_with('_') {
-                                    continue;
-                                }
-                                keys.push(k);
-                                values.push(v);
-                            }
-
-                            if let Some(ref q_vec) = query_emb {
-                                if let Ok(embeddings) = self.embed_batch(&values).await {
-                                    for (i, v_vec) in embeddings.into_iter().enumerate() {
-                                        let dot: f32 = q_vec.iter().zip(v_vec.iter()).map(|(a, b)| a * b).sum();
-                                        if dot >= threshold {
-                                            let key = &keys[i];
-                                            let val = &values[i];
-                                            candidates.push(SearchResult {
-                                                id: format!("stm:{}:{}", sess_id, key),
-                                                title: key.clone(),
-                                                content: val.clone(),
-                                                similarity: dot,
-                                                utility: 100.0,
-                                                tier: "working".to_string(),
-                                                embedding: Some(v_vec),
-                                                raw_vector_sim: Some(dot),
-                                                session_id: Some(sess_id.to_string()),
-                                                word_count: Some(val.split_whitespace().count() as u32),
-                                                ..Default::default()
-                                            });
-                                        }
-                                    }
-                                }
-                            } else {
-                                for (i, val) in values.iter().enumerate() {
-                                    let key = &keys[i];
-                                    candidates.push(SearchResult {
-                                        id: format!("stm:{}:{}", sess_id, key),
-                                        title: key.clone(),
-                                        content: val.clone(),
-                                        similarity: 1.0,
-                                        utility: 100.0,
-                                        tier: "working".to_string(),
-                                        raw_vector_sim: Some(1.0),
-                                        session_id: Some(sess_id.to_string()),
-                                        word_count: Some(val.split_whitespace().count() as u32),
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            self.apply_spreading_activation(cleaned_query.as_str(), &mut candidates, false).await?;
+            self.inject_stm_candidates(session_id, query_emb.as_ref(), threshold, &mut candidates).await?;
         }
 
 
