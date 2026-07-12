@@ -60,16 +60,6 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 ]
             }))
         }
-        "organize" => {
-            Ok(json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Vault organization completed. Collisions resolved successfully."
-                    }
-                ]
-            }))
-        }
         "reprocess" => {
             let all_eps = state.backend.get_all_episodes().await?;
             let mut count = 0;

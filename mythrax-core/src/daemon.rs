@@ -603,8 +603,4 @@ pub mod monitor {
         };
         swap_used_bytes >= threshold
     }
-
-    pub fn check_memory_pressure() -> bool {
-        false
-    }
 }

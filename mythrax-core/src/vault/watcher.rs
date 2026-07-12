@@ -728,48 +728,6 @@ pub async fn save_episode_bidirectional(
     Ok(db_id)
 }
 
-/// Save a wisdom rule both to the database and back to the vault, with loop prevention
-#[allow(dead_code)]
-pub async fn save_wisdom_rule_bidirectional(
-    rule: &WisdomRule,
-    backend: &Arc<dyn StorageBackend>,
-    store: &Arc<MarkdownStore>,
-    ignore_list: &WatchIgnoreList,
-) -> Result<String> {
-    // 1. Determine relative path
-    let rel_path = match rule.vault_path {
-        Some(ref vp) if !vp.is_empty() => vp.clone(),
-        _ => {
-            let slug = slugify(&rule.target_pattern);
-            let filename = format!("{}.md", slug);
-            
-            let markdown = format_wisdom_markdown(rule);
-            let tier_subfolder = format!("wisdom/{}", rule.tier);
-            
-            let resolved_abs = organize_file(&store.vault_root, &tier_subfolder, &filename, &markdown)?;
-            resolved_abs.strip_prefix(&store.vault_root)
-                .unwrap_or(&resolved_abs)
-                .to_string_lossy()
-                .to_string()
-        }
-    };
-
-    // 2. Prepare WisdomRule with resolved vault path
-    let mut rule_to_save = rule.clone();
-    rule_to_save.vault_path = Some(rel_path.clone());
-
-    // 3. Save to database
-    let db_id = backend.save_wisdom_rule(&rule_to_save).await?;
-
-    // 4. Save to vault
-    let markdown = format_wisdom_markdown(&rule_to_save);
-    let abs_path = store.vault_root.join(&rel_path);
-
-    // Queue write operation to coalescing write-behind queue
-    ignore_list.queue_write(abs_path, &markdown, store.clone());
-
-    Ok(db_id)
-}
 
 pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
     let mut yaml_val = serde_json::Map::new();

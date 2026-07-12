@@ -84,9 +84,7 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<SearchResponse>;
     async fn get_wisdom(&self, query: &str, tier: Option<&str>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
-    /// Reserved: schema migration runner (deferred until multi-version migration support).
-    #[allow(dead_code)]
-    async fn apply_migrations(&self) -> Result<()>;
+
     async fn get_llm_config(&self) -> Result<LlmConfigResponse>;
     async fn update_llm_config(&self, req: &LlmConfigRequest) -> Result<()>;
     async fn get_unprocessed_episodes(&self) -> Result<Vec<Episode>>;
@@ -170,7 +168,6 @@ pub struct SurrealBackend {
     pub embedder: Option<Arc<crate::embeddings::LocalEmbedder>>,
     pub client_port: Option<u16>,
     pub write_lock: Arc<tokio::sync::Mutex<()>>,
-    pub wal_tx: Option<tokio::sync::mpsc::Sender<(EpisodeSave, std::path::PathBuf)>>,
     pub db_path: Option<std::path::PathBuf>,
     pub active_embeddings: Arc<std::sync::atomic::AtomicUsize>,
     pub max_concurrent_embeddings: Arc<std::sync::atomic::AtomicUsize>,
@@ -335,9 +332,6 @@ impl SurrealBackend {
         Ok(res_str)
     }
 
-    pub async fn save_episode_with_wal_actor(&self, episode: &EpisodeSave, wal_path: &std::path::Path) -> Result<String> {
-        self.save_episode_with_wal_actor_db(episode, wal_path).await
-    }
 
     /// Saves a batch of episodes in a single transaction.
     pub async fn save_episodes_batch(&self, episodes: &[EpisodeSave]) -> Result<()> {
@@ -401,104 +395,6 @@ impl SurrealBackend {
                 entry.count += 1;
             }
         }
-    }
-
-    pub async fn replay_wal_if_fresh(&self, wal_path: &std::path::Path, initialized_marker: &std::path::Path) -> Result<()> {
-        if self.is_client_mode() {
-            return Ok(());
-        }
-        if initialized_marker.exists() {
-            if let Ok(episodes) = self.get_all_episodes().await {
-                if !episodes.is_empty() {
-                    return Ok(());
-                }
-            }
-        }
-        if wal_path.exists() {
-            let file = std::fs::File::open(wal_path)?;
-            let reader = std::io::BufReader::new(file);
-            use std::io::BufRead;
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    if l.trim().is_empty() {
-                        continue;
-                    }
-                    if let Ok(episode) = serde_json::from_str::<EpisodeSave>(&l) {
-                        if let Err(e) = self.save_episode(&episode).await {
-                            tracing::error!("Failed to save recovered episode from WAL: {:?}", e);
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(parent) = initialized_marker.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(initialized_marker, "initialized")?;
-        Ok(())
-    }
-
-    pub async fn compact_wal_file(&self, wal_path: &std::path::Path) -> Result<()> {
-        if self.is_client_mode() {
-            return Ok(());
-        }
-        if !wal_path.exists() {
-            return Ok(());
-        }
-        let file = std::fs::File::open(wal_path)?;
-        let reader = std::io::BufReader::new(file);
-        use std::io::BufRead;
-        let mut episodes = Vec::new();
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                if l.trim().is_empty() {
-                    continue;
-                }
-                if let Ok(ep) = serde_json::from_str::<EpisodeSave>(&l) {
-                    episodes.push(ep);
-                }
-            }
-        }
-        let mut unique_episodes = Vec::new();
-        let mut seen_titles = std::collections::HashSet::new();
-        for ep in episodes.into_iter().rev() {
-            if seen_titles.insert(ep.title.clone()) {
-                unique_episodes.push(ep);
-            }
-        }
-        unique_episodes.reverse();
-
-        let temp_path = wal_path.with_extension("tmp");
-        {
-            let mut file = {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::OpenOptionsExt;
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .mode(0o600)
-                        .open(&temp_path)?
-                }
-                #[cfg(not(unix))]
-                {
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .open(&temp_path)?
-                }
-            };
-            use std::io::Write;
-            for ep in &unique_episodes {
-                let line_str = serde_json::to_string(ep)?;
-                writeln!(file, "{}", line_str)?;
-            }
-            file.sync_all()?;
-        }
-        std::fs::rename(temp_path, wal_path)?;
-        Ok(())
     }
 
     pub async fn new(url: &str) -> Result<Self> {
@@ -593,47 +489,8 @@ impl SurrealBackend {
             }
         };
 
-        // 4. Initialize write lock and WAL channel
+        // 4. Initialize write lock
         let write_lock = Arc::new(tokio::sync::Mutex::new(()));
-        let (wal_tx, mut wal_rx) = tokio::sync::mpsc::channel::<(EpisodeSave, std::path::PathBuf)>(100);
-
-        // Spawn WAL actor task
-        tokio::spawn(async move {
-            use std::io::Write;
-            while let Some((episode, wal_path)) = wal_rx.recv().await {
-                // Open file with strict 0600 permissions
-                let file = {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::OpenOptionsExt;
-                        std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .mode(0o600)
-                            .open(&wal_path)
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&wal_path)
-                    }
-                };
-
-                match file {
-                    Ok(mut f) => {
-                        if let Ok(line) = serde_json::to_string(&episode) {
-                            let _ = writeln!(f, "{}", line);
-                            let _ = f.sync_all();
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to open WAL file for writing: {:?}", e);
-                    }
-                }
-            }
-        });
 
         let active_embeddings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let max_concurrent_embeddings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -645,7 +502,6 @@ impl SurrealBackend {
             embedder,
             client_port,
             write_lock,
-            wal_tx: Some(wal_tx),
             db_path,
             active_embeddings,
             max_concurrent_embeddings,
@@ -668,7 +524,6 @@ impl SurrealBackend {
             embedder: None,
             client_port: None,
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
-            wal_tx: None,
             db_path: None,
             active_embeddings: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             max_concurrent_embeddings: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -1481,9 +1336,6 @@ impl StorageBackend for SurrealBackend {
         self.record_feedback_db(id, success).await
     }
 
-    async fn apply_migrations(&self) -> Result<()> {
-        Ok(())
-    }
 
     async fn get_llm_config(&self) -> Result<LlmConfigResponse> {
         self.get_llm_config_db().await
@@ -1704,11 +1556,11 @@ impl StorageBackend for SurrealBackend {
                     emp.embed_batch(&missing_texts_clone)
                 } else {
                     let is_mock = {
-                        #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+                        #[cfg(any(test, debug_assertions))]
                         {
                             std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
                         }
-                        #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+                        #[cfg(not(any(test, debug_assertions)))]
                         {
                             false
                         }

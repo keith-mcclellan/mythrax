@@ -902,11 +902,11 @@ impl DynamicModelBroker {
             #[cfg(feature = "mlx")]
             let (model_opt, tok_opt) = {
                 let is_mock = {
-                    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+                    #[cfg(any(test, debug_assertions))]
                     {
                         std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
                     }
-                    #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+                    #[cfg(not(any(test, debug_assertions)))]
                     {
                         false
                     }
@@ -1023,7 +1023,7 @@ impl DynamicModelBroker {
     }
 
     /// Creates a new corrupt mock broker.
-    #[cfg(any(test, debug_assertions, feature = "test-mock", feature = "test-utils"))]
+    #[cfg(any(test, debug_assertions))]
     pub async fn new_corrupt_mock() -> Result<Self> {
         Ok(Self {
             models: Arc::new(Mutex::new(HashMap::new())),
@@ -1040,7 +1040,7 @@ impl DynamicModelBroker {
     pub async fn acquire_llm_with_warmup_fallback(&self, tier: ModelTier) -> Result<Arc<dyn InferenceEngine>> {
         match self.acquire_llm(tier).await {
             Ok(model) => Ok(model),
-            #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+            #[cfg(any(test, debug_assertions))]
             Err(_e) => {
                 let mut models = self.models.lock().unwrap();
                 models.clear();
@@ -1063,7 +1063,7 @@ impl DynamicModelBroker {
                 
                 Ok(fallback_model)
             }
-            #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+            #[cfg(not(any(test, debug_assertions)))]
             Err(e) => Err(e),
         }
     }
@@ -1088,11 +1088,11 @@ mod tests {
 #[cfg(feature = "mlx")]
 async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<()> {
     let is_mock = {
-        #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+        #[cfg(any(test, debug_assertions))]
         {
             std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
         }
-        #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+        #[cfg(not(any(test, debug_assertions)))]
         {
             false
         }

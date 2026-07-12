@@ -7,12 +7,8 @@ use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
 
-fn dot_product(u: &[f32], v: &[f32]) -> f32 {
-    u.iter().zip(v.iter()).map(|(a, b)| a * b).sum()
-}
-
 pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
-    1.0 - dot_product(u, v)
+    1.0 - crate::math::cosine_similarity(u, v)
 }
 
 pub fn dbscan(
@@ -85,16 +81,6 @@ pub fn find_elbow_point(k_distances: &[f32]) -> f32 {
     k_distances[elbow_idx]
 }
 
-pub fn calibrate_epsilon_fallback(model_name: &str, user_override: Option<f32>) -> f32 {
-    if let Some(val) = user_override {
-        return val;
-    }
-    if model_name.contains("nomic") {
-        0.55
-    } else {
-        0.55
-    }
-}
 
 fn find_neighbors(i: usize, embeddings: &[&[f32]], eps: f32) -> Vec<usize> {
     let mut neighbors = Vec::new();
@@ -489,11 +475,7 @@ impl DreamCoordinator {
                     Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
                     _ => None,
                 };
-                let model_name = match db.get_llm_config().await {
-                    Ok(cfg) => cfg.model,
-                    _ => "nomic-embed-text-v1.5-mlx".to_string(),
-                };
-                calibrate_epsilon_fallback(&model_name, user_override_val)
+                user_override_val.unwrap_or(0.55)
             }
         };
 
@@ -1518,7 +1500,7 @@ pub async fn save_wisdom_rule_with_deduplication(
             }
         };
 
-        let sim = dot_product(&new_emb, &existing_emb);
+        let sim = crate::math::cosine_similarity(&new_emb, &existing_emb);
         if sim > 0.80 {
             if let Some((_, best_sim)) = best_match.as_ref() {
                 if sim > *best_sim {

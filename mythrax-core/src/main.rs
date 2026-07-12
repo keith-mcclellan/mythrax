@@ -269,7 +269,6 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
     })
 }
 
-pub static SUSPEND_BACKGROUND_TASKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(unix)]
 fn is_process_alive(pid: i32) -> bool {
@@ -365,7 +364,6 @@ pub fn spawn_swap_monitor_thread() {
                 Err(_) => false,
             };
             if disable_monitor {
-                SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
                 continue;
             }
 
@@ -411,18 +409,12 @@ pub fn spawn_swap_monitor_thread() {
                             tier,
                             threshold_gb
                         );
-                        // Trigger suspension
-                        SUSPEND_BACKGROUND_TASKS.store(true, std::sync::atomic::Ordering::SeqCst);
 
                         // Evict unused models from VRAM
                         if let Some(broker) = mythrax_core::llm::DYNAMIC_MODEL_BROKER.get() {
                             broker.evict_unused_models().await;
                         }
-                    } else {
-                        SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
                     }
-                } else {
-                    SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
             }
         }

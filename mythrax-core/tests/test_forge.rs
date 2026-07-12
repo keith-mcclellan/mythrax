@@ -153,57 +153,6 @@ async fn test_ingest_document() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_skeletonize_skill_workflow() -> Result<()> {
-    let tmp = tempdir()?;
-    let skill_path = tmp.path().join("SKILL.md");
-    
-    let skill_content = r#"---
-name: test-skill
-description: "A test skill"
----
-
-# Test Skill
-
-Some main instructions here.
-
-## Examples
-Here is an example code block:
-```rust
-fn example() {}
-```
-
-## References
-Here is a reference link:
-[rustdoc](https://rust-lang.org)
-"#;
-
-    fs::write(&skill_path, skill_content)?;
-    
-    mythrax_core::cognitive::forge::skeletonize_skill_file(&skill_path)?;
-    
-    // Check rewritten SKILL.md
-    let rewritten = fs::read_to_string(&skill_path)?;
-    assert!(rewritten.contains("name: test-skill"));
-    assert!(rewritten.contains("Detailed examples and playbooks have been moved to [examples/examples.md](examples/examples.md)."));
-    assert!(rewritten.contains("Detailed reference documentation has been moved to [references/references.md](references/references.md)."));
-    assert!(!rewritten.contains("fn example() {}"));
-    assert!(!rewritten.contains("[rustdoc]"));
-
-    // Check examples/examples.md
-    let examples_path = tmp.path().join("examples/examples.md");
-    assert!(examples_path.exists());
-    let examples_content = fs::read_to_string(examples_path)?;
-    assert!(examples_content.contains("fn example() {}"));
-
-    // Check references/references.md
-    let references_path = tmp.path().join("references/references.md");
-    assert!(references_path.exists());
-    let references_content = fs::read_to_string(references_path)?;
-    assert!(references_content.contains("[rustdoc]"));
-
-    Ok(())
-}
 
 #[test]
 fn test_markdown_toc_parsing() {

@@ -54,8 +54,6 @@ path = "src/main.rs"
 [features]
 mlx = ["dep:mlx-rs", "dep:safetensors"]
 bench = []
-test-mock = []
-test-utils = []
 
 [[bin]]
 name = "bench"

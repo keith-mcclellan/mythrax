@@ -629,7 +629,7 @@ impl SurrealBackend {
 
         // Stage 2: Per-result Sigmoid Gating (pre-fusion similarity quality threshold)
         let (use_new_formula, is_sigmoid_gated_search_test) = {
-            #[cfg(any(test, feature = "test-mock"))]
+            #[cfg(test)]
             {
                 let is_running_in_test = {
                     let in_test_exe = if let Ok(exe) = std::env::current_exe() {
@@ -648,7 +648,7 @@ impl SurrealBackend {
                 }) || std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
                 (is_sigmoid || !is_running_in_test, is_sigmoid)
             }
-            #[cfg(not(any(test, feature = "test-mock")))]
+            #[cfg(not(test))]
             {
                 let is_sigmoid = std::env::var("MYTHRAX_SIGMOID_GATED_SEARCH_TEST").is_ok();
                 (true, is_sigmoid)

@@ -321,21 +321,6 @@ pub struct HandoffSave {
     pub include_tool_execution: Option<bool>,
 }
 
-/// Full hydrated Handoff — reserved for agent-tracking API; construction deferred.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
-pub struct Handoff {
-    pub id: Option<String>,
-    pub parent_conversation_id: String,
-    pub subagent_conversation_id: String,
-    pub summary: String,
-    pub handoff_file_path: String,
-    pub scope: Option<String>,
-    pub status: Option<String>,
-    pub created_at: Option<String>,
-    pub embedding: Option<Vec<f32>>,
-    pub include_tool_execution: Option<bool>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct WikiNode {

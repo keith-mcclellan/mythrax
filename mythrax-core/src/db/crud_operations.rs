@@ -12,31 +12,6 @@ use surrealdb_types::SurrealValue;
 use anyhow::{Result, Context};
 use uuid::Uuid;
 
-macro_rules! run_write {
-    ($self:expr, $block:expr) => {{
-        let _guard = $self.write_lock.lock().await;
-        let mut attempt = 0;
-        loop {
-            let res = { $block };
-            match res {
-                Ok(val) => break Ok(val),
-                Err(e) => {
-                    let err_str = e.to_string();
-                    let is_conflict = err_str.contains("TransactionConflict")
-                        || err_str.contains("conflict")
-                        || err_str.contains("Transaction conflict");
-                    if is_conflict && attempt < 5 {
-                        attempt += 1;
-                        let delay = std::time::Duration::from_millis(50 * (1 << attempt));
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    break Err(e);
-                }
-            }
-        }
-    }};
-}
 
 impl SurrealBackend {
     pub async fn init_db(&self) -> Result<()> {
@@ -306,19 +281,6 @@ impl SurrealBackend {
         self.record_episode_tokens_for_cache(&scope_val, &episode.content).await;
 
         Ok(new_ep_id)
-    }
-
-    pub async fn save_episode_with_wal_actor_db(&self, episode: &EpisodeSave, wal_path: &std::path::Path) -> Result<String> {
-        if self.is_client_mode() {
-            return self.save_episode(episode).await;
-        }
-        let id = run_write!(self, {
-            self.save_episode(episode).await
-        })?;
-        if let Some(tx) = &self.wal_tx {
-            let _ = tx.send((episode.clone(), wal_path.to_path_buf())).await;
-        }
-        Ok(id)
     }
 
     pub async fn save_episodes_batch_db(&self, episodes: &[EpisodeSave]) -> Result<()> {
