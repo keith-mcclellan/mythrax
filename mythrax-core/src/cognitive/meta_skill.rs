@@ -45,7 +45,7 @@ fn parse_skill_file(path: &Path) -> Result<SkillInfo> {
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
         if folder_name.starts_with("meta-") {
-            folder_name.strip_prefix("meta-").unwrap().to_string()
+            folder_name.strip_prefix("meta-").unwrap_or(&folder_name).to_string()
         } else {
             "general".to_string()
         }
@@ -280,8 +280,8 @@ impl MetaSkillSynthesizer {
                         #[derive(serde::Deserialize)]
                         struct MergeValidation {
                             should_merge: bool,
-                            suggested_name: String,
-                            reason: String,
+                            suggested_name: Option<String>,
+                            reason: Option<String>,
                         }
 
                         if let Ok(val) = serde_json::from_str::<MergeValidation>(stripped) {
@@ -306,14 +306,21 @@ impl MetaSkillSynthesizer {
             file_content.push_str("No redundant or overlapping skills detected.\n");
         } else {
             for sug in &suggestions {
-                let sources = sug["source_skills"].as_array().unwrap();
-                let src_names: Vec<String> = sources.iter().map(|s| s.as_str().unwrap().to_string()).collect();
+                let sources = sug["source_skills"].as_array();
+                let src_names: Vec<String> = match sources {
+                    Some(arr) => arr.iter().map(|s| s.as_str().unwrap_or("<unknown>").to_string()).collect(),
+                    None => vec![],
+                };
+                let suggested_target_name = sug["suggested_target_name"].as_str().unwrap_or("Unknown Target");
+                let similarity = sug["similarity"].as_f64().unwrap_or(0.0);
+                let reason = sug["reason"].as_str().unwrap_or("No reason provided.");
+
                 file_content.push_str(&format!(
                     "## Merge Candidate: {}\n- **Source Skills**: {}\n- **Semantic Similarity**: {:.2}\n- **Reason**: {}\n\n",
-                    sug["suggested_target_name"].as_str().unwrap(),
+                    suggested_target_name,
                     src_names.join(", "),
-                    sug["similarity"].as_f64().unwrap(),
-                    sug["reason"].as_str().unwrap()
+                    similarity,
+                    reason
                 ));
             }
         }

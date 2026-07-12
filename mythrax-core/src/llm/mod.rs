@@ -99,6 +99,9 @@ impl LLMClient {
                 if prompt.contains("Analyze the following dialog") {
                     return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
                 } else if prompt.contains("Validate if these should merge") {
+                    if std::env::var("MYTHRAX_MOCK_MALFORMED_MERGE").is_ok() {
+                        return Ok(r#"{"should_merge": true}"#.to_string());
+                    }
                     return Ok(r#"{"should_merge": true, "suggested_name": "git-workflow", "reason": "Redundant playbooks"}"#.to_string());
                 } else if prompt.contains("Playbooks to Merge") {
                     return Ok("---\nname: meta-git-workflow\ndescription: Consolidated git meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nConsolidated instructions here.\n".to_string());
@@ -424,11 +427,21 @@ async fn send_with_retry(
         attempt += 1;
         let base_ms = 500.0;
         let factor = (2.0f64).powi(attempt);
-        let jitter = (tokio::time::Instant::now().elapsed().as_nanos() % 100) as f64;
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let jitter = calculate_lcg_jitter(attempt, ns);
         let delay_ms = (base_ms * factor + jitter).min(5000.0);
         let sleep_duration = std::time::Duration::from_millis(delay_ms as u64);
         tokio::time::sleep(sleep_duration).await;
     }
+}
+
+pub fn calculate_lcg_jitter(attempt: i32, ns: u128) -> f64 {
+    let mut x = (ns ^ (attempt as u128)) as u64;
+    x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    (x % 100) as f64
 }
 
 /// Truncates a string to a maximum character count, respecting boundary
