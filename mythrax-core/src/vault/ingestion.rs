@@ -1213,12 +1213,13 @@ fn split_by_words(text: &str) -> Vec<String> {
 
 fn split_by_chars(text: &str, max_chars: usize) -> Vec<String> {
     let mut chunks = Vec::new();
-    let mut current = String::new();
+    // Bolt: Preallocate string capacity to avoid reallocations
+    let mut current = String::with_capacity(max_chars);
     let mut count = 0;
     for c in text.chars() {
         if count >= max_chars {
-            chunks.push(current.clone());
-            current.clear();
+            // Bolt: Replace .clone() + .clear() with mem::replace and preallocate next chunk
+            chunks.push(std::mem::replace(&mut current, String::with_capacity(max_chars)));
             count = 0;
         }
         current.push(c);
@@ -1232,7 +1233,8 @@ fn split_by_chars(text: &str, max_chars: usize) -> Vec<String> {
 
 fn group_sub_chunks(sub_chunks: Vec<String>, delimiter: &str, max_chars: usize) -> Vec<String> {
     let mut grouped = Vec::new();
-    let mut current_group = String::new();
+    // Bolt: Preallocate string capacity to avoid reallocations
+    let mut current_group = String::with_capacity(max_chars);
     let mut current_len = 0;
 
     for chunk in sub_chunks {
@@ -1243,8 +1245,8 @@ fn group_sub_chunks(sub_chunks: Vec<String>, delimiter: &str, max_chars: usize) 
         let chunk_len = chunk.chars().count();
         if chunk_len > max_chars {
             if !current_group.is_empty() {
-                grouped.push(current_group.clone());
-                current_group.clear();
+                // Bolt: Replace .clone() + .clear() with mem::replace and preallocate next chunk
+                grouped.push(std::mem::replace(&mut current_group, String::with_capacity(max_chars)));
                 current_len = 0;
             }
             grouped.push(chunk);

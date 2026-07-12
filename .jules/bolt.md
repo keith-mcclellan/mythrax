@@ -1,0 +1,3 @@
+## 2024-06-25 - Avoid .clone() + .clear() via std::mem::replace
+**Learning:** Using `.clone()` followed by `.clear()` inside string parsing loops (like those found in chunking algorithms) incurs unnecessary heap allocations. Using `std::mem::take()` replaces the string with a zero-capacity default buffer, causing unnecessary reallocation overhead on subsequent pushes.
+**Action:** When extracting accumulated string buffers inside processing loops, use `std::mem::replace(&mut current, String::with_capacity(size))` instead of `.clone()` followed by `.clear()`. This avoids a copy and preallocates the buffer for the next iteration.
