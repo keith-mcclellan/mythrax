@@ -6,6 +6,7 @@ use crate::contracts::WikiNode;
 use surrealdb_types::SurrealValue;
 use std::path::Path;
 use anyhow::Result;
+use crate::math::cosine_similarity;
 
 pub struct Compactor {
     llm: LLMClient,
@@ -79,7 +80,6 @@ impl Compactor {
         scope: &str,
         _embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
     ) -> Result<()> {
-        let _ = auto_page_workspace_files(db).await;
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
 
@@ -616,7 +616,6 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
     ) -> Result<()> {
-        let _ = auto_page_workspace_files(db).await;
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
 
@@ -986,46 +985,6 @@ fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
     anchors
 }
 
-#[allow(dead_code)]
-fn scan_source_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let path_str = path.to_string_lossy();
-            if path_str.contains("mythrax-core/src")
-                || path_str.contains("mythrax-core/tests")
-                || path_str.contains("mythrax-core/Cargo.toml")
-            {
-                continue;
-            }
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name == "target"
-                        || name == ".git"
-                        || name == ".venv"
-                        || name == ".agents"
-                        || name == ".mythrax-shared"
-                        || name == "vault"
-                    {
-                        continue;
-                    }
-                }
-                scan_source_files(&path, files);
-            } else if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext == "rs" || ext == "ts" || ext == "py" {
-                        files.push(path);
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn auto_page_workspace_files(_db: &dyn StorageBackend) -> Result<()> {
-    Ok(())
-}
-
 pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) -> Result<String> {
     let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() else {
         return Ok(markdown.to_string());
@@ -1089,24 +1048,5 @@ pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) 
             result.pop();
         }
         Ok(result)
-    }
-}
-
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0;
-    let mut norm_a = 0.0;
-    let mut norm_b = 0.0;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        norm_a += a[i] * a[i];
-        norm_b += b[i] * b[i];
-    }
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a.sqrt() * norm_b.sqrt())
     }
 }

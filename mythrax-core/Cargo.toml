@@ -1,11 +1,11 @@
 [package]
 name = "mythrax-core"
-version = "2.6.0"
+version = "2.7.0"
 edition = "2024"
 
 [dependencies]
 axum = "0.7"
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.35", features = ["full", "test-util"] }
 surrealdb = { version = "3.1.5", features = ["kv-surrealkv", "kv-mem"] }
 surrealdb-types = "3.1.5"
 sysinfo = "0.30"
@@ -42,10 +42,9 @@ mlx-rs = { version = "0.25.3", features = ["metal"], optional = true }
 safetensors = { version = "0.4.3", optional = true }
 half = "2.4"
 
-tempfile = "3.8"
-
 [dev-dependencies]
 lopdf = "0.38.0"
+tempfile = "3.8"
 
 [[bin]]
 name = "mythrax"
@@ -54,8 +53,6 @@ path = "src/main.rs"
 [features]
 mlx = ["dep:mlx-rs", "dep:safetensors"]
 bench = []
-test-mock = []
-test-utils = []
 
 [[bin]]
 name = "bench"

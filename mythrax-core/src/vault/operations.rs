@@ -52,7 +52,7 @@ pub async fn handle_merge_vault() -> Result<()> {
                             action_to_avoid: ata.to_string(),
                             causal_explanation: ce.to_string(),
                             prescribed_remedy: pr.to_string(),
-                            tier: frontmatter.get("tier").and_then(|v| v.as_str()).unwrap_or("dynamic").to_string(),
+                            tier: frontmatter.get("tier").and_then(|v| v.as_str()).unwrap_or("dynamic").parse::<contracts::Tier>().unwrap_or(contracts::Tier::Project),
                             scope: frontmatter.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string(),
                             vault_path: Some(file_path.to_string_lossy().to_string()),
                             embedding: None,
@@ -84,7 +84,7 @@ pub async fn handle_merge_vault() -> Result<()> {
             let mut explanations = Vec::new();
             let mut remedies = Vec::new();
             let mut max_utility = 50.0f32;
-            let mut max_tier = "dynamic".to_string();
+            let mut max_tier = contracts::Tier::Project;
             let mut merged_scope = "general".to_string();
 
             for (_, r) in &rules {
@@ -96,8 +96,8 @@ pub async fn handle_merge_vault() -> Result<()> {
                         max_utility = u;
                     }
                 }
-                if r.tier == "skills" || r.tier == "wisdom" {
-                    max_tier = r.tier.clone();
+                if r.tier == contracts::Tier::Wisdom {
+                    max_tier = r.tier;
                 }
                 if r.scope != "general" {
                     merged_scope = r.scope.clone();
@@ -220,7 +220,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         let current_threshold: Option<f64> = resp.take(0).ok().and_then(|v: Vec<f64>| v.into_iter().next());
         let threshold = current_threshold.unwrap_or(0.55) as f32;
 
-        let search_res = backend.search(
+        let search_res = backend.search(crate::contracts::SearchParams::from_positional(
         &synthetic_query,
         Some("all"),
         false,
@@ -234,7 +234,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
         let found = search_res.results.iter().any(|r| r.id == ep_id);
         if !found {

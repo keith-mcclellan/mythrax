@@ -1,6 +1,79 @@
 use serde::{Deserialize, Serialize};
 use surrealdb_types::SurrealValue;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue)]
+pub enum Tier {
+    #[default]
+    Wisdom,
+    Project,
+    User,
+    Session,
+    Working,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseTierError(String);
+
+impl std::fmt::Display for ParseTierError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid tier value: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParseTierError {}
+
+impl std::str::FromStr for Tier {
+    type Err = ParseTierError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "permanent" | "skills" | "wisdom" => Ok(Tier::Wisdom),
+            "dynamic" | "forge" | "project" | "wiki" | "wiki_node" => Ok(Tier::Project),
+            "user" => Ok(Tier::User),
+            "session" | "episode" => Ok(Tier::Session),
+            "working" | "stm" => Ok(Tier::Working),
+            other => Err(ParseTierError(other.to_string())),
+        }
+    }
+}
+
+impl Tier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Tier::Wisdom => "wisdom",
+            Tier::Project => "project",
+            Tier::User => "user",
+            Tier::Session => "session",
+            Tier::Working => "working",
+        }
+    }
+}
+
+impl std::fmt::Display for Tier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Serialize for Tier {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Tier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<Tier>().map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct ChatMessage {
     pub id: Option<String>,
@@ -69,6 +142,146 @@ pub struct EpisodeSave {
     pub created_at: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EpisodeSaveBuilder {
+    pub title: String,
+    pub content: String,
+    pub entities: Vec<Entity>,
+    pub scope: Option<String>,
+    pub vault_path: Option<String>,
+    pub source_episode: Option<String>,
+    pub session_id: Option<String>,
+    pub task_id: Option<String>,
+    pub discovery_tokens: Option<u32>,
+    pub facts: Option<Vec<String>>,
+    pub concepts: Option<Vec<String>>,
+    pub files_read: Option<Vec<String>>,
+    pub files_modified: Option<Vec<String>>,
+    pub node_type: Option<String>,
+    pub confidence: Option<f32>,
+    pub created_at: Option<String>,
+}
+
+impl EpisodeSaveBuilder {
+    pub fn new(title: String, content: String) -> Self {
+        Self {
+            title,
+            content,
+            entities: Vec::new(),
+            scope: None,
+            vault_path: None,
+            source_episode: None,
+            session_id: None,
+            task_id: None,
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+            node_type: None,
+            confidence: None,
+            created_at: None,
+        }
+    }
+
+    pub fn entities(mut self, entities: Vec<Entity>) -> Self {
+        self.entities = entities;
+        self
+    }
+
+    pub fn scope(mut self, scope: Option<String>) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    pub fn vault_path(mut self, vault_path: Option<String>) -> Self {
+        self.vault_path = vault_path;
+        self
+    }
+
+    pub fn source_episode(mut self, source_episode: Option<String>) -> Self {
+        self.source_episode = source_episode;
+        self
+    }
+
+    pub fn session_id(mut self, session_id: Option<String>) -> Self {
+        self.session_id = session_id;
+        self
+    }
+
+    pub fn task_id(mut self, task_id: Option<String>) -> Self {
+        self.task_id = task_id;
+        self
+    }
+
+    pub fn discovery_tokens(mut self, discovery_tokens: Option<u32>) -> Self {
+        self.discovery_tokens = discovery_tokens;
+        self
+    }
+
+    pub fn facts(mut self, facts: Option<Vec<String>>) -> Self {
+        self.facts = facts;
+        self
+    }
+
+    pub fn concepts(mut self, concepts: Option<Vec<String>>) -> Self {
+        self.concepts = concepts;
+        self
+    }
+
+    pub fn files_read(mut self, files_read: Option<Vec<String>>) -> Self {
+        self.files_read = files_read;
+        self
+    }
+
+    pub fn files_modified(mut self, files_modified: Option<Vec<String>>) -> Self {
+        self.files_modified = files_modified;
+        self
+    }
+
+    pub fn node_type(mut self, node_type: Option<String>) -> Self {
+        self.node_type = node_type;
+        self
+    }
+
+    pub fn confidence(mut self, confidence: Option<f32>) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    pub fn created_at(mut self, created_at: Option<String>) -> Self {
+        self.created_at = created_at;
+        self
+    }
+
+    pub fn build(self) -> EpisodeSave {
+        EpisodeSave {
+            title: self.title,
+            content: self.content,
+            entities: self.entities,
+            scope: self.scope,
+            vault_path: self.vault_path,
+            source_episode: self.source_episode,
+            session_id: self.session_id,
+            task_id: self.task_id,
+            discovery_tokens: self.discovery_tokens,
+            facts: self.facts,
+            concepts: self.concepts,
+            files_read: self.files_read,
+            files_modified: self.files_modified,
+            node_type: self.node_type,
+            confidence: self.confidence,
+            created_at: self.created_at,
+        }
+    }
+}
+
+impl EpisodeSave {
+    pub fn builder(title: String, content: String) -> EpisodeSaveBuilder {
+        EpisodeSaveBuilder::new(title, content)
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResult {
@@ -77,7 +290,7 @@ pub struct SearchResult {
     pub content: String,
     pub similarity: f32,
     pub utility: f32,
-    pub tier: String,
+    pub tier: Tier,
     #[serde(default, skip_serializing)]
     pub embedding: Option<Vec<f32>>,
     pub vault_path: Option<String>,
@@ -112,7 +325,7 @@ pub struct WisdomRule {
     pub action_to_avoid: String,
     pub causal_explanation: String,
     pub prescribed_remedy: String,
-    pub tier: String, // "pinned" | "permanent" | "dynamic"
+    pub tier: Tier, // Wisdom | Project | User | Session | Working
     pub scope: String,
     pub vault_path: Option<String>,
     pub embedding: Option<Vec<f32>>,
@@ -141,6 +354,7 @@ pub struct LlmConfigResponse {
     pub is_override: bool,
     pub expires_at: Option<String>,
     pub api_key: Option<String>,
+    pub llm_post_inference_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +364,7 @@ pub struct LlmConfigRequest {
     pub model: Option<String>,
     pub cloud_provider: Option<String>,
     pub api_key: Option<String>,
+    pub llm_post_inference_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
@@ -179,21 +394,6 @@ pub struct HandoffSave {
     pub include_tool_execution: Option<bool>,
 }
 
-/// Full hydrated Handoff — reserved for agent-tracking API; construction deferred.
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
-pub struct Handoff {
-    pub id: Option<String>,
-    pub parent_conversation_id: String,
-    pub subagent_conversation_id: String,
-    pub summary: String,
-    pub handoff_file_path: String,
-    pub scope: Option<String>,
-    pub status: Option<String>,
-    pub created_at: Option<String>,
-    pub embedding: Option<Vec<f32>>,
-    pub include_tool_execution: Option<bool>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct WikiNode {
@@ -311,5 +511,95 @@ pub struct SymbolicHit {
     pub node_id: String,
     pub path_confidence: f32,
     pub hops: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SearchParams {
+    pub query: String,
+    pub scope: Option<String>,
+    pub deep_insight: bool,
+    pub limit: usize,
+    pub offset: usize,
+    pub threshold: f32,
+    pub token_budget: Option<usize>,
+    pub allow_downward: bool,
+    pub include_episodes: bool,
+    pub include_artifacts: bool,
+    pub session_id: Option<String>,
+    pub include_archived: bool,
+    pub temporal_anchor: Option<String>,
+}
+
+impl Default for SearchParams {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            scope: None,
+            deep_insight: false,
+            limit: 15,
+            offset: 0,
+            threshold: 0.55,
+            token_budget: None,
+            allow_downward: false,
+            include_episodes: false,
+            include_artifacts: false,
+            session_id: None,
+            include_archived: false,
+            temporal_anchor: None,
+        }
+    }
+}
+
+impl SearchParams {
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            ..Self::default()
+        }
+    }
+    pub fn from_positional(
+        query: &str,
+        scope: Option<&str>,
+        deep_insight: bool,
+        limit: usize,
+        offset: usize,
+        threshold: f32,
+        token_budget: Option<usize>,
+        allow_downward: bool,
+        include_episodes: bool,
+        include_artifacts: bool,
+        session_id: Option<&str>,
+        include_archived: bool,
+        temporal_anchor: Option<&str>,
+    ) -> Self {
+        Self {
+            query: query.to_string(),
+            scope: scope.map(|s| s.to_string()),
+            deep_insight,
+            limit,
+            offset,
+            threshold,
+            token_budget,
+            allow_downward,
+            include_episodes,
+            include_artifacts,
+            session_id: session_id.map(|s| s.to_string()),
+            include_archived,
+            temporal_anchor: temporal_anchor.map(|s| s.to_string()),
+        }
+    }
+    // Builder methods
+    pub fn scope(mut self, scope: impl Into<String>) -> Self { self.scope = Some(scope.into()); self }
+    pub fn deep_insight(mut self, val: bool) -> Self { self.deep_insight = val; self }
+    pub fn limit(mut self, val: usize) -> Self { self.limit = val; self }
+    pub fn offset(mut self, val: usize) -> Self { self.offset = val; self }
+    pub fn threshold(mut self, val: f32) -> Self { self.threshold = val; self }
+    pub fn token_budget(mut self, val: usize) -> Self { self.token_budget = Some(val); self }
+    pub fn allow_downward(mut self, val: bool) -> Self { self.allow_downward = val; self }
+    pub fn include_episodes(mut self, val: bool) -> Self { self.include_episodes = val; self }
+    pub fn include_artifacts(mut self, val: bool) -> Self { self.include_artifacts = val; self }
+    pub fn session_id(mut self, id: impl Into<String>) -> Self { self.session_id = Some(id.into()); self }
+    pub fn include_archived(mut self, val: bool) -> Self { self.include_archived = val; self }
+    pub fn temporal_anchor(mut self, anchor: impl Into<String>) -> Self { self.temporal_anchor = Some(anchor.into()); self }
 }
 

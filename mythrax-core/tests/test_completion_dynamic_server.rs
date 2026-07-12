@@ -28,6 +28,7 @@ async fn test_completion_dynamic_server_loading() {
         model: Some("mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string()),
         cloud_provider: Some("gemini".to_string()),
         api_key: None,
+        llm_post_inference_delay_ms: None,
     };
     backend.update_llm_config(&req).await.unwrap();
 
@@ -75,6 +76,7 @@ async fn test_complete_code_task_mcp_tool() {
         model: Some("mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string()),
         cloud_provider: Some("gemini".to_string()),
         api_key: None,
+        llm_post_inference_delay_ms: None,
     };
     backend.update_llm_config(&req).await.unwrap();
 
@@ -92,6 +94,7 @@ async fn test_complete_code_task_mcp_tool() {
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     // Invoke complete_code_task MCP tool via consolidated agent tool
@@ -127,6 +130,7 @@ async fn test_tier3_completion_and_eviction() {
         model: Some("mlx-community/Qwen3.6-35B-A3B-4bit".to_string()),
         cloud_provider: Some("gemini".to_string()),
         api_key: None,
+        llm_post_inference_delay_ms: None,
     };
     backend.update_llm_config(&req).await.unwrap();
 

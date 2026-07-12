@@ -28,7 +28,7 @@ async fn test_calibrated_confidence_scaling() -> Result<()> {
     // 1. Enable calibrated confidence
     backend.save_profile_key("search.enable_calibrated_confidence", "true").await?;
 
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Unique content for test scaling similarity",
         Some("general"),
         false,
@@ -42,7 +42,7 @@ async fn test_calibrated_confidence_scaling() -> Result<()> {
         None,
         false,
         None,
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     assert!(!results.is_empty(), "Should retrieve the episode");
@@ -54,7 +54,7 @@ async fn test_calibrated_confidence_scaling() -> Result<()> {
     // 2. Disable calibrated confidence
     backend.save_profile_key("search.enable_calibrated_confidence", "false").await?;
 
-    let resp_disabled = backend.search(
+    let resp_disabled = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Unique content for test scaling similarity",
         Some("general"),
         false,
@@ -68,7 +68,7 @@ async fn test_calibrated_confidence_scaling() -> Result<()> {
         None,
         false,
         None,
-    ).await?;
+    )).await?;
 
     let results_disabled = resp_disabled.results;
     let matched_disabled = results_disabled.iter().find(|r| r.id == id).expect("Should find the exact episode");

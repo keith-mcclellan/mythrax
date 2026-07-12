@@ -250,6 +250,8 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     }
                 });
 
+                let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+
                 // Create API State
                 let state = Arc::new(api::ApiState {
                     backend,
@@ -257,6 +259,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     store: store.clone(),
                     ignore_list: ignore_list.clone(),
                     dream_tx: Some(dream_tx),
+                    shutdown_tx: Some(shutdown_tx),
                 });
 
                 // Build router and start Axum listener
@@ -266,35 +269,57 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 let listener = tokio::net::TcpListener::bind(&addr).await?;
                 let pid_path_clone = pid_path.clone();
                 
+                #[cfg(unix)]
+                let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("Failed to register SIGTERM handler");
+
                 tokio::select! {
                     res = axum::serve(listener, app) => {
                         if let Err(e) = res {
                             tracing::error!("Daemon server crashed: {:?}", e);
                         }
                     }
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("Shutdown channel triggered. Initiating graceful shutdown...");
+                        let shutdown_sequence = async {
+                            run_shutdown(pid_path_clone).await;
+                        };
+                        if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(5), shutdown_sequence).await {
+                            tracing::warn!("Graceful shutdown timed out after 5 seconds.");
+                            let _ = std::fs::remove_file(&pid_path);
+                        }
+                        tracing::info!("Shutdown complete.");
+                    }
                     _ = tokio::signal::ctrl_c() => {
                          tracing::info!("SIGINT/Ctrl+C received. Initiating graceful shutdown...");
                          let shutdown_sequence = async {
-                             // Sleep for 500ms to allow pending watcher/DB operations to settle
-                             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-                             // Evict unused models
-                             if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
-                                 broker.evict_unused_models().await;
-                             }
-
-                             // Log Metal cache clearing
-                             tracing::info!("Metal cache cleared.");
-
-                             // Remove PID file
-                             let _ = std::fs::remove_file(&pid_path_clone);
+                             run_shutdown(pid_path_clone).await;
                          };
-
                          if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(5), shutdown_sequence).await {
                              tracing::warn!("Graceful shutdown timed out after 5 seconds.");
-                             let _ = std::fs::remove_file(&pid_path_clone);
+                             let _ = std::fs::remove_file(&pid_path);
                          }
                          tracing::info!("Shutdown complete.");
+                    }
+                    _ = async {
+                        #[cfg(unix)]
+                        {
+                            sigterm.recv().await;
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        tracing::info!("SIGTERM received. Initiating graceful shutdown...");
+                        let shutdown_sequence = async {
+                            run_shutdown(pid_path_clone).await;
+                        };
+                        if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(5), shutdown_sequence).await {
+                            tracing::warn!("Graceful shutdown timed out after 5 seconds.");
+                            let _ = std::fs::remove_file(&pid_path);
+                        }
+                        tracing::info!("Shutdown complete.");
                     }
                 }
                 Ok::<(), anyhow::Error>(())
@@ -391,6 +416,21 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
 
     tracing::info!("Saved CheckpointNode: {}", checkpoint_id);
     Ok(())
+}
+async fn run_shutdown(pid_path: PathBuf) {
+    // Sleep for 500ms to allow pending watcher/DB operations to settle
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Evict unused models
+    if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+        broker.evict_unused_models().await;
+    }
+
+    // Log Metal cache clearing
+    tracing::info!("Metal cache cleared.");
+
+    // Remove PID file
+    let _ = std::fs::remove_file(&pid_path);
 }
 
 pub async fn stop_daemon() -> Result<()> {
@@ -562,9 +602,5 @@ pub mod monitor {
             crate::llm::ModelTier::Tier3 => 6_000 * 1024 * 1024,
         };
         swap_used_bytes >= threshold
-    }
-
-    pub fn check_memory_pressure() -> bool {
-        false
     }
 }

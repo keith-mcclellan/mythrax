@@ -16,6 +16,7 @@ pub struct McpServer {
     auth_token: String,
     daemon_url: String,
     local_state: Option<LocalState>,
+    http_client: reqwest::Client,
 }
 
 impl McpServer {
@@ -24,6 +25,7 @@ impl McpServer {
             auth_token,
             daemon_url,
             local_state: None,
+            http_client: reqwest::Client::new(),
         }
     }
 
@@ -32,6 +34,7 @@ impl McpServer {
             auth_token: String::new(),
             daemon_url: String::new(),
             local_state: Some(LocalState { backend, store }),
+            http_client: reqwest::Client::new(),
         }
     }
 
@@ -236,16 +239,16 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 auth_token: "".to_string(),
                 ignore_list: std::sync::Arc::new(crate::vault::watcher::WatchIgnoreList::new()),
                 dream_tx: None,
+                shutdown_tx: None,
             };
             crate::mcp_routes::call_mcp_tool(&api_state, name, args).await
         } else {
-            let client = reqwest::Client::new();
             let url = format!("{}/v1/mcp/call", self.daemon_url);
             let payload = json!({
                 "name": name,
                 "arguments": args
             });
-            let resp = client.post(&url)
+            let resp = self.http_client.post(&url)
                 .header("X-Mythrax-Token", &self.auth_token)
                 .json(&payload)
                 .send()
@@ -290,9 +293,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     if let Some(root_uri_str) = params.get("rootUri").and_then(|v| v.as_str()) {
                         if let Ok(url) = url::Url::parse(root_uri_str) {
                             if let Ok(path) = url.to_file_path() {
-                                unsafe {
-                                    std::env::set_var("MYTHRAX_WORKSPACE_ROOT", path);
-                                }
+                                crate::store::set_workspace_root(path);
                             }
                         }
                     }
@@ -308,9 +309,8 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     }))
                 }
                 "tools/list" => {
-                    let client = reqwest::Client::new();
                     let url = format!("{}/v1/mcp/tools", self.daemon_url);
-                    let resp = client.get(&url)
+                    let resp = self.http_client.get(&url)
                         .header("X-Mythrax-Token", &self.auth_token)
                         .send()
                         .await
@@ -327,7 +327,6 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     let name = params.get("name").and_then(|v| v.as_str()).context("Missing tool name in tools/call")?;
                     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                     
-                    let client = reqwest::Client::new();
                     let url = format!("{}/v1/mcp/call", self.daemon_url);
                     
                     let payload = json!({
@@ -335,7 +334,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                         "arguments": arguments
                     });
                     
-                    let resp = client.post(&url)
+                    let resp = self.http_client.post(&url)
                         .header("X-Mythrax-Token", &self.auth_token)
                         .json(&payload)
                         .send()

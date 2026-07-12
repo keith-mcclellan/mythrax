@@ -49,6 +49,7 @@ pub fn display_val(val: i32) {
         store,
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     // 1. Test "view" (Virtual Paging) via read tool

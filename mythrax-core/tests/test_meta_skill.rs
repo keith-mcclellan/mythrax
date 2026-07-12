@@ -33,7 +33,7 @@ async fn test_meta_skill_synthesis() -> Result<()> {
         action_to_avoid: "doing something".to_string(),
         causal_explanation: "cuz bad".to_string(),
         prescribed_remedy: "do better".to_string(),
-        tier: "dynamic".to_string(),
+        tier: mythrax_core::contracts::Tier::Project,
         scope: "test-scope".to_string(),
         vault_path: None,
         embedding: Some(vec![0.1; 768]),

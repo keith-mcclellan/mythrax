@@ -47,7 +47,7 @@ async fn test_t2_temporal_decay_with_anchor() -> Result<()> {
     backend.db.query(fix_sql).bind(("id", id_b.strip_prefix("episode:").unwrap_or(&id_b))).await?.check()?;
 
     // Search with temporal_anchor matching a day after Episode B (2023-05-30T23:40:00Z)
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "database locks",
         Some("general"),
         false,
@@ -61,7 +61,7 @@ async fn test_t2_temporal_decay_with_anchor() -> Result<()> {
         None,
         true,
         Some("2023-05-30T23:40:00Z"),
-    ).await?;
+    )).await?;
 
     let results = resp.results;
     assert!(results.len() >= 2, "Expected at least 2 results, got {}", results.len());

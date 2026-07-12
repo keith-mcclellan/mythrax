@@ -246,7 +246,7 @@ impl Forge {
                     action_to_avoid: rule.action_to_avoid.clone(),
                     causal_explanation: rule.causal_explanation.clone(),
                     prescribed_remedy: rule.prescribed_remedy.clone(),
-                    tier: "forge".to_string(),
+                    tier: crate::contracts::Tier::Project,
                     scope: normalized_scope.clone(),
                     vault_path: Some(rule_path),
                     embedding: Some(rule_embedding),
@@ -338,16 +338,9 @@ impl Forge {
         );
         
         let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
-        let trimmed = res.trim();
-        let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
+        let stripped = crate::llm::strip_code_fences(&res);
         
-        let concepts: Vec<ForgedConcept> = serde_json::from_str(stripped)
+        let concepts: Vec<ForgedConcept> = serde_json::from_str(&stripped)
             .context("Failed to parse concepts JSON")?;
         Ok(concepts)
     }
@@ -377,16 +370,9 @@ impl Forge {
         );
         
         let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
-        let trimmed = res.trim();
-        let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
+        let stripped = crate::llm::strip_code_fences(&res);
         
-        let rules: Vec<ForgedRule> = serde_json::from_str(stripped)
+        let rules: Vec<ForgedRule> = serde_json::from_str(&stripped)
             .context("Failed to parse rules JSON")?;
         Ok(rules)
     }
@@ -410,14 +396,7 @@ impl Forge {
         );
 
         let res = self.llm.completion(&*self.backend, Some(system_instruction), &prompt).await?;
-        let trimmed = res.trim();
-        let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
+        let stripped = crate::llm::strip_code_fences(&res);
 
         #[derive(Deserialize)]
         struct RawTOCEntry {
@@ -425,7 +404,7 @@ impl Forge {
             start_phrase: String,
         }
 
-        let raw_entries: Vec<RawTOCEntry> = serde_json::from_str(stripped)
+        let raw_entries: Vec<RawTOCEntry> = serde_json::from_str(&stripped)
             .context("Failed to parse LLM TOC output")?;
 
         let mut current_entries = Vec::new();
@@ -480,32 +459,39 @@ pub fn extract_pdf_text(path: &Path) -> Result<String> {
     Ok(text)
 }
 
+static CACHED_TOKENIZER: std::sync::OnceLock<Option<tokenizers::Tokenizer>> = std::sync::OnceLock::new();
+
+fn get_cached_tokenizer() -> Option<&'static tokenizers::Tokenizer> {
+    CACHED_TOKENIZER.get_or_init(|| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
+        if tokenizer_path.exists() {
+            tokenizers::Tokenizer::from_file(&tokenizer_path).ok()
+        } else {
+            None
+        }
+    }).as_ref()
+}
+
 /// Chunk text into token-sized chunks (or word fallbacks)
 pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
-    use tokenizers::Tokenizer;
-    
-    let home = std::env::var("HOME").unwrap_or_default();
-    let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
-    
-    if tokenizer_path.exists() {
-        if let Ok(tokenizer) = Tokenizer::from_file(&tokenizer_path) {
-            if let Ok(encoding) = tokenizer.encode(text, false) {
-                let ids = encoding.get_ids();
-                let mut chunks = Vec::new();
-                let mut start = 0;
-                while start < ids.len() {
-                    let end = std::cmp::min(start + chunk_size, ids.len());
-                    let chunk_ids = &ids[start..end];
-                    if let Ok(chunk_text) = tokenizer.decode(chunk_ids, false) {
-                        chunks.push(chunk_text);
-                    }
-                    if end == ids.len() {
-                        break;
-                    }
-                    start += chunk_size - overlap;
+    if let Some(tokenizer) = get_cached_tokenizer() {
+        if let Ok(encoding) = tokenizer.encode(text, false) {
+            let ids = encoding.get_ids();
+            let mut chunks = Vec::new();
+            let mut start = 0;
+            while start < ids.len() {
+                let end = std::cmp::min(start + chunk_size, ids.len());
+                let chunk_ids = &ids[start..end];
+                if let Ok(chunk_text) = tokenizer.decode(chunk_ids, false) {
+                    chunks.push(chunk_text);
                 }
-                return chunks;
+                if end == ids.len() {
+                    break;
+                }
+                start += chunk_size - overlap;
             }
+            return chunks;
         }
     }
     
@@ -529,114 +515,6 @@ pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> 
     chunks
 }
 
-/// Runs Automated Skill Skeletonization on a SKILL.md file:
-/// extracts Examples and References, saves them to subfolders, and rewrites SKILL.md as a lean skeleton.
-#[allow(dead_code)] // public API; wired to CLI in a future PR
-pub fn skeletonize_skill_file(skill_path: &Path) -> Result<()> {
-    let content = fs::read_to_string(skill_path).context("Failed to read SKILL.md file")?;
-    
-    let (skeleton, examples_opt, references_opt) = skeletonize_skill(&content);
-    
-    let skill_dir = skill_path.parent().context("Failed to get skill directory")?;
-    
-    if let Some(examples_content) = examples_opt {
-        let examples_dir = skill_dir.join("examples");
-        fs::create_dir_all(&examples_dir)?;
-        let examples_path = examples_dir.join("examples.md");
-        fs::write(&examples_path, examples_content)?;
-    }
-    
-    if let Some(references_content) = references_opt {
-        let references_dir = skill_dir.join("references");
-        fs::create_dir_all(&references_dir)?;
-        let references_path = references_dir.join("references.md");
-        fs::write(&references_path, references_content)?;
-    }
-    
-    fs::write(skill_path, skeleton)?;
-    
-    Ok(())
-}
-
-#[allow(dead_code)] // called only via skeletonize_skill_file
-fn skeletonize_skill(content: &str) -> (String, Option<String>, Option<String>) {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut frontmatter = String::new();
-    let mut i = 0;
-    
-    // Parse frontmatter
-    if i < lines.len() && lines[i].trim() == "---" {
-        frontmatter.push_str(lines[i]);
-        frontmatter.push('\n');
-        i += 1;
-        while i < lines.len() && lines[i].trim() != "---" {
-            frontmatter.push_str(lines[i]);
-            frontmatter.push('\n');
-            i += 1;
-        }
-        if i < lines.len() {
-            frontmatter.push_str(lines[i]);
-            frontmatter.push('\n');
-            i += 1;
-        }
-    }
-    
-    let mut main_body = String::new();
-    let mut examples_body = String::new();
-    let mut references_body = String::new();
-    
-    enum State {
-        Main,
-        Examples,
-        References,
-    }
-    
-    let mut state = State::Main;
-    
-    while i < lines.len() {
-        let line = lines[i];
-        if line.starts_with("## Examples") {
-            state = State::Examples;
-            main_body.push_str(line);
-            main_body.push_str("\n\nDetailed examples and playbooks have been moved to [examples/examples.md](examples/examples.md).\n\n");
-            i += 1;
-            continue;
-        } else if line.starts_with("## References") {
-            state = State::References;
-            main_body.push_str(line);
-            main_body.push_str("\n\nDetailed reference documentation has been moved to [references/references.md](references/references.md).\n\n");
-            i += 1;
-            continue;
-        } else if line.starts_with("## ") {
-            state = State::Main;
-        }
-        
-        match state {
-            State::Main => {
-                main_body.push_str(line);
-                main_body.push('\n');
-            }
-            State::Examples => {
-                examples_body.push_str(line);
-                examples_body.push('\n');
-            }
-            State::References => {
-                references_body.push_str(line);
-                references_body.push('\n');
-            }
-        }
-        i += 1;
-    }
-    
-    let mut updated_content = frontmatter;
-    updated_content.push_str(&main_body);
-    
-    let examples_opt = if examples_body.trim().is_empty() { None } else { Some(examples_body) };
-    let references_opt = if references_body.trim().is_empty() { None } else { Some(references_body) };
-    
-    (updated_content, examples_opt, references_opt)
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TOCEntry {
     pub title: String,
@@ -651,16 +529,9 @@ pub struct LogicalSection {
 }
 
 pub fn count_tokens(text: &str) -> usize {
-    use tokenizers::Tokenizer;
-    
-    let home = std::env::var("HOME").unwrap_or_default();
-    let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
-    
-    if tokenizer_path.exists() {
-        if let Ok(tokenizer) = Tokenizer::from_file(&tokenizer_path) {
-            if let Ok(encoding) = tokenizer.encode(text, false) {
-                return encoding.get_ids().len();
-            }
+    if let Some(tokenizer) = get_cached_tokenizer() {
+        if let Ok(encoding) = tokenizer.encode(text, false) {
+            return encoding.get_ids().len();
         }
     }
     

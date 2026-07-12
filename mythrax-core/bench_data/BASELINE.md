@@ -6,8 +6,8 @@
 **Scored file:** `longmemeval_s_cleaned.json` (long-context haystack)
 **Scored file SHA-256:** `d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442`
 **Split:** `full500` (official 500-question set, full longmemeval_s haystack)
-**Mythrax Git Commit:** `2882e22ad117f00cac74c68d3c4649742cf35ef5`
-**Evaluated at:** 2026-07-11T13:52:20.930464+00:00
+**Mythrax Git Commit:** `6df06a2b37e59cedce4c16bc26e282846e57604a`
+**Evaluated at:** 2026-07-12T17:44:40.376457+00:00
 
 ## Aggregate Metrics
 ### Turn granularity (has_answer)

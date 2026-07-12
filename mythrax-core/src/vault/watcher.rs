@@ -101,6 +101,16 @@ fn count_files_recursive(path: &Path, depth: usize) -> usize {
     }
 }
 
+fn get_vault_paths() -> (PathBuf, PathBuf) {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/Users/keith".to_string());
+    let home_path = PathBuf::from(home);
+    let vault_root = home_path.join("mythrax-vault");
+    let global_dir = vault_root.join("global");
+    (vault_root, global_dir)
+}
+
 pub fn start_watching(
     vault_root: PathBuf,
     ignore_list: Arc<WatchIgnoreList>,
@@ -112,9 +122,9 @@ pub fn start_watching(
         .unwrap_or(vault_root);
     // Hard monitor limits: max recursion depth 10, max watch limit 50,000 files
     let mut total_files = count_files_recursive(&vault_root, 0);
-    let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
+    let (_, global_dir) = get_vault_paths();
     if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
-        total_files += count_files_recursive(global_dir, 0);
+        total_files += count_files_recursive(&global_dir, 0);
     }
     if total_files > 50000 {
         return Err(anyhow::anyhow!("Vault exceeds hard limit of 50,000 files (found {})", total_files));
@@ -134,9 +144,9 @@ pub fn start_watching(
     watcher.watch(&vault_root, RecursiveMode::Recursive)?;
 
     // Watch global directory if it exists and is outside the vault
-    let global_dir = std::path::Path::new("/Users/keith/mythrax-vault/global");
+    let (_, global_dir) = get_vault_paths();
     if global_dir.exists() && global_dir != vault_root.join("global") && !global_dir.starts_with(&vault_root) {
-        watcher.watch(global_dir, RecursiveMode::Recursive)?;
+        watcher.watch(&global_dir, RecursiveMode::Recursive)?;
     }
 
     // 2. Setup Write-Behind Coalescing Queue (500ms delay)
@@ -234,7 +244,7 @@ pub fn start_watching(
                     let canonical_root = std::fs::canonicalize(&s_c.vault_root).unwrap_or_else(|_| s_c.vault_root.clone());
                     let rel_path_str = if let Ok(rel_path) = path.strip_prefix(&canonical_root) {
                         rel_path.to_string_lossy().to_string()
-                    } else if let Ok(rel_path) = path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+                    } else if let Ok(rel_path) = path.strip_prefix(&get_vault_paths().0) {
                         rel_path.to_string_lossy().to_string()
                     } else {
                         path.to_string_lossy().to_string()
@@ -266,6 +276,7 @@ pub fn start_watching(
                 Ok(mut event) => {
                     // Filter events inside the callback
                     event.paths.retain(|path| {
+                        let (_, global_path) = get_vault_paths();
                         // Discard symbolic links
                         let is_sym = std::fs::symlink_metadata(path)
                             .map(|m| m.file_type().is_symlink())
@@ -290,9 +301,8 @@ pub fn start_watching(
                         let root_to_use = if path.starts_with(&vault_root_clone) {
                             Some(vault_root_clone.as_path())
                         } else {
-                            let global_path = std::path::Path::new("/Users/keith/mythrax-vault/global");
-                            if path.starts_with(global_path) {
-                                Some(global_path)
+                            if path.starts_with(&global_path) {
+                                Some(global_path.as_path())
                             } else {
                                 None
                             }
@@ -494,7 +504,7 @@ pub async fn sync_file_to_db(
     let canonical_root = std::fs::canonicalize(&store.vault_root).unwrap_or_else(|_| store.vault_root.clone());
     let rel_path = if let Ok(rel) = canonical_path.strip_prefix(&canonical_root) {
         rel.to_string_lossy().to_string()
-    } else if let Ok(rel) = canonical_path.strip_prefix(Path::new("/Users/keith/mythrax-vault")) {
+    } else if let Ok(rel) = canonical_path.strip_prefix(&get_vault_paths().0) {
         rel.to_string_lossy().to_string()
     } else {
         canonical_path.to_string_lossy().to_string()
@@ -510,24 +520,11 @@ pub async fn sync_file_to_db(
             path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
         });
 
-        let episode = EpisodeSave {
-        created_at: None,
-            title,
-            content: plain_body,
-            entities: frontmatter.entities.unwrap_or_default(),
-            scope: frontmatter.scope,
-            vault_path: Some(rel_path),
-            source_episode: None,
-            session_id: None,
-            task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-            confidence: None,
-        };
+        let episode = EpisodeSave::builder(title, plain_body)
+            .entities(frontmatter.entities.unwrap_or_default())
+            .scope(frontmatter.scope)
+            .vault_path(Some(rel_path))
+            .build();
 
         backend.save_episode(&episode).await?;
     } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
@@ -548,6 +545,7 @@ node_type: None,
                     }
                 })
             };
+            let final_tier_enum = final_tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom);
 
             let final_scope = if is_global {
                 "general".to_string()
@@ -561,7 +559,7 @@ node_type: None,
                 action_to_avoid: frontmatter.action_to_avoid,
                 causal_explanation: frontmatter.causal_explanation,
                 prescribed_remedy: frontmatter.prescribed_remedy,
-                tier: final_tier,
+                tier: final_tier_enum,
                 scope: final_scope,
                 vault_path: Some(rel_path),
                 embedding: None,
@@ -731,48 +729,6 @@ pub async fn save_episode_bidirectional(
     Ok(db_id)
 }
 
-/// Save a wisdom rule both to the database and back to the vault, with loop prevention
-#[allow(dead_code)]
-pub async fn save_wisdom_rule_bidirectional(
-    rule: &WisdomRule,
-    backend: &Arc<dyn StorageBackend>,
-    store: &Arc<MarkdownStore>,
-    ignore_list: &WatchIgnoreList,
-) -> Result<String> {
-    // 1. Determine relative path
-    let rel_path = match rule.vault_path {
-        Some(ref vp) if !vp.is_empty() => vp.clone(),
-        _ => {
-            let slug = slugify(&rule.target_pattern);
-            let filename = format!("{}.md", slug);
-            
-            let markdown = format_wisdom_markdown(rule);
-            let tier_subfolder = format!("wisdom/{}", rule.tier);
-            
-            let resolved_abs = organize_file(&store.vault_root, &tier_subfolder, &filename, &markdown)?;
-            resolved_abs.strip_prefix(&store.vault_root)
-                .unwrap_or(&resolved_abs)
-                .to_string_lossy()
-                .to_string()
-        }
-    };
-
-    // 2. Prepare WisdomRule with resolved vault path
-    let mut rule_to_save = rule.clone();
-    rule_to_save.vault_path = Some(rel_path.clone());
-
-    // 3. Save to database
-    let db_id = backend.save_wisdom_rule(&rule_to_save).await?;
-
-    // 4. Save to vault
-    let markdown = format_wisdom_markdown(&rule_to_save);
-    let abs_path = store.vault_root.join(&rel_path);
-
-    // Queue write operation to coalescing write-behind queue
-    ignore_list.queue_write(abs_path, &markdown, store.clone());
-
-    Ok(db_id)
-}
 
 pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
     let mut yaml_val = serde_json::Map::new();
@@ -836,7 +792,7 @@ mod tests {
         
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
-        let results = backend.search(
+        let results = backend.search(crate::contracts::SearchParams::from_positional(
         "Body content",
         Some("watcher-testing"),
         false,
@@ -850,7 +806,7 @@ mod tests {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Watcher Test");
     }
@@ -865,24 +821,12 @@ mod tests {
         let ignore_list = Arc::new(WatchIgnoreList::new());
         
         // 1. Save an episode via save_episode_bidirectional
-        let episode = EpisodeSave {
-        created_at: None,
-            title: "Bidirectional Test".to_string(),
-            content: "This is some bidirectional sync body content.".to_string(),
-            entities: vec![],
-            scope: Some("bi-testing".to_string()),
-            vault_path: None,
-            source_episode: None,
-            session_id: None,
-            task_id: None,
-            discovery_tokens: None,
-            facts: None,
-            concepts: None,
-            files_read: None,
-            files_modified: None,
-            node_type: None,
-            confidence: None,
-        };
+        let episode = EpisodeSave::builder(
+            "Bidirectional Test".to_string(),
+            "This is some bidirectional sync body content.".to_string(),
+        )
+        .scope(Some("bi-testing".to_string()))
+        .build();
         
         let ep_id = save_episode_bidirectional(&episode, backend.as_ref(), &store, &ignore_list).await.unwrap();
         assert!(ep_id.contains("episode:"));
@@ -899,7 +843,7 @@ mod tests {
         assert!(ignore_list.is_ignored(&abs_path));
         
         // Verify content in DB
-        let results = backend.search(
+        let results = backend.search(crate::contracts::SearchParams::from_positional(
         "bidirectional sync",
         Some("bi-testing"),
         false,
@@ -913,7 +857,7 @@ mod tests {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Bidirectional Test");
         
@@ -930,7 +874,7 @@ mod tests {
         sync_file_to_db(&abs_path, &backend, &store).await.unwrap();
         
         // Verify DB got updated
-        let results2 = backend.search(
+        let results2 = backend.search(crate::contracts::SearchParams::from_positional(
         "updated body",
         Some("bi-testing"),
         false,
@@ -944,7 +888,7 @@ mod tests {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
         assert_eq!(results2.results.len(), 1);
         assert_eq!(results2.results[0].title, "Watcher Test Updated");
     }
@@ -964,9 +908,9 @@ mod tests {
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
         // Retrieve wisdom rule using get_wisdom with tier "skills"
-        let results = backend.get_wisdom("test-pattern", Some("skills"), 10, 0, 0.0).await.unwrap();
+        let results = backend.get_wisdom("test-pattern", Some(crate::contracts::Tier::Wisdom), 10, 0, 0.0).await.unwrap();
         assert_eq!(results.results.len(), 1);
-        assert_eq!(results.results[0].tier, "skills");
+        assert_eq!(results.results[0].tier, crate::contracts::Tier::Wisdom);
         assert_eq!(results.results[0].target_pattern, "test-pattern");
     }
 }

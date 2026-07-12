@@ -59,7 +59,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!ep_id.is_empty(), "Saved episode ID must not be empty");
 
     // Retrieve via search matching general
-    let search_res = backend.search(
+    let search_res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "execution context",
         Some("general"),
         false,
@@ -73,7 +73,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     assert!(!search_res.results.is_empty(), "Must retrieve the ingested episode");
     assert_eq!(search_res.results[0].title, "Test Ingestion System Flow");
 
@@ -91,7 +91,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!raptor_id.is_empty(), "Saved Raptor summary ID must not be empty");
 
     // Retrieve Raptor Summary
-    let search_raptor = backend.search(
+    let search_raptor = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Raptor Summary",
         Some("general"),
         false,
@@ -105,7 +105,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     assert!(!search_raptor.results.is_empty(), "Must retrieve the Raptor summary node");
     assert!(search_raptor.results[0].title.contains("Raptor Summary"));
 
@@ -123,7 +123,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(!insight_id.is_empty(), "Saved insight node ID must not be empty");
 
     // Retrieve Insight Node
-    let search_insight = backend.search(
+    let search_insight = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "permanent wiki nodes",
         Some("general"),
         false,
@@ -137,7 +137,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     assert!(!search_insight.results.is_empty(), "Must retrieve the synthesized insight node");
     assert_eq!(search_insight.results[0].title, "Insight: System Hierarchical Flow");
 
@@ -148,7 +148,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         action_to_avoid: "injecting raw strings into WHERE clauses".to_string(),
         causal_explanation: "triggers SQL/SurrealQL injection or schema corruption".to_string(),
         prescribed_remedy: "always use query parameters via bind bindings".to_string(),
-        tier: "permanent".to_string(),
+        tier: mythrax_core::contracts::Tier::Wisdom,
         scope: "general".to_string(),
         vault_path: Some("wisdom/permanent/rule_query_params.md".to_string()),
         embedding: None,
@@ -181,6 +181,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_store_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     // Invoke complete_code_task which routes through the mlx-lm HTTP server at

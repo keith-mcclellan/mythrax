@@ -7,12 +7,8 @@ use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
 
-fn dot_product(u: &[f32], v: &[f32]) -> f32 {
-    u.iter().zip(v.iter()).map(|(a, b)| a * b).sum()
-}
-
 pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
-    1.0 - dot_product(u, v)
+    1.0 - crate::math::cosine_similarity(u, v)
 }
 
 pub fn dbscan(
@@ -85,16 +81,6 @@ pub fn find_elbow_point(k_distances: &[f32]) -> f32 {
     k_distances[elbow_idx]
 }
 
-pub fn calibrate_epsilon_fallback(model_name: &str, user_override: Option<f32>) -> f32 {
-    if let Some(val) = user_override {
-        return val;
-    }
-    if model_name.contains("nomic") {
-        0.55
-    } else {
-        0.55
-    }
-}
 
 fn find_neighbors(i: usize, embeddings: &[&[f32]], eps: f32) -> Vec<usize> {
     let mut neighbors = Vec::new();
@@ -296,8 +282,8 @@ impl DreamCoordinator {
                     confidence: f32,
                 }
                 // Strip markdown code block wrappers if any
-                let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
-                if let Ok(res) = serde_json::from_str::<ContradictionResponse>(clean_resp) {
+                let clean_resp = crate::llm::strip_code_fences(&resp_str);
+                if let Ok(res) = serde_json::from_str::<ContradictionResponse>(&clean_resp) {
                     if res.contradicts && res.confidence >= 0.80 {
                         if let Some(resolution) = res.resolution {
                             let mut updated_node = existing_node.clone();
@@ -489,11 +475,7 @@ impl DreamCoordinator {
                     Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
                     _ => None,
                 };
-                let model_name = match db.get_llm_config().await {
-                    Ok(cfg) => cfg.model,
-                    _ => "nomic-embed-text-v1.5-mlx".to_string(),
-                };
-                calibrate_epsilon_fallback(&model_name, user_override_val)
+                user_override_val.unwrap_or(0.55)
             }
         };
 
@@ -802,12 +784,12 @@ impl DreamCoordinator {
 
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
                             let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
-                            let final_tier = "dynamic".to_string();
+                            let final_tier_str = "dynamic".to_string();
                             let final_scope = scope.clone();
 
                             let rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier, final_scope,
+                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier_str, final_scope,
                                 cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
                                 r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
                                 source_ep_section
@@ -824,7 +806,7 @@ impl DreamCoordinator {
                                 action_to_avoid: r.action_to_avoid,
                                 causal_explanation: r.causal_explanation,
                                 prescribed_remedy: r.prescribed_remedy,
-                                tier: final_tier,
+                                tier: crate::contracts::Tier::Project,
                                 scope: final_scope,
                                 vault_path: Some(rule_path),
                                 embedding: None,
@@ -1132,7 +1114,7 @@ impl DreamCoordinator {
                             .unwrap_or(Path::new(&ins.vault_path))
                             .to_string_lossy()
                             .to_string();
-                        println!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
+                        tracing::debug!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
                         let _ = db.delete_by_vault_path(&rel_path).await;
                     }
                 }
@@ -1360,8 +1342,8 @@ impl DreamCoordinator {
                         prescribed_remedy: String,
                         confidence: f32,
                     }
-                    let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
-                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(clean_resp) {
+                    let clean_resp = crate::llm::strip_code_fences(&resp_str);
+                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
                         if res.confidence >= 0.80 {
                             let all_procedural = cluster.iter().all(|c| c.is_procedural);
                             let tier = if all_procedural { "permanent" } else { "dynamic" };
@@ -1387,7 +1369,7 @@ impl DreamCoordinator {
                                 action_to_avoid: res.action_to_avoid,
                                 causal_explanation: res.causal_explanation,
                                 prescribed_remedy: res.prescribed_remedy,
-                                tier: tier.to_string(),
+                                tier: tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom),
                                 scope: "general".to_string(),
                                 vault_path: Some(rule_path),
                                 embedding: None,
@@ -1518,7 +1500,7 @@ pub async fn save_wisdom_rule_with_deduplication(
             }
         };
 
-        let sim = dot_product(&new_emb, &existing_emb);
+        let sim = crate::math::cosine_similarity(&new_emb, &existing_emb);
         if sim > 0.80 {
             if let Some((_, best_sim)) = best_match.as_ref() {
                 if sim > *best_sim {
@@ -1531,7 +1513,7 @@ pub async fn save_wisdom_rule_with_deduplication(
     }
 
     if let Some((matched, _sim)) = best_match {
-        if matched.tier == "skills" {
+        if matched.tier == crate::contracts::Tier::Wisdom {
             if let Some(ref vp) = rule.vault_path {
                 let _ = safe_delete_file(&store.vault_root, vp);
             }
@@ -1541,7 +1523,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                 }
                 return Ok(skills_id.clone());
             }
-        } else if matched.tier == "dynamic" || matched.tier == "forge" {
+        } else if matched.tier == crate::contracts::Tier::Project {
             let system_prompt = "You are an expert software engineer and systems architect. Merge and generalize two similar wisdom rules into a single, high-quality, comprehensive wisdom rule.";
             let prompt = format!(
                 "Rule 1:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
@@ -1556,14 +1538,7 @@ pub async fn save_wisdom_rule_with_deduplication(
             let llm = crate::llm::LLMClient::new();
             match llm.completion(db, Some(system_prompt), &prompt).await {
                 Ok(res) => {
-                    let trimmed = res.trim();
-                    let stripped = if trimmed.starts_with("```json") {
-                        trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                    } else if trimmed.starts_with("```") {
-                        trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                    } else {
-                        trimmed
-                    };
+                    let stripped = crate::llm::strip_code_fences(&res);
 
                     #[derive(serde::Deserialize)]
                     struct MergedFields {
@@ -1574,13 +1549,13 @@ pub async fn save_wisdom_rule_with_deduplication(
                     }
 
                     let parsed_fields = if stripped.starts_with('[') {
-                        if let Ok(list) = serde_json::from_str::<Vec<MergedFields>>(stripped) {
+                        if let Ok(list) = serde_json::from_str::<Vec<MergedFields>>(&stripped) {
                             list.into_iter().next()
                         } else {
                             None
                         }
                     } else {
-                        serde_json::from_str::<MergedFields>(stripped).ok()
+                        serde_json::from_str::<MergedFields>(&stripped).ok()
                     };
 
                     if let Some(fields) = parsed_fields {
@@ -1616,7 +1591,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             action_to_avoid: fields.action_to_avoid,
                             causal_explanation: fields.causal_explanation,
                             prescribed_remedy: fields.prescribed_remedy,
-                            tier: "dynamic".to_string(),
+                            tier: crate::contracts::Tier::Project,
                             scope: rule.scope.clone(),
                             vault_path: Some(final_path),
                             embedding: None,

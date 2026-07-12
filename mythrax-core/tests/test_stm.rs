@@ -604,6 +604,7 @@ async fn test_api_save_forged_assets() -> Result<()> {
         store,
         ignore_list,
         dream_tx: None,
+        shutdown_tx: None,
     });
 
     let app = create_router(state);
@@ -787,7 +788,7 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
         action_to_avoid: "Avoiding test".to_string(),
         causal_explanation: "Causal details".to_string(),
         prescribed_remedy: "Remedy details".to_string(),
-        tier: "dynamic".to_string(),
+        tier: mythrax_core::contracts::Tier::Project,
         scope: "general".to_string(),
         vault_path: Some("wisdom/rule_abc.md".to_string()),
         embedding: None,

@@ -164,7 +164,7 @@ async fn test_dynamic_ladder_boost_scaling() {
     
     // 1. Scale = 0.0 (no boost) -> raw_vector_sim should be exactly 0.85
     backend.save_profile_key("search.ladder_scale", "0.0").await.unwrap();
-    let res = backend.search(
+    let res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -178,14 +178,14 @@ async fn test_dynamic_ladder_boost_scaling() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     assert!(!res.results.is_empty());
     let r = res.results.iter().find(|x| x.id == ep_id).unwrap();
     assert_eq!(r.raw_vector_sim.unwrap(), 0.85f32);
     
     // 2. Scale = 1.0 (full boost) -> raw_vector_sim should be 0.85 + 0.15 = 1.0
     backend.save_profile_key("search.ladder_scale", "1.0").await.unwrap();
-    let res2 = backend.search(
+    let res2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -199,13 +199,13 @@ async fn test_dynamic_ladder_boost_scaling() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     let r2 = res2.results.iter().find(|x| x.id == ep_id).unwrap();
     assert_eq!(r2.raw_vector_sim.unwrap(), 1.0f32);
     
     // 3. Scale = 0.5 (half boost) -> raw_vector_sim should be 0.85 + 0.075 = 0.925
     backend.save_profile_key("search.ladder_scale", "0.5").await.unwrap();
-    let res3 = backend.search(
+    let res3 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -219,7 +219,7 @@ async fn test_dynamic_ladder_boost_scaling() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     let r3 = res3.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r3.raw_vector_sim.unwrap() - 0.925f32).abs() < 1e-5);
 }
@@ -251,7 +251,7 @@ async fn test_dynamic_temporal_decay_floor() {
         
     // 1. Decay floor = 0.20 -> factor_multiplier should be 0.25 + 0.5 * 0.20 = 0.35
     backend.save_profile_key("search.temporal_decay_floor", "0.20").await.unwrap();
-    let res = backend.search(
+    let res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -265,7 +265,7 @@ async fn test_dynamic_temporal_decay_floor() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     let r = res.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r.factor_multiplier.unwrap() - 0.35f32).abs() < 1e-4);
     
@@ -276,7 +276,7 @@ async fn test_dynamic_temporal_decay_floor() {
 
     // 2. Decay floor = 0.45 -> factor_multiplier should be 0.25 + 0.5 * 0.45 = 0.475
     backend.save_profile_key("search.temporal_decay_floor", "0.45").await.unwrap();
-    let res2 = backend.search(
+    let res2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Rust database locks",
         Some("general"),
         false,
@@ -290,7 +290,7 @@ async fn test_dynamic_temporal_decay_floor() {
         None,
         true,
         None,
-    ).await.unwrap();
+    )).await.unwrap();
     let r2 = res2.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r2.factor_multiplier.unwrap() - 0.475f32).abs() < 1e-4);
 }

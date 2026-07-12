@@ -74,36 +74,6 @@ impl Harvester {
         }
     }
 
-    #[allow(dead_code)]
-    pub async fn synthesize_user_profile(
-        &self,
-        db: &dyn StorageBackend,
-        store: &MarkdownStore,
-    ) -> Result<()> {
-        let episodes = db.get_all_episodes().await?;
-        let mut combined_text = String::new();
-        for ep in episodes {
-            combined_text.push_str(&format!("Episode Title: {}\nContent:\n{}\n\n", ep.title, ep.content));
-        }
-
-        if combined_text.is_empty() {
-            return Ok(());
-        }
-
-        let sys_prompt = "You are a user profiling cognitive engine. Analyze the development log history and synthesize the user's style preferences, coding habits, development constraints, and frequently preferred architectural paradigms.";
-        let prompt_text = format!("Developer log history:\n\n{}", combined_text);
-        let profile_md = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
-
-        let relative_path = "wiki/user_profile.md";
-        let file_content = format!(
-            "---\ntype: \"user_profile\"\n---\n\n# User Profile & Development Style\n\n{}",
-            profile_md
-        );
-        store.write_file(relative_path, &file_content)?;
-
-        db.save_profile_key("style_preferences", &profile_md).await?;
-        Ok(())
-    }
 
     pub async fn harvest_skills(
         &self,
@@ -187,7 +157,7 @@ impl Harvester {
                         action_to_avoid: r.action_to_avoid,
                         causal_explanation: r.causal_explanation,
                         prescribed_remedy: r.prescribed_remedy,
-                        tier: "skills".to_string(),
+                        tier: crate::contracts::Tier::Wisdom,
                         scope: "general".to_string(),
                         vault_path: Some(rule_path),
                         embedding: None,

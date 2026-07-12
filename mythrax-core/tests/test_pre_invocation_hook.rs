@@ -53,6 +53,7 @@ async fn test_soft_thresholding_and_hook_injection() {
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     // Prepare payload for pre-invocation hook

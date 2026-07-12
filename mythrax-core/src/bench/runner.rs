@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id, parse_haystack_date};
+use mythrax_core::bench::metrics::{evaluate_retrieval, session_id_from_corpus_id, parse_haystack_date};
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use surrealdb_types::SurrealValue;
@@ -140,11 +140,11 @@ struct QuestionResultRecord {
 fn resolve_scored_file(split: &str) -> Result<&'static str> {
     let file = match split {
         // BI-1: publishable run scores the REAL long-context haystack, not gold-evidence-only.
-        "full500" | "internal-gate" | "dev50" => "longmemeval_s_cleaned.json",
+        "full500" | "internal-gate" | "dev50" | "dev25" => "longmemeval_s_cleaned.json",
         // Explicit upper-bound diagnostic ONLY. Never published.
         "oracle" => "longmemeval_oracle.json",
         other => anyhow::bail!(
-            "SPEC-GAP: unknown split '{}'. Use full500 | oracle | internal-gate | dev50",
+            "SPEC-GAP: unknown split '{}'. Use full500 | oracle | internal-gate | dev50 | dev25",
             other
         ),
     };
@@ -321,6 +321,33 @@ async fn main() -> Result<()> {
             dev_subset.len()
         );
         dev_subset
+    } else if args.split == "dev25" {
+        let mut sorted = questions;
+        sorted.sort_by(|a, b| a.question_id.cmp(&b.question_id));
+        let mut dev_subset = Vec::new();
+        let mut counts = std::collections::HashMap::new();
+        let limits = [
+            ("knowledge-update".to_string(), 4),
+            ("multi-session".to_string(), 6),
+            ("single-session-assistant".to_string(), 3),
+            ("single-session-preference".to_string(), 1),
+            ("single-session-user".to_string(), 4),
+            ("temporal-reasoning".to_string(), 7),
+        ].into_iter().collect::<std::collections::HashMap<String, usize>>();
+
+        for q in sorted {
+            let limit = limits.get(&q.question_type).cloned().unwrap_or(0);
+            let count = counts.entry(q.question_type.clone()).or_insert(0);
+            if *count < limit {
+                dev_subset.push(q);
+                *count += 1;
+            }
+        }
+        println!(
+            "dev25: deterministic stratified dev split of {} questions.",
+            dev_subset.len()
+        );
+        dev_subset
     } else {
         questions
     };
@@ -355,7 +382,7 @@ async fn main() -> Result<()> {
             // Decoupled coordinate sweep
             let tune_questions = &target_questions;
             
-            let format_metrics = |r_any: f32, r_all: f32, ndcg: f32, r_any_sess: f32, r_all_sess: f32, records: &[QuestionResultRecord]| -> String {
+            let format_metrics = |r_any: f32, _r_all: f32, ndcg: f32, r_any_sess: f32, r_all_sess: f32, records: &[QuestionResultRecord]| -> String {
                 let mut type_counts = std::collections::HashMap::new();
                 let mut type_recall_at10 = std::collections::HashMap::new();
                 for record in records {
@@ -840,7 +867,7 @@ async fn run_evaluation(
     target_questions: &[QuestionEntry],
     mode: &str,
     param_overrides: Option<std::collections::HashMap<String, String>>,
-    target_cache_path: &std::path::Path,
+    _target_cache_path: &std::path::Path,
     published: bool,
     note: &str,
 ) -> Result<(f32, f32, f32, f32, f32, f64, f64, Vec<QuestionResultRecord>)> {
@@ -1040,16 +1067,16 @@ async fn run_evaluation(
                         let created_at = q.haystack_dates.as_ref()
                             .and_then(|dates| dates.get(sess_idx))
                             .and_then(|d| parse_haystack_date(d));
-                        let ep = EpisodeSave {
-                            created_at,
-                            title: format!("Session {} - Turn {}", session_id, turn_idx),
-                            content: format!("{}: {}", turn.role, turn.content),
-                            scope: Some("general".to_string()),
-                            vault_path: Some(corpus_id.clone()),
-                            session_id: Some(session_id.clone()),
-                            node_type: Some(node_type),
-                            ..Default::default()
-                        };
+                        let ep = EpisodeSave::builder(
+                            format!("Session {} - Turn {}", session_id, turn_idx),
+                            format!("{}: {}", turn.role, turn.content),
+                        )
+                        .scope(Some("general".to_string()))
+                        .vault_path(Some(corpus_id.clone()))
+                        .session_id(Some(session_id.clone()))
+                        .node_type(Some(node_type))
+                        .created_at(created_at)
+                        .build();
                         episodes_to_ingest.push(ep);
                     }
                 }
@@ -1147,7 +1174,7 @@ async fn run_evaluation(
             let active_session_id = q.answer_session_ids.first().map(|s| s.as_str());
             let temporal_anchor = q.question_date.as_ref().and_then(|d| parse_haystack_date(d));
             let search_response = backend
-                .search(
+                .search(mythrax_core::contracts::SearchParams::from_positional(
                     &q.question,
                     Some("general"),
                     false,
@@ -1161,7 +1188,7 @@ async fn run_evaluation(
                     active_session_id,
                     true,
                     temporal_anchor.as_deref(),
-                )
+                ))
                 .await
                 .context("Search query failed during evaluation")?;
             let query_latency_ms = start_query.elapsed().as_secs_f64() * 1000.0;

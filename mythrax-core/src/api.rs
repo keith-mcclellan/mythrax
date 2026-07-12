@@ -10,9 +10,6 @@ use crate::contracts::{EpisodeSave, Feedback, LlmConfigRequest, LlmConfigRespons
 use crate::store::MarkdownStore;
 use crate::vault::watcher::WatchIgnoreList;
 use serde_json::{json, Value};
-use futures_util::stream::Stream;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use bytes::Bytes;
 
 pub struct ApiState {
@@ -21,6 +18,7 @@ pub struct ApiState {
     pub store: Arc<MarkdownStore>,
     pub ignore_list: Arc<WatchIgnoreList>,
     pub dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    pub shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 pub fn create_router(state: Arc<ApiState>) -> Router {
@@ -141,7 +139,7 @@ async fn search_handler(
     let include_archived = payload.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
     let temporal_anchor = payload.get("temporal_anchor").and_then(|v| v.as_str());
 
-    match state.backend.search(
+    match state.backend.search(crate::contracts::SearchParams::from_positional(
         query,
         scope,
         deep_insight,
@@ -155,7 +153,7 @@ async fn search_handler(
         session_id,
         include_archived,
         temporal_anchor,
-    ).await {
+    )).await {
         Ok(res) => Ok(Json(res)),
         Err(e) => {
             tracing::error!("Search failed: {:?}", e);
@@ -374,10 +372,9 @@ async fn completions_proxy_handler(
                 let mut header_map = HeaderMap::new();
                 header_map.insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/event-stream"));
                 
-                let stream = resp.bytes_stream();
-                let intercepted_stream = StreamInterceptor::new(stream);
-                
-                (status, header_map, axum::body::Body::from_stream(intercepted_stream)).into_response()
+                use futures_util::StreamExt;
+                let stream = resp.bytes_stream().map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+                (status, header_map, axum::body::Body::from_stream(stream)).into_response()
             }
             Err(e) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to proxy request: {}", e)).into_response()
@@ -388,22 +385,7 @@ async fn completions_proxy_handler(
             Ok(resp) => {
                 let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
                 match resp.json::<Value>().await {
-                    Ok(mut json_val) => {
-                        if let Some(choices) = json_val.get_mut("choices").and_then(|c| c.as_array_mut()) {
-                            if let Some(first_choice) = choices.first_mut() {
-                                if let Some(content) = first_choice.get_mut("message").and_then(|m| m.get_mut("content")) {
-                                    if let Some(content_str) = content.as_str() {
-                                        if !content_str.starts_with("Execution Check:") {
-                                            let new_content = format!(
-                                                "Execution Check: [Karpathy Rules applied? Yes] [Local Model verified? Yes]\n{}",
-                                                content_str
-                                            );
-                                            *content = Value::String(new_content);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    Ok(json_val) => {
                         (status, Json(json_val)).into_response()
                     }
                     Err(e) => {
@@ -453,124 +435,6 @@ async fn ollama_proxy_handler(
     }
 }
 
-struct StreamInterceptor<S> {
-    inner: S,
-    checked: bool,
-    buffer: Vec<u8>,
-    text_buffer: String,
-}
-
-impl<S> StreamInterceptor<S> {
-    fn new(inner: S) -> Self {
-        Self {
-            inner,
-            checked: false,
-            buffer: Vec::new(),
-            text_buffer: String::new(),
-        }
-    }
-}
-
-impl<S> Stream for StreamInterceptor<S>
-where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
-{
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, std::io::Error>>> {
-        loop {
-            match Pin::new(&mut self.inner).poll_next(cx) {
-                Poll::Ready(Some(Ok(bytes))) => {
-                    if self.checked {
-                        return Poll::Ready(Some(Ok(bytes)));
-                    }
-                    
-                    self.buffer.extend_from_slice(&bytes);
-                    
-                    let mut pos = 0;
-                    while let Some(newline_idx) = self.buffer[pos..].iter().position(|&b| b == b'\n') {
-                        let line_end = pos + newline_idx;
-                        let line = &self.buffer[pos..line_end];
-                        pos = line_end + 1;
-                        
-                        let line_str = String::from_utf8_lossy(line);
-                        if line_str.starts_with("data: ") {
-                            let data_part = line_str["data: ".len()..].trim();
-                            if data_part == "[DONE]" {
-                                continue;
-                            }
-                            if let Ok(val) = serde_json::from_str::<Value>(data_part) {
-                                if let Some(choices) = val.get("choices").and_then(|c| c.as_array()) {
-                                    if let Some(first_choice) = choices.first() {
-                                        if let Some(content) = first_choice.get("delta").and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
-                                            self.text_buffer.push_str(content);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    self.buffer.drain(0..pos);
-                    
-                    if self.text_buffer.len() >= 20 || self.text_buffer.contains('\n') {
-                        self.checked = true;
-                        if !self.text_buffer.starts_with("Execution Check:") {
-                            let inject_json = json!({
-                                "id": "chatcmpl-proxy",
-                                "object": "chat.completion.chunk",
-                                "created": chrono::Utc::now().timestamp(),
-                                "model": "local-proxy",
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {
-                                        "content": "Execution Check: [Karpathy Rules applied? Yes] [Local Model verified? Yes]\n"
-                                    },
-                                    "finish_reason": null
-                                }]
-                            });
-                            let inject_str = format!("data: {}\n\n", inject_json);
-                            let mut new_bytes = Vec::new();
-                            new_bytes.extend_from_slice(inject_str.as_bytes());
-                            new_bytes.extend_from_slice(&bytes);
-                            return Poll::Ready(Some(Ok(Bytes::from(new_bytes))));
-                        }
-                    }
-                    
-                    return Poll::Ready(Some(Ok(bytes)));
-                }
-                Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(std::io::Error::new(std::io::ErrorKind::Other, e))));
-                }
-                Poll::Ready(None) => {
-                    if !self.checked && !self.text_buffer.starts_with("Execution Check:") {
-                        self.checked = true;
-                        let inject_json = json!({
-                            "id": "chatcmpl-proxy",
-                            "object": "chat.completion.chunk",
-                            "created": chrono::Utc::now().timestamp(),
-                            "model": "local-proxy",
-                            "choices": [{
-                                "index": 0,
-                                "delta": {
-                                    "content": "Execution Check: [Karpathy Rules applied? Yes] [Local Model verified? Yes]\n"
-                                },
-                                "finish_reason": null
-                            }]
-                        });
-                        let inject_str = format!("data: {}\n\n", inject_json);
-                        return Poll::Ready(Some(Ok(Bytes::from(inject_str))));
-                    }
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -594,6 +458,7 @@ mod tests {
             store,
             ignore_list,
             dream_tx: None,
+            shutdown_tx: None,
         });
 
         let app = create_router(state);
@@ -822,12 +687,21 @@ async fn stop_daemon_endpoint_handler(
     let home = std::env::var("HOME").unwrap_or_default();
     let pid_path_clone = std::path::PathBuf::from(home).join(".mythrax/daemon.pid");
     
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        tracing::info!("Graceful shutdown requested via API. Exiting...");
-        let _ = std::fs::remove_file(pid_path_clone);
-        std::process::exit(0);
-    });
+    if let Some(tx) = &state.shutdown_tx {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tracing::info!("Graceful shutdown requested via API. Sending shutdown signal...");
+            let _ = tx.send(()).await;
+        });
+    } else {
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tracing::info!("Graceful shutdown requested via API (no shutdown_tx). Exiting...");
+            let _ = std::fs::remove_file(pid_path_clone);
+            std::process::exit(0);
+        });
+    }
 
     Ok(Json(json!({ "status": "stopping" })))
 }

@@ -99,6 +99,9 @@ impl LLMClient {
                 if prompt.contains("Analyze the following dialog") {
                     return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
                 } else if prompt.contains("Validate if these should merge") {
+                    if std::env::var("MYTHRAX_MOCK_MALFORMED_MERGE").is_ok() {
+                        return Ok(r#"{"should_merge": true}"#.to_string());
+                    }
                     return Ok(r#"{"should_merge": true, "suggested_name": "git-workflow", "reason": "Redundant playbooks"}"#.to_string());
                 } else if prompt.contains("Playbooks to Merge") {
                     return Ok("---\nname: meta-git-workflow\ndescription: Consolidated git meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nConsolidated instructions here.\n".to_string());
@@ -149,7 +152,9 @@ impl LLMClient {
                 // Fallback to HTTP request when mlx feature is disabled or broker is uninitialized
                 tracing::debug!("mlx feature disabled or broker not initialized: routing local inference to mlx-lm HTTP server at :8080");
 
-                let url = "http://127.0.0.1:8080/v1/chat/completions";
+                let url_str = std::env::var("MYTHRAX_COMPLETIONS_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:8080/v1/chat/completions".to_string());
+                let url = &url_str;
                 let truncated_prompt = if prompt.len() > 100_000 {
                     let truncated = truncate_to_boundary(prompt, 100_000);
                     format!("{}... [Truncated due to local context limits]", truncated)
@@ -204,7 +209,10 @@ impl LLMClient {
 
                 let result = strip_think_block(&raw);
 
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let delay_ms = db.get_llm_config().await
+                    .map(|cfg| cfg.llm_post_inference_delay_ms.unwrap_or(5000))
+                    .unwrap_or(5000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 
                 result
             }
@@ -306,7 +314,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
 
         // Query Wisdom Rules semantically for all tiers
         let mut rules = Vec::new();
-        for tier in &["pinned", "permanent", "dynamic"] {
+        for tier in &[crate::contracts::Tier::Wisdom, crate::contracts::Tier::Project] {
             if let Ok(res) = db.get_wisdom(parent_hypothesis, Some(*tier), 5, 0, 0.55).await {
                 rules.extend(res.results);
             }
@@ -375,18 +383,49 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
 
 
 pub fn strip_code_fences(content: &str) -> String {
-    let mut cleaned = content.trim().to_string();
+    let mut cleaned = content.trim();
     if cleaned.starts_with("```") {
-        if let Some(first_newline_pos) = cleaned.find('\n') {
-            cleaned = cleaned[first_newline_pos + 1..].to_string();
+        if cleaned.contains('\n') {
+            if let Some(first_newline_pos) = cleaned.find('\n') {
+                cleaned = &cleaned[first_newline_pos + 1..];
+            }
+            if cleaned.ends_with("```") {
+                cleaned = &cleaned[..cleaned.len() - 3];
+            } else if cleaned.ends_with("```\n") {
+                cleaned = &cleaned[..cleaned.len() - 4];
+            }
+        } else {
+            if cleaned.starts_with("```json") {
+                cleaned = &cleaned["```json".len()..];
+            } else if cleaned.starts_with("```markdown") {
+                cleaned = &cleaned["```markdown".len()..];
+            } else if cleaned.starts_with("```") {
+                cleaned = &cleaned["```".len()..];
+            }
+            if cleaned.ends_with("```") {
+                cleaned = &cleaned[..cleaned.len() - 3];
+            }
         }
-        if cleaned.ends_with("```") {
-            cleaned = cleaned[..cleaned.len() - 3].trim().to_string();
-        } else if cleaned.ends_with("```\n") {
-            cleaned = cleaned[..cleaned.len() - 4].trim().to_string();
+    } else {
+        if let Some(start_idx) = cleaned.find("```") {
+            let fence_slice = &cleaned[start_idx..];
+            let prefix = if fence_slice.starts_with("```json") {
+                "```json"
+            } else if fence_slice.starts_with("```markdown") {
+                "```markdown"
+            } else {
+                "```"
+            };
+            let content_start = start_idx + prefix.len();
+            let rest = &cleaned[content_start..];
+            if let Some(end_idx) = rest.rfind("```") {
+                cleaned = &rest[..end_idx];
+            } else {
+                cleaned = rest;
+            }
         }
     }
-    cleaned
+    cleaned.trim().to_string()
 }
 
 async fn send_with_retry(
@@ -424,11 +463,21 @@ async fn send_with_retry(
         attempt += 1;
         let base_ms = 500.0;
         let factor = (2.0f64).powi(attempt);
-        let jitter = (tokio::time::Instant::now().elapsed().as_nanos() % 100) as f64;
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let jitter = calculate_lcg_jitter(attempt, ns);
         let delay_ms = (base_ms * factor + jitter).min(5000.0);
         let sleep_duration = std::time::Duration::from_millis(delay_ms as u64);
         tokio::time::sleep(sleep_duration).await;
     }
+}
+
+pub fn calculate_lcg_jitter(attempt: i32, ns: u128) -> f64 {
+    let mut x = (ns ^ (attempt as u128)) as u64;
+    x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    (x % 100) as f64
 }
 
 /// Truncates a string to a maximum character count, respecting boundary
@@ -763,10 +812,17 @@ impl DynamicModelBroker {
 
         // 2. Block until the strong reference count of all evicted models drops to 0 (weak upgrade returns None)
         for (t, weak_ref) in evict_list {
+            let start_wait = tokio::time::Instant::now();
             while weak_ref.upgrade().is_some() {
+                if start_wait.elapsed() >= std::time::Duration::from_secs(30) {
+                    tracing::warn!("Timeout waiting for evicted model tier {:?} to deallocate from VRAM", t);
+                    break;
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tracing::info!("Evicted model tier {:?} successfully deallocated from VRAM", t);
+            if weak_ref.upgrade().is_none() {
+                tracing::info!("Evicted model tier {:?} successfully deallocated from VRAM", t);
+            }
         }
 
         // 3. Determine the model name and download paths WITHOUT holding the lock
@@ -846,11 +902,11 @@ impl DynamicModelBroker {
             #[cfg(feature = "mlx")]
             let (model_opt, tok_opt) = {
                 let is_mock = {
-                    #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+                    #[cfg(any(test, debug_assertions))]
                     {
                         std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
                     }
-                    #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+                    #[cfg(not(any(test, debug_assertions)))]
                     {
                         false
                     }
@@ -967,7 +1023,7 @@ impl DynamicModelBroker {
     }
 
     /// Creates a new corrupt mock broker.
-    #[cfg(any(test, debug_assertions, feature = "test-mock", feature = "test-utils"))]
+    #[cfg(any(test, debug_assertions))]
     pub async fn new_corrupt_mock() -> Result<Self> {
         Ok(Self {
             models: Arc::new(Mutex::new(HashMap::new())),
@@ -984,7 +1040,7 @@ impl DynamicModelBroker {
     pub async fn acquire_llm_with_warmup_fallback(&self, tier: ModelTier) -> Result<Arc<dyn InferenceEngine>> {
         match self.acquire_llm(tier).await {
             Ok(model) => Ok(model),
-            #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+            #[cfg(any(test, debug_assertions))]
             Err(_e) => {
                 let mut models = self.models.lock().unwrap();
                 models.clear();
@@ -1007,7 +1063,7 @@ impl DynamicModelBroker {
                 
                 Ok(fallback_model)
             }
-            #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+            #[cfg(not(any(test, debug_assertions)))]
             Err(e) => Err(e),
         }
     }
@@ -1032,11 +1088,11 @@ mod tests {
 #[cfg(feature = "mlx")]
 async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<()> {
     let is_mock = {
-        #[cfg(any(test, debug_assertions, feature = "test-mock"))]
+        #[cfg(any(test, debug_assertions))]
         {
             std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
         }
-        #[cfg(not(any(test, debug_assertions, feature = "test-mock")))]
+        #[cfg(not(any(test, debug_assertions)))]
         {
             false
         }

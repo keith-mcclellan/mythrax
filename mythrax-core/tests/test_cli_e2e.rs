@@ -19,6 +19,7 @@ fn binary() -> std::path::PathBuf {
 fn cmd(home: &std::path::Path, port: &str) -> Command {
     let mut c = Command::new(binary());
     c.env("MYTHRAX_MOCK_LLM", "true");
+    c.env("MYTHRAX_TEST_MOCK", "1");
     c.env("HOME", home);
     c.env("MYTHRAX_DAEMON_PORT", port);
     c

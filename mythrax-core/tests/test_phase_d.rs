@@ -40,7 +40,7 @@ async fn test_t15_temporal_expansion_pool_size() -> Result<()> {
 
     // Now test with pool size = 10
     backend.save_profile_key("search.temporal_expansion_pool_size", "10").await?;
-    let resp_10 = backend.search(
+    let resp_10 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "QueryMatchWord after",
         Some("general"),
         false,
@@ -54,7 +54,7 @@ async fn test_t15_temporal_expansion_pool_size() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     
     let successors_10_count = resp_10.results.iter()
         .filter(|r| r.title.starts_with("Successor"))
@@ -64,7 +64,7 @@ async fn test_t15_temporal_expansion_pool_size() -> Result<()> {
 
     // Now test with pool size = 2
     backend.save_profile_key("search.temporal_expansion_pool_size", "2").await?;
-    let resp_2 = backend.search(
+    let resp_2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "QueryMatchWord after",
         Some("general"),
         false,
@@ -78,7 +78,7 @@ async fn test_t15_temporal_expansion_pool_size() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     let successors_2_count = resp_2.results.iter()
         .filter(|r| r.title.starts_with("Successor"))
@@ -117,7 +117,7 @@ async fn test_t16_cross_session_temporal_expansion() -> Result<()> {
     backend.save_episodes_batch(&[ep2]).await?;
 
     // Search under active session user123_2, query with Preceding cue "before"
-    let resp = backend.search(
+    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "SearchTerm before",
         Some("general"),
         false,
@@ -131,7 +131,7 @@ async fn test_t16_cross_session_temporal_expansion() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
 
     // The results should contain Turn 1 from user123_1 via expansion
     let found_turn1 = resp.results.iter().any(|r| r.title == "Turn 1" && r.session_id.as_deref() == Some("user123_1"));

@@ -8,7 +8,7 @@ pub mod db;
 pub mod embeddings;
 pub mod secret_filter;
 pub mod store;
-pub mod wal;
+pub mod math;
 pub mod vault;
 pub mod auth;
 pub mod verify;

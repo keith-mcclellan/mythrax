@@ -211,6 +211,7 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
             model: Some(model),
             cloud_provider: Some("gemini".to_string()),
             api_key: None,
+            llm_post_inference_delay_ms: None,
         });
     } else {
         print!("Select cloud provider (openai/anthropic/gemini) [default: openai]: ");
@@ -253,6 +254,7 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
             model: Some(model),
             cloud_provider: Some(cloud_provider),
             api_key: Some(api_key),
+            llm_post_inference_delay_ms: None,
         });
     }
 
@@ -267,7 +269,6 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
     })
 }
 
-pub static SUSPEND_BACKGROUND_TASKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(unix)]
 fn is_process_alive(pid: i32) -> bool {
@@ -363,7 +364,6 @@ pub fn spawn_swap_monitor_thread() {
                 Err(_) => false,
             };
             if disable_monitor {
-                SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
                 continue;
             }
 
@@ -409,18 +409,12 @@ pub fn spawn_swap_monitor_thread() {
                             tier,
                             threshold_gb
                         );
-                        // Trigger suspension
-                        SUSPEND_BACKGROUND_TASKS.store(true, std::sync::atomic::Ordering::SeqCst);
 
                         // Evict unused models from VRAM
                         if let Some(broker) = mythrax_core::llm::DYNAMIC_MODEL_BROKER.get() {
                             broker.evict_unused_models().await;
                         }
-                    } else {
-                        SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
                     }
-                } else {
-                    SUSPEND_BACKGROUND_TASKS.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
             }
         }
@@ -597,7 +591,7 @@ async fn main() -> Result<()> {
                     action_to_avoid: "Opening RocksDB database directly from multiple concurrent CLI or client processes.".to_string(),
                     causal_explanation: "RocksDB is a single-writer database. Multiple processes attempting to acquire the write lock simultaneously will cause panic or crash due to lock contention.".to_string(),
                     prescribed_remedy: "Always route all queries and operations through the centralized Mythrax background daemon. The daemon exclusively holds the write lock and serves requests over HTTP.".to_string(),
-                    tier: "permanent".to_string(),
+                    tier: mythrax_core::contracts::Tier::Wisdom,
                     scope: "general".to_string(),
                     vault_path: Some("wisdom/permanent/rocksdb_integrity.md".to_string()),
                     embedding: None,
@@ -616,7 +610,7 @@ async fn main() -> Result<()> {
                     action_to_avoid: "Pasting full file contents, database dumps, or extensive histories directly into the subagent prompt.".to_string(),
                     causal_explanation: "Pasting full context wastes token budget, causes context window pollution, and degrades subagent focus.".to_string(),
                     prescribed_remedy: "Store context node record IDs in Short Term Memory (STM) and write a minimal contract file under `.handoffs/handoff_<task_id>.md`. Spawn the subagent pointing to the handoff file URL and let it hydrate context dynamically.".to_string(),
-                    tier: "permanent".to_string(),
+                    tier: mythrax_core::contracts::Tier::Wisdom,
                     scope: "general".to_string(),
                     vault_path: Some("wisdom/permanent/smart_handoffs.md".to_string()),
                     embedding: None,
@@ -635,7 +629,7 @@ async fn main() -> Result<()> {
                     action_to_avoid: "Proceeding with code modification or tool execution without checking the pre-invocation hook context.".to_string(),
                     causal_explanation: "Failing to verify pre-invocation hook context leads to duplicate effort, rule violations, and lack of alignment with parent guidelines.".to_string(),
                     prescribed_remedy: "Output a 1-line compliance check (`Execution Check: ...`) on the very first line of your response, and query Mythrax memory if hook context is empty.".to_string(),
-                    tier: "permanent".to_string(),
+                    tier: mythrax_core::contracts::Tier::Wisdom,
                     scope: "general".to_string(),
                     vault_path: Some("wisdom/permanent/pre_invocation_compliance.md".to_string()),
                     embedding: None,
@@ -654,7 +648,7 @@ async fn main() -> Result<()> {
                     action_to_avoid: "Using `rm` to permanently delete files in the vault or workspace.".to_string(),
                     causal_explanation: "Permanent deletions are irreversible, making accidental data loss or breaking changes impossible to recover from.".to_string(),
                     prescribed_remedy: "Always move deleted files to the `.trash/` directory under the vault or workspace root.".to_string(),
-                    tier: "permanent".to_string(),
+                    tier: mythrax_core::contracts::Tier::Wisdom,
                     scope: "general".to_string(),
                     vault_path: Some("wisdom/permanent/safe_deletions.md".to_string()),
                     embedding: None,
@@ -673,7 +667,7 @@ async fn main() -> Result<()> {
                     action_to_avoid: "Using old granular file tools (view_file, replace_file_content) or old standalone audit tools, or bypassing MemoryOS virtual paging.".to_string(),
                     causal_explanation: "Old tools are deprecated and removed. Bypassing virtual paging and paging-aware editing leads to token budget exhaustion and context window bloat.".to_string(),
                     prescribed_remedy: "Always use 'manage_file' (actions: 'view', 'replace', 'multi_replace') for files, and 'manage_vault' (action: 'audit') for compliance. Target virtual placeholders directly during edits as the paging-aware manager resolves them on disk.".to_string(),
-                    tier: "permanent".to_string(),
+                    tier: mythrax_core::contracts::Tier::Wisdom,
                     scope: "general".to_string(),
                     vault_path: Some("wisdom/permanent/mythrax_v1_2_capabilities.md".to_string()),
                     embedding: None,

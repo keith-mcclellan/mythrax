@@ -92,7 +92,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
 
     // 1. CROSS-SESSION SEARCH: Search with session_id = None (meaning all retrieved nodes from different sessions are cross-session)
     unsafe { std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false"); }
-    let resp_cross = backend.search(
+    let resp_cross = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Database index compression",
         Some("general"),
         false,
@@ -106,7 +106,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     unsafe { std::env::set_var("MYTHRAX_SESSION_ISOLATION", "true"); }
 
     let results_cross = resp_cross.results;
@@ -150,7 +150,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
 
     // 2. SAME-SESSION SEARCH: Search with session_id = Some("session-123")
     // This will retrieve only Index 0 (Active) and Index 1 (Recent Archived), as they are same-session.
-    let resp_same = backend.search(
+    let resp_same = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Database index compression",
         Some("general"),
         false,
@@ -164,7 +164,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
         Some("session-123"),
         true,
         None,
-    ).await?;
+    )).await?;
 
     let results_same = resp_same.results;
     println!("SAME-SESSION RESULTS: {:?}", results_same.iter().map(|r| &r.title).collect::<Vec<_>>());

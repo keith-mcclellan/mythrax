@@ -125,7 +125,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
     coordinator.run_dream(&backend, &store, Some("incremental"), None).await?;
 
     // Verify the new turns are mined into the database
-    let search_res = backend.search(
+    let search_res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "EXTERNAL_DREAM_VERIFICATION_TOKEN",
         Some("general"),
         false,
@@ -139,7 +139,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     assert!(search_res.total_matches > 0, "Mined episode containing verification token should be retrievable");
 
     // The key _last_swept_at is stashed in STM

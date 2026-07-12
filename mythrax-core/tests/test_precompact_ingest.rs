@@ -103,7 +103,7 @@ async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<(
     assert!(count >= 2, "expected both array-form turns mined, got {}", count);
 
     for payload in ["BLOCK_TOOL_PAYLOAD_ABC", "NESTED_TOOL_PAYLOAD_DEF"] {
-        let response = backend.search(
+        let response = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         payload,
         Some("general"),
         false,
@@ -117,7 +117,7 @@ async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<(
         None,
         true,
         None,
-    ).await?;
+    )).await?;
         let found = response.results.iter().any(|r| r.content.contains(payload));
         assert!(found, "verbatim tool output {} was dropped from array-form content", payload);
     }
@@ -157,7 +157,7 @@ async fn precompact_mines_assistant_turns() -> anyhow::Result<()> {
 
     assert_eq!(count, 1, "expected 1 assistant turn mined, got {}", count);
 
-    let response = backend.search(
+    let response = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "troubleshooting process",
         None,
         false,
@@ -171,7 +171,7 @@ async fn precompact_mines_assistant_turns() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     let found = response.results.iter().any(|r| r.content.contains("troubleshooting process"));
     assert!(found, "assistant turn content was not found in search results");
 
@@ -215,7 +215,7 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
     assert_eq!(count, 1, "expected exactly 1 turn mined (length > 20), got {}", count);
 
     // Verify the short one is NOT in search results
-    let response_short = backend.search(
+    let response_short = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Sure, OK",
         None,
         false,
@@ -229,12 +229,12 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     let found_short = response_short.results.iter().any(|r| r.content.contains("Sure, OK"));
     assert!(!found_short, "short assistant turn was incorrectly indexed");
 
     // Verify the long one IS in search results
-    let response_long = backend.search(
+    let response_long = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Sure thing",
         None,
         false,
@@ -248,7 +248,7 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     let found_long = response_long.results.iter().any(|r| r.content.contains("Sure thing"));
     assert!(found_long, "long assistant turn was not indexed");
 

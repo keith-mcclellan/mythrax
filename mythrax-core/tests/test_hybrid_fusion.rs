@@ -56,7 +56,7 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
     // Query: "basement pipes"
     // With hybrid OFF, the vector search is performed.
     backend.save_profile_key("retrieval.hybrid", "false").await?;
-    let _res_off = backend.search(
+    let _res_off = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "basement pipes",
         Some("general"),
         false,
@@ -70,11 +70,11 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     
     // 2. Search with hybrid ON
     backend.save_profile_key("retrieval.hybrid", "true").await?;
-    let res_on = backend.search(
+    let res_on = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "basement pipes",
         Some("general"),
         false,
@@ -88,7 +88,7 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
         None,
         true,
         None,
-    ).await?;
+    )).await?;
     
     // If hybrid is ON, the lexical match (Ep 1) should rank highly (and be returned as a high-scoring result)
     // because of its 100% lexical term overlap.
