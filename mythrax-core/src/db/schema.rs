@@ -36,7 +36,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS word_count ON episode TYPE option<int>;
     DEFINE FIELD IF NOT EXISTS metrics ON episode TYPE option<record<episode_metrics>>;
     DEFINE FIELD IF NOT EXISTS node_type ON episode TYPE string DEFAULT 'agent_thought';
-    DEFINE FIELD IF NOT EXISTS confidence ON episode TYPE float DEFAULT 0.90;
+    DEFINE FIELD IF NOT EXISTS confidence ON episode TYPE option<float> DEFAULT 0.90;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
