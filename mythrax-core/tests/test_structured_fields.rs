@@ -24,7 +24,9 @@ async fn test_concept_prefilter_narrows_candidates() {
         files_modified: None,
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     backend.save_episode(&ep_close).await.unwrap();
 
     // 2. Target episode tagged with "oauth"
@@ -45,7 +47,9 @@ async fn test_concept_prefilter_narrows_candidates() {
         files_modified: None,
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     let target_id = backend.save_episode(&ep_target).await.unwrap();
 
     // 3. Unrelated episode
@@ -66,7 +70,9 @@ async fn test_concept_prefilter_narrows_candidates() {
         files_modified: None,
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     backend.save_episode(&ep_unrelated).await.unwrap();
 
     // Search for concept "oauth" - should return only the target episode
@@ -105,7 +111,9 @@ async fn test_files_modified_filter() {
         files_modified: Some(vec!["api.rs".to_string()]),
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     let id1 = backend.save_episode(&ep1).await.unwrap();
 
     let ep2 = EpisodeSave {
@@ -125,7 +133,9 @@ async fn test_files_modified_filter() {
         files_modified: Some(vec!["test_temporal_edges.rs".to_string()]),
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     backend.save_episode(&ep2).await.unwrap();
 
     // Search filtered by file "api.rs"
@@ -164,7 +174,9 @@ async fn test_structured_filter_never_empties_floor() {
         files_modified: None,
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     let id = backend.save_episode(&ep).await.unwrap();
 
     // Search with a concept that doesn't exist ("nonexistent")

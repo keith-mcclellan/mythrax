@@ -88,7 +88,9 @@ Rule body"#;
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
 
     // Save wisdom rule (should trigger T1 federated promotion)
     let rule_id = backend.save_wisdom_rule(&rule).await?;
@@ -491,7 +493,9 @@ Old rule body"#;
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
 
     // Save the old rule in the DB to get its ID
     let old_rule_id = backend.save_wisdom_rule(&old_rule).await?;
@@ -520,7 +524,9 @@ Old rule body"#;
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
 
     // Call save_wisdom_rule_with_deduplication
     // This should trigger the merge, save a new merged rule, and mark the old rule as superseded!

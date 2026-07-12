@@ -571,6 +571,8 @@ pub async fn sync_file_to_db(
                 superseded_at: frontmatter.superseded_at,
                 superseded_by: frontmatter.superseded_by,
                 rule_type: None,
+            
+                ..Default::default()
             };
 
             backend.save_wisdom_rule(&rule).await?;

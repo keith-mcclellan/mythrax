@@ -227,7 +227,9 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     backend.save_wisdom_rule(&rule_rust).await?;
 
     // Store a mock RocksDB lock error remedy
@@ -249,7 +251,9 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     backend.save_wisdom_rule(&rule_lock).await?;
 
     // 1. Rust error signature matching
@@ -342,7 +346,9 @@ async fn test_executor_decorates_failures() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     backend.save_wisdom_rule(&rule).await?;
 
     // Execute command that fails and outputs "error[E0063]" on stderr

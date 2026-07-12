@@ -122,6 +122,40 @@ pub async fn mine_transcript(
         let next_offset = current_offset + bytes_read as u64;
         let line_str = buf.trim_end_matches('\n').trim_end_matches('\r');
 
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
+            // Check for checklist items in the content (WU-3.3)
+            let content_opt = val.get("content").and_then(|c| c.as_str())
+                .or_else(|| val.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()));
+            if let Some(content_str) = content_opt {
+                let mut checklist_lines = Vec::new();
+                for line in content_str.lines() {
+                    if line.contains("- [ ]") || line.contains("- [x]") {
+                        checklist_lines.push(line.trim().to_string());
+                    }
+                }
+                if !checklist_lines.is_empty() {
+                    let checklist_str = checklist_lines.join("\n");
+                    let _ = backend.save_stm(session, "checklist", &checklist_str).await;
+                    
+                    let ep = EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
+                        .scope(Some("general".to_string()))
+                        .session_id(Some(session.to_string()))
+                        .node_type(Some("task_checklist".to_string()))
+                        .build();
+                    let store_arc = Arc::new(crate::store::MarkdownStore {
+                        vault_root: store.vault_root.clone(),
+                    });
+                    if let Ok(saved_id) = save_episode_bidirectional(&ep, backend, &store_arc, ignore).await {
+                        if let Some(ref prev_id) = prev_saved_id {
+                            let _ = backend.relate_followed_by(prev_id, &saved_id).await;
+                        }
+                        prev_saved_id = Some(saved_id);
+                        saved_count += 1;
+                    }
+                }
+            }
+        }
+
         if let Ok(msg) = serde_json::from_str::<SimpleMessage>(&line_str) {
             let role = msg.role.clone().or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
             let content = msg.content.clone().or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));

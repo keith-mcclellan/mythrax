@@ -119,6 +119,8 @@ pub struct Episode {
     pub node_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -140,6 +142,8 @@ pub struct EpisodeSave {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +164,7 @@ pub struct EpisodeSaveBuilder {
     pub node_type: Option<String>,
     pub confidence: Option<f32>,
     pub created_at: Option<String>,
+    pub importance: Option<f32>,
 }
 
 impl EpisodeSaveBuilder {
@@ -181,6 +186,7 @@ impl EpisodeSaveBuilder {
             node_type: None,
             confidence: None,
             created_at: None,
+            importance: None,
         }
     }
 
@@ -254,6 +260,11 @@ impl EpisodeSaveBuilder {
         self
     }
 
+    pub fn importance(mut self, importance: Option<f32>) -> Self {
+        self.importance = importance;
+        self
+    }
+
     pub fn build(self) -> EpisodeSave {
         EpisodeSave {
             title: self.title,
@@ -272,6 +283,7 @@ impl EpisodeSaveBuilder {
             node_type: self.node_type,
             confidence: self.confidence,
             created_at: self.created_at,
+            importance: self.importance,
         }
     }
 }
@@ -338,6 +350,12 @@ pub struct WisdomRule {
     pub superseded_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

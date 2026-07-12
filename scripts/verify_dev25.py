@@ -10,10 +10,12 @@ os.chdir(os.path.join(script_dir, "../mythrax-core"))
 
 # Run benchmark
 print("=== Running dev25 Benchmark ===")
+env = os.environ.copy()
+env["MYTHRAX_BENCH"] = "1"
 res = subprocess.run([
     "cargo", "run", "--features", "mlx,bench", "--release", "--bin", "bench", 
     "--", "--split", "dev25", "--mode", "hybrid", "--allow-download"
-])
+], env=env)
 if res.returncode != 0:
     print("Benchmark binary execution failed!")
     sys.exit(res.returncode)

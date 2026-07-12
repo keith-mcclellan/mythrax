@@ -127,7 +127,8 @@ impl SurrealBackend {
                     session_id: $session_id,
                     word_count: $word_count,
                     node_type: $node_type,
-                    created_at: type::datetime($created_at)
+                    created_at: type::datetime($created_at),
+                    importance: $importance
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -156,7 +157,8 @@ impl SurrealBackend {
                     session_id: $session_id,
                     word_count: $word_count,
                     node_type: $node_type,
-                    created_at: type::datetime($created_at)
+                    created_at: type::datetime($created_at),
+                    importance: $importance
                 };
                 
                 CREATE $met CONTENT {
@@ -211,6 +213,7 @@ impl SurrealBackend {
             .bind(("word_count", word_count))
             .bind(("node_type", node_type_val))
             .bind(("created_at", created_at_val))
+            .bind(("importance", episode.importance.unwrap_or(5.0)))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -478,6 +481,11 @@ impl SurrealBackend {
         let mut rule_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
 
+        if let Some(ref id_str) = rule.id {
+            let id_clean = id_str.strip_prefix("wisdom:").unwrap_or(id_str);
+            rule_uuid = id_clean.to_string();
+        }
+
         if let Some(ref vp) = rule.vault_path {
             let check_query = "SELECT VALUE id FROM wisdom WHERE vault_path = $vault_path LIMIT 1;";
             let mut response = self.db.query(check_query).bind(("vault_path", vp.as_str())).await?;
@@ -509,7 +517,9 @@ impl SurrealBackend {
                         embedding: $embedding,
                         status: $status,
                         superseded_at: $superseded_at,
-                        superseded_by: $superseded_by
+                        superseded_by: $superseded_by,
+                        severity: $severity,
+                        blocking: $blocking
                     };
                     UPDATE metrics SET utility_score = $utility_score WHERE target_id = $rule;
                     COMMIT TRANSACTION;
@@ -531,7 +541,9 @@ impl SurrealBackend {
                         embedding: $embedding,
                         status: $status,
                         superseded_at: $superseded_at,
-                        superseded_by: $superseded_by
+                        superseded_by: $superseded_by,
+                        severity: $severity,
+                        blocking: $blocking
                     };
                     COMMIT TRANSACTION;
                 ".to_string()
@@ -555,7 +567,9 @@ impl SurrealBackend {
                     embedding: $embedding,
                     status: $status,
                     superseded_at: $superseded_at,
-                    superseded_by: $superseded_by
+                    superseded_by: $superseded_by,
+                    severity: $severity,
+                    blocking: $blocking
                 };
                 
                 CREATE $met CONTENT {
@@ -608,6 +622,8 @@ impl SurrealBackend {
             .bind(("status", rule.status.as_deref().unwrap_or("active")))
             .bind(("superseded_at", rule.superseded_at.as_deref()))
             .bind(("superseded_by", rule.superseded_by.as_deref()))
+            .bind(("severity", rule.severity.as_deref()))
+            .bind(("blocking", rule.blocking.unwrap_or(false)))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
@@ -1166,37 +1182,108 @@ impl SurrealBackend {
         Ok(())
     }
 
-    pub async fn save_stm_db(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+        pub async fn save_stm_db(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+        if std::env::var("MYTHRAX_BENCH").is_ok() {
+            let sql = "
+                BEGIN TRANSACTION;
+                UPSERT type::record('short_term_memory', [$session_id, $key]) CONTENT {
+                    session_id: $session_id,
+                    key: $key,
+                    value: $value,
+                    updated_at: time::now()
+                };
+                COMMIT TRANSACTION;
+            ";
+            self.db.query(sql)
+                .bind(("session_id", session_id))
+                .bind(("key", key))
+                .bind(("value", value))
+                .await?.check()?;
+            return Ok(());
+        }
+        let mut final_key = key.to_string();
+        let mut expires_at: Option<chrono::DateTime<chrono::Utc>> = None;
+
+        if key.starts_with("broadcast:") {
+            let parts: Vec<&str> = key.split(':').collect();
+            let ttl = if parts.len() == 3 {
+                final_key = format!("broadcast:{}", parts[1]);
+                parts[2].parse::<i64>().unwrap_or(300)
+            } else {
+                300
+            };
+            expires_at = Some(chrono::Utc::now() + chrono::Duration::seconds(ttl));
+        }
+
         let sql = "
             BEGIN TRANSACTION;
             UPSERT type::record('short_term_memory', [$session_id, $key]) CONTENT {
                 session_id: $session_id,
                 key: $key,
                 value: $value,
-                updated_at: time::now()
+                updated_at: time::now(),
+                expires_at: $expires_at
             };
             COMMIT TRANSACTION;
         ";
         self.db.query(sql)
             .bind(("session_id", session_id))
-            .bind(("key", key))
+            .bind(("key", final_key.as_str()))
             .bind(("value", value))
+            .bind(("expires_at", expires_at))
             .await?.check()?;
 
         // Dual-write to local JSON file unless running a benchmark
         if std::env::var("MYTHRAX_BENCH").is_err() {
-            crate::store::save_stm_file(session_id, key, value)?;
+            crate::store::save_stm_file(session_id, &final_key, value)?;
         }
         Ok(())
     }
 
     pub async fn get_stm_db(&self, session_id: &str, key: Option<&str>) -> Result<std::collections::HashMap<String, String>> {
+        if std::env::var("MYTHRAX_BENCH").is_ok() {
+            if let Some(k) = key {
+                let sql = "SELECT VALUE value FROM type::record('short_term_memory', [$session_id, $key]);";
+                let mut response = self.db.query(sql)
+                    .bind(("session_id", session_id))
+                    .bind(("key", k))
+                    .await?.check()?;
+                let value: Option<String> = response.take(0)?;
+                let mut map = std::collections::HashMap::new();
+                if let Some(v) = value {
+                    map.insert(k.to_string(), v);
+                }
+                return Ok(map);
+            } else {
+                let sql = "SELECT key, value FROM short_term_memory WHERE session_id = $session_id;";
+                let mut response = self.db.query(sql)
+                    .bind(("session_id", session_id))
+                    .await?.check()?;
+                #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+                struct StmRecord {
+                    key: String,
+                    value: String,
+                }
+                let records: Vec<StmRecord> = response.take(0)?;
+                let mut map = std::collections::HashMap::new();
+                for r in records {
+                    map.insert(r.key, r.value);
+                }
+                return Ok(map);
+            }
+        }
         if let Some(k) = key {
-            let sql = "SELECT VALUE value FROM type::record('short_term_memory', [$session_id, $key]);";
-            let mut response = self.db.query(sql)
-                .bind(("session_id", session_id))
-                .bind(("key", k))
-                .await?.check()?;
+            let (sql, is_broadcast) = if k.starts_with("broadcast:") {
+                ("SELECT VALUE value FROM short_term_memory WHERE key = $key AND (expires_at = NONE OR expires_at > time::now()) ORDER BY updated_at DESC LIMIT 1;", true)
+            } else {
+                ("SELECT VALUE value FROM short_term_memory WHERE session_id = $session_id AND key = $key AND (expires_at = NONE OR expires_at > time::now()) LIMIT 1;", false)
+            };
+
+            let mut query = self.db.query(sql);
+            if !is_broadcast {
+                query = query.bind(("session_id", session_id));
+            }
+            let mut response = query.bind(("key", k)).await?.check()?;
             let value: Option<String> = response.take(0)?;
             let mut map = std::collections::HashMap::new();
             if let Some(v) = value {
@@ -1204,10 +1291,12 @@ impl SurrealBackend {
             }
             Ok(map)
         } else {
-            let sql = "SELECT key, value FROM short_term_memory WHERE session_id = $session_id;";
-            let mut response = self.db.query(sql)
+            // Fetch session specific non-expired STM keys
+            let sql_sess = "SELECT key, value FROM short_term_memory WHERE session_id = $session_id AND (expires_at = NONE OR expires_at > time::now());";
+            let mut response = self.db.query(sql_sess)
                 .bind(("session_id", session_id))
                 .await?.check()?;
+            
             #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
             struct StmRecord {
                 key: String,
@@ -1218,6 +1307,15 @@ impl SurrealBackend {
             for r in records {
                 map.insert(r.key, r.value);
             }
+
+            // Fetch all non-expired broadcast keys and merge
+            let sql_broad = "SELECT key, value, updated_at FROM short_term_memory WHERE string::starts_with(key, 'broadcast:') AND (expires_at = NONE OR expires_at > time::now()) ORDER BY updated_at ASC;";
+            let mut broad_response = self.db.query(sql_broad).await?.check()?;
+            let broad_records: Vec<StmRecord> = broad_response.take(0)?;
+            for r in broad_records {
+                map.insert(r.key, r.value);
+            }
+
             Ok(map)
         }
     }

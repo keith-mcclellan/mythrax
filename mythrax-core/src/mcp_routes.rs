@@ -193,7 +193,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge", "save_forged_assets", "init", "ideate", "execute", "backprop", "merge", "run", "pre_invocation", "precompact", "audit_compliance"] },
+                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge", "save_forged_assets", "init", "ideate", "execute", "backprop", "merge", "run", "pre_invocation", "precompact", "audit_compliance", "clean"] },
                         "fix": { "type": "boolean", "default": false },
                         "scope": { "type": "string" },
                         "workspace_path": { "type": "string", "default": "." },

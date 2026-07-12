@@ -45,7 +45,9 @@ async fn test_meta_skill_synthesis() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     backend.save_wisdom_rule(&rule).await?;
 
     let node = WikiNode {

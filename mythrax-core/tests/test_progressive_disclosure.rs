@@ -73,7 +73,7 @@ async fn test_search_index_omits_content() -> Result<()> {
             files_modified: None,
             node_type: None,
         
-            confidence: None,};
+            confidence: None, ..Default::default() };
         backend.save_episode(&ep).await?;
     }
 
@@ -133,7 +133,7 @@ async fn test_get_full_hydrates() -> Result<()> {
         files_modified: None,
         node_type: None,
     
-        confidence: None,};
+        confidence: None, ..Default::default() };
     let ep_id = backend.save_episode(&ep).await?;
 
     // Call search_index first to get the ID
@@ -192,7 +192,7 @@ async fn test_timeline_orders_neighbors() -> Result<()> {
             files_modified: None,
             node_type: None,
         
-            confidence: None,};
+            confidence: None, ..Default::default() };
         let id = backend.save_episode(&ep).await?;
         ids.push(id);
     }
@@ -273,6 +273,7 @@ async fn test_index_then_full_token_savings() -> Result<()> {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
         let id = backend.save_episode(&ep).await?;
         ids.push(id);

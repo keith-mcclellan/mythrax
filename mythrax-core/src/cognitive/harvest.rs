@@ -169,6 +169,8 @@ impl Harvester {
                         superseded_at: None,
                         superseded_by: None,
                         rule_type: None,
+                    
+                        ..Default::default()
                     };
                     let _ = db.save_wisdom_rule(&rule_contract).await;
                 }
