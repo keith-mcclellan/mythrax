@@ -1,9 +1,7 @@
-use axum::async_trait;
 use surrealdb_types::SurrealValue;
-use crate::contracts::{SearchParams, SearchResponse, SearchResult, Episode, WisdomRule, WikiNode};
+use crate::contracts::{SearchParams, SearchResponse, SearchResult};
 use anyhow::{Result, Context};
 use surrealdb::IndexedResults;
-use std::sync::Arc;
 use crate::db::backend::{GLOBAL_RERANKER, EpisodeRaw, format_record_id, parse_record_id, get_user_prefix, sentence_cosine_similarity_opt, TemporalCueType, parse_temporal_cues, StorageBackend};
 use crate::db::query_classification::{QueryCategory, get_decay_factor, split_temporal_query, normalize_spelling, expand_synonyms};
 use crate::db::SurrealBackend;

@@ -3,7 +3,7 @@ use surrealdb_types::SurrealValue;
 use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode, SearchResponse, WisdomSearchResponse, GetMemoryNodesResponse, ForgedSectionBatch};
 use anyhow::{Result, Context};
 use surrealdb::engine::local::{Db, Mem, SurrealKv};
-use surrealdb::{Surreal, IndexedResults};
+use surrealdb::Surreal;
 use std::sync::Arc;
 use uuid::Uuid;
 pub use crate::db::query_classification::{QueryCategory, get_decay_factor, split_temporal_query, normalize_spelling, expand_synonyms, classify_query};
@@ -1073,62 +1073,7 @@ impl WisdomRaw {
     }
 }
 
-#[derive(serde::Deserialize, Debug, SurrealValue)]
-struct SearchRaw {
-    id: surrealdb::types::RecordId,
-    title: String,
-    content: String,
-    utility: Option<f64>,
-    embedding: Option<Vec<f32>>,
-    vault_path: Option<String>,
-    related_nodes: Option<Vec<RelatedNodeRaw>>,
-    prev_episodes: Option<Vec<EpisodeRaw>>,
-    next_episodes: Option<Vec<EpisodeRaw>>,
-    last_retrieved_at: Option<String>,
-    importance: Option<f64>,
-    created_at: Option<chrono::DateTime<chrono::Utc>>,
-    archived: Option<bool>,
-    archived_at: Option<chrono::DateTime<chrono::Utc>>,
-    discovery_tokens: Option<u32>,
-    session_id: Option<String>,
-    word_count: Option<u32>,
-    scope: Option<String>,
-    bm25_score: Option<f32>,
-    confidence: Option<f32>,
-}
 
-#[derive(serde::Deserialize, Debug, SurrealValue)]
-struct RelatedNodeRaw {
-    id: surrealdb::types::RecordId,
-    title: Option<String>,
-    name: Option<String>,
-    content: Option<String>,
-    summary: Option<String>,
-    target_pattern: Option<String>,
-    causal_explanation: Option<String>,
-    action_to_avoid: Option<String>,
-    prescribed_remedy: Option<String>,
-    vault_path: Option<String>,
-    source_episode: Option<surrealdb::types::RecordId>,
-}
-
-#[derive(serde::Deserialize, Debug, SurrealValue)]
-struct SearchWisdomRaw {
-    id: surrealdb::types::RecordId,
-    target_pattern: String,
-    action_to_avoid: String,
-    causal_explanation: String,
-    prescribed_remedy: String,
-    tier: String,
-    scope: String,
-    embedding: Option<Vec<f32>>,
-    generator_name: String,
-    utility: Option<f64>,
-    vault_path: Option<String>,
-    related_nodes: Option<Vec<RelatedNodeRaw>>,
-    importance: Option<f64>,
-    created_at: Option<chrono::DateTime<chrono::Utc>>,
-}
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, SurrealValue, Clone)]
 pub struct EpisodeRaw {
@@ -1254,53 +1199,7 @@ pub struct MetricAccess {
     pub access_count: i64,
 }
 
-fn prepare_fts_query(query: &str, cap: usize) -> Vec<String> {
-    let stop_words: std::collections::HashSet<&str> = [
-        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "arent",
-        "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
-        "cant", "cannot", "could", "couldnt", "did", "didnt", "do", "does", "doesnt", "doing", "dont",
-        "down", "during", "each", "few", "for", "from", "further", "had", "hadnt", "has", "hasnt", "have",
-        "havent", "having", "he", "hed", "hell", "hes", "her", "here", "heres", "hers", "herself", "him",
-        "himself", "his", "how", "hows", "i", "id", "ill", "im", "ive", "if", "in", "into", "is", "isnt",
-        "it", "its", "itself", "lets", "me", "more", "most", "mustnt", "my", "myself", "no", "nor", "not",
-        "of", "off", "on", "once", "only", "or", "other", "ought", "our", "ours", "ourselves", "out",
-        "over", "own", "same", "shant", "she", "shed", "shell", "shes", "should", "shouldnt", "so",
-        "some", "such", "than", "that", "thats", "the", "their", "theirs", "them", "themselves", "then",
-        "there", "theres", "these", "they", "theyd", "theyll", "theyre", "theyve", "this", "those",
-        "through", "to", "too", "under", "until", "up", "very", "was", "wasnt", "we", "wed", "well",
-        "were", "weve", "werent", "what", "whats", "when", "whens", "where", "wheres", "which", "while",
-        "who", "whos", "whom", "why", "whys", "with", "wont", "would", "wouldnt", "you", "youd", "youll",
-        "youre", "youve", "your", "yours", "yourself", "yourselves"
-    ].iter().cloned().collect();
 
-    let cleaned: String = query.chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { ' ' })
-        .collect();
-
-    let words: Vec<String> = cleaned.split_whitespace()
-        .filter(|w| !stop_words.contains(w) && w.len() >= 2)
-        .map(|w| {
-            let normalized = normalize_spelling(w);
-            let expanded = expand_synonyms(normalized);
-            expanded.to_string()
-        })
-        .collect();
-
-    if words.is_empty() {
-        // Fallback: use the raw cleaned query as a single token
-        let fallback = query.chars()
-            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-            .collect::<String>();
-        let fallback = fallback.trim().to_string();
-        if fallback.is_empty() {
-            vec![]
-        } else {
-            vec![fallback]
-        }
-    } else {
-        words.into_iter().take(cap).collect()
-    }
-}
 
 pub(crate) static PROFILE_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, Option<String>>>> = std::sync::OnceLock::new();
 
