@@ -684,7 +684,7 @@ impl SurrealBackend {
         if self.is_client_mode() {
             return self.daemon_get("/v1/config/llm").await;
         }
-        let sql = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms FROM config:settings;";
+        let sql = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms, model_tier_mappings FROM config:settings;";
         let mut response = self.db.query(sql).await?.check().context("Get config query failed")?;
         let config_opt: Option<LlmConfigResponse> = response.take(0)?;
         let mut config = if let Some(mut c) = config_opt {
@@ -701,6 +701,7 @@ impl SurrealBackend {
                 expires_at: None,
                 api_key: None,
                 llm_post_inference_delay_ms: Some(5000),
+                model_tier_mappings: None,
             }
         };
 
@@ -718,7 +719,7 @@ impl SurrealBackend {
             let _res: serde_json::Value = self.daemon_post("/v1/config/llm", req).await?;
             return Ok(());
         }
-        let sql_select = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms FROM config:settings;";
+        let sql_select = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms, model_tier_mappings FROM config:settings;";
         let mut select_res = self.db.query(sql_select).await?.check().context("Get config query failed")?;
         let existing: Option<LlmConfigResponse> = select_res.take(0)?;
 
@@ -746,6 +747,8 @@ impl SurrealBackend {
         let delay = req.llm_post_inference_delay_ms
             .or(existing.as_ref().and_then(|e| e.llm_post_inference_delay_ms))
             .unwrap_or(5000);
+        let mappings = req.model_tier_mappings.clone()
+            .or(existing.as_ref().and_then(|e| e.model_tier_mappings.clone()));
 
         let sql = "
             UPSERT config:settings CONTENT {
@@ -754,7 +757,8 @@ impl SurrealBackend {
                 cloud_provider: $cloud_provider,
                 is_override: true,
                 expires_at: $expires_at,
-                llm_post_inference_delay_ms: $llm_post_inference_delay_ms
+                llm_post_inference_delay_ms: $llm_post_inference_delay_ms,
+                model_tier_mappings: $model_tier_mappings
             };
         ";
         let _ = self.db.query(sql)
@@ -763,7 +767,10 @@ impl SurrealBackend {
             .bind(("cloud_provider", cloud_provider.as_str()))
             .bind(("expires_at", expires_at.clone()))
             .bind(("llm_post_inference_delay_ms", delay))
+            .bind(("model_tier_mappings", mappings))
             .await?.check().context("UPSERT config failed")?;
+
+        let _ = crate::llm::router::reload_tier_mappings(self).await;
 
         if let Some(ref key) = req.api_key {
             let provider_for_key = if req.provider == "local" {

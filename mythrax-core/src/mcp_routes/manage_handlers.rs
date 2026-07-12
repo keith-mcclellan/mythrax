@@ -271,6 +271,9 @@ pub async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value
             let llm_post_inference_delay_ms = args.get("llm_post_inference_delay_ms")
                 .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok())));
 
+            let model_tier_mappings = args.get("model_tier_mappings")
+                .and_then(|v| serde_json::from_value::<std::collections::HashMap<String, String>>(v.clone()).ok());
+
             let req = LlmConfigRequest {
                 provider,
                 duration,
@@ -278,6 +281,7 @@ pub async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value
                 cloud_provider,
                 api_key,
                 llm_post_inference_delay_ms,
+                model_tier_mappings,
             };
 
             state.backend.update_llm_config(&req).await?;
