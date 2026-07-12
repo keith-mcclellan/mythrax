@@ -1,6 +1,11 @@
 use mythrax_core::contracts::{ModelTier, TaskArchetype, TaskProfile};
 use mythrax_core::llm::router::route_task;
 use mythrax_core::db::{StorageBackend, SurrealBackend};
+use anyhow::Result;
+use tempfile::tempdir;
+use std::sync::Mutex;
+
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_routing_types_exist() {

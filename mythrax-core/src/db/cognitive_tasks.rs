@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use anyhow::{Result, Context};
-use crate::db::backend::SurrealBackend;
+use crate::db::backend::{SurrealBackend, format_record_id};
 use surrealdb_types::SurrealValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -134,7 +134,7 @@ impl std::str::FromStr for TaskStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitiveTask {
     pub id: String, // String record ID, e.g. "cognitive_task:uuid"
     pub task_type: String,
@@ -149,6 +149,39 @@ pub struct CognitiveTask {
     pub injected_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct CognitiveTaskRaw {
+    pub id: surrealdb::types::RecordId,
+    pub task_type: String,
+    pub prompt: String,
+    pub system_instruction: String,
+    pub expected_format: String,
+    pub priority: String,
+    pub created_at: DateTime<Utc>,
+    pub status: String,
+    pub result: Option<String>,
+    pub ttl_minutes: i64,
+    pub injected_at: Option<DateTime<Utc>>,
+}
+
+impl From<CognitiveTaskRaw> for CognitiveTask {
+    fn from(raw: CognitiveTaskRaw) -> Self {
+        CognitiveTask {
+            id: format_record_id(&raw.id),
+            task_type: raw.task_type,
+            prompt: raw.prompt,
+            system_instruction: raw.system_instruction,
+            expected_format: raw.expected_format,
+            priority: raw.priority,
+            created_at: raw.created_at,
+            status: raw.status,
+            result: raw.result,
+            ttl_minutes: raw.ttl_minutes,
+            injected_at: raw.injected_at,
+        }
+    }
+}
+
 impl SurrealBackend {
     pub async fn create_cognitive_task(&self, task: &CognitiveTask) -> Result<String> {
         let query_str = "
@@ -158,7 +191,7 @@ impl SurrealBackend {
                 system_instruction: $system_instruction,
                 expected_format: $expected_format,
                 priority: $priority,
-                created_at: type::datetime($created_at),
+                created_at: $created_at,
                 status: $status,
                 result: $result,
                 ttl_minutes: $ttl_minutes,
@@ -177,16 +210,16 @@ impl SurrealBackend {
             .bind(("system_instruction", task.system_instruction.as_str()))
             .bind(("expected_format", task.expected_format.as_str()))
             .bind(("priority", task.priority.as_str()))
-            .bind(("created_at", task.created_at.to_rfc3339()))
+            .bind(("created_at", task.created_at))
             .bind(("status", task.status.as_str()))
             .bind(("result", task.result.as_deref()))
             .bind(("ttl_minutes", task.ttl_minutes))
-            .bind(("injected_at", task.injected_at.map(|dt| dt.to_rfc3339())))
+            .bind(("injected_at", task.injected_at))
             .await?;
         
-        let created: Option<CognitiveTask> = response.take(0)?;
+        let created: Option<CognitiveTaskRaw> = response.take(0)?;
         if let Some(c) = created {
-            Ok(c.id)
+            Ok(format_record_id(&c.id))
         } else {
             anyhow::bail!("Failed to create cognitive task")
         }
@@ -203,8 +236,8 @@ impl SurrealBackend {
         let mut response = self.db.query(query_str)
             .bind(("id_val", id_val.as_str()))
             .await?;
-        let task: Option<CognitiveTask> = response.take(0)?;
-        Ok(task)
+        let task_raw: Option<CognitiveTaskRaw> = response.take(0)?;
+        Ok(task_raw.map(CognitiveTask::from))
     }
 
     pub async fn update_cognitive_task_status(&self, id: &str, status: TaskStatus, result: Option<String>) -> Result<()> {
@@ -233,23 +266,26 @@ impl SurrealBackend {
     pub async fn get_pending_cognitive_tasks(&self) -> Result<Vec<CognitiveTask>> {
         let query_str = "SELECT * FROM cognitive_task WHERE status = 'Pending' ORDER BY created_at ASC;";
         let mut response = self.db.query(query_str).await?;
-        let tasks: Vec<CognitiveTask> = response.take(0)?;
-        Ok(tasks)
+        let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
+        Ok(tasks.into_iter().map(CognitiveTask::from).collect())
     }
 
     pub async fn get_injected_tasks_older_than_ttl(&self) -> Result<Vec<CognitiveTask>> {
         let query_str = "SELECT * FROM cognitive_task WHERE status = 'Injected';";
         let mut response = self.db.query(query_str).await?;
-        let tasks: Vec<CognitiveTask> = response.take(0)?;
+        let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
         
         let now = Utc::now();
-        let expired_tasks = tasks.into_iter().filter(|t| {
-            if let Some(injected) = t.injected_at {
-                injected + chrono::Duration::minutes(t.ttl_minutes) < now
-            } else {
-                false
-            }
-        }).collect();
+        let expired_tasks = tasks.into_iter()
+            .map(CognitiveTask::from)
+            .filter(|t| {
+                if let Some(injected) = t.injected_at {
+                    injected + chrono::Duration::minutes(t.ttl_minutes) < now
+                } else {
+                    false
+                }
+            })
+            .collect();
         
         Ok(expired_tasks)
     }
