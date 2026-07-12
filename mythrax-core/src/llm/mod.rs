@@ -24,6 +24,8 @@ pub mod mxbai_mlx;
 #[cfg(feature = "mlx")]
 pub use mxbai_mlx::MxbaiReranker;
 
+pub mod router;
+
 #[cfg(not(feature = "mlx"))]
 pub struct Qwen2Model;
 #[cfg(not(feature = "mlx"))]
@@ -82,6 +84,53 @@ impl LLMClient {
             false,
         )
         .await
+    }
+
+    pub async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        let config = db.get_llm_config().await?;
+        let tier = crate::llm::router::route_task(db, profile).await;
+
+        if tier == crate::contracts::ModelTier::Cloud {
+            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                "gemini-1.5-flash"
+            } else {
+                &config.model
+            };
+            return self.completion_explicit(
+                db,
+                "cloud",
+                &config.cloud_provider,
+                cloud_model,
+                system_instruction,
+                prompt,
+                false,
+            ).await;
+        }
+
+        let _gpu_permit = crate::llm::router::gpu_reservation_lock().lock().await;
+
+        let local_model = match tier {
+            crate::contracts::ModelTier::Micro => "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+            crate::contracts::ModelTier::Small => "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+            crate::contracts::ModelTier::Medium => "mlx-community/Qwen2.5-7B-Instruct-4bit",
+            _ => &config.model,
+        };
+
+        self.completion_explicit(
+            db,
+            "local",
+            &config.cloud_provider,
+            local_model,
+            system_instruction,
+            prompt,
+            false,
+        ).await
     }
 
     pub async fn completion_explicit(
