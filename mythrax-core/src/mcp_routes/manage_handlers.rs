@@ -574,6 +574,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required for pre_invocation_hook")?;
 
+    // WU-4.5: TTL Sweep & LargeLocal Fallback
+    let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(state).await;
+
     if let Some(q) = query {
         let insert_sql = "INSERT INTO chat_history { session_id: $session_id, role: 'user', content: $content, created_at: time::now() };";
         let _ = surreal_backend.db.query(insert_sql)
@@ -1037,6 +1040,35 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     }
 
     let mut final_context = format!("{}{}", history_part, initial_context);
+
+    // WU-4.2: Pre-Invocation Injection for Pending Tasks
+    let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
+    let mut selected_tasks = Vec::new();
+    let immediate_task = pending_tasks.iter().find(|t| t.priority == "Immediate");
+    if let Some(t) = immediate_task {
+        selected_tasks.push(t.clone());
+    } else {
+        for t in pending_tasks.iter().filter(|t| t.priority != "Immediate").take(3) {
+            selected_tasks.push(t.clone());
+        }
+    }
+
+    let mut callback_injection = String::new();
+    if !selected_tasks.is_empty() {
+        callback_injection.push_str("### 🧠 Pending Cognitive Callbacks\n");
+        for task in &selected_tasks {
+            callback_injection.push_str(&format!(
+                "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
+                task.id, task.task_type, task.prompt, task.system_instruction, task.expected_format, task.priority
+            ));
+            surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None).await?;
+        }
+        callback_injection.push('\n');
+    }
+
+    if !callback_injection.is_empty() {
+        final_context = format!("{}{}", callback_injection, final_context);
+    }
     
     if !stale_search_warning.is_empty() {
         final_context = format!("{}{}", stale_search_warning, final_context);

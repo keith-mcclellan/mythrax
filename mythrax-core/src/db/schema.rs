@@ -394,4 +394,18 @@ pub const INIT_SCHEMA: &str = "
     UPSERT search_keyword:thursday CONTENT { word: 'thursday', category: 'Temporal' };
     UPSERT search_keyword:friday CONTENT { word: 'friday', category: 'Temporal' };
     UPSERT search_keyword:saturday CONTENT { word: 'saturday', category: 'Temporal' };
+
+    DEFINE TABLE IF NOT EXISTS cognitive_task SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS task_type ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS prompt ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS system_instruction ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS expected_format ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS priority ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS created_at ON cognitive_task TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS status ON cognitive_task TYPE string DEFAULT 'Pending';
+    DEFINE FIELD IF NOT EXISTS result ON cognitive_task TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS ttl_minutes ON cognitive_task TYPE int DEFAULT 30;
+    DEFINE FIELD IF NOT EXISTS injected_at ON cognitive_task TYPE option<datetime>;
+
+    DEFINE TABLE IF NOT EXISTS pipeline_state SCHEMALESS;
 ";

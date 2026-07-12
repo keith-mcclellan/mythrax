@@ -19,6 +19,7 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
         "ingest_bulk" => "ingest_bulk",
         "ingest_forge" => "ingest_forge",
         "set" | "set_config" => "set",
+        "cognitive_callback" => "cognitive_callback",
         other => other,
     };
     if let Some(obj) = args.as_object_mut() {
@@ -87,6 +88,9 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
         }
         "save_forged_assets" | "ingest_bulk" | "ingest_forge" => {
             super::vault_handlers::handle_manage_vault(state, args).await
+        }
+        "cognitive_callback" => {
+            handle_cognitive_callback(state, args).await
         }
         _ => anyhow::bail!("Invalid action for write tool: {}", action),
     }
@@ -332,3 +336,110 @@ pub async fn run_llm_critic(
 
     Ok(())
 }
+
+pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<Value> {
+    let callback_id = args.get("callback_id").and_then(|v| v.as_str()).context("Missing callback_id")?;
+    let result = args.get("result").and_then(|v| v.as_str()).context("Missing result")?;
+
+    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+        .context("SurrealBackend required for cognitive_callback")?;
+
+    let task_opt = surreal_backend.get_cognitive_task(callback_id).await?;
+    let task = match task_opt {
+        Some(t) => t,
+        None => anyhow::bail!("Task not found: {}", callback_id),
+    };
+
+    if task.status != "Injected" && task.status != "Expired" {
+        anyhow::bail!("Invalid task status for callback: {}", task.status);
+    }
+
+    if task.expected_format.starts_with("Json") {
+        if let Err(e) = serde_json::from_str::<serde_json::Value>(result) {
+            anyhow::bail!("Invalid JSON format: {:?}", e);
+        }
+    }
+
+    surreal_backend.update_cognitive_task_status(callback_id, crate::db::TaskStatus::Completed, Some(result.to_string())).await?;
+
+    let state_opt = surreal_backend.get_pipeline_state(callback_id).await?;
+    if let Some(serialized_state) = state_opt {
+        resume_pipeline_continuation(state, callback_id, &serialized_state, result).await?;
+    }
+
+    Ok(json!({ "status": "success", "callback_id": callback_id }))
+}
+
+async fn resume_pipeline_continuation(
+    state: &ApiState,
+    callback_id: &str,
+    serialized_state: &str,
+    result: &str,
+) -> Result<()> {
+    let state_val: serde_json::Value = serde_json::from_str(serialized_state)?;
+    
+    if let Some(target_file) = state_val.get("target_file").and_then(|v| v.as_str()) {
+        let temp_file = format!("{}.tmp", target_file);
+        std::fs::write(&temp_file, result)?;
+        std::fs::rename(&temp_file, target_file)?;
+    }
+
+    let worktree_path = state_val.get("worktree_path").and_then(|v| v.as_str());
+    let candidate_branch = state_val.get("candidate_branch").and_then(|v| v.as_str());
+    
+    if let (Some(path), Some(branch)) = (worktree_path, candidate_branch) {
+        let _ = std::process::Command::new("git")
+            .args(&["checkout", "-B", branch])
+            .current_dir(path)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(&["reset", "--hard", "HEAD"])
+            .current_dir(path)
+            .output();
+    }
+
+    if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
+        surreal_backend.delete_pipeline_state(callback_id).await?;
+    }
+    
+    Ok(())
+}
+
+pub async fn sweep_expired_tasks(state: &ApiState) -> Result<()> {
+    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+        .context("SurrealBackend required for sweep_expired_tasks")?;
+
+    let expired = surreal_backend.get_injected_tasks_older_than_ttl().await?;
+    for task in expired {
+        surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Expired, None).await?;
+
+        let config = surreal_backend.get_llm_config().await?;
+        let sys_instr = if task.system_instruction.is_empty() {
+            None
+        } else {
+            Some(task.system_instruction.as_str())
+        };
+        
+        let response_text = crate::llm::LLMClient::new().completion_explicit(
+            surreal_backend,
+            "local",
+            &config.cloud_provider,
+            &config.model,
+            sys_instr,
+            &task.prompt,
+            false,
+        ).await?;
+
+        surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Expired, Some(response_text.clone())).await?;
+
+        let state_opt = surreal_backend.get_pipeline_state(&task.id).await?;
+        if let Some(serialized_state) = state_opt {
+            if let Err(e) = resume_pipeline_continuation(state, &task.id, &serialized_state, &response_text).await {
+                tracing::error!("Failed to resume pipeline for expired task {}: {:?}", task.id, e);
+            }
+        }
+    }
+    Ok(())
+}
+
+
