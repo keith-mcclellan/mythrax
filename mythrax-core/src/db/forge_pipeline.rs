@@ -135,7 +135,9 @@ impl SurrealBackend {
         // If writing files failed, roll back and return error
         if let Err(e) = write_res {
             for path in &written_files {
-                let _ = std::fs::remove_file(path);
+                if let Err(err) = std::fs::remove_file(path) {
+                    tracing::warn!("Failed to remove file {:?} during rollback: {:?}", path, err);
+                }
             }
             return Err(e);
         }
@@ -361,7 +363,9 @@ impl SurrealBackend {
                 if let Some(e) = first_err {
                     // Rollback files on database transaction error
                     for path in &written_files {
-                        let _ = std::fs::remove_file(path);
+                        if let Err(err) = std::fs::remove_file(path) {
+                            tracing::warn!("Failed to remove file {:?} during transaction error rollback: {:?}", path, err);
+                        }
                     }
                     return Err(anyhow::anyhow!("SurrealDB transaction execution failed: {}", e));
                 }
@@ -369,7 +373,9 @@ impl SurrealBackend {
             Err(e) => {
                 // Rollback files on database query/connection error
                 for path in &written_files {
-                    let _ = std::fs::remove_file(path);
+                    if let Err(err) = std::fs::remove_file(path) {
+                        tracing::warn!("Failed to remove file {:?} during query error rollback: {:?}", path, err);
+                    }
                 }
                 return Err(e.into());
             }

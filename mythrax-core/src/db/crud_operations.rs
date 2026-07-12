@@ -68,7 +68,9 @@ impl SurrealBackend {
                                 serde_json::Value::String(s) => s,
                                 other => other.to_string(),
                             };
-                            let _ = self.save_profile_key(&k, &val_str).await;
+                            if let Err(e) = self.save_profile_key(&k, &val_str).await {
+                                tracing::warn!("Failed to save profile key {} during initialization: {:?}", k, e);
+                            }
                         }
                     }
                 }
@@ -454,7 +456,9 @@ impl SurrealBackend {
             if let Some(colon_idx) = map_key.find(':') {
                 let user_prefix = &map_key[..colon_idx];
                 let tracking_key = &map_key[colon_idx + 1..];
-                let _ = self.save_stm(user_prefix, tracking_key, &last_ep_id).await;
+                if let Err(e) = self.save_stm(user_prefix, tracking_key, &last_ep_id).await {
+                    tracing::warn!("Failed to save STM for {} / {}: {:?}", user_prefix, tracking_key, e);
+                }
             }
         }
 

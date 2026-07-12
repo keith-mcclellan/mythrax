@@ -437,6 +437,10 @@ impl SurrealBackend {
         };
         let t_start = std::time::Instant::now();
 
+        let mut _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "query_prep");
+        let _guard = _span.enter();
+
         // Stage 1: Query Prep (normalization & temporal cue parsing)
         let user_profile = if let Some(sid) = session_id {
             match self.compile_user_profile(sid).await {
@@ -626,6 +630,13 @@ impl SurrealBackend {
             Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
             _ => false,
         };
+
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 1 complete");
+        drop(_guard);
+        _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "sigmoid_gating");
+        let _guard = _span.enter();
 
         // Stage 2: Per-result Sigmoid Gating (pre-fusion similarity quality threshold)
         let (use_new_formula, is_sigmoid_gated_search_test) = {
@@ -851,6 +862,13 @@ impl SurrealBackend {
         let target_pattern = "AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)";
         vector_sql = vector_sql.replace(target_pattern, session_filter);
         keyword_sql = keyword_sql.replace(target_pattern, session_filter);
+
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 2 complete");
+        drop(_guard);
+        _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "retrieval_and_fusion");
+        let _guard = _span.enter();
 
         // Stage 3: Parallel Vector / FTS (BM25) Retrieval & Fusion (Reciprocal Rank Fusion or Score Blending)
         let (vector_resp_res, keyword_resp_res) = if !is_hybrid {
@@ -1698,6 +1716,13 @@ impl SurrealBackend {
             self.inject_stm_candidates(session_id, query_emb.as_ref(), threshold, &mut candidates).await?;
         }
 
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 3 complete");
+        drop(_guard);
+        _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "session_isolation");
+        let _guard = _span.enter();
+
         // Stage 5: Session Isolation & Context Filter scoping
         if is_session_isolation_enabled {
             let mut active_session_id = session_id.map(|s| s.to_string());
@@ -1719,6 +1744,13 @@ impl SurrealBackend {
                 });
             }
         }
+
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 5 complete");
+        drop(_guard);
+        _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "temporal_expansion");
+        let _guard = _span.enter();
 
         // Stage 6: Temporal Neighbor Expansion (traverses followed_by edges if cues detected)
         let mut neighbor_candidates = Vec::new();
@@ -1988,6 +2020,13 @@ impl SurrealBackend {
             _ => 25,
         };
 
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 6 complete");
+        drop(_guard);
+        _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "segment_reranking");
+        let _guard = _span.enter();
+
         // Stage 7: Sub-sentence/Segment cosine/TF-IDF Reranking
         let gamma_rerank = if !is_hybrid {
             0.0f32
@@ -2205,6 +2244,13 @@ impl SurrealBackend {
             candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
         }
 
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 7 complete");
+        drop(_guard);
+        _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "rank_position_boost");
+        let _guard = _span.enter();
+
         // Stage 8: Rank-Position Ladder Boost (position-based score adjustment)
         if enable_calibrated_confidence {
             for c in &mut candidates {
@@ -2234,6 +2280,13 @@ impl SurrealBackend {
             final_results.push(item);
         }
         candidates = final_results;
+
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 8 complete");
+        drop(_guard);
+        _stage_start = std::time::Instant::now();
+        let _span = tracing::info_span!("search_stage", stage = "verbatim_hydration");
+        let _guard = _span.enter();
 
         // Stage 9: Bounded Verbatim Hydration and Limit/Offset clipping
         const MAX_HYDRATION_CHARS: usize = 10000;
@@ -2369,6 +2422,10 @@ impl SurrealBackend {
                 t_total
             );
         }
+
+        let elapsed_ms = _stage_start.elapsed().as_millis() as u64;
+        tracing::debug!(elapsed_ms, "Stage 9 complete");
+        drop(_guard);
 
         Ok(SearchResponse {
             results: sliced_results,
