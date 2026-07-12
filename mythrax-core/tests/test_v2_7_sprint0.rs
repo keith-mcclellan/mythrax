@@ -164,6 +164,7 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
         store,
         ignore_list,
         dream_tx: None,
+        shutdown_tx: None,
     });
 
     let app = create_router(state);

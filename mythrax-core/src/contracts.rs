@@ -141,6 +141,7 @@ pub struct LlmConfigResponse {
     pub is_override: bool,
     pub expires_at: Option<String>,
     pub api_key: Option<String>,
+    pub llm_post_inference_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +151,7 @@ pub struct LlmConfigRequest {
     pub model: Option<String>,
     pub cloud_provider: Option<String>,
     pub api_key: Option<String>,
+    pub llm_post_inference_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]

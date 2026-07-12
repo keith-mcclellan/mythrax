@@ -152,7 +152,9 @@ impl LLMClient {
                 // Fallback to HTTP request when mlx feature is disabled or broker is uninitialized
                 tracing::debug!("mlx feature disabled or broker not initialized: routing local inference to mlx-lm HTTP server at :8080");
 
-                let url = "http://127.0.0.1:8080/v1/chat/completions";
+                let url_str = std::env::var("MYTHRAX_COMPLETIONS_URL")
+                    .unwrap_or_else(|_| "http://127.0.0.1:8080/v1/chat/completions".to_string());
+                let url = &url_str;
                 let truncated_prompt = if prompt.len() > 100_000 {
                     let truncated = truncate_to_boundary(prompt, 100_000);
                     format!("{}... [Truncated due to local context limits]", truncated)
@@ -207,7 +209,10 @@ impl LLMClient {
 
                 let result = strip_think_block(&raw);
 
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                let delay_ms = db.get_llm_config().await
+                    .map(|cfg| cfg.llm_post_inference_delay_ms.unwrap_or(5000))
+                    .unwrap_or(5000);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 
                 result
             }

@@ -19,6 +19,7 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
         store: std::sync::Arc::new(store),
         ignore_list: std::sync::Arc::new(Default::default()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     // 1. Create a BeliefState in SurrealDB

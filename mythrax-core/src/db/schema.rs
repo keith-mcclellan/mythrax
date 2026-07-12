@@ -118,6 +118,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS cloud_provider ON config TYPE string;
     DEFINE FIELD IF NOT EXISTS is_override ON config TYPE bool DEFAULT false;
     DEFINE FIELD IF NOT EXISTS expires_at ON config TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS llm_post_inference_delay_ms ON config TYPE option<int>;
 
     DEFINE TABLE IF NOT EXISTS metrics SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS target_id ON metrics TYPE record;

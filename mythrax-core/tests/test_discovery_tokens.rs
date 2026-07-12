@@ -170,6 +170,7 @@ async fn test_token_economics_savings() {
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     let payload = serde_json::json!({
@@ -233,6 +234,7 @@ async fn test_zero_discovery_no_divide_by_zero() {
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     let payload = serde_json::json!({

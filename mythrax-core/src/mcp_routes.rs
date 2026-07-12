@@ -1742,6 +1742,8 @@ async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value> {
             let model = args.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
             let cloud_provider = args.get("cloud_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
             let api_key = args.get("api_key").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let llm_post_inference_delay_ms = args.get("llm_post_inference_delay_ms")
+                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok())));
 
             let req = LlmConfigRequest {
                 provider,
@@ -1749,6 +1751,7 @@ async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value> {
                 model,
                 cloud_provider,
                 api_key,
+                llm_post_inference_delay_ms,
             };
 
             state.backend.update_llm_config(&req).await?;

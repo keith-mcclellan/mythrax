@@ -604,6 +604,7 @@ async fn test_api_save_forged_assets() -> Result<()> {
         store,
         ignore_list,
         dream_tx: None,
+        shutdown_tx: None,
     });
 
     let app = create_router(state);

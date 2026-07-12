@@ -18,6 +18,7 @@ pub struct ApiState {
     pub store: Arc<MarkdownStore>,
     pub ignore_list: Arc<WatchIgnoreList>,
     pub dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    pub shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 pub fn create_router(state: Arc<ApiState>) -> Router {
@@ -457,6 +458,7 @@ mod tests {
             store,
             ignore_list,
             dream_tx: None,
+            shutdown_tx: None,
         });
 
         let app = create_router(state);
@@ -685,12 +687,21 @@ async fn stop_daemon_endpoint_handler(
     let home = std::env::var("HOME").unwrap_or_default();
     let pid_path_clone = std::path::PathBuf::from(home).join(".mythrax/daemon.pid");
     
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        tracing::info!("Graceful shutdown requested via API. Exiting...");
-        let _ = std::fs::remove_file(pid_path_clone);
-        std::process::exit(0);
-    });
+    if let Some(tx) = &state.shutdown_tx {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tracing::info!("Graceful shutdown requested via API. Sending shutdown signal...");
+            let _ = tx.send(()).await;
+        });
+    } else {
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            tracing::info!("Graceful shutdown requested via API (no shutdown_tx). Exiting...");
+            let _ = std::fs::remove_file(pid_path_clone);
+            std::process::exit(0);
+        });
+    }
 
     Ok(Json(json!({ "status": "stopping" })))
 }

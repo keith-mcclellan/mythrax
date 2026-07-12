@@ -236,6 +236,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 auth_token: "".to_string(),
                 ignore_list: std::sync::Arc::new(crate::vault::watcher::WatchIgnoreList::new()),
                 dream_tx: None,
+                shutdown_tx: None,
             };
             crate::mcp_routes::call_mcp_tool(&api_state, name, args).await
         } else {
@@ -290,9 +291,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     if let Some(root_uri_str) = params.get("rootUri").and_then(|v| v.as_str()) {
                         if let Ok(url) = url::Url::parse(root_uri_str) {
                             if let Ok(path) = url.to_file_path() {
-                                unsafe {
-                                    std::env::set_var("MYTHRAX_WORKSPACE_ROOT", path);
-                                }
+                                crate::store::set_workspace_root(path);
                             }
                         }
                     }

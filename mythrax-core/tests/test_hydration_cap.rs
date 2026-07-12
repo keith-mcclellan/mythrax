@@ -28,6 +28,7 @@ async fn test_get_full_hydration_cap() -> Result<()> {
         store: store.clone(),
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     // Create an episode with very large content (> 10000 characters)

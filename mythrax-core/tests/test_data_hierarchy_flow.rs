@@ -181,6 +181,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         store: Arc::new(mythrax_core::store::MarkdownStore::new(temp_store_dir.path().to_path_buf()).unwrap()),
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
+        shutdown_tx: None,
     };
 
     // Invoke complete_code_task which routes through the mlx-lm HTTP server at

@@ -4737,10 +4737,13 @@ impl StorageBackend for SurrealBackend {
         if self.is_client_mode() {
             return self.daemon_get("/v1/config/llm").await;
         }
-        let sql = "SELECT active_provider, model, cloud_provider, is_override, expires_at FROM config:settings;";
+        let sql = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms FROM config:settings;";
         let mut response = self.db.query(sql).await?.check().context("Get config query failed")?;
         let config_opt: Option<LlmConfigResponse> = response.take(0)?;
-        let mut config = if let Some(c) = config_opt {
+        let mut config = if let Some(mut c) = config_opt {
+            if c.llm_post_inference_delay_ms.is_none() {
+                c.llm_post_inference_delay_ms = Some(5000);
+            }
             c
         } else {
             LlmConfigResponse {
@@ -4750,6 +4753,7 @@ impl StorageBackend for SurrealBackend {
                 is_override: false,
                 expires_at: None,
                 api_key: None,
+                llm_post_inference_delay_ms: Some(5000),
             }
         };
 
@@ -4767,7 +4771,7 @@ impl StorageBackend for SurrealBackend {
             let _res: serde_json::Value = self.daemon_post("/v1/config/llm", req).await?;
             return Ok(());
         }
-        let sql_select = "SELECT active_provider, model, cloud_provider, is_override, expires_at FROM config:settings;";
+        let sql_select = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms FROM config:settings;";
         let mut select_res = self.db.query(sql_select).await?.check().context("Get config query failed")?;
         let existing: Option<LlmConfigResponse> = select_res.take(0)?;
 
@@ -4792,6 +4796,9 @@ impl StorageBackend for SurrealBackend {
         let cloud_provider = current_cloud_provider.unwrap();
 
         let expires_at: Option<String> = None;
+        let delay = req.llm_post_inference_delay_ms
+            .or(existing.as_ref().and_then(|e| e.llm_post_inference_delay_ms))
+            .unwrap_or(5000);
 
         let sql = "
             UPSERT config:settings CONTENT {
@@ -4799,7 +4806,8 @@ impl StorageBackend for SurrealBackend {
                 model: $model,
                 cloud_provider: $cloud_provider,
                 is_override: true,
-                expires_at: $expires_at
+                expires_at: $expires_at,
+                llm_post_inference_delay_ms: $llm_post_inference_delay_ms
             };
         ";
         let _ = self.db.query(sql)
@@ -4807,6 +4815,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("model", model.as_str()))
             .bind(("cloud_provider", cloud_provider.as_str()))
             .bind(("expires_at", expires_at.clone()))
+            .bind(("llm_post_inference_delay_ms", delay))
             .await?.check().context("UPSERT config failed")?;
 
         if let Some(ref key) = req.api_key {

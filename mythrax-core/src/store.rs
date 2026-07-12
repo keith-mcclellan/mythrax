@@ -76,15 +76,39 @@ impl MarkdownStore {
             content.push('\n');
         }
         content.push_str(&link_str);
-        content.push('\n');
-
         self.write_file(file_path, &content)?;
         Ok(())
     }
 }
 
+use std::sync::RwLock;
+
+static WORKSPACE_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+pub fn set_workspace_root(path: PathBuf) {
+    if let Ok(mut lock) = WORKSPACE_ROOT.write() {
+        *lock = Some(path);
+    }
+}
+
+pub fn get_workspace_root() -> Option<PathBuf> {
+    if let Ok(lock) = WORKSPACE_ROOT.read() {
+        lock.clone()
+    } else {
+        None
+    }
+}
+
+pub fn clear_workspace_root() {
+    if let Ok(mut lock) = WORKSPACE_ROOT.write() {
+        *lock = None;
+    }
+}
 
 pub fn find_vault_root() -> PathBuf {
+    if let Some(root) = get_workspace_root() {
+        return root;
+    }
     if let Ok(val) = std::env::var("MYTHRAX_VAULT_ROOT") {
         return PathBuf::from(val);
     }
@@ -258,12 +282,11 @@ mod tests {
             std::env::remove_var("MYTHRAX_VAULT_ROOT");
         }
 
-        unsafe {
-            std::env::set_var("MYTHRAX_WORKSPACE_ROOT", "/tmp/workspace_test_env");
-        }
+        set_workspace_root(PathBuf::from("/tmp/workspace_test_env"));
         assert_eq!(find_vault_root(), PathBuf::from("/tmp/workspace_test_env"));
-        unsafe {
-            std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
+        // Clean up
+        if let Ok(mut lock) = WORKSPACE_ROOT.write() {
+            *lock = None;
         }
     }
 

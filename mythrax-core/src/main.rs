@@ -211,6 +211,7 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
             model: Some(model),
             cloud_provider: Some("gemini".to_string()),
             api_key: None,
+            llm_post_inference_delay_ms: None,
         });
     } else {
         print!("Select cloud provider (openai/anthropic/gemini) [default: openai]: ");
@@ -253,6 +254,7 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
             model: Some(model),
             cloud_provider: Some(cloud_provider),
             api_key: Some(api_key),
+            llm_post_inference_delay_ms: None,
         });
     }
 
