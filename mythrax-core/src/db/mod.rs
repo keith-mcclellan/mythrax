@@ -1,5 +1,8 @@
 pub mod backend;
 pub mod schema;
+pub mod query_classification;
+pub mod crud_operations;
+pub mod forge_pipeline;
 
 pub use backend::{StorageBackend, SurrealBackend, GLOBAL_BACKEND, EpisodeRaw};
 pub use backend::parse_record_id;

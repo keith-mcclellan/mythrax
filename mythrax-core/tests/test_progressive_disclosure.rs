@@ -257,7 +257,7 @@ async fn test_index_then_full_token_savings() -> Result<()> {
     let mut ids = Vec::new();
     for i in 1..=10 {
         let ep = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: format!("Big Episode Title {}", i),
             content: format!("Start of episode {}. {}", i, long_text),
             entities: vec![],
@@ -272,8 +272,8 @@ async fn test_index_then_full_token_savings() -> Result<()> {
             files_read: None,
             files_modified: None,
             node_type: None,
-        
-            confidence: None,};
+            confidence: None,
+        };
         let id = backend.save_episode(&ep).await?;
         ids.push(id);
     }
