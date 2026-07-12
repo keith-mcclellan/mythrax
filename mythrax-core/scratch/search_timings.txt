@@ -1509,3 +1509,53 @@ query: "I'm looking back at our previous chess game and I was wondering, what wa
 query: "I'm looking back at our previous conversation about the Seco de Cordero recipe from Ancash. You mentioned using a light or medium-bodied beer, but I was wondering if you could remind me what type of beer you specifically recommended?", profile: 19760us, embed: 698us, terms: 28us, db: 39100us, rerank_start: 7397us, total: 72469us
 query: "How many days had passed between the Hindu festival of Holi and the Sunday mass at St. Mary's Church?", profile: 18894us, embed: 589us, terms: 22us, db: 35423us, rerank_start: 5971us, total: 66390us
 query: "How many days did it take for me to find a house I loved after starting to work with Rachel?", profile: 21063us, embed: 731us, terms: 17us, db: 43600us, rerank_start: 78766us, total: 149632us
+query: "How long did I wait for the decision on my asylum application?", profile: 22401us, embed: 1625us, terms: 273us, db: 41262us, rerank_start: 6045us, total: 76870us
+query: "How many doctor's appointments did I go to in March?", profile: 19032us, embed: 890us, terms: 117us, db: 37660us, rerank_start: 5813us, total: 69591us
+query: "How much did I spend on each coffee mug for my coworkers?", profile: 18267us, embed: 602us, terms: 16us, db: 34983us, rerank_start: 5407us, total: 64633us
+query: "How many new postcards have I added to my collection since I started collecting again?", profile: 18644us, embed: 809us, terms: 112us, db: 42570us, rerank_start: 6133us, total: 73458us
+query: "How many engineers do I lead when I just started my new role as Senior Software Engineer? How many engineers do I lead now?", profile: 18906us, embed: 832us, terms: 24us, db: 42170us, rerank_start: 68875us, total: 137205us
+query: "How many engineers do I lead when I just started my new role as Software Engineer Manager?", profile: 19408us, embed: 598us, terms: 20us, db: 44276us, rerank_start: 66226us, total: 135709us
+query: "Can you suggest some accessories that would complement my current photography setup?", profile: 17600us, embed: 825us, terms: 95us, db: 81147us, rerank_start: 7185us, total: 115399us
+query: "How many projects have I completed since starting painting classes?", profile: 18389us, embed: 562us, terms: 16us, db: 35865us, rerank_start: 6360us, total: 66675us
+query: "What should I serve for dinner this weekend with my homegrown ingredients?", profile: 19448us, embed: 568us, terms: 18us, db: 81905us, rerank_start: 75168us, total: 184946us
+query: "Where do I initially keep my old sneakers?", profile: 18488us, embed: 556us, terms: 17us, db: 36518us, rerank_start: 59945us, total: 120681us
+query: "Where do I currently keep my old sneakers?", profile: 19788us, embed: 578us, terms: 28us, db: 39393us, rerank_start: 69642us, total: 134247us
+query: "How much more money did I raise than my initial goal in the charity cycling event?", profile: 21781us, embed: 559us, terms: 17us, db: 39982us, rerank_start: 6858us, total: 74983us
+query: "Can you suggest some useful accessories for my phone?", profile: 19148us, embed: 523us, terms: 13us, db: 87309us, rerank_start: 6317us, total: 121140us
+query: "What is the name of my cat?", profile: 18367us, embed: 508us, terms: 11us, db: 34793us, rerank_start: 5364us, total: 63328us
+query: "What is the name of my hamster?", profile: 19957us, embed: 515us, terms: 14us, db: 37241us, rerank_start: 5590us, total: 67457us
+query: "How long have I been using my Fitbit Charge 3?", profile: 18621us, embed: 517us, terms: 15us, db: 36056us, rerank_start: 7031us, total: 67116us
+query: "How many days had passed between the Sunday mass at St. Mary's Church and the Ash Wednesday service at the cathedral?", profile: 18641us, embed: 620us, terms: 22us, db: 34593us, rerank_start: 6206us, total: 65058us
+query: "What new kitchen gadget did I invest in before getting the Air Fryer?", profile: 17708us, embed: 544us, terms: 20us, db: 36567us, rerank_start: 21191us, total: 81231us
+query: "What percentage of leadership positions do women hold in the my company?", profile: 20703us, embed: 567us, terms: 18us, db: 36464us, rerank_start: 63073us, total: 126628us
+query: "How much will I save by taking the train from the airport to my hotel instead of a taxi?", profile: 20790us, embed: 702us, terms: 22us, db: 83108us, rerank_start: 6400us, total: 119029us
+query: "How much will I save by taking the bus from the airport to my hotel instead of a taxi?", profile: 20374us, embed: 609us, terms: 16us, db: 89562us, rerank_start: 30035us, total: 148031us
+query: "How many items of clothing do I need to pick up or return from a store?", profile: 18328us, embed: 579us, terms: 17us, db: 38560us, rerank_start: 95081us, total: 157684us
+query: "How many days before the team meeting I was preparing for did I attend the workshop on 'Effective Communication in the Workplace'?", profile: 18211us, embed: 635us, terms: 17us, db: 33909us, rerank_start: 26770us, total: 84823us
+query: "How many months have passed since I last visited a museum with a friend?", profile: 18303us, embed: 587us, terms: 15us, db: 34339us, rerank_start: 25299us, total: 84082us
+query: "I mentioned visiting a museum two months ago. Did I visit with a friend or not?", profile: 19043us, embed: 566us, terms: 16us, db: 36425us, rerank_start: 27939us, total: 89154us
+query: "How many days had passed since I finished reading 'The Seven Husbands of Evelyn Hugo' when I attended the book reading event at the local library, where the author of 'The Silent Patient' is discussing her latest thriller novel?", profile: 19482us, embed: 1038us, terms: 29us, db: 36075us, rerank_start: 8116us, total: 70586us
+query: "I wanted to follow up on our previous conversation about binaural beats for anxiety and depression. Can you remind me how many subjects were in the study published in the journal Music and Medicine that found significant reductions in symptoms of depression, anxiety, and stress?", profile: 17377us, embed: 734us, terms: 40us, db: 33966us, rerank_start: 6187us, total: 64140us
+query: "How much more miles per gallon was my car getting a few months ago compared to now?", profile: 17707us, embed: 595us, terms: 22us, db: 36177us, rerank_start: 26381us, total: 86137us
+query: "How many days did I spend attending workshops, lectures, and conferences in April?", profile: 18177us, embed: 562us, terms: 19us, db: 34631us, rerank_start: 6436us, total: 65248us
+query: "How long is my daily commute to work?", profile: 18264us, embed: 526us, terms: 13us, db: 34620us, rerank_start: 5554us, total: 64168us
+query: "What is the total time it takes I to get ready and commute to work?", profile: 19433us, embed: 541us, terms: 16us, db: 40248us, rerank_start: 6547us, total: 72024us
+query: "How much money did I raise in total through all the charity events I participated in?", profile: 16765us, embed: 551us, terms: 15us, db: 32979us, rerank_start: 5346us, total: 61360us
+query: "I'm looking back at our previous chess game and I was wondering, what was the move you made after 27. Kg2 Bd5+?", profile: 18168us, embed: 615us, terms: 22us, db: 36374us, rerank_start: 29350us, total: 90416us
+query: "How long have I been collecting vintage cameras?", profile: 19235us, embed: 534us, terms: 15us, db: 35978us, rerank_start: 6320us, total: 67138us
+query: "How long have I been collecting vintage films?", profile: 20600us, embed: 513us, terms: 15us, db: 41262us, rerank_start: 5515us, total: 72802us
+query: "How many years older is my grandma than me?", profile: 18854us, embed: 607us, terms: 12us, db: 36782us, rerank_start: 6039us, total: 67537us
+query: "I'm looking back at our previous conversation about the Seco de Cordero recipe from Ancash. You mentioned using a light or medium-bodied beer, but I was wondering if you could remind me what type of beer you specifically recommended?", profile: 20391us, embed: 710us, terms: 35us, db: 38566us, rerank_start: 7057us, total: 71892us
+query: "I'm going back to our previous chat about the Lost Temple of the Djinn one-shot. Can you remind me how many mummies the party will face in the temple?", profile: 18863us, embed: 646us, terms: 20us, db: 36187us, rerank_start: 5868us, total: 66650us
+query: "I think we discussed work from home jobs for seniors earlier. Can you remind me what was the 7th job in the list you provided?", profile: 18315us, embed: 649us, terms: 20us, db: 48993us, rerank_start: 22212us, total: 95550us
+query: "How long was I in Japan for?", profile: 18044us, embed: 500us, terms: 11us, db: 34380us, rerank_start: 4915us, total: 62448us
+query: "How many magazine subscriptions do I currently have?", profile: 20023us, embed: 557us, terms: 12us, db: 38308us, rerank_start: 73164us, total: 137718us
+query: "I wanted to follow up on our previous conversation about mindfulness techniques. You mentioned some great resources for guided imagery exercises, can you remind me of the website that had free exercises like 'The Mountain Meditation' and 'The Body Scan Meditation'?", profile: 18375us, embed: 716us, terms: 26us, db: 41033us, rerank_start: 6765us, total: 73195us
+query: "How many days had passed between the Hindu festival of Holi and the Sunday mass at St. Mary's Church?", profile: 19372us, embed: 586us, terms: 20us, db: 36124us, rerank_start: 6175us, total: 67280us
+query: "How many days did it take for me to find a house I loved after starting to work with Rachel?", profile: 22120us, embed: 615us, terms: 18us, db: 43550us, rerank_start: 66252us, total: 138116us
+query: "How many days did it take me to finish 'The Nightingale' by Kristin Hannah?", profile: 19832us, embed: 611us, terms: 16us, db: 36460us, rerank_start: 70111us, total: 132570us
+query: "Which book did I finish a week ago?", profile: 21379us, embed: 519us, terms: 17us, db: 38244us, rerank_start: 21671us, total: 87568us
+query: "How many weeks had passed since I recovered from the flu when I went on my 10th jog outdoors?", profile: 17891us, embed: 567us, terms: 19us, db: 38647us, rerank_start: 30213us, total: 92665us
+query: "How many days had passed since I started taking ukulele lessons when I decided to take my acoustic guitar to the guitar tech for servicing?", profile: 20020us, embed: 668us, terms: 22us, db: 38579us, rerank_start: 91962us, total: 156423us
+query: "What did I do with Rachel on the Wednesday two months ago?", profile: 17697us, embed: 541us, terms: 12us, db: 32586us, rerank_start: 93935us, total: 149408us
+query: "How many months ago did I attend the photography workshop?", profile: 18695us, embed: 573us, terms: 13us, db: 35014us, rerank_start: 19514us, total: 78972us
