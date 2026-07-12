@@ -64,6 +64,8 @@ pub async fn handle_merge_vault() -> Result<()> {
                             superseded_at: None,
                             superseded_by: None,
                             rule_type: None,
+                        
+                            ..Default::default()
                         };
                         rules_group.entry(rule.target_pattern.clone()).or_default().push((file_path.clone(), rule));
                     }
@@ -130,6 +132,8 @@ pub async fn handle_merge_vault() -> Result<()> {
                 superseded_at: None,
                 superseded_by: None,
                 rule_type: None,
+            
+                ..Default::default()
             };
 
             let frontmatter_str = vault::watcher::format_wisdom_markdown(&merged_rule);

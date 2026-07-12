@@ -27,7 +27,9 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
         files_modified: None,
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     
     // Ep 2: strong semantic match for "artificial intelligence", but no mention of "basement pipes"
     let ep2 = EpisodeSave {
@@ -47,7 +49,9 @@ async fn test_hybrid_fusion_toggle() -> anyhow::Result<()> {
         files_modified: None,
         node_type: None,
     
-        confidence: None,};
+        confidence: None,
+        ..Default::default()
+    };
     
     let id1 = backend.save_episode(&ep1).await?;
     let _id2 = backend.save_episode(&ep2).await?;

@@ -217,6 +217,15 @@ pub enum VaultAction {
         #[arg(short, long)]
         workspace: Option<String>,
     },
+    /// Clean stale sessions and git branches from the vault
+    Clean {
+        /// Dry-run mode to print what would be cleaned without executing
+        #[arg(short, long)]
+        dry_run: bool,
+        /// Automatically confirm cleanup (skip interactive prompt)
+        #[arg(short, long)]
+        confirm: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

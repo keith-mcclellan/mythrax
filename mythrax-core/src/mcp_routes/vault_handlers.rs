@@ -3,6 +3,7 @@ use anyhow::{Result, Context};
 use std::sync::Arc;
 use crate::api::ApiState;
 use crate::db::SurrealBackend;
+use surrealdb_types::SurrealValue;
 use crate::contracts::*;
 use crate::cognitive::compactor::Compactor;
 use crate::cognitive::synthesis::DreamCoordinator;
@@ -124,6 +125,137 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                             audit_results.daemon_ok,
                             audit_results
                         )
+                    }
+                ]
+            }))
+        }
+        "clean" => {
+            let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+            let confirm = args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            // 1. Get stale sessions
+            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                .context("SurrealBackend required")?;
+            
+            // Query all distinct sessions from short_term_memory
+            let sessions_query = "SELECT session_id FROM short_term_memory GROUP BY session_id;";
+            let mut response = surreal_backend.db.query(sessions_query).await?.check()?;
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+            struct SessionRecord {
+                session_id: String,
+            }
+            let session_records: Vec<SessionRecord> = response.take(0)?;
+            
+            let mut stale_sessions = Vec::new();
+            let now = chrono::Utc::now();
+            let stale_threshold = chrono::Duration::days(30);
+
+            for rec in session_records {
+                if let Ok(Some(last_activity)) = state.backend.get_session_last_activity(&rec.session_id).await {
+                    if now - last_activity > stale_threshold {
+                        stale_sessions.push((rec.session_id.clone(), last_activity));
+                    }
+                }
+            }
+
+            // 2. Get stale git branches
+            let repo_root = crate::store::get_workspace_root()
+                .unwrap_or_else(|| {
+                    let mut p = state.store.vault_root.clone();
+                    while p.parent().is_some() {
+                        if p.join(".git").exists() {
+                            return p;
+                        }
+                        p = p.parent().unwrap().to_path_buf();
+                    }
+                    state.store.vault_root.clone()
+                });
+
+            let mut stale_branches = Vec::new();
+            if repo_root.join(".git").exists() {
+                let git_output = std::process::Command::new("git")
+                    .args(["for-each-ref", "--format=%(refname:short) %(committerdate:unix)", "refs/heads/htr_branch_*"])
+                    .current_dir(&repo_root)
+                    .output();
+                if let Ok(output) = git_output {
+                    let stdout_str = String::from_utf8_lossy(&output.stdout);
+                    for line in stdout_str.lines() {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() == 2 {
+                            let branch_name = parts[0];
+                            if let Ok(timestamp) = parts[1].parse::<i64>() {
+                                let commit_time = chrono::DateTime::from_timestamp(timestamp, 0)
+                                    .unwrap_or_default();
+                                if now.timestamp() - timestamp > 30 * 86400 {
+                                    stale_branches.push((branch_name.to_string(), commit_time));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Dry-run summary
+            if dry_run || !confirm {
+                let mut text = "Dry-Run Summary:\n".to_string();
+                text.push_str("Stale Sessions:\n");
+                for (sess, dt) in &stale_sessions {
+                    text.push_str(&format!("- {} (last active: {})\n", sess, dt.to_rfc3339()));
+                }
+                if stale_sessions.is_empty() {
+                    text.push_str("  None\n");
+                }
+                text.push_str("Stale Git Branches:\n");
+                for (branch, dt) in &stale_branches {
+                    text.push_str(&format!("- {} (last commit: {})\n", branch, dt.to_rfc3339()));
+                }
+                if stale_branches.is_empty() {
+                    text.push_str("  None\n");
+                }
+                
+                if !confirm {
+                    text.push_str("\nTo proceed, run the clean command again with confirm=true.\n");
+                }
+
+                return Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": text
+                        }
+                    ]
+                }));
+            }
+
+            // 4. Perform actual cleanup
+            for (sess, _) in &stale_sessions {
+                let _ = state.backend.clear_stm(sess).await;
+                let delete_queries = format!("
+                    DELETE FROM chat_history WHERE session_id = '{}';
+                    DELETE FROM belief_state WHERE session_id = '{}';
+                    DELETE FROM handoff WHERE parent_conversation_id = '{}' OR subagent_conversation_id = '{}';
+                ", sess, sess, sess, sess);
+                let _ = surreal_backend.db.query(&delete_queries).await;
+            }
+
+            for (branch, _) in &stale_branches {
+                let _ = std::process::Command::new("git")
+                    .args(["branch", "-D", branch])
+                    .current_dir(&repo_root)
+                    .status();
+            }
+
+            let text = format!(
+                "Cleanup Completed:\n- Deleted {} stale sessions from SurrealDB.\n- Deleted {} stale htr_branch_* git branches.",
+                stale_sessions.len(),
+                stale_branches.len()
+            );
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
                     }
                 ]
             }))

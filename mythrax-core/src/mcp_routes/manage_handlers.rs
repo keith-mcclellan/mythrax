@@ -618,6 +618,147 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     let handoffs: Vec<serde_json::Value> = handoffs_resp.take(0)?;
 
     let stm_map = state.backend.get_stm(session_id, None).await?;
+
+    // A. Read last assistant turn and run observer/guardrail engine
+    let mut last_assistant_turn = None;
+    if let Some(path_str) = stm_map.get("_transcript_path") {
+        if let Ok(file_content) = std::fs::read_to_string(path_str) {
+            for line in file_content.lines().rev() {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                    let is_assistant = val.get("role").and_then(|r| r.as_str()).map(|r| r == "assistant").unwrap_or(false)
+                        || val.get("source").and_then(|s| s.as_str()).map(|s| s == "MODEL").unwrap_or(false);
+                    if is_assistant {
+                        if let Some(content_str) = val.get("content").and_then(|c| c.as_str()) {
+                            last_assistant_turn = Some(content_str.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut guardrail_blocks = Vec::new();
+    let mut blocking_directives = Vec::new();
+
+    if let Some(ref turn_content) = last_assistant_turn {
+        // 1. Memory utilization scoring (WU-3.1)
+        let mut injected_nodes = Vec::new();
+        if let Some(nodes_str) = stm_map.get("distilled_context_nodes") {
+            if let Ok(parsed) = serde_json::from_str::<Vec<String>>(nodes_str) {
+                injected_nodes = parsed;
+            } else {
+                let cleaned = nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
+                for part in cleaned.split(',') {
+                    let part = part.trim().trim_matches('"');
+                    if !part.is_empty() {
+                        injected_nodes.push(part.to_string());
+                    }
+                }
+            }
+        }
+
+        if !injected_nodes.is_empty() {
+            let hydrated = state.backend.get_memory_nodes(&injected_nodes).await?;
+            let mut utilized_count = 0;
+            
+            for wiki in &hydrated.wiki_nodes {
+                let is_util = turn_content.to_lowercase().contains(&wiki.name.to_lowercase());
+                if is_util { utilized_count += 1; }
+            }
+            
+            for wisdom in &hydrated.wisdom_rules {
+                let is_util = turn_content.to_lowercase().contains(&wisdom.target_pattern.to_lowercase());
+                if is_util { utilized_count += 1; }
+                // EMA Reinforcement (WU-3.5)
+                let target_imp = if is_util { 10.0 } else { 1.0 };
+                let current_imp = wisdom.importance.unwrap_or(5.0) as f32;
+                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
+                let update_sql = "UPDATE type::record('wisdom', $id) SET importance = $imp;";
+                let id_part = wisdom.id.as_ref().map(|s| s.split(':').nth(1).unwrap_or(s)).unwrap_or("");
+                let _ = surreal_backend.db.query(update_sql).bind(("id", id_part)).bind(("imp", new_imp)).await;
+            }
+
+            for ep in &hydrated.episodes {
+                let is_util = turn_content.to_lowercase().contains(&ep.title.to_lowercase());
+                if is_util { utilized_count += 1; }
+                // EMA Reinforcement (WU-3.5)
+                let target_imp = if is_util { 10.0 } else { 1.0 };
+                let current_imp = ep.importance.unwrap_or(5.0) as f32;
+                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
+                let update_sql = "UPDATE type::record('episode', $id) SET importance = $imp;";
+                let id_part = ep.id.as_ref().map(|s| s.split(':').nth(1).unwrap_or(s)).unwrap_or("");
+                let _ = surreal_backend.db.query(update_sql).bind(("id", id_part)).bind(("imp", new_imp)).await;
+            }
+
+            let mem_util_score = (utilized_count * 100) / injected_nodes.len();
+            let _ = state.backend.save_stm(session_id, "_last_memory_utilization", &mem_util_score.to_string()).await;
+        }
+
+        // 2. Guardrail Engine rule violations (WU-3.2)
+        let active_rules_res = surreal_backend.db.query("SELECT * FROM wisdom WHERE status = 'active';").await;
+        if let Ok(mut resp) = active_rules_res {
+            let active_rules: Vec<WisdomRule> = if let Ok(raw_rules) = resp.take::<Vec<crate::db::backend::WisdomRaw>>(0) {
+                raw_rules.into_iter().map(|r| r.into_wisdom_rule()).collect()
+            } else {
+                Vec::new()
+            };
+            for rule in active_rules {
+                if turn_content.to_lowercase().contains(&rule.target_pattern.to_lowercase()) {
+                    let severity = rule.severity.clone().unwrap_or_else(|| "WARNING".to_string()).to_uppercase();
+                    let blocking = rule.blocking.unwrap_or(false);
+                    
+                    if blocking {
+                        blocking_directives.push(format!(
+                            "> [!CAUTION]\n> **CRITICAL RULE ACKNOWLEDGEMENT REQUIRED**\n> You have triggered a blocking guardrail rule for `{}`.\n> Rule: Avoid `{}` because `{}`.\n> Remedy: `{}`.\n> You MUST explicitly state in your next turn how you will implement this remedy before proceeding!\n",
+                            rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                        ));
+                    }
+                    
+                    guardrail_blocks.push(format!(
+                        "> [!{}]\n> **Rule Violation Alert**: Pertaining to `{}`\n> - **Avoid**: {}\n> - **Causal**: {}\n> - **Remedy**: {}\n",
+                        severity, rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                    ));
+                }
+            }
+        }
+
+        // 3. Auto Task Persistence (WU-3.3)
+        let mut checklist_lines = Vec::new();
+        for line in turn_content.lines() {
+            if line.contains("- [ ]") || line.contains("- [x]") {
+                checklist_lines.push(line.trim().to_string());
+            }
+        }
+        if !checklist_lines.is_empty() {
+            let checklist_str = checklist_lines.join("\n");
+            let _ = state.backend.save_stm(session_id, "checklist", &checklist_str).await;
+            
+            // Save as task_checklist episode
+            let ep = EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
+                .scope(Some("general".to_string()))
+                .session_id(Some(session_id.to_string()))
+                .node_type(Some("task_checklist".to_string()))
+                .build();
+            let _ = state.backend.save_episode(&ep).await;
+        }
+    }
+
+    // 4. Memory Query Frequency Tracker (WU-3.4)
+    let mut stale_search_warning = String::new();
+    let now_unix = chrono::Utc::now().timestamp();
+    if let Some(last_search_str) = stm_map.get("_last_search_time") {
+        if let Ok(last_search_time) = last_search_str.parse::<i64>() {
+            let elapsed = now_unix - last_search_time;
+            if elapsed > 300 {
+                stale_search_warning = format!("\n> [!WARNING]\n> Warning: Memory searches are stale. Last search was {} seconds ago. Consider running a search query to pull relevant context.\n", elapsed);
+            }
+        } else {
+            stale_search_warning = "\n> [!WARNING]\n> Warning: Memory searches are stale. No search has been performed in this session yet.\n".to_string();
+        }
+    } else {
+        stale_search_warning = "\n> [!WARNING]\n> Warning: Memory searches are stale. No search has been performed in this session yet.\n".to_string();
+    }
     let mut parts = Vec::new();
 
     let mut broker_status = "### 🤖 Local Inference & Model Broker Status\n- **Broker State**: Offline or uninitialized\n\n".to_string();
@@ -891,7 +1032,17 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         history_part.push('\n');
     }
 
-    let final_context = format!("{}{}", history_part, initial_context);
+    let mut final_context = format!("{}{}", history_part, initial_context);
+    
+    if !stale_search_warning.is_empty() {
+        final_context = format!("{}{}", stale_search_warning, final_context);
+    }
+    if !guardrail_blocks.is_empty() {
+        final_context = format!("### 🛡️ Guardrail Alerts\n{}\n{}", guardrail_blocks.join("\n"), final_context);
+    }
+    if !blocking_directives.is_empty() {
+        final_context = format!("{}\n{}", blocking_directives.join("\n"), final_context);
+    }
 
     let mut response_obj = json!({
         "content": [

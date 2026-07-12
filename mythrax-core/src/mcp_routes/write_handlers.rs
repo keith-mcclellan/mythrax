@@ -322,6 +322,8 @@ pub async fn run_llm_critic(
         superseded_at: None,
         superseded_by: None,
         rule_type: None,
+    
+        ..Default::default()
     };
 
     let markdown = crate::vault::watcher::format_wisdom_markdown(&rule_save);

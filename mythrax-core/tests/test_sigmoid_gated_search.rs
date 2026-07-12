@@ -102,7 +102,9 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     let id_r = backend.save_wisdom_rule(&rule).await?;
     let uuid_r = id_r.split(':').nth(1).unwrap();
 

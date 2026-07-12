@@ -84,6 +84,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wisdom TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON wisdom TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS rule_type ON wisdom TYPE string DEFAULT 'aesthetic';
+    DEFINE FIELD IF NOT EXISTS severity ON wisdom TYPE option<string> DEFAULT 'info';
+    DEFINE FIELD IF NOT EXISTS blocking ON wisdom TYPE option<bool> DEFAULT false;
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
     DEFINE INDEX OVERWRITE wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -150,6 +152,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS key ON short_term_memory TYPE string;
     DEFINE FIELD IF NOT EXISTS value ON short_term_memory TYPE string;
     DEFINE FIELD IF NOT EXISTS updated_at ON short_term_memory TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS expires_at ON short_term_memory TYPE option<datetime>;
     DEFINE INDEX IF NOT EXISTS stm_session_key ON short_term_memory FIELDS session_id, key UNIQUE;
 
     DEFINE TABLE IF NOT EXISTS followed_by SCHEMAFULL TYPE RELATION IN episode OUT episode;

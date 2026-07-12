@@ -818,6 +818,8 @@ impl DreamCoordinator {
                                 superseded_at: None,
                                 superseded_by: None,
                                 rule_type: Some(rule_type.clone()),
+                            
+                                ..Default::default()
                             };
                             if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
                                 for ep_id in &cluster_ep_ids {
@@ -1381,6 +1383,8 @@ impl DreamCoordinator {
                                 superseded_at: None,
                                 superseded_by: None,
                                 rule_type: Some(if all_procedural { "procedural".to_string() } else { "aesthetic".to_string() }),
+                            
+                                ..Default::default()
                             };
 
                             if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
@@ -1603,6 +1607,8 @@ pub async fn save_wisdom_rule_with_deduplication(
                             superseded_at: None,
                             superseded_by: None,
                             rule_type: None,
+                        
+                            ..Default::default()
                         };
 
                         match db.save_wisdom_rule(&merged_contract).await {
@@ -1852,6 +1858,8 @@ pub async fn traverse_adjacent_logs(
                     archived_at: node.archived_at,
                     node_type: node.node_type,
                     confidence: None,
+                
+                    ..Default::default()
                 });
                 accumulated_chars = char_cap;
                 break;
@@ -1880,6 +1888,8 @@ pub async fn traverse_adjacent_logs(
                     archived_at: node.archived_at,
                     node_type: node.node_type,
                     confidence: None,
+                
+                    ..Default::default()
                 });
             }
 

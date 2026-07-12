@@ -365,6 +365,7 @@ fn test_episode_raw_conversion() {
         word_count: Some(500),
         node_type: Some("episode".to_string()),
         confidence: Some(0.95),
+        importance: Some(5.0),
     };
 
     let episode = Episode::from(raw);
@@ -390,6 +391,7 @@ fn test_episode_raw_conversion() {
     assert_eq!(episode.word_count, Some(500));
     assert_eq!(episode.node_type, Some("episode".to_string()));
     assert_eq!(episode.confidence, Some(0.95));
+    assert_eq!(episode.importance, Some(5.0));
 }
 
 #[test]

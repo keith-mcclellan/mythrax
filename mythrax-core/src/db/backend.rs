@@ -901,6 +901,9 @@ pub(crate) struct WisdomRaw {
     pub(crate) superseded_at: Option<String>,
     pub(crate) superseded_by: Option<String>,
     pub(crate) rule_type: Option<String>,
+    pub(crate) severity: Option<String>,
+    pub(crate) blocking: Option<bool>,
+    pub(crate) importance: Option<f64>,
 }
 
 impl WisdomRaw {
@@ -924,6 +927,9 @@ impl WisdomRaw {
             superseded_at: self.superseded_at,
             superseded_by: self.superseded_by,
             rule_type: self.rule_type,
+            severity: self.severity,
+            blocking: self.blocking,
+            importance: self.importance.map(|v| v as f32),
         }
     }
 }
@@ -954,6 +960,7 @@ pub struct EpisodeRaw {
     pub word_count: Option<u32>,
     pub node_type: Option<String>,
     pub confidence: Option<f32>,
+    pub importance: Option<f32>,
 }
 
 impl From<EpisodeRaw> for Episode {
@@ -981,6 +988,8 @@ impl From<EpisodeRaw> for Episode {
             word_count: raw.word_count,
             node_type: raw.node_type,
             confidence: raw.confidence,
+            importance: raw.importance,
+            ..Default::default()
         }
     }
 }
@@ -1912,6 +1921,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
 
         let ep_id = backend.save_episode(&episode).await.unwrap();
@@ -2010,6 +2020,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
 
         let ep_id = backend.save_episode(&episode).await.unwrap();
@@ -2101,6 +2112,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
         let ep_id = backend.save_episode(&episode).await.unwrap();
 
@@ -2123,6 +2135,7 @@ mod tests {
             superseded_at: None,
             superseded_by: None,
             rule_type: None,
+            ..Default::default()
         };
         let rule_id = backend.save_wisdom_rule(&rule).await.unwrap();
 
@@ -2196,6 +2209,7 @@ mod tests {
             superseded_at: None,
             superseded_by: None,
             rule_type: None,
+            ..Default::default()
         };
         let _ = backend.save_wisdom_rule(&rule).await.unwrap();
 
@@ -2267,6 +2281,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         }).await.unwrap();
 
         backend.save_stm(parent_id, "distilled_context_nodes", &format!("[\"{}\"]", ep_id)).await.unwrap();
@@ -2388,6 +2403,7 @@ mod tests {
             superseded_at: None,
             superseded_by: None,
             rule_type: None,
+            ..Default::default()
         };
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 
@@ -2409,6 +2425,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
         backend.save_episode(&ep).await.unwrap();
 
@@ -2487,6 +2504,7 @@ mod tests {
             superseded_at: None,
             superseded_by: None,
             rule_type: None,
+            ..Default::default()
         };
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 
@@ -2717,6 +2735,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         }).await.unwrap();
 
         let node = WikiNode {
@@ -2936,6 +2955,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
         let ep1_id = backend.save_episode(&ep1).await.unwrap();
 
@@ -2956,6 +2976,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
         let ep2_id = backend.save_episode(&ep2).await.unwrap();
 
@@ -2983,6 +3004,7 @@ mod tests {
             files_modified: None,
             node_type: None,
             confidence: None,
+            ..Default::default()
         };
         let ep3_id = backend.save_episode(&ep3).await.unwrap();
 

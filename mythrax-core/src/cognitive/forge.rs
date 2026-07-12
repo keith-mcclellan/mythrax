@@ -258,6 +258,8 @@ impl Forge {
                     superseded_at: None,
                     superseded_by: None,
                     rule_type: None,
+                
+                    ..Default::default()
                 };
                 let rule_id_str = self.backend.save_wisdom_rule(&rule_node).await?;
                 let rule_thing = crate::db::parse_record_id(&rule_id_str)?;
