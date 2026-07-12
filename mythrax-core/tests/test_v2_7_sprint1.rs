@@ -587,4 +587,32 @@ fn test_search_params_struct() {
     assert_eq!(positional.temporal_anchor, Some("pos_anchor".to_string()));
 }
 
+#[test]
+fn test_strip_code_fences_all_variants() {
+    use mythrax_core::llm::strip_code_fences;
 
+    // Normal fences with language suffix
+    assert_eq!(strip_code_fences("```json\n{\"a\": 1}\n```"), "{\"a\": 1}");
+    
+    // Normal fences without language suffix
+    assert_eq!(strip_code_fences("```\n{\"a\": 1}\n```"), "{\"a\": 1}");
+    
+    // Multi-line fences
+    assert_eq!(strip_code_fences("```json\n{\n  \"a\": 1\n}\n```"), "{\n  \"a\": 1\n}");
+
+    // Fences without newlines
+    assert_eq!(strip_code_fences("```json{\"a\": 1}```"), "{\"a\": 1}");
+    assert_eq!(strip_code_fences("```{\"a\": 1}```"), "{\"a\": 1}");
+
+    // Fences with leading/trailing whitespace
+    assert_eq!(strip_code_fences("  \n  ```json\n{\"a\": 1}\n```  \n "), "{\"a\": 1}");
+
+    // Bare strings (returns unchanged)
+    assert_eq!(strip_code_fences("{\"a\": 1}"), "{\"a\": 1}");
+    assert_eq!(strip_code_fences("plain text"), "plain text");
+
+    // Nested fences (strips only outer fences)
+    let nested = "```markdown\nOuter\n```rust\nfn inner() {}\n```\nMore Outer\n```";
+    let expected = "Outer\n```rust\nfn inner() {}\n```\nMore Outer";
+    assert_eq!(strip_code_fences(nested), expected);
+}

@@ -218,14 +218,7 @@ impl MetaSkillSynthesizer {
 
             tracing::info!("Synthesizing meta-skill for scope: {}", scope);
             let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
-            let trimmed = response.trim();
-            let stripped = if trimmed.starts_with("```markdown") {
-                trimmed.strip_prefix("```markdown").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-            } else if trimmed.starts_with("```") {
-                trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-            } else {
-                trimmed
-            };
+            let stripped = crate::llm::strip_code_fences(&response);
 
             let project_skills_dir = store.vault_root.join("../.agents/skills");
             let skill_dir = project_skills_dir.join(format!("meta-{}", scope));
@@ -268,14 +261,7 @@ impl MetaSkillSynthesizer {
                     );
 
                     if let Ok(res_str) = self.llm.completion(db, Some(sys_prompt), &prompt_text).await {
-                        let trimmed = res_str.trim();
-                        let stripped = if trimmed.starts_with("```json") {
-                            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                        } else if trimmed.starts_with("```") {
-                            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                        } else {
-                            trimmed
-                        };
+                        let stripped = crate::llm::strip_code_fences(&res_str);
 
                         #[derive(serde::Deserialize)]
                         struct MergeValidation {
@@ -284,7 +270,7 @@ impl MetaSkillSynthesizer {
                             reason: Option<String>,
                         }
 
-                        if let Ok(val) = serde_json::from_str::<MergeValidation>(stripped) {
+                        if let Ok(val) = serde_json::from_str::<MergeValidation>(&stripped) {
                             if val.should_merge {
                                 suggestions.push(serde_json::json!({
                                     "source_skills": vec![skills[i].name.clone(), skills[j].name.clone()],
@@ -372,14 +358,7 @@ impl MetaSkillSynthesizer {
         );
 
         let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
-        let trimmed = response.trim();
-        let stripped = if trimmed.starts_with("```markdown") {
-            trimmed.strip_prefix("```markdown").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
+        let stripped = crate::llm::strip_code_fences(&response);
 
         let project_skills_dir = store.vault_root.join("../.agents/skills");
         let skill_dir = project_skills_dir.join(format!("meta-{}", target_name));

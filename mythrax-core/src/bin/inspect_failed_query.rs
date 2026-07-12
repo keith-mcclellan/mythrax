@@ -17,6 +17,7 @@ struct QuestionEntry {
     haystack_sessions: Vec<Vec<TurnEntry>>,
     answer_session_ids: Vec<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     gold_corpus_ids: Vec<String>,
 }
 

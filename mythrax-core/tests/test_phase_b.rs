@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::db::backend::QueryCategory;
 use mythrax_core::contracts::{EpisodeSave, WisdomRule};
 use mythrax_core::db::backend::split_temporal_query;
 

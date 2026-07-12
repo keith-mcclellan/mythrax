@@ -383,18 +383,49 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
 
 
 pub fn strip_code_fences(content: &str) -> String {
-    let mut cleaned = content.trim().to_string();
+    let mut cleaned = content.trim();
     if cleaned.starts_with("```") {
-        if let Some(first_newline_pos) = cleaned.find('\n') {
-            cleaned = cleaned[first_newline_pos + 1..].to_string();
+        if cleaned.contains('\n') {
+            if let Some(first_newline_pos) = cleaned.find('\n') {
+                cleaned = &cleaned[first_newline_pos + 1..];
+            }
+            if cleaned.ends_with("```") {
+                cleaned = &cleaned[..cleaned.len() - 3];
+            } else if cleaned.ends_with("```\n") {
+                cleaned = &cleaned[..cleaned.len() - 4];
+            }
+        } else {
+            if cleaned.starts_with("```json") {
+                cleaned = &cleaned["```json".len()..];
+            } else if cleaned.starts_with("```markdown") {
+                cleaned = &cleaned["```markdown".len()..];
+            } else if cleaned.starts_with("```") {
+                cleaned = &cleaned["```".len()..];
+            }
+            if cleaned.ends_with("```") {
+                cleaned = &cleaned[..cleaned.len() - 3];
+            }
         }
-        if cleaned.ends_with("```") {
-            cleaned = cleaned[..cleaned.len() - 3].trim().to_string();
-        } else if cleaned.ends_with("```\n") {
-            cleaned = cleaned[..cleaned.len() - 4].trim().to_string();
+    } else {
+        if let Some(start_idx) = cleaned.find("```") {
+            let fence_slice = &cleaned[start_idx..];
+            let prefix = if fence_slice.starts_with("```json") {
+                "```json"
+            } else if fence_slice.starts_with("```markdown") {
+                "```markdown"
+            } else {
+                "```"
+            };
+            let content_start = start_idx + prefix.len();
+            let rest = &cleaned[content_start..];
+            if let Some(end_idx) = rest.rfind("```") {
+                cleaned = &rest[..end_idx];
+            } else {
+                cleaned = rest;
+            }
         }
     }
-    cleaned
+    cleaned.trim().to_string()
 }
 
 async fn send_with_retry(

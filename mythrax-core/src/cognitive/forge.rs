@@ -338,16 +338,9 @@ impl Forge {
         );
         
         let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
-        let trimmed = res.trim();
-        let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
+        let stripped = crate::llm::strip_code_fences(&res);
         
-        let concepts: Vec<ForgedConcept> = serde_json::from_str(stripped)
+        let concepts: Vec<ForgedConcept> = serde_json::from_str(&stripped)
             .context("Failed to parse concepts JSON")?;
         Ok(concepts)
     }
@@ -377,16 +370,9 @@ impl Forge {
         );
         
         let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
-        let trimmed = res.trim();
-        let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
+        let stripped = crate::llm::strip_code_fences(&res);
         
-        let rules: Vec<ForgedRule> = serde_json::from_str(stripped)
+        let rules: Vec<ForgedRule> = serde_json::from_str(&stripped)
             .context("Failed to parse rules JSON")?;
         Ok(rules)
     }
@@ -410,14 +396,7 @@ impl Forge {
         );
 
         let res = self.llm.completion(&*self.backend, Some(system_instruction), &prompt).await?;
-        let trimmed = res.trim();
-        let stripped = if trimmed.starts_with("```json") {
-            trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else if trimmed.starts_with("```") {
-            trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-        } else {
-            trimmed
-        };
+        let stripped = crate::llm::strip_code_fences(&res);
 
         #[derive(Deserialize)]
         struct RawTOCEntry {
@@ -425,7 +404,7 @@ impl Forge {
             start_phrase: String,
         }
 
-        let raw_entries: Vec<RawTOCEntry> = serde_json::from_str(stripped)
+        let raw_entries: Vec<RawTOCEntry> = serde_json::from_str(&stripped)
             .context("Failed to parse LLM TOC output")?;
 
         let mut current_entries = Vec::new();

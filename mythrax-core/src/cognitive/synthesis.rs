@@ -296,8 +296,8 @@ impl DreamCoordinator {
                     confidence: f32,
                 }
                 // Strip markdown code block wrappers if any
-                let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
-                if let Ok(res) = serde_json::from_str::<ContradictionResponse>(clean_resp) {
+                let clean_resp = crate::llm::strip_code_fences(&resp_str);
+                if let Ok(res) = serde_json::from_str::<ContradictionResponse>(&clean_resp) {
                     if res.contradicts && res.confidence >= 0.80 {
                         if let Some(resolution) = res.resolution {
                             let mut updated_node = existing_node.clone();
@@ -1360,8 +1360,8 @@ impl DreamCoordinator {
                         prescribed_remedy: String,
                         confidence: f32,
                     }
-                    let clean_resp = resp_str.trim().trim_start_matches("```json").trim_end_matches("```").trim();
-                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(clean_resp) {
+                    let clean_resp = crate::llm::strip_code_fences(&resp_str);
+                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
                         if res.confidence >= 0.80 {
                             let all_procedural = cluster.iter().all(|c| c.is_procedural);
                             let tier = if all_procedural { "permanent" } else { "dynamic" };
@@ -1556,14 +1556,7 @@ pub async fn save_wisdom_rule_with_deduplication(
             let llm = crate::llm::LLMClient::new();
             match llm.completion(db, Some(system_prompt), &prompt).await {
                 Ok(res) => {
-                    let trimmed = res.trim();
-                    let stripped = if trimmed.starts_with("```json") {
-                        trimmed.strip_prefix("```json").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                    } else if trimmed.starts_with("```") {
-                        trimmed.strip_prefix("```").unwrap_or(trimmed).strip_suffix("```").unwrap_or(trimmed).trim()
-                    } else {
-                        trimmed
-                    };
+                    let stripped = crate::llm::strip_code_fences(&res);
 
                     #[derive(serde::Deserialize)]
                     struct MergedFields {
@@ -1574,13 +1567,13 @@ pub async fn save_wisdom_rule_with_deduplication(
                     }
 
                     let parsed_fields = if stripped.starts_with('[') {
-                        if let Ok(list) = serde_json::from_str::<Vec<MergedFields>>(stripped) {
+                        if let Ok(list) = serde_json::from_str::<Vec<MergedFields>>(&stripped) {
                             list.into_iter().next()
                         } else {
                             None
                         }
                     } else {
-                        serde_json::from_str::<MergedFields>(stripped).ok()
+                        serde_json::from_str::<MergedFields>(&stripped).ok()
                     };
 
                     if let Some(fields) = parsed_fields {
