@@ -33,7 +33,7 @@ except Exception as e:
 try:
     with open(results_path) as f:
         manifest = json.loads(f.readline())
-        records = [json.loads(line) for line in f]
+        records = [json.loads(line) for line in f if line.strip()]
 except Exception as e:
     print(f'Error reading results file: {e}')
     sys.exit(1)
