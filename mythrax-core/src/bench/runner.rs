@@ -1067,16 +1067,16 @@ async fn run_evaluation(
                         let created_at = q.haystack_dates.as_ref()
                             .and_then(|dates| dates.get(sess_idx))
                             .and_then(|d| parse_haystack_date(d));
-                        let ep = EpisodeSave {
-                            created_at,
-                            title: format!("Session {} - Turn {}", session_id, turn_idx),
-                            content: format!("{}: {}", turn.role, turn.content),
-                            scope: Some("general".to_string()),
-                            vault_path: Some(corpus_id.clone()),
-                            session_id: Some(session_id.clone()),
-                            node_type: Some(node_type),
-                            ..Default::default()
-                        };
+                        let ep = EpisodeSave::builder(
+                            format!("Session {} - Turn {}", session_id, turn_idx),
+                            format!("{}: {}", turn.role, turn.content),
+                        )
+                        .scope(Some("general".to_string()))
+                        .vault_path(Some(corpus_id.clone()))
+                        .session_id(Some(session_id.clone()))
+                        .node_type(Some(node_type))
+                        .created_at(created_at)
+                        .build();
                         episodes_to_ingest.push(ep);
                     }
                 }

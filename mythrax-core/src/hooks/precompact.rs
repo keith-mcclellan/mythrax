@@ -159,24 +159,11 @@ pub async fn mine_transcript(
                         _ => "agent_thought".to_string(),
                     };
                     let title = format!("Verbatim {} Turn ({})", r, session);
-                    let ep = EpisodeSave {
-        created_at: None,
-                        title,
-                        content: extracted,
-                        entities: vec![],
-                        scope: Some("general".to_string()),
-                        vault_path: None,
-                        source_episode: None,
-                        session_id: Some(session.to_string()),
-                        task_id: None,
-                        discovery_tokens: None,
-                        facts: None,
-                        concepts: None,
-                        files_read: None,
-                        files_modified: None,
-                        node_type: Some(type_val),
-                        confidence: None,
-                    };    
+                    let ep = EpisodeSave::builder(title, extracted)
+                        .scope(Some("general".to_string()))
+                        .session_id(Some(session.to_string()))
+                        .node_type(Some(type_val))
+                        .build();    
                     let store_arc = Arc::new(crate::store::MarkdownStore {
                         vault_root: store.vault_root.clone(),
                     });

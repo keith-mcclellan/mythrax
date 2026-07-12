@@ -520,24 +520,11 @@ pub async fn sync_file_to_db(
             path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
         });
 
-        let episode = EpisodeSave {
-        created_at: None,
-            title,
-            content: plain_body,
-            entities: frontmatter.entities.unwrap_or_default(),
-            scope: frontmatter.scope,
-            vault_path: Some(rel_path),
-            source_episode: None,
-            session_id: None,
-            task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-            confidence: None,
-        };
+        let episode = EpisodeSave::builder(title, plain_body)
+            .entities(frontmatter.entities.unwrap_or_default())
+            .scope(frontmatter.scope)
+            .vault_path(Some(rel_path))
+            .build();
 
         backend.save_episode(&episode).await?;
     } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
@@ -875,24 +862,12 @@ mod tests {
         let ignore_list = Arc::new(WatchIgnoreList::new());
         
         // 1. Save an episode via save_episode_bidirectional
-        let episode = EpisodeSave {
-        created_at: None,
-            title: "Bidirectional Test".to_string(),
-            content: "This is some bidirectional sync body content.".to_string(),
-            entities: vec![],
-            scope: Some("bi-testing".to_string()),
-            vault_path: None,
-            source_episode: None,
-            session_id: None,
-            task_id: None,
-            discovery_tokens: None,
-            facts: None,
-            concepts: None,
-            files_read: None,
-            files_modified: None,
-            node_type: None,
-            confidence: None,
-        };
+        let episode = EpisodeSave::builder(
+            "Bidirectional Test".to_string(),
+            "This is some bidirectional sync body content.".to_string(),
+        )
+        .scope(Some("bi-testing".to_string()))
+        .build();
         
         let ep_id = save_episode_bidirectional(&episode, backend.as_ref(), &store, &ignore_list).await.unwrap();
         assert!(ep_id.contains("episode:"));

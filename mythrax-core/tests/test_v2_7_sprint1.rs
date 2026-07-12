@@ -329,3 +329,184 @@ async fn test_vram_eviction_timeout() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_episode_raw_conversion() {
+    use mythrax_core::db::EpisodeRaw;
+    use mythrax_core::contracts::Episode;
+    use surrealdb::types::{RecordId, RecordIdKey};
+    use chrono::Utc;
+
+    let raw = EpisodeRaw {
+        id: RecordId {
+            table: "episode".into(),
+            key: RecordIdKey::from("foo_id"),
+        },
+        title: "Test Title".to_string(),
+        content: "Test Content".to_string(),
+        source: Some("test_source".to_string()),
+        scope: Some("test_scope".to_string()),
+        vault_path: Some("test_vault_path".to_string()),
+        embedding: Some(vec![1.0, 2.0, 3.0]),
+        processed_in_dream: Some(true),
+        source_episode: Some(RecordId {
+            table: "episode".into(),
+            key: RecordIdKey::from("parent_id"),
+        }),
+        last_retrieved_at: Some("2026-07-11T20:00:00Z".to_string()),
+        utility: Some(42.5),
+        archived: Some(false),
+        archived_at: Some(chrono::DateTime::parse_from_rfc3339("2026-07-11T20:00:00Z").unwrap().with_timezone(&Utc)),
+        discovery_tokens: Some(10),
+        facts: Some(vec!["fact1".to_string()]),
+        concepts: Some(vec!["concept1".to_string()]),
+        files_read: Some(vec!["read1.txt".to_string()]),
+        files_modified: Some(vec!["mod1.txt".to_string()]),
+        session_id: Some("session123".to_string()),
+        word_count: Some(500),
+        node_type: Some("episode".to_string()),
+        confidence: Some(0.95),
+    };
+
+    let episode = Episode::from(raw);
+    assert_eq!(episode.id, Some("episode:foo_id".to_string()));
+    assert_eq!(episode.title, "Test Title");
+    assert_eq!(episode.content, "Test Content");
+    assert_eq!(episode.source, Some("test_source".to_string()));
+    assert_eq!(episode.scope, Some("test_scope".to_string()));
+    assert_eq!(episode.vault_path, Some("test_vault_path".to_string()));
+    assert_eq!(episode.embedding, Some(vec![1.0, 2.0, 3.0]));
+    assert_eq!(episode.processed_in_dream, Some(true));
+    assert_eq!(episode.source_episode, Some("episode:parent_id".to_string()));
+    assert_eq!(episode.last_retrieved_at, Some("2026-07-11T20:00:00Z".to_string()));
+    assert_eq!(episode.utility, Some(42.5));
+    assert_eq!(episode.archived, Some(false));
+    assert_eq!(episode.archived_at, Some("2026-07-11T20:00:00+00:00".to_string()));
+    assert_eq!(episode.discovery_tokens, Some(10));
+    assert_eq!(episode.facts, Some(vec!["fact1".to_string()]));
+    assert_eq!(episode.concepts, Some(vec!["concept1".to_string()]));
+    assert_eq!(episode.files_read, Some(vec!["read1.txt".to_string()]));
+    assert_eq!(episode.files_modified, Some(vec!["mod1.txt".to_string()]));
+    assert_eq!(episode.session_id, Some("session123".to_string()));
+    assert_eq!(episode.word_count, Some(500));
+    assert_eq!(episode.node_type, Some("episode".to_string()));
+    assert_eq!(episode.confidence, Some(0.95));
+}
+
+#[test]
+fn test_episode_save_builder() {
+    use mythrax_core::contracts::{EpisodeSave, Entity};
+
+    let entity = Entity {
+        name: "TestEntity".to_string(),
+        entity_type: "concept".to_string(),
+        summary: "Summary of TestEntity".to_string(),
+        labels: vec!["test".to_string()],
+        scope: Some("test_scope".to_string()),
+        vault_path: Some("vault/test.md".to_string()),
+        embedding: None,
+    };
+
+    let save = EpisodeSave::builder("Title".to_string(), "Content".to_string())
+        .scope(Some("scope1".to_string()))
+        .vault_path(Some("path1".to_string()))
+        .source_episode(Some("episode1".to_string()))
+        .session_id(Some("session1".to_string()))
+        .task_id(Some("task1".to_string()))
+        .discovery_tokens(Some(100))
+        .facts(Some(vec!["fact1".to_string()]))
+        .concepts(Some(vec!["concept1".to_string()]))
+        .files_read(Some(vec!["read1".to_string()]))
+        .files_modified(Some(vec!["mod1".to_string()]))
+        .node_type(Some("node1".to_string()))
+        .confidence(Some(0.85))
+        .created_at(Some("2026-07-11T20:00:00Z".to_string()))
+        .entities(vec![entity.clone()])
+        .build();
+
+    assert_eq!(save.title, "Title");
+    assert_eq!(save.content, "Content");
+    assert_eq!(save.scope, Some("scope1".to_string()));
+    assert_eq!(save.vault_path, Some("path1".to_string()));
+    assert_eq!(save.source_episode, Some("episode1".to_string()));
+    assert_eq!(save.session_id, Some("session1".to_string()));
+    assert_eq!(save.task_id, Some("task1".to_string()));
+    assert_eq!(save.discovery_tokens, Some(100));
+    assert_eq!(save.facts, Some(vec!["fact1".to_string()]));
+    assert_eq!(save.concepts, Some(vec!["concept1".to_string()]));
+    assert_eq!(save.files_read, Some(vec!["read1".to_string()]));
+    assert_eq!(save.files_modified, Some(vec!["mod1".to_string()]));
+    assert_eq!(save.node_type, Some("node1".to_string()));
+    assert_eq!(save.confidence, Some(0.85));
+    assert_eq!(save.created_at, Some("2026-07-11T20:00:00Z".to_string()));
+    assert_eq!(save.entities.len(), 1);
+    assert_eq!(save.entities[0].name, "TestEntity");
+}
+
+#[tokio::test]
+async fn test_spreading_activation_batch_set_equivalence() -> Result<()> {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    use mythrax_core::contracts::EpisodeSave;
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    backend.set_search_mode("keyword").await;
+    backend.save_profile_key("search.enable_calibrated_confidence", "false").await?;
+    backend.save_profile_key("search.enable_gaussian_temporal", "false").await?;
+    backend.save_profile_key("search.enable_spreading_activation", "true").await?;
+    backend.save_profile_key("search.spreading_activation_attenuation", "0.7").await?;
+
+    // Insert an Entity
+    let entity_uuid = uuid::Uuid::new_v4().to_string();
+    let entity_id = format!("entity:{}", entity_uuid);
+    backend.db.query("CREATE type::record('entity', $id) CONTENT { name: 'RustDB', entity_type: 'technology', summary: 'A database system written in Rust', labels: ['database'], scope: 'general' };")
+        .bind(("id", entity_uuid.clone()))
+        .await?.check()?;
+
+    // Insert three Episodes
+    let save1 = EpisodeSave::builder("Title1".to_string(), "Content1".to_string())
+        .scope(Some("general".to_string()))
+        .build();
+    let ep1_id = backend.save_episode(&save1).await?;
+
+    let save2 = EpisodeSave::builder("Title2".to_string(), "Content2".to_string())
+        .scope(Some("general".to_string()))
+        .build();
+    let ep2_id = backend.save_episode(&save2).await?;
+
+    // Relate Entity to Episodes
+    backend.relate_nodes(&entity_id, &ep1_id, None, None, Some(0.8)).await?;
+    backend.relate_nodes(&entity_id, &ep2_id, None, None, Some(0.6)).await?;
+
+    // Run the batch query version by searching
+    let resp = backend.search(
+        "RustDB",
+        Some("general"),
+        false,
+        10,
+        0,
+        0.0,
+        None,
+        false,
+        true,
+        true,
+        None,
+        true,
+        None,
+    ).await?;
+
+    // Find our episodes in the search results
+    let r1 = resp.results.iter().find(|r| r.id == ep1_id).expect("ep1 should be found");
+    let r2 = resp.results.iter().find(|r| r.id == ep2_id).expect("ep2 should be found");
+
+    // Manually compute/simulate:
+    // Similarity = 1.0 * confidence * attenuation
+    // ep1: 1.0 * 0.8 * 0.7 = 0.56
+    // ep2: 1.0 * 0.6 * 0.7 = 0.42
+    assert!((r1.similarity - 0.56).abs() < 1e-4);
+    assert!((r2.similarity - 0.42).abs() < 1e-4);
+
+    Ok(())
+}
+
+

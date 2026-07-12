@@ -579,24 +579,13 @@ pub async fn bulk_ingest_vault(
                     );
                     
                     if store.write_file(&parent_relative_path, &parent_content).is_ok() {
-                        let parent_ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
-                            title: parent_title.clone(),
-                            content: parent_content,
-                            entities: vec![],
-                            scope: Some(resolved_scope.clone()),
-                            vault_path: Some(parent_relative_path.clone()),
-                            source_episode: None,
-                            session_id: None,
-                            task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                        let parent_ep_save = crate::contracts::EpisodeSave::builder(
+                            parent_title.clone(),
+                            parent_content,
+                        )
+                        .scope(Some(resolved_scope.clone()))
+                        .vault_path(Some(parent_relative_path.clone()))
+                        .build();
                         if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
                             success_count += 1;
                             parent_saved_id = ep_id;
@@ -655,24 +644,13 @@ confidence: None,
                     );
 
                     if store.write_file(&relative_path, &note_content).is_ok() {
-                        let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
-                            title: part_title.clone(),
-                            content: note_content,
-                            entities: vec![],
-                            scope: Some(resolved_scope.clone()),
-                            vault_path: Some(relative_path.clone()),
-                            source_episode: None,
-                            session_id: None,
-                            task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                        let ep_save = crate::contracts::EpisodeSave::builder(
+                            part_title.clone(),
+                            note_content,
+                        )
+                        .scope(Some(resolved_scope.clone()))
+                        .vault_path(Some(relative_path.clone()))
+                        .build();
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;
                             generated_parts.push((part_title, relative_path, episode_saved_id));
@@ -776,24 +754,13 @@ confidence: None,
                             title, scope, content
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -823,24 +790,13 @@ confidence: None,
                             title, scope, content
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -875,24 +831,13 @@ confidence: None,
                             title, scope, content
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -925,24 +870,13 @@ confidence: None,
                             title, scope, content
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -975,24 +909,13 @@ confidence: None,
                             title, scope, content
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1022,24 +945,13 @@ confidence: None,
                             title, scope, content
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1074,24 +986,13 @@ confidence: None,
                             title, scope, content
                         );
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }
@@ -1120,24 +1021,13 @@ confidence: None,
                         let relative_path = format!("episodes/{}_{}.md", file_stem, &uuid[..8]);
                         
                         if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave {
-        created_at: None,
+                            let ep_save = crate::contracts::EpisodeSave::builder(
                                 title,
-                                content: note_content,
-                                entities: vec![],
-                                scope: Some(scope.to_string()),
-                                vault_path: Some(relative_path),
-                                source_episode: None,
-                                session_id: None,
-                                task_id: None,
-discovery_tokens: None,
-facts: None,
-concepts: None,
-files_read: None,
-files_modified: None,
-node_type: None,
-confidence: None,
-};
+                                note_content,
+                            )
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                             if db.save_episode(&ep_save).await.is_ok() {
                                 success_count += 1;
                             }

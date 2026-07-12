@@ -348,6 +348,7 @@ impl SurrealBackend {
                         let edge_sql = "SELECT in, out, confidence FROM relates_to WHERE in IN $entities OR out IN $entities;";
                         if let Ok(mut edge_res) = self.db.query(edge_sql).bind(("entities", entities)).await {
                             if let Ok(edges) = edge_res.take::<Vec<RelatesToEdge>>(0) {
+                                let mut target_similarities = std::collections::HashMap::new();
                                 for edge in edges {
                                     let edge_conf = edge.confidence.unwrap_or(1.0);
                                     let target_id = if edge.r#in.table.as_str() == "episode" {
@@ -359,36 +360,49 @@ impl SurrealBackend {
                                     };
 
                                     if let Some(tid) = target_id {
-                                        let ep_opt: Option<EpisodeRaw> = self.db.select(tid).await.unwrap_or(None);
-                                        if let Some(ep) = ep_opt {
-                                            let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
-                                            let ep_str = format_record_id(&ep.id);
-                                            if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
-                                                existing.similarity = existing.similarity.max(activation_similarity);
-                                                if is_hybrid {
-                                                    existing.raw_vector_sim = Some(existing.raw_vector_sim.unwrap_or(0.0).max(activation_similarity));
+                                        let activation_similarity = 1.0f32 * edge_conf * spreading_activation_attenuation;
+                                        target_similarities.entry(tid)
+                                            .and_modify(|s: &mut f32| *s = s.max(activation_similarity))
+                                            .or_insert(activation_similarity);
+                                    }
+                                }
+
+                                if !target_similarities.is_empty() {
+                                    let unique_ids: Vec<surrealdb::types::RecordId> = target_similarities.keys().cloned().collect();
+                                    let ep_sql = "SELECT * FROM $ids;";
+                                    if let Ok(mut ep_res) = self.db.query(ep_sql).bind(("ids", unique_ids)).await {
+                                        if let Ok(eps) = ep_res.take::<Vec<EpisodeRaw>>(0) {
+                                            for ep in eps {
+                                                if let Some(&activation_similarity) = target_similarities.get(&ep.id) {
+                                                    let ep_str = format_record_id(&ep.id);
+                                                    if let Some(existing) = candidates.iter_mut().find(|c| c.id == ep_str) {
+                                                        existing.similarity = existing.similarity.max(activation_similarity);
+                                                        if is_hybrid {
+                                                            existing.raw_vector_sim = Some(existing.raw_vector_sim.unwrap_or(0.0).max(activation_similarity));
+                                                        }
+                                                    } else {
+                                                        candidates.push(SearchResult {
+                                                            id: ep_str,
+                                                            title: ep.title,
+                                                            content: ep.content,
+                                                            similarity: activation_similarity,
+                                                            utility: ep.utility.unwrap_or(50.0) as f32,
+                                                            tier: "episode".to_string(),
+                                                            embedding: ep.embedding.clone(),
+                                                            vault_path: ep.vault_path.clone(),
+                                                            source_episode: if is_hybrid { Some("spreading_activation".to_string()) } else { None },
+                                                            discovery_tokens: ep.discovery_tokens,
+                                                            related_nodes: None,
+                                                            raw_vector_sim: if is_hybrid { Some(activation_similarity) } else { Some(1.0) },
+                                                            original_gate: Some(1.0),
+                                                            factor_multiplier: Some(1.0),
+                                                            created_at: None,
+                                                            session_id: ep.session_id.clone(),
+                                                            word_count: ep.word_count,
+                                                            ..Default::default()
+                                                        });
+                                                    }
                                                 }
-                                            } else {
-                                                candidates.push(SearchResult {
-                                                    id: ep_str,
-                                                    title: ep.title,
-                                                    content: ep.content,
-                                                    similarity: activation_similarity,
-                                                    utility: ep.utility.unwrap_or(50.0) as f32,
-                                                    tier: "episode".to_string(),
-                                                    embedding: ep.embedding.clone(),
-                                                    vault_path: ep.vault_path.clone(),
-                                                    source_episode: if is_hybrid { Some("spreading_activation".to_string()) } else { None },
-                                                    discovery_tokens: ep.discovery_tokens,
-                                                    related_nodes: None,
-                                                    raw_vector_sim: if is_hybrid { Some(activation_similarity) } else { Some(1.0) },
-                                                    original_gate: Some(1.0),
-                                                    factor_multiplier: Some(1.0),
-                                                    created_at: None,
-                                                    session_id: ep.session_id.clone(),
-                                                    word_count: ep.word_count,
-                                                    ..Default::default()
-                                                });
                                             }
                                         }
                                     }
@@ -1609,31 +1623,61 @@ struct SearchWisdomRaw {
     created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(serde::Deserialize, Debug, SurrealValue)]
-struct EpisodeRaw {
-    id: surrealdb::types::RecordId,
-    title: String,
-    content: String,
-    source: Option<String>,
-    scope: Option<String>,
-    vault_path: Option<String>,
-    embedding: Option<Vec<f32>>,
-    processed_in_dream: Option<bool>,
-    source_episode: Option<surrealdb::types::RecordId>,
-    last_retrieved_at: Option<String>,
-    utility: Option<f32>,
-    archived: Option<bool>,
-    archived_at: Option<chrono::DateTime<chrono::Utc>>,
-    discovery_tokens: Option<u32>,
-    facts: Option<Vec<String>>,
-    concepts: Option<Vec<String>>,
-    files_read: Option<Vec<String>>,
-    files_modified: Option<Vec<String>>,
-    session_id: Option<String>,
-    word_count: Option<u32>,
-    node_type: Option<String>,
-    confidence: Option<f32>,
+#[derive(serde::Deserialize, serde::Serialize, Debug, SurrealValue, Clone)]
+pub struct EpisodeRaw {
+    pub id: surrealdb::types::RecordId,
+    pub title: String,
+    pub content: String,
+    pub source: Option<String>,
+    pub scope: Option<String>,
+    pub vault_path: Option<String>,
+    pub embedding: Option<Vec<f32>>,
+    pub processed_in_dream: Option<bool>,
+    pub source_episode: Option<surrealdb::types::RecordId>,
+    pub last_retrieved_at: Option<String>,
+    pub utility: Option<f32>,
+    pub archived: Option<bool>,
+    pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub discovery_tokens: Option<u32>,
+    pub facts: Option<Vec<String>>,
+    pub concepts: Option<Vec<String>>,
+    pub files_read: Option<Vec<String>>,
+    pub files_modified: Option<Vec<String>>,
+    pub session_id: Option<String>,
+    pub word_count: Option<u32>,
+    pub node_type: Option<String>,
+    pub confidence: Option<f32>,
 }
+
+impl From<EpisodeRaw> for Episode {
+    fn from(raw: EpisodeRaw) -> Self {
+        Episode {
+            id: Some(format_record_id(&raw.id)),
+            title: raw.title,
+            content: raw.content,
+            source: raw.source,
+            scope: raw.scope,
+            vault_path: raw.vault_path,
+            embedding: raw.embedding,
+            processed_in_dream: raw.processed_in_dream,
+            source_episode: raw.source_episode.map(|t| format_record_id(&t)),
+            last_retrieved_at: raw.last_retrieved_at,
+            utility: raw.utility,
+            archived: raw.archived,
+            archived_at: raw.archived_at.map(|t| t.to_rfc3339()),
+            discovery_tokens: raw.discovery_tokens,
+            facts: raw.facts,
+            concepts: raw.concepts,
+            files_read: raw.files_read,
+            files_modified: raw.files_modified,
+            session_id: raw.session_id,
+            word_count: raw.word_count,
+            node_type: raw.node_type,
+            confidence: raw.confidence,
+        }
+    }
+}
+
 
 /// Full hydrated Handoff contract — returned by queries; construction deferred pending
 /// the agent-tracking dashboard feature. Suppressed until then.
@@ -4723,30 +4767,7 @@ impl StorageBackend for SurrealBackend {
         let sql = "SELECT * FROM episode WHERE processed_in_dream = false;";
         let mut response = self.db.query(sql).await?.check().context("Query unprocessed episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
-        let episodes = raw_episodes.into_iter().map(|raw| Episode {
-            id: Some(format_record_id(&raw.id)),
-            title: raw.title,
-            content: raw.content,
-            source: raw.source,
-            scope: raw.scope,
-            vault_path: raw.vault_path,
-            embedding: raw.embedding,
-            processed_in_dream: raw.processed_in_dream,
-            source_episode: raw.source_episode.map(|t| format_record_id(&t)),
-            last_retrieved_at: raw.last_retrieved_at,
-            utility: raw.utility,
-            archived: raw.archived,
-            archived_at: raw.archived_at.map(|t| t.to_rfc3339()),
-            discovery_tokens: raw.discovery_tokens,
-            facts: raw.facts,
-            concepts: raw.concepts,
-            files_read: raw.files_read,
-            files_modified: raw.files_modified,
-            session_id: raw.session_id,
-            word_count: raw.word_count,
-            node_type: raw.node_type,
-            confidence: raw.confidence,
-        }).collect();
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
     }
 
@@ -4762,30 +4783,7 @@ impl StorageBackend for SurrealBackend {
         let sql = "SELECT * FROM episode;";
         let mut response = self.db.query(sql).await?.check().context("Query all episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
-        let episodes = raw_episodes.into_iter().map(|raw| Episode {
-            id: Some(format_record_id(&raw.id)),
-            title: raw.title,
-            content: raw.content,
-            source: raw.source,
-            scope: raw.scope,
-            vault_path: raw.vault_path,
-            embedding: raw.embedding,
-            processed_in_dream: raw.processed_in_dream,
-            source_episode: raw.source_episode.map(|t| format_record_id(&t)),
-            last_retrieved_at: raw.last_retrieved_at,
-            utility: raw.utility,
-            archived: raw.archived,
-            archived_at: raw.archived_at.map(|t| t.to_rfc3339()),
-            discovery_tokens: raw.discovery_tokens,
-            facts: raw.facts,
-            concepts: raw.concepts,
-            files_read: raw.files_read,
-            files_modified: raw.files_modified,
-            session_id: raw.session_id,
-            word_count: raw.word_count,
-            node_type: raw.node_type,
-            confidence: raw.confidence,
-        }).collect();
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
     }
 
@@ -4795,30 +4793,7 @@ impl StorageBackend for SurrealBackend {
             .bind(("node_type", node_type))
             .await?.check().context("Query episodes by node type failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
-        let episodes = raw_episodes.into_iter().map(|raw| Episode {
-            id: Some(format_record_id(&raw.id)),
-            title: raw.title,
-            content: raw.content,
-            source: raw.source,
-            scope: raw.scope,
-            vault_path: raw.vault_path,
-            embedding: raw.embedding,
-            processed_in_dream: raw.processed_in_dream,
-            source_episode: raw.source_episode.map(|t| format_record_id(&t)),
-            last_retrieved_at: raw.last_retrieved_at,
-            utility: raw.utility,
-            archived: raw.archived,
-            discovery_tokens: raw.discovery_tokens,
-            facts: raw.facts,
-            concepts: raw.concepts,
-            files_read: raw.files_read,
-            files_modified: raw.files_modified,
-            session_id: raw.session_id,
-            word_count: raw.word_count,
-            archived_at: raw.archived_at.map(|dt| dt.to_rfc3339()),
-            node_type: raw.node_type,
-            confidence: raw.confidence,
-        }).collect();
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
     }
 
@@ -5517,31 +5492,7 @@ impl StorageBackend for SurrealBackend {
                 "episode" => {
                     let ep_opt: Option<EpisodeRaw> = self.db.select(thing_id.clone()).await?;
                     if let Some(raw) = ep_opt {
-                        let ep = Episode {
-                            id: Some(format_record_id(&raw.id)),
-                            title: raw.title,
-                            content: raw.content,
-                            source: raw.source,
-                            scope: raw.scope,
-                            vault_path: raw.vault_path,
-                            embedding: raw.embedding,
-                            processed_in_dream: raw.processed_in_dream,
-                            source_episode: raw.source_episode.map(|t| format_record_id(&t)),
-                            last_retrieved_at: raw.last_retrieved_at,
-                            utility: raw.utility,
-                            archived: raw.archived,
-                            archived_at: raw.archived_at.map(|t| t.to_rfc3339()),
-                            discovery_tokens: raw.discovery_tokens,
-                            facts: raw.facts,
-                            concepts: raw.concepts,
-                            files_read: raw.files_read,
-                            files_modified: raw.files_modified,
-                            session_id: raw.session_id,
-                            word_count: raw.word_count,
-                            node_type: raw.node_type,
-                            confidence: raw.confidence,
-                        };
-                        episodes.push(ep);
+                        episodes.push(Episode::from(raw));
                     }
                 }
                 "wisdom" => {

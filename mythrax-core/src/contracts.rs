@@ -69,6 +69,146 @@ pub struct EpisodeSave {
     pub created_at: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EpisodeSaveBuilder {
+    pub title: String,
+    pub content: String,
+    pub entities: Vec<Entity>,
+    pub scope: Option<String>,
+    pub vault_path: Option<String>,
+    pub source_episode: Option<String>,
+    pub session_id: Option<String>,
+    pub task_id: Option<String>,
+    pub discovery_tokens: Option<u32>,
+    pub facts: Option<Vec<String>>,
+    pub concepts: Option<Vec<String>>,
+    pub files_read: Option<Vec<String>>,
+    pub files_modified: Option<Vec<String>>,
+    pub node_type: Option<String>,
+    pub confidence: Option<f32>,
+    pub created_at: Option<String>,
+}
+
+impl EpisodeSaveBuilder {
+    pub fn new(title: String, content: String) -> Self {
+        Self {
+            title,
+            content,
+            entities: Vec::new(),
+            scope: None,
+            vault_path: None,
+            source_episode: None,
+            session_id: None,
+            task_id: None,
+            discovery_tokens: None,
+            facts: None,
+            concepts: None,
+            files_read: None,
+            files_modified: None,
+            node_type: None,
+            confidence: None,
+            created_at: None,
+        }
+    }
+
+    pub fn entities(mut self, entities: Vec<Entity>) -> Self {
+        self.entities = entities;
+        self
+    }
+
+    pub fn scope(mut self, scope: Option<String>) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    pub fn vault_path(mut self, vault_path: Option<String>) -> Self {
+        self.vault_path = vault_path;
+        self
+    }
+
+    pub fn source_episode(mut self, source_episode: Option<String>) -> Self {
+        self.source_episode = source_episode;
+        self
+    }
+
+    pub fn session_id(mut self, session_id: Option<String>) -> Self {
+        self.session_id = session_id;
+        self
+    }
+
+    pub fn task_id(mut self, task_id: Option<String>) -> Self {
+        self.task_id = task_id;
+        self
+    }
+
+    pub fn discovery_tokens(mut self, discovery_tokens: Option<u32>) -> Self {
+        self.discovery_tokens = discovery_tokens;
+        self
+    }
+
+    pub fn facts(mut self, facts: Option<Vec<String>>) -> Self {
+        self.facts = facts;
+        self
+    }
+
+    pub fn concepts(mut self, concepts: Option<Vec<String>>) -> Self {
+        self.concepts = concepts;
+        self
+    }
+
+    pub fn files_read(mut self, files_read: Option<Vec<String>>) -> Self {
+        self.files_read = files_read;
+        self
+    }
+
+    pub fn files_modified(mut self, files_modified: Option<Vec<String>>) -> Self {
+        self.files_modified = files_modified;
+        self
+    }
+
+    pub fn node_type(mut self, node_type: Option<String>) -> Self {
+        self.node_type = node_type;
+        self
+    }
+
+    pub fn confidence(mut self, confidence: Option<f32>) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    pub fn created_at(mut self, created_at: Option<String>) -> Self {
+        self.created_at = created_at;
+        self
+    }
+
+    pub fn build(self) -> EpisodeSave {
+        EpisodeSave {
+            title: self.title,
+            content: self.content,
+            entities: self.entities,
+            scope: self.scope,
+            vault_path: self.vault_path,
+            source_episode: self.source_episode,
+            session_id: self.session_id,
+            task_id: self.task_id,
+            discovery_tokens: self.discovery_tokens,
+            facts: self.facts,
+            concepts: self.concepts,
+            files_read: self.files_read,
+            files_modified: self.files_modified,
+            node_type: self.node_type,
+            confidence: self.confidence,
+            created_at: self.created_at,
+        }
+    }
+}
+
+impl EpisodeSave {
+    pub fn builder(title: String, content: String) -> EpisodeSaveBuilder {
+        EpisodeSaveBuilder::new(title, content)
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResult {

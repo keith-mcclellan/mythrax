@@ -1097,24 +1097,14 @@ async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
                 }
             }
 
-            let episode = EpisodeSave {
-        created_at: None,
-                title,
-                content: content.clone(),
-                entities,
-                scope: scope.clone(),
-                vault_path,
-                source_episode: None,
-                session_id,
-                task_id,
-                discovery_tokens: None,
-                facts: None,
-                concepts: None,
-                files_read: None,
-                files_modified: None,
-                node_type,
-                confidence: None,
-            };
+            let episode = EpisodeSave::builder(title, content.clone())
+                .entities(entities)
+                .scope(scope.clone())
+                .vault_path(vault_path)
+                .session_id(session_id)
+                .task_id(task_id)
+                .node_type(node_type)
+                .build();
 
             let id = crate::vault::watcher::save_episode_bidirectional(&episode, state.backend.as_ref(), &state.store, &state.ignore_list).await?;
 
@@ -1490,24 +1480,14 @@ async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
 
             let id = state.backend.save_handoff(&handoff).await?;
 
-            let event_ep = EpisodeSave {
-        created_at: None,
-                title: format!("Handoff Event: Parent to Subagent"),
-                content: format!("Handoff registered. Parent: {}, Subagent: {}, Summary: {}, File Path: {}", parent_conversation_id, subagent_conversation_id, handoff.summary, handoff.handoff_file_path),
-                entities: vec![],
-                scope: handoff.scope.clone(),
-                vault_path: None,
-                source_episode: None,
-                session_id: Some(parent_conversation_id.clone()),
-                task_id: None,
-                discovery_tokens: None,
-                facts: None,
-                concepts: None,
-                files_read: None,
-                files_modified: None,
-                node_type: Some("handoff_event".to_string()),
-                confidence: None,
-            };
+            let event_ep = EpisodeSave::builder(
+                "Handoff Event: Parent to Subagent".to_string(),
+                format!("Handoff registered. Parent: {}, Subagent: {}, Summary: {}, File Path: {}", parent_conversation_id, subagent_conversation_id, handoff.summary, handoff.handoff_file_path),
+            )
+            .scope(handoff.scope.clone())
+            .session_id(Some(parent_conversation_id.clone()))
+            .node_type(Some("handoff_event".to_string()))
+            .build();
             let _ = state.backend.save_episode(&event_ep).await;
 
             // T6: Citations Footnotes
@@ -1589,24 +1569,12 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
                     if !path.exists() {
                         missing_count += 1;
                         if fix {
-                            let save = EpisodeSave {
-        created_at: None,
-                                title: ep.title.clone(),
-                                content: ep.content.clone(),
-                                entities: vec![],
-                                scope: ep.scope.clone(),
-                                vault_path: Some(vp.clone()),
-                                source_episode: ep.source_episode.clone(),
-                                session_id: None,
-                                task_id: None,
-                                discovery_tokens: None,
-                                facts: None,
-                                concepts: None,
-                                files_read: None,
-                                files_modified: None,
-                                node_type: ep.node_type.clone(),
-                                confidence: None,
-                            };
+                            let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                                .scope(ep.scope.clone())
+                                .vault_path(Some(vp.clone()))
+                                .source_episode(ep.source_episode.clone())
+                                .node_type(ep.node_type.clone())
+                                .build();
                             let markdown = crate::vault::watcher::format_episode_markdown(&save);
                             state.store.write_file(vp, &markdown)?;
                         }
@@ -1639,24 +1607,12 @@ async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value> {
             let mut count = 0;
             for ep in all_eps {
                 if ep.embedding.is_none() {
-                    let save = EpisodeSave {
-        created_at: None,
-                        title: ep.title.clone(),
-                        content: ep.content.clone(),
-                        entities: vec![],
-                        scope: ep.scope.clone(),
-                        vault_path: ep.vault_path.clone(),
-                        source_episode: ep.source_episode.clone(),
-                        session_id: None,
-                        task_id: None,
-                        discovery_tokens: None,
-                        facts: None,
-                        concepts: None,
-                        files_read: None,
-                        files_modified: None,
-                        node_type: ep.node_type.clone(),
-                        confidence: None,
-                    };
+                    let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                        .scope(ep.scope.clone())
+                        .vault_path(ep.vault_path.clone())
+                        .source_episode(ep.source_episode.clone())
+                        .node_type(ep.node_type.clone())
+                        .build();
                     state.backend.save_episode(&save).await?;
                     count += 1;
                 }
@@ -1871,24 +1827,12 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         if let Some(ref vp) = ep.vault_path {
             let path = state.store.vault_root.join(vp);
             if !path.exists() {
-                let save = EpisodeSave {
-        created_at: None,
-                    title: ep.title.clone(),
-                    content: ep.content.clone(),
-                    entities: vec![],
-                    scope: ep.scope.clone(),
-                    vault_path: Some(vp.clone()),
-                    source_episode: ep.source_episode.clone(),
-                    session_id: None,
-                    task_id: None,
-                    discovery_tokens: None,
-                    facts: None,
-                    concepts: None,
-                    files_read: None,
-                    files_modified: None,
-                    node_type: ep.node_type.clone(),
-                    confidence: None,
-                };
+                let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                    .scope(ep.scope.clone())
+                    .vault_path(Some(vp.clone()))
+                    .source_episode(ep.source_episode.clone())
+                    .node_type(ep.node_type.clone())
+                    .build();
                 let markdown = crate::vault::watcher::format_episode_markdown(&save);
                 state.store.write_file(vp, &markdown)?;
             }
@@ -2548,24 +2492,15 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
                 path.to_string()
             };
 
-            let artifact_ep = EpisodeSave {
-        created_at: None,
-                title: format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
-                content: format!("File updated successfully: {}", rel_path),
-                entities: vec![],
-                scope: Some("general".to_string()),
-                vault_path: Some(rel_path),
-                source_episode: None,
-                session_id: None,
-                task_id: None,
-                discovery_tokens: None,
-                facts: None,
-                concepts: None,
-                files_read: None,
-                files_modified: Some(vec![path.to_string()]),
-                node_type: Some("artifact_state".to_string()),
-                confidence: None,
-            };
+            let artifact_ep = EpisodeSave::builder(
+                format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
+                format!("File updated successfully: {}", rel_path),
+            )
+            .scope(Some("general".to_string()))
+            .vault_path(Some(rel_path))
+            .files_modified(Some(vec![path.to_string()]))
+            .node_type(Some("artifact_state".to_string()))
+            .build();
             let _ = state.backend.save_episode(&artifact_ep).await;
 
             Ok(json!({
@@ -2654,24 +2589,15 @@ async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
                 path.to_string()
             };
 
-            let artifact_ep = EpisodeSave {
-        created_at: None,
-                title: format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
-                content: format!("File updated successfully: {}", rel_path),
-                entities: vec![],
-                scope: Some("general".to_string()),
-                vault_path: Some(rel_path),
-                source_episode: None,
-                session_id: None,
-                task_id: None,
-                discovery_tokens: None,
-                facts: None,
-                concepts: None,
-                files_read: None,
-                files_modified: Some(vec![path.to_string()]),
-                node_type: Some("artifact_state".to_string()),
-                confidence: None,
-            };
+            let artifact_ep = EpisodeSave::builder(
+                format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
+                format!("File updated successfully: {}", rel_path),
+            )
+            .scope(Some("general".to_string()))
+            .vault_path(Some(rel_path))
+            .files_modified(Some(vec![path.to_string()]))
+            .node_type(Some("artifact_state".to_string()))
+            .build();
             let _ = state.backend.save_episode(&artifact_ep).await;
 
             Ok(json!({
