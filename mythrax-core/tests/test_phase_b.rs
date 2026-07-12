@@ -307,7 +307,7 @@ async fn test_t14_tier_boost_after_factor_fix() -> Result<()> {
         action_to_avoid: "database locking conflicts".to_string(),
         causal_explanation: "concurrent access".to_string(),
         prescribed_remedy: "Use client mode".to_string(),
-        tier: "skills".to_string(),
+        tier: mythrax_core::contracts::Tier::Wisdom,
         scope: "general".to_string(),
         generator_name: "manual".to_string(),
         ..Default::default()

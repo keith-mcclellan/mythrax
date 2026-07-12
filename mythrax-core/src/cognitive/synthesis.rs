@@ -784,12 +784,12 @@ impl DreamCoordinator {
 
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
                             let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
-                            let final_tier = "dynamic".to_string();
+                            let final_tier_str = "dynamic".to_string();
                             let final_scope = scope.clone();
 
                             let rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier, final_scope,
+                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier_str, final_scope,
                                 cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
                                 r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
                                 source_ep_section
@@ -806,7 +806,7 @@ impl DreamCoordinator {
                                 action_to_avoid: r.action_to_avoid,
                                 causal_explanation: r.causal_explanation,
                                 prescribed_remedy: r.prescribed_remedy,
-                                tier: final_tier,
+                                tier: crate::contracts::Tier::Project,
                                 scope: final_scope,
                                 vault_path: Some(rule_path),
                                 embedding: None,
@@ -1369,7 +1369,7 @@ impl DreamCoordinator {
                                 action_to_avoid: res.action_to_avoid,
                                 causal_explanation: res.causal_explanation,
                                 prescribed_remedy: res.prescribed_remedy,
-                                tier: tier.to_string(),
+                                tier: tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom),
                                 scope: "general".to_string(),
                                 vault_path: Some(rule_path),
                                 embedding: None,
@@ -1513,7 +1513,7 @@ pub async fn save_wisdom_rule_with_deduplication(
     }
 
     if let Some((matched, _sim)) = best_match {
-        if matched.tier == "skills" {
+        if matched.tier == crate::contracts::Tier::Wisdom {
             if let Some(ref vp) = rule.vault_path {
                 let _ = safe_delete_file(&store.vault_root, vp);
             }
@@ -1523,7 +1523,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                 }
                 return Ok(skills_id.clone());
             }
-        } else if matched.tier == "dynamic" || matched.tier == "forge" {
+        } else if matched.tier == crate::contracts::Tier::Project {
             let system_prompt = "You are an expert software engineer and systems architect. Merge and generalize two similar wisdom rules into a single, high-quality, comprehensive wisdom rule.";
             let prompt = format!(
                 "Rule 1:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
@@ -1591,7 +1591,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             action_to_avoid: fields.action_to_avoid,
                             causal_explanation: fields.causal_explanation,
                             prescribed_remedy: fields.prescribed_remedy,
-                            tier: "dynamic".to_string(),
+                            tier: crate::contracts::Tier::Project,
                             scope: rule.scope.clone(),
                             vault_path: Some(final_path),
                             embedding: None,

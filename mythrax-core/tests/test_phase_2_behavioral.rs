@@ -186,7 +186,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
 
     let all_rules = backend.get_all_wisdom_rules().await?;
     assert!(!all_rules.is_empty());
-    let promoted_rule = all_rules.iter().find(|r| r.tier == "permanent").unwrap();
+    let promoted_rule = all_rules.iter().find(|r| r.tier == mythrax_core::contracts::Tier::Wisdom).unwrap();
     assert_eq!(promoted_rule.scope, "general");
 
     Ok(())

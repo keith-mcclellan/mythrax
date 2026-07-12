@@ -616,3 +616,91 @@ fn test_strip_code_fences_all_variants() {
     let expected = "Outer\n```rust\nfn inner() {}\n```\nMore Outer";
     assert_eq!(strip_code_fences(nested), expected);
 }
+
+#[test]
+fn test_normalized_embedding_invariant() {
+    use mythrax_core::embeddings::NormalizedEmbedding;
+
+    // Vector is empty
+    let empty_vec: Vec<f32> = vec![];
+    assert!(NormalizedEmbedding::try_new(empty_vec).is_err());
+
+    // Valid normalized vector (magnitude exactly 1.0)
+    let valid_vec = vec![0.6, 0.8]; // 0.6^2 + 0.8^2 = 0.36 + 0.64 = 1.0
+    let norm1 = NormalizedEmbedding::try_new(valid_vec.clone());
+    assert!(norm1.is_ok());
+    let norm1 = norm1.unwrap();
+    assert_eq!(norm1.as_slice(), &valid_vec);
+    assert_eq!(norm1.clone().into_inner(), valid_vec);
+
+    // Magnitude within 1% of 1.0
+    let valid_vec_high = vec![0.6 * 1.009, 0.8 * 1.009];
+    assert!(NormalizedEmbedding::try_new(valid_vec_high).is_ok());
+    
+    let valid_vec_low = vec![0.6 * 0.991, 0.8 * 0.991];
+    assert!(NormalizedEmbedding::try_new(valid_vec_low).is_ok());
+
+    // Non-normalized vector (too small, magnitude = 0.5)
+    let small_vec = vec![0.3, 0.4];
+    assert!(NormalizedEmbedding::try_new(small_vec).is_err());
+
+    // Non-normalized vector (too large, magnitude = 2.0)
+    let large_vec = vec![1.2, 1.6];
+    assert!(NormalizedEmbedding::try_new(large_vec).is_err());
+
+    // Dot product calculation
+    let norm2 = NormalizedEmbedding::try_new(vec![0.6, 0.8]).unwrap();
+    let dot = norm1.dot_product(&norm2);
+    assert!((dot - 1.0).abs() < 1e-5);
+
+    // dot_product([0.6, 0.8], [-0.8, 0.6]) = -0.48 + 0.48 = 0.0 (orthogonal)
+    let norm_ortho = NormalizedEmbedding::try_new(vec![-0.8, 0.6]).unwrap();
+    let dot_ortho = norm1.dot_product(&norm_ortho);
+    assert!(dot_ortho.abs() < 1e-5);
+}
+
+#[test]
+fn test_tier_enum_roundtrip() {
+    use mythrax_core::contracts::Tier;
+
+    // Check FromStr mapping (all variants and aliases)
+    assert_eq!("permanent".parse::<Tier>().unwrap(), Tier::Wisdom);
+    assert_eq!("skills".parse::<Tier>().unwrap(), Tier::Wisdom);
+    assert_eq!("wisdom".parse::<Tier>().unwrap(), Tier::Wisdom);
+
+    assert_eq!("dynamic".parse::<Tier>().unwrap(), Tier::Project);
+    assert_eq!("forge".parse::<Tier>().unwrap(), Tier::Project);
+    assert_eq!("project".parse::<Tier>().unwrap(), Tier::Project);
+
+    assert_eq!("user".parse::<Tier>().unwrap(), Tier::User);
+
+    assert_eq!("session".parse::<Tier>().unwrap(), Tier::Session);
+
+    assert_eq!("working".parse::<Tier>().unwrap(), Tier::Working);
+    assert_eq!("stm".parse::<Tier>().unwrap(), Tier::Working);
+
+    // Invalid mapping
+    assert!("invalid_tier".parse::<Tier>().is_err());
+
+    // Check Display mapping
+    assert_eq!(Tier::Wisdom.to_string(), "wisdom");
+    assert_eq!(Tier::Project.to_string(), "project");
+    assert_eq!(Tier::User.to_string(), "user");
+    assert_eq!(Tier::Session.to_string(), "session");
+    assert_eq!(Tier::Working.to_string(), "working");
+
+    // Check Serde serialization/deserialization roundtrip
+    for variant in [Tier::Wisdom, Tier::Project, Tier::User, Tier::Session, Tier::Working] {
+        let serialized = serde_json::to_string(&variant).unwrap();
+        assert_eq!(serialized, format!("\"{}\"", variant));
+        let deserialized: Tier = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, variant);
+    }
+
+    // Verify raw db strings deserializing correctly to the corresponding Tier enum
+    assert_eq!(serde_json::from_str::<Tier>("\"permanent\"").unwrap(), Tier::Wisdom);
+    assert_eq!(serde_json::from_str::<Tier>("\"dynamic\"").unwrap(), Tier::Project);
+    assert_eq!(serde_json::from_str::<Tier>("\"stm\"").unwrap(), Tier::Working);
+}
+
+

@@ -76,7 +76,7 @@ Rule body"#;
         action_to_avoid: "Avoiding X".to_string(),
         causal_explanation: "Causes Y".to_string(),
         prescribed_remedy: "Use Z".to_string(),
-        tier: "dynamic".to_string(),
+        tier: mythrax_core::contracts::Tier::Project,
         scope: "project-x".to_string(),
         vault_path: Some(rule_vault_path.to_string()),
         embedding: None,
@@ -178,7 +178,7 @@ Body"#;
     assert!(merged_content.contains("Remedy A"));
     assert!(merged_content.contains("Remedy B"));
     assert!(merged_content.contains("> [!WARNING]"));
-    assert!(merged_content.contains("tier: skills")); // Max tier was skills
+    assert!(merged_content.contains("tier: wisdom")); // Max tier was Tier::Wisdom (parsed from skills)
     assert!(merged_content.contains("utility: 60.0")); // Max utility was 60.0
 
     Ok(())
@@ -479,7 +479,7 @@ Old rule body"#;
         action_to_avoid: "Avoiding X".to_string(),
         causal_explanation: "Causes Y".to_string(),
         prescribed_remedy: "Use Z".to_string(),
-        tier: "dynamic".to_string(),
+        tier: mythrax_core::contracts::Tier::Project,
         scope: "general".to_string(),
         vault_path: Some(old_rule_vault_path.to_string()),
         embedding: None,
@@ -508,7 +508,7 @@ Old rule body"#;
         action_to_avoid: "Avoiding X but slightly different".to_string(),
         causal_explanation: "Causes Y".to_string(),
         prescribed_remedy: "Use Z and also W".to_string(),
-        tier: "dynamic".to_string(),
+        tier: mythrax_core::contracts::Tier::Project,
         scope: "general".to_string(),
         vault_path: Some(new_rule_vault_path.to_string()),
         embedding: None,

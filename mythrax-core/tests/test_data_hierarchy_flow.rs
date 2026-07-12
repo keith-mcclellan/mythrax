@@ -148,7 +148,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         action_to_avoid: "injecting raw strings into WHERE clauses".to_string(),
         causal_explanation: "triggers SQL/SurrealQL injection or schema corruption".to_string(),
         prescribed_remedy: "always use query parameters via bind bindings".to_string(),
-        tier: "permanent".to_string(),
+        tier: mythrax_core::contracts::Tier::Wisdom,
         scope: "general".to_string(),
         vault_path: Some("wisdom/permanent/rule_query_params.md".to_string()),
         embedding: None,

@@ -107,7 +107,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     let match_stm = resp_stm.results.iter().find(|r| r.id == "stm:session_bar:context_guard");
     assert!(match_stm.is_some(), "STM entry must be injected into search results");
     let stm_res = match_stm.unwrap();
-    assert_eq!(stm_res.tier, "working");
+    assert_eq!(stm_res.tier, mythrax_core::contracts::Tier::Working);
     assert_eq!(stm_res.utility, 100.0);
     assert_eq!(stm_res.title, "context_guard");
     assert_eq!(stm_res.content, "Avoid concurrent RocksDB process lock by starting in client mode");

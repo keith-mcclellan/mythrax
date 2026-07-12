@@ -246,7 +246,7 @@ impl Forge {
                     action_to_avoid: rule.action_to_avoid.clone(),
                     causal_explanation: rule.causal_explanation.clone(),
                     prescribed_remedy: rule.prescribed_remedy.clone(),
-                    tier: "forge".to_string(),
+                    tier: crate::contracts::Tier::Project,
                     scope: normalized_scope.clone(),
                     vault_path: Some(rule_path),
                     embedding: Some(rule_embedding),

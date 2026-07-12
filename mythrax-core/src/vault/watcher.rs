@@ -545,6 +545,7 @@ pub async fn sync_file_to_db(
                     }
                 })
             };
+            let final_tier_enum = final_tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom);
 
             let final_scope = if is_global {
                 "general".to_string()
@@ -558,7 +559,7 @@ pub async fn sync_file_to_db(
                 action_to_avoid: frontmatter.action_to_avoid,
                 causal_explanation: frontmatter.causal_explanation,
                 prescribed_remedy: frontmatter.prescribed_remedy,
-                tier: final_tier,
+                tier: final_tier_enum,
                 scope: final_scope,
                 vault_path: Some(rel_path),
                 embedding: None,
@@ -907,9 +908,9 @@ mod tests {
         sync_file_to_db(&temp.path().join(relative_path), &backend, &store).await.unwrap();
         
         // Retrieve wisdom rule using get_wisdom with tier "skills"
-        let results = backend.get_wisdom("test-pattern", Some("skills"), 10, 0, 0.0).await.unwrap();
+        let results = backend.get_wisdom("test-pattern", Some(crate::contracts::Tier::Wisdom), 10, 0, 0.0).await.unwrap();
         assert_eq!(results.results.len(), 1);
-        assert_eq!(results.results[0].tier, "skills");
+        assert_eq!(results.results[0].tier, crate::contracts::Tier::Wisdom);
         assert_eq!(results.results[0].target_pattern, "test-pattern");
     }
 }

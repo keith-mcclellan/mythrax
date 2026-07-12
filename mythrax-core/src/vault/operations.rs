@@ -52,7 +52,7 @@ pub async fn handle_merge_vault() -> Result<()> {
                             action_to_avoid: ata.to_string(),
                             causal_explanation: ce.to_string(),
                             prescribed_remedy: pr.to_string(),
-                            tier: frontmatter.get("tier").and_then(|v| v.as_str()).unwrap_or("dynamic").to_string(),
+                            tier: frontmatter.get("tier").and_then(|v| v.as_str()).unwrap_or("dynamic").parse::<contracts::Tier>().unwrap_or(contracts::Tier::Project),
                             scope: frontmatter.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string(),
                             vault_path: Some(file_path.to_string_lossy().to_string()),
                             embedding: None,
@@ -84,7 +84,7 @@ pub async fn handle_merge_vault() -> Result<()> {
             let mut explanations = Vec::new();
             let mut remedies = Vec::new();
             let mut max_utility = 50.0f32;
-            let mut max_tier = "dynamic".to_string();
+            let mut max_tier = contracts::Tier::Project;
             let mut merged_scope = "general".to_string();
 
             for (_, r) in &rules {
@@ -96,8 +96,8 @@ pub async fn handle_merge_vault() -> Result<()> {
                         max_utility = u;
                     }
                 }
-                if r.tier == "skills" || r.tier == "wisdom" {
-                    max_tier = r.tier.clone();
+                if r.tier == contracts::Tier::Wisdom {
+                    max_tier = r.tier;
                 }
                 if r.scope != "general" {
                     merged_scope = r.scope.clone();

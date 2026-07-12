@@ -314,7 +314,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
 
         // Query Wisdom Rules semantically for all tiers
         let mut rules = Vec::new();
-        for tier in &["pinned", "permanent", "dynamic"] {
+        for tier in &[crate::contracts::Tier::Wisdom, crate::contracts::Tier::Project] {
             if let Ok(res) = db.get_wisdom(parent_hypothesis, Some(*tier), 5, 0, 0.55).await {
                 rules.extend(res.results);
             }

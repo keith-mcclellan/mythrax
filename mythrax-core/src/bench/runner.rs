@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use mythrax_core::bench::metrics::{evaluate_retrieval, ndcg, session_id_from_corpus_id, parse_haystack_date};
+use mythrax_core::bench::metrics::{evaluate_retrieval, session_id_from_corpus_id, parse_haystack_date};
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use surrealdb_types::SurrealValue;
@@ -382,7 +382,7 @@ async fn main() -> Result<()> {
             // Decoupled coordinate sweep
             let tune_questions = &target_questions;
             
-            let format_metrics = |r_any: f32, r_all: f32, ndcg: f32, r_any_sess: f32, r_all_sess: f32, records: &[QuestionResultRecord]| -> String {
+            let format_metrics = |r_any: f32, _r_all: f32, ndcg: f32, r_any_sess: f32, r_all_sess: f32, records: &[QuestionResultRecord]| -> String {
                 let mut type_counts = std::collections::HashMap::new();
                 let mut type_recall_at10 = std::collections::HashMap::new();
                 for record in records {
@@ -867,7 +867,7 @@ async fn run_evaluation(
     target_questions: &[QuestionEntry],
     mode: &str,
     param_overrides: Option<std::collections::HashMap<String, String>>,
-    target_cache_path: &std::path::Path,
+    _target_cache_path: &std::path::Path,
     published: bool,
     note: &str,
 ) -> Result<(f32, f32, f32, f32, f32, f64, f64, Vec<QuestionResultRecord>)> {

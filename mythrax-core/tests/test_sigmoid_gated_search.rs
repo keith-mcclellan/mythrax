@@ -90,7 +90,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         action_to_avoid: "Writing concurrently".to_string(),
         causal_explanation: "RocksDB process lock".to_string(),
         prescribed_remedy: "Use client mode".to_string(),
-        tier: "skills".to_string(),
+        tier: mythrax_core::contracts::Tier::Wisdom,
         scope: "general".to_string(),
         vault_path: Some("wisdom/skills/avoid_concurrency.md".to_string()),
         embedding: None,

@@ -310,7 +310,7 @@ pub async fn run_llm_critic(
         action_to_avoid: critic_wisdom.action_to_avoid,
         causal_explanation: critic_wisdom.causal_explanation,
         prescribed_remedy: critic_wisdom.prescribed_remedy,
-        tier: "dynamic".to_string(),
+        tier: crate::contracts::Tier::Project,
         scope: active_scope,
         vault_path: Some(rule_path.clone()),
         embedding: None,

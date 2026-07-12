@@ -117,7 +117,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
             if let Some(sess_id) = session_id {
                 let mut cited_ids = Vec::new();
                 for r in &search_res.results {
-                    if r.tier == "episode" {
+                    if r.tier == crate::contracts::Tier::Session {
                         cited_ids.push(r.id.clone());
                     }
                 }
@@ -205,7 +205,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
 
             let mut index_rows = Vec::new();
             for r in search_res.results {
-                if r.tier == "episode" {
+                if r.tier == crate::contracts::Tier::Session {
                     let subtitle = make_subtitle(&r.content);
                     index_rows.push(crate::contracts::IndexRow {
                         id: r.id,
@@ -348,7 +348,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                     content,
                     similarity: 1.0,
                     utility: ep.utility.unwrap_or(0.0),
-                    tier: "episode".to_string(),
+                    tier: crate::contracts::Tier::Session,
                     embedding: None,
                     vault_path: ep.vault_path.clone(),
                     source_episode: ep.source_episode.clone(),
@@ -371,7 +371,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                     content,
                     similarity: 1.0,
                     utility: 0.0,
-                    tier: "wiki".to_string(),
+                    tier: crate::contracts::Tier::Project,
                     embedding: None,
                     vault_path: wiki.vault_path.clone(),
                     source_episode: None,
@@ -398,7 +398,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                     content,
                     similarity: rule.similarity.unwrap_or(1.0),
                     utility: rule.utility.unwrap_or(0.0) as f32,
-                    tier: "wisdom".to_string(),
+                    tier: crate::contracts::Tier::Wisdom,
                     embedding: None,
                     vault_path: rule.vault_path.clone(),
                     source_episode: None,
@@ -420,7 +420,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
         }
         "rules" => {
             let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
-            let tier = args.get("tier").and_then(|v| v.as_str());
+            let tier = args.get("tier").and_then(|v| v.as_str()).and_then(|t| t.parse::<crate::contracts::Tier>().ok());
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);

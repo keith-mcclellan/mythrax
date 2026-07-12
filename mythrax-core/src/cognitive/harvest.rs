@@ -157,7 +157,7 @@ impl Harvester {
                         action_to_avoid: r.action_to_avoid,
                         causal_explanation: r.causal_explanation,
                         prescribed_remedy: r.prescribed_remedy,
-                        tier: "skills".to_string(),
+                        tier: crate::contracts::Tier::Wisdom,
                         scope: "general".to_string(),
                         vault_path: Some(rule_path),
                         embedding: None,

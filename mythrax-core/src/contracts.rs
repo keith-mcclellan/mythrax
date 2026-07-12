@@ -1,6 +1,79 @@
 use serde::{Deserialize, Serialize};
 use surrealdb_types::SurrealValue;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue)]
+pub enum Tier {
+    #[default]
+    Wisdom,
+    Project,
+    User,
+    Session,
+    Working,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseTierError(String);
+
+impl std::fmt::Display for ParseTierError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid tier value: {}", self.0)
+    }
+}
+
+impl std::error::Error for ParseTierError {}
+
+impl std::str::FromStr for Tier {
+    type Err = ParseTierError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "permanent" | "skills" | "wisdom" => Ok(Tier::Wisdom),
+            "dynamic" | "forge" | "project" | "wiki" | "wiki_node" => Ok(Tier::Project),
+            "user" => Ok(Tier::User),
+            "session" | "episode" => Ok(Tier::Session),
+            "working" | "stm" => Ok(Tier::Working),
+            other => Err(ParseTierError(other.to_string())),
+        }
+    }
+}
+
+impl Tier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Tier::Wisdom => "wisdom",
+            Tier::Project => "project",
+            Tier::User => "user",
+            Tier::Session => "session",
+            Tier::Working => "working",
+        }
+    }
+}
+
+impl std::fmt::Display for Tier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Serialize for Tier {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Tier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<Tier>().map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct ChatMessage {
     pub id: Option<String>,
@@ -217,7 +290,7 @@ pub struct SearchResult {
     pub content: String,
     pub similarity: f32,
     pub utility: f32,
-    pub tier: String,
+    pub tier: Tier,
     #[serde(default, skip_serializing)]
     pub embedding: Option<Vec<f32>>,
     pub vault_path: Option<String>,
@@ -252,7 +325,7 @@ pub struct WisdomRule {
     pub action_to_avoid: String,
     pub causal_explanation: String,
     pub prescribed_remedy: String,
-    pub tier: String, // "pinned" | "permanent" | "dynamic"
+    pub tier: Tier, // Wisdom | Project | User | Session | Working
     pub scope: String,
     pub vault_path: Option<String>,
     pub embedding: Option<Vec<f32>>,

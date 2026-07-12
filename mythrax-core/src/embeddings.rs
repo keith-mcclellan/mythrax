@@ -794,6 +794,36 @@ impl LocalEmbedder {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct NormalizedEmbedding(Vec<f32>);
+
+impl NormalizedEmbedding {
+    pub fn try_new(vec: Vec<f32>) -> Result<Self> {
+        if vec.is_empty() {
+            anyhow::bail!("Vector is empty");
+        }
+        let magnitude_sq: f32 = vec.iter().map(|&x| x * x).sum();
+        let magnitude = magnitude_sq.sqrt();
+        if magnitude < 0.99 || magnitude > 1.01 {
+            anyhow::bail!("Vector magnitude {} is not within 1% of 1.0 (between 0.99 and 1.01)", magnitude);
+        }
+        Ok(NormalizedEmbedding(vec))
+    }
+
+    pub fn dot_product(&self, other: &Self) -> f32 {
+        self.0.iter().zip(other.0.iter()).map(|(&x, &y)| x * y).sum()
+    }
+
+    pub fn as_slice(&self) -> &[f32] {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> Vec<f32> {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

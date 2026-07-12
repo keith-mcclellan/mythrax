@@ -160,11 +160,11 @@ fn prepare_fts_query(query: &str, cap: usize) -> Vec<String> {
 }
 
 // Stage 8 rank positioning private helper
-fn get_tier_boost(tier: &str, category: QueryCategory) -> f32 {
+fn get_tier_boost(tier: crate::contracts::Tier, category: QueryCategory) -> f32 {
     match (tier, category) {
-        ("episode", QueryCategory::User | QueryCategory::Preference | QueryCategory::Temporal) => 1.3,
-        ("skills" | "wisdom", _) => 1.2,
-        ("wiki_node" | "insight" | "project_brief" | "system_playbook", _) => 1.1,
+        (crate::contracts::Tier::Session, QueryCategory::User | QueryCategory::Preference | QueryCategory::Temporal) => 1.3,
+        (crate::contracts::Tier::Wisdom, _) => 1.2,
+        (crate::contracts::Tier::Project, _) => 1.1,
         _ => 1.0,
     }
 }
@@ -288,7 +288,7 @@ impl SurrealBackend {
                                                             content: ep.content,
                                                             similarity: activation_similarity,
                                                             utility: ep.utility.unwrap_or(50.0) as f32,
-                                                            tier: "episode".to_string(),
+                                                            tier: crate::contracts::Tier::Session,
                                                             embedding: ep.embedding.clone(),
                                                             vault_path: ep.vault_path.clone(),
                                                             source_episode: if is_hybrid { Some("spreading_activation".to_string()) } else { None },
@@ -356,7 +356,7 @@ impl SurrealBackend {
                                             content: val.clone(),
                                             similarity: dot,
                                             utility: 100.0,
-                                            tier: "working".to_string(),
+                                            tier: crate::contracts::Tier::Working,
                                             embedding: Some(v_vec),
                                             raw_vector_sim: Some(dot),
                                             session_id: Some(sess_id.to_string()),
@@ -375,7 +375,7 @@ impl SurrealBackend {
                                     content: val.clone(),
                                     similarity: 1.0,
                                     utility: 100.0,
-                                    tier: "working".to_string(),
+                                    tier: crate::contracts::Tier::Working,
                                     raw_vector_sim: Some(1.0),
                                     session_id: Some(sess_id.to_string()),
                                     word_count: Some(val.split_whitespace().count() as u32),
@@ -1027,7 +1027,7 @@ impl SurrealBackend {
                                 content: r_node.content.clone().unwrap_or_default(),
                                 similarity: 0.0,
                                 utility: 0.0,
-                                tier: r_node.id.table.as_str().to_string(),
+                                tier: r_node.id.table.as_str().parse().unwrap_or(crate::contracts::Tier::Project),
                                 embedding: None,
                                 vault_path: r_node.vault_path.clone(),
                                 source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
@@ -1045,7 +1045,7 @@ impl SurrealBackend {
                                 content: prev.content.clone(),
                                 similarity: 0.0,
                                 utility: 0.0,
-                                tier: "episode".to_string(),
+                                tier: crate::contracts::Tier::Session,
                                 embedding: None,
                                 vault_path: prev.vault_path.clone(),
                                 source_episode: Some("temporal_neighbor".to_string()),
@@ -1063,7 +1063,7 @@ impl SurrealBackend {
                                 content: next.content.clone(),
                                 similarity: 0.0,
                                 utility: 0.0,
-                                tier: "episode".to_string(),
+                                tier: crate::contracts::Tier::Session,
                                 embedding: None,
                                 vault_path: next.vault_path.clone(),
                                 source_episode: Some("temporal_neighbor".to_string()),
@@ -1128,20 +1128,20 @@ impl SurrealBackend {
                     let importance_component = importance / 10.0f32;
                     let norm = w_imp_ep + w_rec_ep;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
-                    let mut f = ((w_imp_ep * importance_component + w_rec_ep * recency_component) / divisor) * get_tier_boost("episode", query_category);
+                    let mut f = ((w_imp_ep * importance_component + w_rec_ep * recency_component) / divisor) * get_tier_boost(crate::contracts::Tier::Session, query_category);
                     f *= compute_archived_demotion(&ep, similarity);
                     (g, f)
                 } else {
                     let u_old = ep.utility.unwrap_or(50.0) as f32;
                     let decayed_utility = u_old * get_decay_factor(delta_t_secs);
-                    let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("episode", query_category);
+                    let mut f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost(crate::contracts::Tier::Session, query_category);
                     f *= compute_archived_demotion(&ep, similarity);
                     (1.0f32, f)
                 };
 
                 let blended_score = if use_new_formula && bypass_sigmoid_gating { similarity } else { similarity * factor_multiplier * gate };
                 let decayed_utility = ep.utility.unwrap_or(50.0) as f32 * get_decay_factor(delta_t_secs);
-                let tier = "episode".to_string();
+                let tier = crate::contracts::Tier::Session;
 
                 let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
                 if blended_score >= pass_threshold {
@@ -1184,7 +1184,7 @@ impl SurrealBackend {
                                 content: r_node.content.clone().unwrap_or_default(),
                                 similarity: 0.0,
                                 utility: 0.0,
-                                tier: r_node.id.table.as_str().to_string(),
+                                tier: r_node.id.table.as_str().parse().unwrap_or(crate::contracts::Tier::Project),
                                 embedding: None,
                                 vault_path: r_node.vault_path.clone(),
                                 source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
@@ -1233,17 +1233,17 @@ impl SurrealBackend {
                     let importance_component = utility_val / 10.0f32;
                     let norm = w_imp_ins + w_rec_ins;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
-                    let f = ((w_imp_ins * importance_component + w_rec_ins * recency_component) / divisor) * get_tier_boost("wiki_node", query_category);
+                    let f = ((w_imp_ins * importance_component + w_rec_ins * recency_component) / divisor) * get_tier_boost(crate::contracts::Tier::Project, query_category);
                     (g, f)
                 } else {
                     let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
-                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 1.0f32)) * get_tier_boost("wiki_node", query_category);
+                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 1.0f32)) * get_tier_boost(crate::contracts::Tier::Project, query_category);
                     (1.0f32, f)
                 };
 
                 let blended_score = similarity * factor_multiplier * gate;
                 let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
-                let tier = "insight".to_string();
+                let tier = crate::contracts::Tier::Project;
 
                 let pass_threshold = if use_new_formula { if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 } } else { threshold };
                 if blended_score >= pass_threshold {
@@ -1296,11 +1296,11 @@ impl SurrealBackend {
                     let importance_component = utility_val / 100.0f32;
                     let norm = w_imp_wis + w_rec_wis;
                     let divisor = if norm > 0.0 { norm } else { 1.0f32 };
-                    let f = ((w_imp_wis * importance_component + w_rec_wis * recency_component) / divisor) * get_tier_boost("wisdom", query_category);
+                    let f = ((w_imp_wis * importance_component + w_rec_wis * recency_component) / divisor) * get_tier_boost(crate::contracts::Tier::Wisdom, query_category);
                     (g, f)
                 } else {
                     let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
-                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost("wisdom", query_category);
+                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32)) * get_tier_boost(crate::contracts::Tier::Wisdom, query_category);
                     (1.0f32, f)
                 };
 
@@ -1310,7 +1310,7 @@ impl SurrealBackend {
                     "**Action to Avoid**: {}\n**Why**: {}\n**Prescribed Remedy**: {}",
                     rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
                 );
-                let tier = rule.tier.clone();
+                let tier = rule.tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom);
                 let mut related_nodes_list = None;
                 if deep_insight {
                     let mut rel_list = Vec::new();
@@ -1322,7 +1322,7 @@ impl SurrealBackend {
                                 content: r_node.content.clone().unwrap_or_default(),
                                 similarity: 0.0,
                                 utility: 0.0,
-                                tier: r_node.id.table.as_str().to_string(),
+                                tier: r_node.id.table.as_str().parse().unwrap_or(crate::contracts::Tier::Project),
                                 embedding: None,
                                 vault_path: r_node.vault_path.clone(),
                                 source_episode: r_node.source_episode.as_ref().map(|t| format_record_id(t)),
@@ -1571,7 +1571,7 @@ impl SurrealBackend {
                         c.similarity
                     };
 
-                    let is_special_candidate = c.tier == "working" || c.source_episode == Some("spreading_activation".to_string());
+                    let is_special_candidate = c.tier == crate::contracts::Tier::Working || c.source_episode == Some("spreading_activation".to_string());
                     let fused = if is_special_candidate {
                         raw_sim
                     } else {
@@ -1650,7 +1650,7 @@ impl SurrealBackend {
                         };
                         let raw_sim = 1.0f32;
                         let fused = alpha * raw_sim + beta * bm25_norm;
-                        let is_special_candidate = c.tier == "working" || c.source_episode == Some("spreading_activation".to_string());
+                        let is_special_candidate = c.tier == crate::contracts::Tier::Working || c.source_episode == Some("spreading_activation".to_string());
                         let is_single_path = raw_sim < 1e-5 || bm25_norm < 1e-5;
                         let current_center = if is_single_path {
                             fusion_sigmoid_center - single_path_offset
@@ -1936,7 +1936,7 @@ impl SurrealBackend {
                                                             content: raw.content.clone(),
                                                             similarity: neighbor_score,
                                                             utility: raw.utility.unwrap_or(50.0) as f32,
-                                                            tier: "episode".to_string(),
+                                                            tier: crate::contracts::Tier::Session,
                                                             embedding: None,
                                                             vault_path: raw.vault_path.clone(),
                                                             source_episode: None,
@@ -2208,7 +2208,7 @@ impl SurrealBackend {
         // Stage 8: Rank-Position Ladder Boost (position-based score adjustment)
         if enable_calibrated_confidence {
             for c in &mut candidates {
-                if c.tier == "episode" {
+                if c.tier == crate::contracts::Tier::Session {
                     c.similarity *= c.confidence.unwrap_or(1.0);
                 }
             }
@@ -2247,26 +2247,33 @@ impl SurrealBackend {
 
         if let Some(budget) = token_budget {
             fn get_hierarchy_rank(result: &SearchResult) -> usize {
-                if result.tier == "skills" {
-                    0
-                } else if result.tier == "permanent" || result.tier == "pinned" {
-                    1
-                } else if result.tier == "insight" || result.tier == "wiki_node" {
-                    if let Some(ref path) = result.vault_path {
-                        if path.contains("compaction") || path.contains("project_brief") {
+                match result.tier {
+                    crate::contracts::Tier::Wisdom => {
+                        if let Some(ref path) = result.vault_path {
+                            if path.contains("skills") {
+                                0
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        }
+                    }
+                    crate::contracts::Tier::Project => {
+                        if let Some(ref path) = result.vault_path {
+                            if path.contains("compaction") || path.contains("project_brief") {
+                                2
+                            } else {
+                                3
+                            }
+                        } else if result.title.contains("Compaction:") || result.title.contains("Synthesis") {
                             2
                         } else {
                             3
                         }
-                    } else if result.title.contains("Compaction:") || result.title.contains("Synthesis") {
-                        2
-                    } else {
-                        3
                     }
-                } else if result.tier == "episode" {
-                    4
-                } else {
-                    5
+                    crate::contracts::Tier::Session => 4,
+                    _ => 5,
                 }
             }
 
@@ -2322,7 +2329,7 @@ impl SurrealBackend {
 
         if enable_access_reinforcement {
             for c in &sliced_results {
-                if c.tier == "episode" {
+                if c.tier == crate::contracts::Tier::Session {
                     let backend_clone = self.clone();
                     let id_clone = c.id.clone();
                     if let Ok(permit) = self.reinforcement_semaphore.clone().acquire_owned().await {

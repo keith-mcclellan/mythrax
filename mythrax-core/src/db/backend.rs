@@ -1,6 +1,6 @@
 use axum::async_trait;
 use surrealdb_types::SurrealValue;
-use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode, SearchResponse, WisdomSearchResponse, GetMemoryNodesResponse, ForgedSectionBatch};
+use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode, SearchResponse, WisdomSearchResponse, GetMemoryNodesResponse, ForgedSectionBatch, Tier};
 use anyhow::{Result, Context};
 use surrealdb::engine::local::{Db, Mem, SurrealKv};
 use surrealdb::Surreal;
@@ -82,7 +82,7 @@ pub trait StorageBackend: Send + Sync {
         &self,
         params: crate::contracts::SearchParams,
     ) -> Result<SearchResponse>;
-    async fn get_wisdom(&self, query: &str, tier: Option<&str>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
+    async fn get_wisdom(&self, query: &str, tier: Option<Tier>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
 
     async fn get_llm_config(&self) -> Result<LlmConfigResponse>;
@@ -912,7 +912,7 @@ impl WisdomRaw {
             action_to_avoid: self.action_to_avoid,
             causal_explanation: self.causal_explanation,
             prescribed_remedy: self.prescribed_remedy,
-            tier: self.tier,
+            tier: self.tier.parse().unwrap_or(Tier::Wisdom),
             scope: self.scope,
             vault_path: self.vault_path,
             embedding: self.embedding,
@@ -1204,7 +1204,7 @@ impl StorageBackend for SurrealBackend {
         self.search_pipeline(params).await
     }
 
-    async fn get_wisdom(&self, query: &str, tier: Option<&str>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
+    async fn get_wisdom(&self, query: &str, tier: Option<Tier>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
         let active_scope = self.resolve_active_scope();
 
         let query_emb = if let Some(ref _embedder) = self.embedder {
@@ -1243,7 +1243,7 @@ impl StorageBackend for SurrealBackend {
             };
             let mut q = self.db.query(sql);
             if let Some(t) = tier {
-                q = q.bind(("tier", t));
+                q = q.bind(("tier", t.to_string()));
             }
             q.bind(("active_scope", active_scope.as_str()))
                 .bind(("query_embedding", q_vec.clone()))
@@ -1271,7 +1271,7 @@ impl StorageBackend for SurrealBackend {
             };
             let mut q = self.db.query(sql);
             if let Some(t) = tier {
-                q = q.bind(("tier", t));
+                q = q.bind(("tier", t.to_string()));
             }
             q.bind(("query", query))
                 .bind(("active_scope", active_scope.as_str()))
@@ -2111,7 +2111,7 @@ mod tests {
             action_to_avoid: "avoiding hydration".to_string(),
             causal_explanation: "leads to dry tests".to_string(),
             prescribed_remedy: "hydrate it".to_string(),
-            tier: "dynamic".to_string(),
+            tier: Tier::Project,
             scope: "hydration-test".to_string(),
             vault_path: None,
             embedding: None,
@@ -2184,7 +2184,7 @@ mod tests {
             action_to_avoid: "avoiding concurrency".to_string(),
             causal_explanation: "causes slow code".to_string(),
             prescribed_remedy: "use concurrency safely".to_string(),
-            tier: "skills".to_string(), // Skills tier boost = 1.2
+            tier: Tier::Wisdom, // Skills tier boost = 1.2
             scope: "ranking-test".to_string(),
             vault_path: None,
             embedding: None,
@@ -2231,13 +2231,13 @@ mod tests {
         assert_eq!(response.results.len(), 3);
         
         // Assert sorting order based on tier boosts: skills (1.2) > wiki/insight (1.1) > episode (1.0)
-        assert_eq!(response.results[0].tier, "skills");
+        assert_eq!(response.results[0].tier, Tier::Wisdom);
         assert_eq!(response.results[0].title, "Concurrency pattern");
 
-        assert_eq!(response.results[1].tier, "insight");
+        assert_eq!(response.results[1].tier, Tier::Project);
         assert_eq!(response.results[1].title, "Concurrency Guide");
 
-        assert_eq!(response.results[2].tier, "episode");
+        assert_eq!(response.results[2].tier, Tier::Session);
         assert_eq!(response.results[2].title, "Concurrency Episode");
     }
 
@@ -2376,7 +2376,7 @@ mod tests {
             action_to_avoid: "Avoid this".to_string(),
             causal_explanation: "Cause".to_string(),
             prescribed_remedy: "Remedy".to_string(),
-            tier: "skills".to_string(),
+            tier: Tier::Wisdom,
             scope: "budget-test".to_string(),
             vault_path: None,
             embedding: None,
@@ -2431,7 +2431,7 @@ mod tests {
         
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
-        assert_eq!(response.results[0].tier, "skills");
+        assert_eq!(response.results[0].tier, Tier::Wisdom);
         
         // Check omitted_ids
         assert!(response.omitted_ids.is_some());
@@ -2475,7 +2475,7 @@ mod tests {
             action_to_avoid: "doing things manually".to_string(),
             causal_explanation: "This is a very long explanation explaining why doing things manually is bad, error-prone, slow, and non-deterministic".to_string(),
             prescribed_remedy: "automate all steps".to_string(),
-            tier: "skills".to_string(),
+            tier: Tier::Wisdom,
             scope: "compaction-test".to_string(),
             vault_path: None,
             embedding: None,
