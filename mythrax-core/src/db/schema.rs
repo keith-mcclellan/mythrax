@@ -408,4 +408,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS injected_at ON cognitive_task TYPE option<datetime>;
 
     DEFINE TABLE IF NOT EXISTS pipeline_state SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS forged_section_hash SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS bootstrap_state SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS distilled_conversation SCHEMALESS;
 ";
+

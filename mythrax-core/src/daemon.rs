@@ -138,6 +138,16 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     }
                 });
 
+                // Spawn background embedding cache flusher
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await; // every 60 seconds
+                        if let Err(e) = crate::embeddings::flush_dirty_default() {
+                            tracing::error!("Background embedding cache flush failed: {:?}", e);
+                        }
+                    }
+                });
+
                 // Spawn the tokio background scheduler loop
                 let backend_dream = backend.clone();
                 let store_dream = store.clone();
@@ -420,6 +430,11 @@ async fn run_checkpoint(backend: &SurrealBackend, _vault_root: &Path) -> Result<
 async fn run_shutdown(pid_path: PathBuf) {
     // Sleep for 500ms to allow pending watcher/DB operations to settle
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Flush dirty embedding cache entries robustly on shutdown
+    if let Err(e) = crate::embeddings::flush_dirty_default() {
+        tracing::error!("Failed to flush embedding cache on shutdown: {:?}", e);
+    }
 
     // Evict unused models
     if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {

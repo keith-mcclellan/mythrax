@@ -950,6 +950,17 @@ async fn main() -> Result<()> {
         Commands::Exec { command_name, args } => {
             handle_exec(&command_name, &args).await?;
         }
+        Commands::Bootstrap { dry_run, since, scope, distill_model, force } => {
+            let payload = serde_json::json!({
+                "action": "bootstrap",
+                "dry_run": dry_run,
+                "since": since,
+                "scope": scope,
+                "distill_model": distill_model,
+                "force": force,
+            });
+            execute_cli_tool_call("manage", payload).await?;
+        }
     }
 
     Ok(())

@@ -213,8 +213,8 @@ fn test_forge_pdf_exits_zero() {
 #[test]
 fn test_cli_daemon_run_and_cleanup() {
     let tmp = tempdir().expect("temp dir");
-    let mut child = cmd(tmp.path(), "18091")
-        .args(["daemon", "run", "--port", "18091"])
+    let mut child = cmd(tmp.path(), "19091")
+        .args(["daemon", "run", "--port", "19091"])
         .spawn()
         .expect("spawn daemon run");
 
@@ -231,7 +231,7 @@ fn test_cli_daemon_run_and_cleanup() {
     assert!(found, "PID file should be created at {:?}", pid_file);
 
     // Wait for the TCP port to be open to ensure Axum is running and signals are handled
-    let addr = "127.0.0.1:18091";
+    let addr = "127.0.0.1:19091";
     let mut port_open = false;
     for _ in 0..300 {
         if std::net::TcpStream::connect(addr).is_ok() {
@@ -240,7 +240,7 @@ fn test_cli_daemon_run_and_cleanup() {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    assert!(port_open, "Daemon port 18091 should be listening");
+    assert!(port_open, "Daemon port 19091 should be listening");
 
     // Read the PID file and verify it contains the child's PID
     let pid_content = fs::read_to_string(&pid_file).expect("read PID file");
@@ -262,16 +262,16 @@ fn test_cli_daemon_run_and_cleanup() {
         print_daemon_log_on_failure(tmp.path());
     }
     assert!(!pid_file.exists(), "PID file should be deleted on clean SIGINT exit");
-    cleanup_daemon(tmp.path(), "18091");
+    cleanup_daemon(tmp.path(), "19091");
 }
 
 #[test]
 fn test_cli_search_episodes_flag() {
     let tmp = tempdir().expect("temp dir");
     
-    // Start daemon on port 18096
-    let mut daemon = cmd(tmp.path(), "18096")
-        .args(["daemon", "run", "--port", "18096"])
+    // Start daemon on port 19096
+    let mut daemon = cmd(tmp.path(), "19096")
+        .args(["daemon", "run", "--port", "19096"])
         .spawn()
         .expect("spawn daemon");
 
@@ -288,7 +288,7 @@ fn test_cli_search_episodes_flag() {
     assert!(found, "Daemon PID file should be created");
 
     // Wait for the TCP port to be open to ensure Axum is running and signals are handled
-    let addr = "127.0.0.1:18096";
+    let addr = "127.0.0.1:19096";
     let mut port_open = false;
     for _ in 0..300 {
         if std::net::TcpStream::connect(addr).is_ok() {
@@ -297,7 +297,7 @@ fn test_cli_search_episodes_flag() {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    assert!(port_open, "Daemon port 18096 should be listening");
+    assert!(port_open, "Daemon port 19096 should be listening");
 
     // Create a temporary document to save
     let doc_file = tmp.path().join("search_test_doc.md");
@@ -308,14 +308,14 @@ fn test_cli_search_episodes_flag() {
     .expect("write doc");
 
     // Save episode via CLI
-    let save_status = cmd(tmp.path(), "18096")
+    let save_status = cmd(tmp.path(), "19096")
         .args(["memory", "record", "search_test_doc", "--file", doc_file.to_str().unwrap(), "--scope", "e2e_search_test"])
         .status()
         .expect("spawn memory record");
     assert!(save_status.success(), "memory record command should succeed");
 
     // Perform default search (should exclude episodes)
-    let search_default_out = cmd(tmp.path(), "18096")
+    let search_default_out = cmd(tmp.path(), "19096")
         .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test"])
         .output()
         .expect("spawn memory query default");
@@ -328,7 +328,7 @@ fn test_cli_search_episodes_flag() {
     );
 
     // Perform search with --episodes flag
-    let search_episodes_out = cmd(tmp.path(), "18096")
+    let search_episodes_out = cmd(tmp.path(), "19096")
         .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test", "--include-episodes"])
         .output()
         .expect("spawn search with --episodes");
@@ -347,5 +347,5 @@ fn test_cli_search_episodes_flag() {
         .expect("kill daemon");
     assert!(status.success());
     let _ = daemon.wait();
-    cleanup_daemon(tmp.path(), "18096");
+    cleanup_daemon(tmp.path(), "19096");
 }

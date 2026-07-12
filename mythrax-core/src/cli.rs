@@ -63,6 +63,24 @@ pub enum Commands {
         /// Arguments to pass to the command
         args: Vec<String>,
     },
+    /// Bootstrap local memory from historical logs and customizations
+    Bootstrap {
+        /// Dry-run mode to print what would be bootstrapped without saving
+        #[arg(short, long)]
+        dry_run: bool,
+        /// Ingest only conversations modified since this ISO timestamp
+        #[arg(long)]
+        since: Option<String>,
+        /// Scope tag (defaults to 'general')
+        #[arg(short, long, default_value = "general")]
+        scope: String,
+        /// Model to use for distillation
+        #[arg(long)]
+        distill_model: Option<String>,
+        /// Force re-processing of already processed conversations
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

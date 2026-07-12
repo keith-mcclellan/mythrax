@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
 pub struct EmbeddingLruCache {
-    pub map: std::collections::HashMap<String, (Vec<f32>, u64)>,
+    pub map: std::collections::HashMap<String, (Vec<f32>, u64, bool)>,
     pub counter: u64,
     pub capacity: usize,
 }
@@ -61,6 +61,18 @@ pub fn get_default_capacity() -> usize {
 }
 
 static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<EmbeddingLruCache>> = OnceLock::new();
+static EMBEDDING_CACHE_PATH: OnceLock<std::sync::Mutex<Option<std::path::PathBuf>>> = OnceLock::new();
+
+pub fn set_embedding_cache_path(path: &Path) {
+    let mutex = EMBEDDING_CACHE_PATH.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut opt) = mutex.lock() {
+        *opt = Some(path.to_path_buf());
+    }
+}
+
+pub fn get_embedding_cache_path() -> Option<std::path::PathBuf> {
+    EMBEDDING_CACHE_PATH.get().and_then(|mutex| mutex.lock().ok().and_then(|opt| opt.clone()))
+}
 
 pub fn get_embedding_cache_len() -> usize {
     if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
@@ -87,11 +99,11 @@ pub fn cache_embedding(text: String, embedding: Vec<f32>) {
         cache.capacity = default_capacity;
         cache.counter += 1;
         let tick = cache.counter;
-        cache.map.insert(text, (embedding, tick));
+        cache.map.insert(text, (embedding, tick, true));
         if cache.map.len() > cache.capacity {
             let mut min_tick = u64::MAX;
             let mut evict_key = None;
-            for (key, (_, tick)) in cache.map.iter() {
+            for (key, (_, tick, _)) in cache.map.iter() {
                 if *tick < min_tick {
                     min_tick = *tick;
                     evict_key = Some(key.clone());
@@ -119,6 +131,7 @@ pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
 }
 
 pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
+    set_embedding_cache_path(path);
     if !path.exists() {
         return Ok(());
     }
@@ -168,13 +181,13 @@ pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
         for (key, values) in loaded_cache {
             cache.counter += 1;
             let tick = cache.counter;
-            cache.map.insert(key, (values, tick));
+            cache.map.insert(key, (values, tick, false));
         }
 
         if cache.map.len() > cache.capacity {
             let overflow = cache.map.len() - cache.capacity;
             let mut key_ticks: Vec<(String, u64)> = cache.map.iter()
-                .map(|(k, (_, tick))| (k.clone(), *tick))
+                .map(|(k, (_, tick, _))| (k.clone(), *tick))
                 .collect();
             key_ticks.sort_by_key(|&(_, tick)| tick);
             for i in 0..overflow {
@@ -187,8 +200,9 @@ pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
 }
 
 pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
+    set_embedding_cache_path(path);
     let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
-    let cache = cache_mutex.lock().map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
+    let mut cache = cache_mutex.lock().map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
 
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -201,7 +215,7 @@ pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
     let num_entries = cache.map.len() as u32;
     writer.write_all(&num_entries.to_le_bytes())?;
 
-    for (key, (values, _tick)) in cache.map.iter() {
+    for (key, (values, _tick, dirty)) in cache.map.iter_mut() {
         // Write key length
         let key_bytes = key.as_bytes();
         let key_len = key_bytes.len() as u32;
@@ -217,10 +231,117 @@ pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
         for val in values.iter() {
             writer.write_all(&val.to_le_bytes())?;
         }
+        *dirty = false;
     }
 
     writer.flush()?;
 
+    Ok(())
+}
+
+pub fn flush_dirty_default() -> Result<()> {
+    if let Some(path) = get_embedding_cache_path() {
+        flush_dirty(&path)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn flush_dirty(path: &Path) -> Result<()> {
+    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
+    let mut cache = cache_mutex.lock().map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
+    
+    let has_dirty = cache.map.iter().any(|(_, (_, _, dirty))| *dirty);
+    if !has_dirty {
+        return Ok(());
+    }
+    
+    let is_sqlite = path.extension().map_or(false, |ext| ext == "db" || ext == "sqlite");
+    if is_sqlite {
+        let conn = rusqlite::Connection::open(path)?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS embedding_cache (
+                text TEXT PRIMARY KEY,
+                embedding BLOB
+            )",
+            [],
+        )?;
+        
+        let mut stmt = conn.prepare("INSERT OR REPLACE INTO embedding_cache (text, embedding) VALUES (?, ?)")?;
+        for (key, (embedding, _, dirty)) in cache.map.iter_mut() {
+            if *dirty {
+                let mut bytes = Vec::with_capacity(embedding.len() * 4);
+                for &val in embedding.iter() {
+                    bytes.extend_from_slice(&val.to_le_bytes());
+                }
+                stmt.execute(rusqlite::params![key, bytes])?;
+                *dirty = false;
+            }
+        }
+    } else {
+        let mut merged_cache = std::collections::HashMap::new();
+        if path.exists() {
+            if let Ok(file) = std::fs::File::open(path) {
+                let mut reader = std::io::BufReader::new(file);
+                let mut num_entries_buf = [0u8; 4];
+                if reader.read_exact(&mut num_entries_buf).is_ok() {
+                    let num_entries = u32::from_le_bytes(num_entries_buf) as usize;
+                    for _ in 0..num_entries {
+                        let mut key_len_buf = [0u8; 4];
+                        if reader.read_exact(&mut key_len_buf).is_err() { break; }
+                        let key_len = u32::from_le_bytes(key_len_buf) as usize;
+                        let mut key_bytes = vec![0u8; key_len];
+                        if reader.read_exact(&mut key_bytes).is_err() { break; }
+                        if let Ok(key) = String::from_utf8(key_bytes) {
+                            let mut num_values_buf = [0u8; 4];
+                            if reader.read_exact(&mut num_values_buf).is_err() { break; }
+                            let num_values = u32::from_le_bytes(num_values_buf) as usize;
+                            let mut values = Vec::with_capacity(num_values);
+                            let mut ok = true;
+                            for _ in 0..num_values {
+                                let mut f32_buf = [0u8; 4];
+                                if reader.read_exact(&mut f32_buf).is_err() { ok = false; break; }
+                                values.push(f32::from_le_bytes(f32_buf));
+                            }
+                            if ok {
+                                merged_cache.insert(key, values);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        for (key, (embedding, _, dirty)) in cache.map.iter_mut() {
+            merged_cache.insert(key.clone(), embedding.clone());
+            *dirty = false;
+        }
+        
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        let mut writer = std::io::BufWriter::new(file);
+        
+        let num_entries = merged_cache.len() as u32;
+        writer.write_all(&num_entries.to_le_bytes())?;
+        
+        for (key, values) in merged_cache.iter() {
+            let key_bytes = key.as_bytes();
+            let key_len = key_bytes.len() as u32;
+            writer.write_all(&key_len.to_le_bytes())?;
+            writer.write_all(key_bytes)?;
+            
+            let num_values = values.len() as u32;
+            writer.write_all(&num_values.to_le_bytes())?;
+            for val in values.iter() {
+                writer.write_all(&val.to_le_bytes())?;
+            }
+        }
+        writer.flush()?;
+    }
+    
     Ok(())
 }
 
