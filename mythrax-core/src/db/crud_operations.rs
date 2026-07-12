@@ -5,7 +5,7 @@ use crate::db::backend::{
 };
 use crate::contracts::{
     EpisodeSave, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode,
-    GetMemoryNodesResponse, ForgedSectionBatch,
+    GetMemoryNodesResponse,
 };
 use crate::db::schema::INIT_SCHEMA;
 use surrealdb_types::SurrealValue;
@@ -464,7 +464,7 @@ impl SurrealBackend {
             COMMIT TRANSACTION;
         "#;
 
-        let mut res = self.db.query(query).bind(("episodes", mapped_json_array)).await?;
+        let res = self.db.query(query).bind(("episodes", mapped_json_array)).await?;
         res.check().context("SurrealDB save_episodes_batch transaction failed")?;
 
         // 6. Relate temporal followed_by connections

@@ -25,5 +25,6 @@
   "search.bypass_sigmoid_gating": "true",
   "search.temporal_expansion_pool_size": "8",
   "search.user.gaussian_sigma": "375.0000",
-  "search.preference.gaussian_sigma": "375.0000"
+  "search.preference.gaussian_sigma": "375.0000",
+  "search.embedding_cache_capacity": "500000"
 }

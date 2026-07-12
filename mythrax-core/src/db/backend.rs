@@ -6,38 +6,10 @@ use surrealdb::engine::local::{Db, Mem, SurrealKv};
 use surrealdb::{Surreal, IndexedResults};
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::db::schema::INIT_SCHEMA;
-
 pub use crate::db::query_classification::{QueryCategory, get_decay_factor, split_temporal_query, normalize_spelling, expand_synonyms, classify_query};
 
 pub static GLOBAL_BACKEND: std::sync::OnceLock<Arc<SurrealBackend>> = std::sync::OnceLock::new();
 pub static GLOBAL_RERANKER: tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>> = tokio::sync::Mutex::const_new(None);
-
-macro_rules! run_write {
-    ($self:expr, $block:expr) => {{
-        let _guard = $self.write_lock.lock().await;
-        let mut attempt = 0;
-        loop {
-            let res = { $block };
-            match res {
-                Ok(val) => break Ok(val),
-                Err(e) => {
-                    let err_str = e.to_string();
-                    let is_conflict = err_str.contains("TransactionConflict")
-                        || err_str.contains("conflict")
-                        || err_str.contains("Transaction conflict");
-                    if is_conflict && attempt < 5 {
-                        attempt += 1;
-                        let delay = std::time::Duration::from_millis(50 * (1 << attempt));
-                        tokio::time::sleep(delay).await;
-                        continue;
-                    }
-                    break Err(e);
-                }
-            }
-        }
-    }};
-}
 
 pub fn unescape_id_part(part: &str) -> String {
     let mut s = part.trim();

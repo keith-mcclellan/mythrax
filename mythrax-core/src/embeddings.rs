@@ -32,6 +32,31 @@ pub fn get_default_capacity() -> usize {
             return capacity;
         }
     }
+    
+    // In test mock mode, default to 10000 and do not read tuned_params.json
+    if std::env::var("MYTHRAX_TEST_MOCK").map(|v| v == "1" || v == "true").unwrap_or(false) {
+        return 10000;
+    }
+    
+    // Check tuned params json robustly
+    let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
+    if !tuned_path.exists() {
+        tuned_path = std::path::PathBuf::from("../bench_data/tuned_params.json");
+    }
+    if !tuned_path.exists() {
+        tuned_path = std::path::PathBuf::from("mythrax-core/bench_data/tuned_params.json");
+    }
+    if tuned_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&tuned_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(val_str) = json.get("search.embedding_cache_capacity").and_then(|v| v.as_str()) {
+                    if let Ok(capacity) = val_str.parse::<usize>() {
+                        return capacity;
+                    }
+                }
+            }
+        }
+    }
     10000
 }
 
