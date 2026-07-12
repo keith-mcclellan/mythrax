@@ -2,5 +2,6 @@
   "split": "dev50",
   "recall_any_5": 0.9200,
   "recall_all_5": 0.7400,
-  "ndcg_10": 0.7674
+  "ndcg_10": 0.7674,
+  "avg_latency_ms": 95.4
 }
