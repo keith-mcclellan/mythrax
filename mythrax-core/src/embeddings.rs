@@ -10,19 +10,84 @@ use std::sync::OnceLock;
 
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
-static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>> = OnceLock::new();
+pub struct EmbeddingLruCache {
+    pub map: std::collections::HashMap<String, (Vec<f32>, u64)>,
+    pub counter: u64,
+    pub capacity: usize,
+}
+
+impl EmbeddingLruCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            counter: 0,
+            capacity,
+        }
+    }
+}
+
+pub fn get_default_capacity() -> usize {
+    if let Ok(val) = std::env::var("MYTHRAX_EMBEDDING_CACHE_CAPACITY") {
+        if let Ok(capacity) = val.parse::<usize>() {
+            return capacity;
+        }
+    }
+    10000
+}
+
+static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<EmbeddingLruCache>> = OnceLock::new();
+
+pub fn get_embedding_cache_len() -> usize {
+    if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+        if let Ok(cache) = cache_mutex.lock() {
+            return cache.map.len();
+        }
+    }
+    0
+}
+
+pub fn clear_embedding_cache() {
+    if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+        if let Ok(mut cache) = cache_mutex.lock() {
+            cache.map.clear();
+            cache.counter = 0;
+        }
+    }
+}
 
 pub fn cache_embedding(text: String, embedding: Vec<f32>) {
-    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
     if let Ok(mut cache) = cache_mutex.lock() {
-        cache.insert(text, embedding);
+        let default_capacity = get_default_capacity();
+        cache.capacity = default_capacity;
+        cache.counter += 1;
+        let tick = cache.counter;
+        cache.map.insert(text, (embedding, tick));
+        if cache.map.len() > cache.capacity {
+            let mut min_tick = u64::MAX;
+            let mut evict_key = None;
+            for (key, (_, tick)) in cache.map.iter() {
+                if *tick < min_tick {
+                    min_tick = *tick;
+                    evict_key = Some(key.clone());
+                }
+            }
+            if let Some(k) = evict_key {
+                cache.map.remove(&k);
+            }
+        }
     }
 }
 
 pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
     if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
-        if let Ok(cache) = cache_mutex.lock() {
-            return cache.get(text).cloned();
+        if let Ok(mut cache) = cache_mutex.lock() {
+            cache.counter += 1;
+            let tick = cache.counter;
+            if let Some(entry) = cache.map.get_mut(text) {
+                entry.1 = tick;
+                return Some(entry.0.clone());
+            }
         }
     }
     None
@@ -70,17 +135,35 @@ pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
         loaded_cache.insert(key, values);
     }
 
-    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
     if let Ok(mut cache) = cache_mutex.lock() {
-        cache.extend(loaded_cache);
+        let default_capacity = get_default_capacity();
+        cache.capacity = default_capacity;
+
+        for (key, values) in loaded_cache {
+            cache.counter += 1;
+            let tick = cache.counter;
+            cache.map.insert(key, (values, tick));
+        }
+
+        if cache.map.len() > cache.capacity {
+            let overflow = cache.map.len() - cache.capacity;
+            let mut key_ticks: Vec<(String, u64)> = cache.map.iter()
+                .map(|(k, (_, tick))| (k.clone(), *tick))
+                .collect();
+            key_ticks.sort_by_key(|&(_, tick)| tick);
+            for i in 0..overflow {
+                cache.map.remove(&key_ticks[i].0);
+            }
+        }
     }
 
     Ok(())
 }
 
 pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
-    let cache = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    let map = cache.lock().map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
+    let cache_mutex = EMBEDDING_CACHE.get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
+    let cache = cache_mutex.lock().map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
 
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -90,10 +173,10 @@ pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
     let mut writer = std::io::BufWriter::new(file);
 
     // Write number of entries
-    let num_entries = map.len() as u32;
+    let num_entries = cache.map.len() as u32;
     writer.write_all(&num_entries.to_le_bytes())?;
 
-    for (key, values) in map.iter() {
+    for (key, (values, _tick)) in cache.map.iter() {
         // Write key length
         let key_bytes = key.as_bytes();
         let key_len = key_bytes.len() as u32;

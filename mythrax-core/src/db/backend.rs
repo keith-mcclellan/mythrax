@@ -313,6 +313,7 @@ pub struct SurrealBackend {
     pub avg_dl_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, (f32, std::time::Instant)>>>,
     pub search_mode: Arc<tokio::sync::Mutex<String>>,
     pub reranker: Arc<tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>>>,
+    pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl SurrealBackend {
@@ -1134,6 +1135,7 @@ impl SurrealBackend {
             avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
+            reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
         };
         let _ = GLOBAL_BACKEND.set(Arc::new(backend.clone()));
         Ok(backend)
@@ -1156,6 +1158,7 @@ impl SurrealBackend {
             avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
+            reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
         }
     }
 
@@ -4409,9 +4412,12 @@ impl StorageBackend for SurrealBackend {
                 if c.tier == "episode" {
                     let backend_clone = self.clone();
                     let id_clone = c.id.clone();
-                    tokio::spawn(async move {
-                        let _ = backend_clone.reinforce_episode(&id_clone).await;
-                    });
+                    if let Ok(permit) = self.reinforcement_semaphore.clone().acquire_owned().await {
+                        tokio::spawn(async move {
+                            let _ = backend_clone.reinforce_episode(&id_clone).await;
+                            drop(permit);
+                        });
+                    }
                 }
             }
         }

@@ -781,10 +781,17 @@ impl DynamicModelBroker {
 
         // 2. Block until the strong reference count of all evicted models drops to 0 (weak upgrade returns None)
         for (t, weak_ref) in evict_list {
+            let start_wait = tokio::time::Instant::now();
             while weak_ref.upgrade().is_some() {
+                if start_wait.elapsed() >= std::time::Duration::from_secs(30) {
+                    tracing::warn!("Timeout waiting for evicted model tier {:?} to deallocate from VRAM", t);
+                    break;
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tracing::info!("Evicted model tier {:?} successfully deallocated from VRAM", t);
+            if weak_ref.upgrade().is_none() {
+                tracing::info!("Evicted model tier {:?} successfully deallocated from VRAM", t);
+            }
         }
 
         // 3. Determine the model name and download paths WITHOUT holding the lock

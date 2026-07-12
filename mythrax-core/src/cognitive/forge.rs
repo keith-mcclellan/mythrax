@@ -480,32 +480,39 @@ pub fn extract_pdf_text(path: &Path) -> Result<String> {
     Ok(text)
 }
 
+static CACHED_TOKENIZER: std::sync::OnceLock<Option<tokenizers::Tokenizer>> = std::sync::OnceLock::new();
+
+fn get_cached_tokenizer() -> Option<&'static tokenizers::Tokenizer> {
+    CACHED_TOKENIZER.get_or_init(|| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
+        if tokenizer_path.exists() {
+            tokenizers::Tokenizer::from_file(&tokenizer_path).ok()
+        } else {
+            None
+        }
+    }).as_ref()
+}
+
 /// Chunk text into token-sized chunks (or word fallbacks)
 pub fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
-    use tokenizers::Tokenizer;
-    
-    let home = std::env::var("HOME").unwrap_or_default();
-    let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
-    
-    if tokenizer_path.exists() {
-        if let Ok(tokenizer) = Tokenizer::from_file(&tokenizer_path) {
-            if let Ok(encoding) = tokenizer.encode(text, false) {
-                let ids = encoding.get_ids();
-                let mut chunks = Vec::new();
-                let mut start = 0;
-                while start < ids.len() {
-                    let end = std::cmp::min(start + chunk_size, ids.len());
-                    let chunk_ids = &ids[start..end];
-                    if let Ok(chunk_text) = tokenizer.decode(chunk_ids, false) {
-                        chunks.push(chunk_text);
-                    }
-                    if end == ids.len() {
-                        break;
-                    }
-                    start += chunk_size - overlap;
+    if let Some(tokenizer) = get_cached_tokenizer() {
+        if let Ok(encoding) = tokenizer.encode(text, false) {
+            let ids = encoding.get_ids();
+            let mut chunks = Vec::new();
+            let mut start = 0;
+            while start < ids.len() {
+                let end = std::cmp::min(start + chunk_size, ids.len());
+                let chunk_ids = &ids[start..end];
+                if let Ok(chunk_text) = tokenizer.decode(chunk_ids, false) {
+                    chunks.push(chunk_text);
                 }
-                return chunks;
+                if end == ids.len() {
+                    break;
+                }
+                start += chunk_size - overlap;
             }
+            return chunks;
         }
     }
     
@@ -651,16 +658,9 @@ pub struct LogicalSection {
 }
 
 pub fn count_tokens(text: &str) -> usize {
-    use tokenizers::Tokenizer;
-    
-    let home = std::env::var("HOME").unwrap_or_default();
-    let tokenizer_path = Path::new(&home).join(".mythrax/models/tokenizer.json");
-    
-    if tokenizer_path.exists() {
-        if let Ok(tokenizer) = Tokenizer::from_file(&tokenizer_path) {
-            if let Ok(encoding) = tokenizer.encode(text, false) {
-                return encoding.get_ids().len();
-            }
+    if let Some(tokenizer) = get_cached_tokenizer() {
+        if let Ok(encoding) = tokenizer.encode(text, false) {
+            return encoding.get_ids().len();
         }
     }
     

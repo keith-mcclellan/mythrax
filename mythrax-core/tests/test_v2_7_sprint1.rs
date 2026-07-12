@@ -245,3 +245,87 @@ async fn test_graceful_shutdown_channel() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_embedding_cache_lru_eviction() {
+    // Clear the cache first to ensure a clean state
+    mythrax_core::embeddings::clear_embedding_cache();
+
+    // Assert initially empty
+    assert_eq!(mythrax_core::embeddings::get_embedding_cache_len(), 0);
+
+    // Insert 10,000 items
+    for i in 0..10000 {
+        let text = format!("key_{}", i);
+        let embedding = vec![i as f32; 10];
+        mythrax_core::embeddings::cache_embedding(text, embedding);
+    }
+    assert_eq!(mythrax_core::embeddings::get_embedding_cache_len(), 10000);
+
+    // Access key_0 to make it recently used
+    let _ = mythrax_core::embeddings::get_cached_embedding("key_0");
+
+    // Insert 1 more item (total insertions 10,001, but size should stay capped at 10,000)
+    mythrax_core::embeddings::cache_embedding("key_10000".to_string(), vec![10000.0; 10]);
+
+    // Since key_0 was accessed, the next oldest was key_1, so key_1 should be evicted and key_0 should still exist!
+    assert_eq!(mythrax_core::embeddings::get_embedding_cache_len(), 10000);
+    assert!(mythrax_core::embeddings::get_cached_embedding("key_1").is_none());
+    assert!(mythrax_core::embeddings::get_cached_embedding("key_0").is_some());
+    
+    // Insert 10,005 items in total, verifying size stays capped at 10,000
+    for i in 10001..10005 {
+        let text = format!("key_{}", i);
+        let embedding = vec![i as f32; 10];
+        mythrax_core::embeddings::cache_embedding(text, embedding);
+    }
+    assert_eq!(mythrax_core::embeddings::get_embedding_cache_len(), 10000);
+}
+
+#[tokio::test]
+async fn test_tokio_spawn_semaphore_cap() -> Result<()> {
+    let backend = SurrealBackend::new_in_memory().await?;
+    // The semaphore should start with 10 permits.
+    assert_eq!(backend.reinforcement_semaphore.available_permits(), 10);
+    
+    // Acquire 10 permits
+    let mut permits = Vec::new();
+    for _ in 0..10 {
+        permits.push(backend.reinforcement_semaphore.clone().acquire_owned().await?);
+    }
+    
+    // Now there are 0 permits available.
+    assert_eq!(backend.reinforcement_semaphore.available_permits(), 0);
+    
+    // If we try to acquire another, it blocks/fails.
+    assert!(backend.reinforcement_semaphore.try_acquire().is_err());
+    
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_vram_eviction_timeout() -> Result<()> {
+    use mythrax_core::llm::{DynamicModelBroker, ModelTier};
+
+    let temp = tempdir()?;
+    let broker = DynamicModelBroker::new(temp.path().to_path_buf()).await?;
+
+    // Load Tier 1 model
+    let tier1_engine = broker.acquire_llm(ModelTier::Tier1).await?;
+    
+    // Hold a strong reference to Tier 1 model to simulate it blocking/failing to deallocate
+    let _strong_ref = tier1_engine.clone();
+
+    // Call acquire_llm for Tier 2. This would block forever without the timeout.
+    // With the timeout, it should complete.
+    let start = tokio::time::Instant::now();
+    let tier2_engine = broker.acquire_llm(ModelTier::Tier2).await?;
+    let elapsed = start.elapsed();
+
+    // The timeout is 30 seconds, so elapsed should be at least 30 seconds (virtual time)
+    assert!(elapsed >= std::time::Duration::from_secs(30));
+    assert!(tier2_engine.name().contains("Qwen"));
+
+    Ok(())
+}
+
