@@ -359,6 +359,24 @@ pub fn resolve_scope_from_path(path: &Path) -> Option<String> {
 
 pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(log_path).ok()?;
+    
+    // 1. Try parsing active workspaces from <user_information>
+    if let Some(info_start) = content.find("<user_information>") {
+        if let Some(info_offset) = content[info_start..].find("</user_information>") {
+            let info_block = &content[info_start..info_start + info_offset];
+            for line in info_block.lines() {
+                if let Some(arrow_idx) = line.find(" -> ") {
+                    let path_part = line[..arrow_idx].trim();
+                    let path = Path::new(path_part);
+                    if let Some(scope) = resolve_scope_from_path(path) {
+                        return Some(scope);
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: Existing generic scanner
     let mut scopes: Vec<String> = Vec::new();
     let folder_prefixes = ["/Documents/", "/repos/", "/workspace/", "/workspaces/", "/projects/"];
     

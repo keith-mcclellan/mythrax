@@ -4300,3 +4300,184 @@ query: "How many weeks had passed since I recovered from the flu when I went on 
 query: "How many days had passed since I started taking ukulele lessons when I decided to take my acoustic guitar to the guitar tech for servicing?", profile: 20657us, embed: 616us, terms: 29us, db: 41053us, rerank_start: 94693us, total: 162657us
 query: "What did I do with Rachel on the Wednesday two months ago?", profile: 16801us, embed: 572us, terms: 12us, db: 33935us, rerank_start: 98635us, total: 156751us
 query: "How many months ago did I attend the photography workshop?", profile: 17340us, embed: 575us, terms: 13us, db: 33754us, rerank_start: 18479us, total: 74811us
+query: "second step before", profile: 1977us, embed: 9472us, terms: 1152us, db: 3516us, rerank_start: 4811us, total: 21002us
+query: "Redis", profile: 1us, embed: 5920us, terms: 914us, db: 4664us, rerank_start: 1121us, total: 12874us
+query: "failure", profile: 0us, embed: 2269us, terms: 11us, db: 2826us, rerank_start: 396us, total: 5553us
+query: "Parent Insight", profile: 2us, embed: 7396us, terms: 1156us, db: 3290us, rerank_start: 1087us, total: 12969us
+query: "Parent Insight", profile: 0us, embed: 2380us, terms: 15us, db: 3679us, rerank_start: 423us, total: 6596us
+query: "Parent Insight", profile: 2us, embed: 7297us, terms: 1115us, db: 3905us, rerank_start: 1089us, total: 13528us
+query: "Parent Insight", profile: 0us, embed: 2260us, terms: 14us, db: 1927us, rerank_start: 380us, total: 4624us
+query: "Concurrency", profile: 2us, embed: 5893us, terms: 711us, db: 3206us, rerank_start: 1143us, total: 11062us
+query: "secret", profile: 2us, embed: 6036us, terms: 1612us, db: 2709us, rerank_start: 1063us, total: 11464us
+query: "secret", profile: 0us, embed: 2187us, terms: 595us, db: 2491us, rerank_start: 399us, total: 5703us
+query: "Secret", profile: 1us, embed: 6078us, terms: 881us, db: 1511us, rerank_start: 1019us, total: 9518us
+query: "Secret", profile: 0us, embed: 2295us, terms: 14us, db: 3018us, rerank_start: 415us, total: 5783us
+query: "Multi-Paragraph", profile: 2us, embed: 6111us, terms: 1605us, db: 2665us, rerank_start: 1450us, total: 39719us
+query: "Multi-Paragraph", profile: 2us, embed: 2851us, terms: 641us, db: 2902us, rerank_start: 405us, total: 8663us
+query: "Single-Paragraph", profile: 0us, embed: 2334us, terms: 602us, db: 2611us, rerank_start: 381us, total: 15663us
+query: "Avoid", profile: 2us, embed: 6199us, terms: 1558us, db: 2671us, rerank_start: 1412us, total: 38610us
+query: "Avoid", profile: 1us, embed: 2658us, terms: 670us, db: 2853us, rerank_start: 408us, total: 7898us
+query: "redis", profile: 2us, embed: 5844us, terms: 897us, db: 2998us, rerank_start: 1128us, total: 10918us
+query: "Pattern", profile: 2us, embed: 5967us, terms: 927us, db: 3637us, rerank_start: 1093us, total: 39547us
+query: "bidirectional sync", profile: 2us, embed: 7463us, terms: 1044us, db: 3861us, rerank_start: 1228us, total: 13657us
+query: "updated body", profile: 2us, embed: 4397us, terms: 36us, db: 5573us, rerank_start: 688us, total: 10760us
+query: "Body content", profile: 0us, embed: 6022us, terms: 1100us, db: 3635us, rerank_start: 1137us, total: 11943us
+query: "SWEEP_TEST_VERIFICATION_TOKEN", profile: 1us, embed: 6277us, terms: 987us, db: 4202us, rerank_start: 1154us, total: 12693us
+query: "ADDITIONAL_TEST_TOKEN", profile: 2us, embed: 3279us, terms: 41us, db: 5489us, rerank_start: 597us, total: 9527us
+query: "What troubleshooting steps have already been taken?", profile: 6us, embed: 19928us, terms: 1545us, db: 9154us, rerank_start: 7102us, total: 38076us
+query: "What did I conclude about the root cause of the hang?", profile: 1us, embed: 12154us, terms: 70us, db: 7896us, rerank_start: 607us, total: 20847us
+query: "What commands were run during the port 8080 troubleshooting?", profile: 0us, embed: 7073us, terms: 485us, db: 8391us, rerank_start: 15265us, total: 32209us
+query: "What query was causing the database deadlock?", profile: 0us, embed: 10297us, terms: 54us, db: 7818us, rerank_start: 629us, total: 19449us
+query: "Which process did we check to see if it was listening on port 8080?", profile: 0us, embed: 10013us, terms: 50us, db: 9804us, rerank_start: 665us, total: 21129us
+query: "Database index compression", profile: 1us, embed: 7091us, terms: 986us, db: 5238us, rerank_start: 1225us, total: 14591us
+query: "Database index compression", profile: 11751us, embed: 2477us, terms: 17us, db: 3829us, rerank_start: 1366us, total: 19459us
+query: "Unique content for test scaling similarity", profile: 1us, embed: 7151us, terms: 739us, db: 4420us, rerank_start: 1212us, total: 13596us
+query: "Unique content for test scaling similarity", profile: 0us, embed: 2422us, terms: 22us, db: 3955us, rerank_start: 395us, total: 6834us
+query: "Hello, how do I optimize the pipeline?", profile: 1484us, embed: 6163us, terms: 1605us, db: 2786us, rerank_start: 1736us, total: 13823us
+query: "current status", profile: 1067us, embed: 2397us, terms: 621us, db: 2665us, rerank_start: 1075us, total: 7843us
+query: "SpecialSearchQueryPattern", profile: 84us, embed: 5845us, terms: 930us, db: 1736us, rerank_start: 986us, total: 9603us
+query: "SpecialSearchQueryPattern", profile: 34us, embed: 2476us, terms: 22us, db: 2909us, rerank_start: 437us, total: 5943us
+query: "Rust database locks", profile: 0us, embed: 6498us, terms: 695us, db: 3722us, rerank_start: 1124us, total: 12077us
+query: "Rust database locks", profile: 0us, embed: 2230us, terms: 15us, db: 3291us, rerank_start: 407us, total: 5966us
+query: "Rust database locks", profile: 0us, embed: 2169us, terms: 15us, db: 3244us, rerank_start: 388us, total: 5840us
+query: "Rust database locks", profile: 1us, embed: 6029us, terms: 712us, db: 3482us, rerank_start: 1091us, total: 11349us
+query: "Rust database locks", profile: 0us, embed: 2301us, terms: 16us, db: 3301us, rerank_start: 438us, total: 6081us
+query: "architecture", profile: 5us, embed: 16251us, terms: 1483us, db: 6342us, rerank_start: 1387us, total: 25589us
+query: "architecture", profile: 9us, embed: 6905us, terms: 39us, db: 8164us, rerank_start: 1202us, total: 16444us
+query: "Unique content for test gaussian temporal decay", profile: 1us, embed: 6969us, terms: 535us, db: 4518us, rerank_start: 1196us, total: 13268us
+query: "Unique content for test gaussian temporal decay", profile: 0us, embed: 2395us, terms: 24us, db: 4146us, rerank_start: 404us, total: 7004us
+query: "basement pipes", profile: 1us, embed: 8244us, terms: 1024us, db: 4522us, rerank_start: 1352us, total: 15222us
+query: "basement pipes", profile: 1us, embed: 2374us, terms: 41us, db: 3646us, rerank_start: 1106us, total: 7240us
+query: "test summary", profile: 19us, embed: 7242us, terms: 1985us, db: 2915us, rerank_start: 1303us, total: 13489us
+query: "Episode", profile: 14us, embed: 7177us, terms: 1062us, db: 3723us, rerank_start: 1406us, total: 13482us
+query: "Episode", profile: 0us, embed: 5885us, terms: 15us, db: 3330us, rerank_start: 472us, total: 9767us
+query: "Core Logic", profile: 5us, embed: 6256us, terms: 951us, db: 4228us, rerank_start: 1141us, total: 12635us
+query: "[{\"name\": \"test_concept\", \"content\": \"test_explanation\"}]", profile: 1us, embed: 9091us, terms: 2203us, db: 5367us, rerank_start: 1339us, total: 18117us
+query: "Cited", profile: 1453us, embed: 2303us, terms: 17us, db: 3100us, rerank_start: 1209us, total: 8112us
+query: "Decay", profile: 4us, embed: 7049us, terms: 531us, db: 3388us, rerank_start: 1251us, total: 12254us
+query: "threshold test", profile: 1740us, embed: 6349us, terms: 1079us, db: 3881us, rerank_start: 2186us, total: 15286us
+query: "Sure, OK", profile: 2us, embed: 7091us, terms: 1039us, db: 3814us, rerank_start: 1379us, total: 13389us
+query: "Sure thing", profile: 1us, embed: 4439us, terms: 15us, db: 3216us, rerank_start: 403us, total: 8104us
+query: "troubleshooting process", profile: 1us, embed: 6688us, terms: 1081us, db: 3487us, rerank_start: 1333us, total: 12653us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 1us, embed: 6597us, terms: 1101us, db: 4479us, rerank_start: 1457us, total: 13708us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 5672us, terms: 22us, db: 3999us, rerank_start: 449us, total: 10203us
+query: "What compile actions did I run?", profile: 2us, embed: 16843us, terms: 1074us, db: 5631us, rerank_start: 5314us, total: 29014us
+query: "Hydration", profile: 29us, embed: 7387us, terms: 1040us, db: 3601us, rerank_start: 1368us, total: 13515us
+query: "Big Episode", profile: 3us, embed: 6746us, terms: 1152us, db: 4986us, rerank_start: 1400us, total: 16776us
+query: "Big Episode", profile: 1us, embed: 2652us, terms: 23us, db: 4819us, rerank_start: 542us, total: 10372us
+query: "Episode", profile: 3us, embed: 6909us, terms: 1039us, db: 3560us, rerank_start: 1288us, total: 12927us
+query: "Timeline Episode 3", profile: 3us, embed: 8330us, terms: 1293us, db: 4241us, rerank_start: 1363us, total: 15334us
+query: "Rust database locks", profile: 1us, embed: 7432us, terms: 1154us, db: 4560us, rerank_start: 1328us, total: 14551us
+query: "avoid_concurrency", profile: 0us, embed: 2370us, terms: 23us, db: 3134us, rerank_start: 412us, total: 6007us
+query: "test query", profile: 1588us, embed: 6349us, terms: 1720us, db: 2951us, rerank_start: 2087us, total: 14737us
+query: "security patterns", profile: 1us, embed: 7071us, terms: 1020us, db: 4298us, rerank_start: 1279us, total: 13771us
+query: "refactored tests or fixes", profile: 1us, embed: 6909us, terms: 1019us, db: 4154us, rerank_start: 1196us, total: 13381us
+query: "General note", profile: 1us, embed: 6867us, terms: 1033us, db: 3657us, rerank_start: 1262us, total: 12864us
+query: "RustDB", profile: 2040us, embed: 6416us, terms: 518us, db: 3117us, rerank_start: 2981us, total: 15140us
+query: "RustDB", profile: 1280us, embed: 2274us, terms: 15us, db: 2779us, rerank_start: 848us, total: 7206us
+query: "RocksDB process lock client mode", profile: 1308us, embed: 2431us, terms: 32us, db: 3628us, rerank_start: 903us, total: 8350us
+query: "Memory Leak Diagnostics", profile: 0us, embed: 2372us, terms: 23us, db: 3894us, rerank_start: 62us, total: 6392us
+query: "Memory Leak Diagnostics", profile: 1us, embed: 2626us, terms: 24us, db: 4126us, rerank_start: 52us, total: 6880us
+query: "Database Transaction Isolation", profile: 1396us, embed: 2376us, terms: 20us, db: 4077us, rerank_start: 942us, total: 8879us
+query: "Database Transaction Isolation", profile: 1268us, embed: 2340us, terms: 17us, db: 3917us, rerank_start: 874us, total: 8476us
+query: "second step before", profile: 1889us, embed: 9246us, terms: 1211us, db: 3433us, rerank_start: 4840us, total: 20682us
+query: "Redis", profile: 2us, embed: 6816us, terms: 969us, db: 4953us, rerank_start: 1214us, total: 14187us
+query: "failure", profile: 0us, embed: 2400us, terms: 14us, db: 3219us, rerank_start: 436us, total: 6105us
+query: "Parent Insight", profile: 2us, embed: 8382us, terms: 1258us, db: 3686us, rerank_start: 1177us, total: 14540us
+query: "Parent Insight", profile: 0us, embed: 2420us, terms: 15us, db: 3781us, rerank_start: 421us, total: 6728us
+query: "Parent Insight", profile: 2us, embed: 8547us, terms: 1313us, db: 4359us, rerank_start: 1303us, total: 15636us
+query: "Parent Insight", profile: 0us, embed: 2444us, terms: 13us, db: 2165us, rerank_start: 438us, total: 5101us
+query: "Concurrency", profile: 2us, embed: 6612us, terms: 792us, db: 3568us, rerank_start: 1287us, total: 12381us
+query: "secret", profile: 3us, embed: 6696us, terms: 1857us, db: 2868us, rerank_start: 1225us, total: 12689us
+query: "secret", profile: 0us, embed: 2378us, terms: 611us, db: 2649us, rerank_start: 393us, total: 6057us
+query: "Secret", profile: 2us, embed: 6706us, terms: 1042us, db: 1686us, rerank_start: 1259us, total: 10717us
+query: "Secret", profile: 0us, embed: 2524us, terms: 15us, db: 3233us, rerank_start: 464us, total: 6280us
+query: "Multi-Paragraph", profile: 2us, embed: 6756us, terms: 1719us, db: 3001us, rerank_start: 1240us, total: 42867us
+query: "Multi-Paragraph", profile: 0us, embed: 2750us, terms: 697us, db: 2958us, rerank_start: 439us, total: 8876us
+query: "Single-Paragraph", profile: 0us, embed: 2299us, terms: 614us, db: 2649us, rerank_start: 386us, total: 14828us
+query: "Avoid", profile: 2us, embed: 6852us, terms: 1763us, db: 3113us, rerank_start: 1199us, total: 41994us
+query: "Avoid", profile: 4us, embed: 2722us, terms: 667us, db: 2873us, rerank_start: 424us, total: 8105us
+query: "redis", profile: 2us, embed: 6538us, terms: 1066us, db: 3417us, rerank_start: 1279us, total: 12353us
+query: "Pattern", profile: 2us, embed: 6877us, terms: 1019us, db: 3803us, rerank_start: 1242us, total: 43250us
+query: "bidirectional sync", profile: 1us, embed: 7395us, terms: 1221us, db: 3710us, rerank_start: 1273us, total: 13663us
+query: "updated body", profile: 1us, embed: 4586us, terms: 24us, db: 4114us, rerank_start: 534us, total: 9305us
+query: "Body content", profile: 0us, embed: 6426us, terms: 1065us, db: 3689us, rerank_start: 1243us, total: 12468us
+query: "SWEEP_TEST_VERIFICATION_TOKEN", profile: 1us, embed: 6235us, terms: 1082us, db: 4520us, rerank_start: 1220us, total: 13125us
+query: "ADDITIONAL_TEST_TOKEN", profile: 0us, embed: 2482us, terms: 26us, db: 4251us, rerank_start: 488us, total: 7335us
+query: "What troubleshooting steps have already been taken?", profile: 4us, embed: 16372us, terms: 1160us, db: 5987us, rerank_start: 5395us, total: 29146us
+query: "What did I conclude about the root cause of the hang?", profile: 0us, embed: 9603us, terms: 34us, db: 7141us, rerank_start: 464us, total: 17327us
+query: "What commands were run during the port 8080 troubleshooting?", profile: 0us, embed: 6053us, terms: 282us, db: 7219us, rerank_start: 15329us, total: 29899us
+query: "What query was causing the database deadlock?", profile: 0us, embed: 9118us, terms: 33us, db: 7562us, rerank_start: 534us, total: 17881us
+query: "Which process did we check to see if it was listening on port 8080?", profile: 0us, embed: 9259us, terms: 32us, db: 9425us, rerank_start: 544us, total: 19818us
+query: "Database index compression", profile: 1us, embed: 12178us, terms: 1111us, db: 5109us, rerank_start: 1304us, total: 19747us
+query: "Database index compression", profile: 12649us, embed: 2452us, terms: 20us, db: 3974us, rerank_start: 1359us, total: 20472us
+query: "Unique content for test scaling similarity", profile: 1us, embed: 8289us, terms: 1357us, db: 4802us, rerank_start: 1657us, total: 16189us
+query: "Unique content for test scaling similarity", profile: 1us, embed: 2991us, terms: 45us, db: 4313us, rerank_start: 463us, total: 7879us
+query: "Hello, how do I optimize the pipeline?", profile: 1496us, embed: 6401us, terms: 1634us, db: 2822us, rerank_start: 2005us, total: 14381us
+query: "current status", profile: 1170us, embed: 2392us, terms: 643us, db: 2717us, rerank_start: 1121us, total: 8060us
+query: "SpecialSearchQueryPattern", profile: 102us, embed: 6581us, terms: 1035us, db: 1708us, rerank_start: 1095us, total: 10544us
+query: "SpecialSearchQueryPattern", profile: 38us, embed: 2794us, terms: 36us, db: 3518us, rerank_start: 522us, total: 6994us
+query: "Rust database locks", profile: 0us, embed: 6999us, terms: 815us, db: 3868us, rerank_start: 1209us, total: 12924us
+query: "Rust database locks", profile: 0us, embed: 2488us, terms: 16us, db: 3542us, rerank_start: 411us, total: 6483us
+query: "Rust database locks", profile: 0us, embed: 2317us, terms: 17us, db: 3544us, rerank_start: 413us, total: 6316us
+query: "Rust database locks", profile: 1us, embed: 6731us, terms: 781us, db: 3876us, rerank_start: 1176us, total: 12602us
+query: "Rust database locks", profile: 0us, embed: 2532us, terms: 17us, db: 3542us, rerank_start: 409us, total: 6525us
+query: "architecture", profile: 2us, embed: 13744us, terms: 1160us, db: 3813us, rerank_start: 1128us, total: 19917us
+query: "architecture", profile: 4us, embed: 7717us, terms: 28us, db: 10440us, rerank_start: 602us, total: 18874us
+query: "Unique content for test gaussian temporal decay", profile: 0us, embed: 7318us, terms: 533us, db: 4606us, rerank_start: 1295us, total: 13797us
+query: "Unique content for test gaussian temporal decay", profile: 0us, embed: 2610us, terms: 24us, db: 4507us, rerank_start: 505us, total: 7688us
+query: "basement pipes", profile: 0us, embed: 6115us, terms: 859us, db: 3673us, rerank_start: 1230us, total: 11931us
+query: "basement pipes", profile: 0us, embed: 2535us, terms: 20us, db: 3515us, rerank_start: 504us, total: 6615us
+query: "test summary", profile: 7us, embed: 7142us, terms: 2005us, db: 2911us, rerank_start: 1305us, total: 13390us
+query: "Episode", profile: 2us, embed: 6709us, terms: 1091us, db: 3522us, rerank_start: 1280us, total: 12673us
+query: "Episode", profile: 0us, embed: 5802us, terms: 14us, db: 3307us, rerank_start: 454us, total: 9642us
+query: "Core Logic", profile: 3us, embed: 6343us, terms: 1323us, db: 4139us, rerank_start: 1278us, total: 13132us
+query: "[{\"name\": \"test_concept\", \"content\": \"test_explanation\"}]", profile: 1us, embed: 9173us, terms: 2083us, db: 5152us, rerank_start: 1487us, total: 17961us
+query: "Cited", profile: 1475us, embed: 2365us, terms: 19us, db: 3084us, rerank_start: 1163us, total: 8139us
+query: "Decay", profile: 4us, embed: 6063us, terms: 560us, db: 3506us, rerank_start: 1240us, total: 11408us
+query: "threshold test", profile: 1609us, embed: 6784us, terms: 985us, db: 3729us, rerank_start: 1988us, total: 15139us
+query: "Sure, OK", profile: 1us, embed: 6798us, terms: 1025us, db: 3618us, rerank_start: 1242us, total: 12735us
+query: "Sure thing", profile: 0us, embed: 4329us, terms: 19us, db: 3281us, rerank_start: 418us, total: 8079us
+query: "troubleshooting process", profile: 1us, embed: 6403us, terms: 1160us, db: 3557us, rerank_start: 1420us, total: 12611us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 1us, embed: 7015us, terms: 1046us, db: 4623us, rerank_start: 1285us, total: 14046us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 1us, embed: 5680us, terms: 19us, db: 4045us, rerank_start: 445us, total: 10249us
+query: "What compile actions did I run?", profile: 3us, embed: 16684us, terms: 1069us, db: 5309us, rerank_start: 5473us, total: 28663us
+query: "Hydration", profile: 3us, embed: 6746us, terms: 1043us, db: 3367us, rerank_start: 1288us, total: 12495us
+query: "Big Episode", profile: 3us, embed: 5964us, terms: 925us, db: 4551us, rerank_start: 1141us, total: 14882us
+query: "Big Episode", profile: 1us, embed: 2608us, terms: 21us, db: 4672us, rerank_start: 515us, total: 10097us
+query: "Episode", profile: 7us, embed: 6156us, terms: 1019us, db: 3448us, rerank_start: 1133us, total: 11878us
+query: "Timeline Episode 3", profile: 3us, embed: 8794us, terms: 1361us, db: 4434us, rerank_start: 1319us, total: 16017us
+query: "Rust database locks", profile: 0us, embed: 6717us, terms: 1112us, db: 4140us, rerank_start: 1214us, total: 13231us
+query: "avoid_concurrency", profile: 0us, embed: 2342us, terms: 24us, db: 3235us, rerank_start: 456us, total: 6130us
+query: "test query", profile: 1506us, embed: 6125us, terms: 1570us, db: 2772us, rerank_start: 1804us, total: 13800us
+query: "security patterns", profile: 1us, embed: 7588us, terms: 1148us, db: 4119us, rerank_start: 1293us, total: 14229us
+query: "refactored tests or fixes", profile: 1us, embed: 7279us, terms: 1085us, db: 4246us, rerank_start: 1327us, total: 14028us
+query: "General note", profile: 1us, embed: 6840us, terms: 1223us, db: 3676us, rerank_start: 1313us, total: 13097us
+query: "RustDB", profile: 1870us, embed: 6173us, terms: 475us, db: 2915us, rerank_start: 2707us, total: 14194us
+query: "RustDB", profile: 1375us, embed: 2343us, terms: 14us, db: 2814us, rerank_start: 854us, total: 7410us
+query: "RocksDB process lock client mode", profile: 1436us, embed: 2472us, terms: 30us, db: 3507us, rerank_start: 866us, total: 8357us
+query: "Memory Leak Diagnostics", profile: 0us, embed: 2342us, terms: 24us, db: 3770us, rerank_start: 52us, total: 6229us
+query: "Memory Leak Diagnostics", profile: 1us, embed: 2603us, terms: 24us, db: 4128us, rerank_start: 52us, total: 6854us
+query: "Database Transaction Isolation", profile: 1417us, embed: 2431us, terms: 18us, db: 4070us, rerank_start: 974us, total: 8978us
+query: "Database Transaction Isolation", profile: 1339us, embed: 2357us, terms: 20us, db: 3985us, rerank_start: 903us, total: 8667us
+query: "RustDB", profile: 1us, embed: 7160us, terms: 309us, db: 3167us, rerank_start: 2022us, total: 12711us
+query: "general context", profile: 2017us, embed: 6556us, terms: 989us, db: 3532us, rerank_start: 2193us, total: 15327us
+query: "general context", profile: 1578us, embed: 6037us, terms: 1900us, db: 2816us, rerank_start: 1921us, total: 14269us
+query: "general context", profile: 1229us, embed: 2544us, terms: 793us, db: 2929us, rerank_start: 2521us, total: 10040us
+query: "general context", profile: 1264us, embed: 2535us, terms: 684us, db: 2883us, rerank_start: 1384us, total: 8768us
+query: "general context", profile: 1742us, embed: 6012us, terms: 1586us, db: 2847us, rerank_start: 1987us, total: 14207us
+query: "Hello", profile: 1652us, embed: 6746us, terms: 1710us, db: 2901us, rerank_start: 1827us, total: 14868us
+query: "Hello again", profile: 1127us, embed: 2411us, terms: 662us, db: 2709us, rerank_start: 1111us, total: 8034us
+query: "Hello", profile: 1459us, embed: 6194us, terms: 1789us, db: 2899us, rerank_start: 1839us, total: 14196us
+query: "Agentic Memory", profile: 1us, embed: 6939us, terms: 1098us, db: 4207us, rerank_start: 1357us, total: 13745us
+query: "Write 4", profile: 2us, embed: 8102us, terms: 1806us, db: 3161us, rerank_start: 1119us, total: 14224us
+query: "Bulk Content 19", profile: 0us, embed: 2437us, terms: 672us, db: 2738us, rerank_start: 384us, total: 6243us
+query: "Write 4", profile: 3us, embed: 7324us, terms: 771us, db: 3345us, rerank_start: 448us, total: 11906us
+query: "Bulk Content 19", profile: 0us, embed: 2696us, terms: 705us, db: 2933us, rerank_start: 413us, total: 6761us
+query: "Write 4", profile: 4us, embed: 7653us, terms: 933us, db: 8722us, rerank_start: 469us, total: 17797us
+query: "Bulk Content 19", profile: 0us, embed: 2648us, terms: 677us, db: 2806us, rerank_start: 389us, total: 6533us
+query: "Write 4", profile: 4us, embed: 8574us, terms: 861us, db: 8352us, rerank_start: 447us, total: 18252us
+query: "Bulk Content 19", profile: 0us, embed: 2656us, terms: 661us, db: 2735us, rerank_start: 384us, total: 6448us
+query: "Write 4", profile: 4us, embed: 21075us, terms: 12296us, db: 11723us, rerank_start: 15719us, total: 60881us
+query: "Bulk Content 19", profile: 1us, embed: 19806us, terms: 3678us, db: 11687us, rerank_start: 413us, total: 35603us
+query: "Bulk Content 19", profile: 4us, embed: 7821us, terms: 800us, db: 8797us, rerank_start: 469us, total: 17924us
