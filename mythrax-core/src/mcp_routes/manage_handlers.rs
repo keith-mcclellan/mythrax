@@ -1239,6 +1239,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
     let initial_context = {
         let mut base = String::new();
+        base.push_str("### 💡 Mythrax Skill Playbook Reminder\n> [!IMPORTANT]\n> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.\n\n");
         if !belief_part.is_empty() {
             base.push_str(&belief_part);
         }
