@@ -23,9 +23,10 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
 For in-depth guides, architectural references, and developer playbooks, see the following documentation:
 
 - **[User Guide](mythrax_user_guide.md)**: A complete reference manual covering core memory entities, the Smart Handoff protocol, the ingestion pipeline, and a comprehensive CLI/MCP tool reference.
-- **[Architecture Reference](ARCHITECTURE.md)**: Detailed specifications of the single-port gateway, dual-engine database persistence, VRAM safeguards, WAL concurrency, and graceful shutdown lifecycles.
+- **[Architecture Reference](ARCHITECTURE.md)**: Detailed specifications of the single-port gateway, dual-engine database persistence, VRAM safeguards, and graceful shutdown lifecycles.
 - **[Developer Guide](DEVELOPMENT.md)**: A step-by-step guide for developers on how to add or extend tools under the action-enum-based architecture.
 - **[Agent Skill Playbook](.agents/skills/mythrax/SKILL.md)**: Guidelines and rules for AI agents utilizing the Mythrax MCP server, including the pre-invocation hook boot check compliance.
+- **[Reinitialization Playbook](REINITIALIZATION.md)**: Concise guide to resetting database/vault environments and reingesting conversation history.
 
 ---
 
