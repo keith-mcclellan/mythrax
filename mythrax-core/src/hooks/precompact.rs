@@ -102,6 +102,7 @@ pub async fn mine_transcript(
     let mut current_offset = start_offset;
     let mut saved_count = 0;
     let mut prev_saved_id: Option<String> = None;
+    let mut tool_sequence = Vec::new();
 
     let all_eps = backend.get_all_episodes().await.unwrap_or_default();
     let mut has_previous_user_input = all_eps.iter().any(|ep| {
@@ -123,6 +124,15 @@ pub async fn mine_transcript(
         let line_str = buf.trim_end_matches('\n').trim_end_matches('\r');
 
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
+            // Extract tool calls
+            if let Some(tool_calls_arr) = val.get("tool_calls").and_then(|v| v.as_array()) {
+                for tc in tool_calls_arr {
+                    if let Some(name) = tc.get("name").and_then(|v| v.as_str()) {
+                        tool_sequence.push(name.to_string());
+                    }
+                }
+            }
+
             // Check for checklist items in the content (WU-3.3)
             let content_opt = val.get("content").and_then(|c| c.as_str())
                 .or_else(|| val.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()));
@@ -220,10 +230,64 @@ pub async fn mine_transcript(
 
     let _ = backend.save_stm(session, "transcript_offset", &current_offset.to_string()).await;
 
+    // Run n-gram analysis on the extracted tool sequence
+    let _ = analyze_tool_calls_ngrams(backend, &tool_sequence).await;
+
     // 2.0 dual-durability journaling
     backend.journal_state(&store.vault_root, Some(session))
         .await
         .context("Failed to journal state after transcript mining")?;
 
     Ok(saved_count)
+}
+
+async fn analyze_tool_calls_ngrams(backend: &dyn StorageBackend, tool_sequence: &[String]) -> Result<()> {
+    if tool_sequence.len() < 2 {
+        return Ok(());
+    }
+
+    let mut counts: std::collections::HashMap<Vec<String>, usize> = std::collections::HashMap::new();
+
+    for len in 2..=4 {
+        if tool_sequence.len() < len {
+            continue;
+        }
+        for i in 0..=(tool_sequence.len() - len) {
+            let ngram = tool_sequence[i..(i + len)].to_vec();
+            *counts.entry(ngram).or_insert(0) += 1;
+        }
+    }
+
+    for (ngram, count) in counts {
+        if count >= 2 {
+            let chain_str = ngram.join(" -> ");
+            let uuid = uuid::Uuid::new_v4().to_string();
+            let rule = crate::contracts::WisdomRule {
+                id: Some(format!("wisdom:{}", uuid)),
+                target_pattern: format!("Tool sequence: {}", chain_str),
+                action_to_avoid: format!("Avoid manually repeating this tool sequence: {}", chain_str),
+                causal_explanation: format!("This tool chain was used {} times in the session transcript.", count),
+                prescribed_remedy: format!("Automate this sequence using a combined batch route or helper tool: {}", chain_str),
+                tier: crate::contracts::Tier::Project,
+                scope: "general".to_string(),
+                vault_path: None,
+                embedding: None,
+                source_episodes: vec![],
+                generator_name: "TranscriptNgramMiner".to_string(),
+                similarity: Some(1.0),
+                utility: Some(1.0),
+                status: Some("active".to_string()),
+                superseded_at: None,
+                superseded_by: None,
+                rule_type: Some("frequent_tool_chain".to_string()),
+                severity: Some("info".to_string()),
+                blocking: Some(false),
+                importance: Some(5.0),
+            };
+
+            let _ = backend.save_wisdom_rule(&rule).await;
+        }
+    }
+
+    Ok(())
 }

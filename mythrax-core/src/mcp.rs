@@ -268,7 +268,8 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     Ok(json!({
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
-                            "tools": {}
+                            "tools": {},
+                            "resources": {}
                         },
                         "serverInfo": {
                             "name": "mythrax",
@@ -285,6 +286,57 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
                     self.call_tool(name, arguments).await
                 }
+                "tools/call_batch" => {
+                    let calls_val = if params.is_array() {
+                        &params
+                    } else {
+                        params.get("calls").ok_or_else(|| anyhow::anyhow!("Missing 'calls' parameter"))?
+                    };
+                    let calls_arr = calls_val.as_array().ok_or_else(|| anyhow::anyhow!("'calls' must be an array"))?;
+                    let mut futures = Vec::new();
+                    for call in calls_arr {
+                        let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let arguments = call.get("arguments").or_else(|| call.get("args")).cloned().unwrap_or(Value::Null);
+                        let self_ref = self;
+                        futures.push(async move {
+                            match self_ref.call_tool(&name, arguments).await {
+                                Ok(res) => json!({ "status": "success", "result": res }),
+                                Err(e) => json!({ "status": "error", "message": e.to_string() }),
+                            }
+                        });
+                    }
+                    let results = futures_util::future::join_all(futures).await;
+                    Ok(Value::Array(results))
+                }
+                "resources/list" => {
+                    Ok(json!({
+                        "resources": [
+                            {
+                                "uri": "htr://tree",
+                                "name": "Active Hypothesis Tree",
+                                "description": "Structured JSON representation of the active hypothesis tree.",
+                                "mimeType": "application/json"
+                            }
+                        ]
+                    }))
+                }
+                "resources/read" => {
+                    let uri = params.get("uri").and_then(|v| v.as_str()).context("Missing uri in resources/read")?;
+                    if uri == "htr://tree" {
+                        let tree_str = get_htr_tree_json(_local.backend.as_ref()).await?;
+                        Ok(json!({
+                            "contents": [
+                                {
+                                    "uri": "htr://tree",
+                                    "mimeType": "application/json",
+                                    "text": tree_str
+                                }
+                            ]
+                        }))
+                    } else {
+                        anyhow::bail!("Resource not found: {}", uri)
+                    }
+                }
                 _ => anyhow::bail!("Method not found: {}", method),
             }
         } else {
@@ -300,7 +352,8 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     Ok(json!({
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
-                            "tools": {}
+                            "tools": {},
+                            "resources": {}
                         },
                         "serverInfo": {
                             "name": "mythrax",
@@ -348,8 +401,69 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     let call_result: Value = resp.json().await.context("Failed to parse daemon tool call result JSON")?;
                     Ok(call_result)
                 }
+                "tools/call_batch" => {
+                    let calls_val = if params.is_array() {
+                        &params
+                    } else {
+                        params.get("calls").ok_or_else(|| anyhow::anyhow!("Missing 'calls' parameter"))?
+                    };
+                    let calls_arr = calls_val.as_array().ok_or_else(|| anyhow::anyhow!("'calls' must be an array"))?;
+                    let mut futures = Vec::new();
+                    for call in calls_arr {
+                        let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let arguments = call.get("arguments").or_else(|| call.get("args")).cloned().unwrap_or(Value::Null);
+                        let self_ref = self;
+                        futures.push(async move {
+                            match self_ref.call_tool(&name, arguments).await {
+                                Ok(res) => json!({ "status": "success", "result": res }),
+                                Err(e) => json!({ "status": "error", "message": e.to_string() }),
+                            }
+                        });
+                    }
+                    let results = futures_util::future::join_all(futures).await;
+                    Ok(Value::Array(results))
+                }
+                "resources/list" => {
+                    let url = format!("{}/v1/mcp/resources", self.daemon_url);
+                    let resp = self.http_client.get(&url)
+                        .header("X-Mythrax-Token", &self.auth_token)
+                        .send()
+                        .await
+                        .context("Failed to contact daemon resources endpoint")?;
+                    if resp.status() != reqwest::StatusCode::OK {
+                        anyhow::bail!("Daemon returned error status listing resources: {}", resp.status());
+                    }
+                    let resources_list: Value = resp.json().await.context("Failed to parse daemon resources JSON")?;
+                    Ok(resources_list)
+                }
+                "resources/read" => {
+                    let uri = params.get("uri").and_then(|v| v.as_str()).context("Missing uri in resources/read")?;
+                    let url = format!("{}/v1/mcp/resources/read", self.daemon_url);
+                    let payload = json!({ "uri": uri });
+                    let resp = self.http_client.post(&url)
+                        .header("X-Mythrax-Token", &self.auth_token)
+                        .json(&payload)
+                        .send()
+                        .await
+                        .context("Failed to contact daemon resources/read endpoint")?;
+                    if resp.status() != reqwest::StatusCode::OK {
+                        anyhow::bail!("Daemon returned error status reading resource '{}': {}", uri, resp.status());
+                    }
+                    let read_result: Value = resp.json().await.context("Failed to parse daemon resource read result JSON")?;
+                    Ok(read_result)
+                }
                 _ => anyhow::bail!("Method not found: {}", method),
             }
         }
     }
+}
+
+async fn get_htr_tree_json(backend: &dyn StorageBackend) -> Result<String> {
+    let sql = "SELECT * FROM hypothesis_node;";
+    let surreal_backend = backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+        .context("SurrealBackend required")?;
+    let mut response = surreal_backend.db.query(sql).await?.check()?;
+    let nodes: Vec<crate::contracts::HypothesisNode> = response.take(0)?;
+    let tree_json = serde_json::to_string_pretty(&nodes)?;
+    Ok(tree_json)
 }

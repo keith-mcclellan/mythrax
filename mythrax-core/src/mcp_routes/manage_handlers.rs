@@ -577,6 +577,57 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     // WU-4.5: TTL Sweep & LargeLocal Fallback
     let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(state).await;
 
+    // WU-6.9: PagingManager context window paging
+    let token_budget = 8000u32;
+    let sql_session = "SELECT * FROM episode WHERE session_id = $session_id AND archived = false;";
+    if let Ok(mut resp) = surreal_backend.db.query(sql_session).bind(("session_id", session_id)).await {
+        if let Ok(episodes) = resp.take::<Vec<crate::contracts::Episode>>(0) {
+            let mut total_tokens = 0u32;
+            let mut pm = crate::cognitive::memory_os::PagingManager::new(500);
+
+            for ep in &episodes {
+                let tokens = calc_tokens(&ep.title, &ep.content, ep.facts.as_deref());
+                total_tokens += tokens;
+                
+                if let Some(ref id) = ep.id {
+                    let pinned = ep.node_type.as_deref() == Some("user_input") || ep.node_type.as_deref() == Some("task_checklist");
+                    pm.access_node(id.clone(), crate::cognitive::memory_os::ActiveNodeInfo {
+                        importance: ep.importance.unwrap_or(50.0),
+                        node_type: "episode".to_string(),
+                        pinned,
+                    });
+                }
+            }
+
+            if total_tokens > token_budget {
+                let excess_tokens = total_tokens.saturating_sub(token_budget);
+                let mut tokens_freed = 0u32;
+                
+                let mut evictable_episodes = episodes.iter()
+                    .filter(|ep| {
+                        let is_pinned = ep.node_type.as_deref() == Some("user_input") || ep.node_type.as_deref() == Some("task_checklist");
+                        !is_pinned && ep.id.is_some()
+                    })
+                    .collect::<Vec<_>>();
+                evictable_episodes.sort_by(|a, b| a.importance.unwrap_or(50.0).partial_cmp(&b.importance.unwrap_or(50.0)).unwrap_or(std::cmp::Ordering::Equal));
+
+                for ep in evictable_episodes {
+                    if tokens_freed >= excess_tokens {
+                        break;
+                    }
+                    let tokens = calc_tokens(&ep.title, &ep.content, ep.facts.as_deref());
+                    tokens_freed += tokens;
+
+                    if let Some(ref id) = ep.id {
+                        let id_raw = id.split(':').nth(1).unwrap_or(id).to_string();
+                        let archive_sql = "UPDATE type::record('episode', $id) MERGE { archived: true, archived_at: time::now() };";
+                        let _ = surreal_backend.db.query(archive_sql).bind(("id", id_raw)).await;
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(q) = query {
         let insert_sql = "INSERT INTO chat_history { session_id: $session_id, role: 'user', content: $content, created_at: time::now() };";
         let _ = surreal_backend.db.query(insert_sql)

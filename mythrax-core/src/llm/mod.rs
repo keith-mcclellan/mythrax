@@ -45,6 +45,7 @@ pub fn metal_embedding_semaphore() -> &'static Semaphore {
     METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
+#[derive(Clone)]
 pub struct LLMClient {
     client: reqwest::Client,
 }
@@ -355,6 +356,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
         _parent_id: &str,
         parent_hypothesis: &str,
         target_files: &[(String, String)],
+        constraints: &[String],
     ) -> Result<String> {
         let mut files_context = String::new();
         for (path, content) in target_files {
@@ -387,8 +389,17 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             }
         }
 
+        let mut constraints_injection = String::new();
+        if !constraints.is_empty() {
+            constraints_injection.push_str("\n\nYou MUST respect the following constraints during code generation:\n");
+            for c in constraints {
+                constraints_injection.push_str(&format!("- {}\n", c));
+            }
+        }
+
         let prompt = format!(
             "You are an autonomous codebase researcher. We are modifying the following files:\n\n\
+             {}\n\
              {}\n\
              Based on the parent hypothesis: \"{}\", propose two alternative refinements.\n\
              For each refinement, suggest sequential node_id (e.g. \"1\", \"2\"), description, expected utility score (0.0 to 100.0), and a 'code_changes' map containing relative file paths to their COMPLETE updated file contents.\n\n\
@@ -404,12 +415,12 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                }}\n\
              ]\n\n\
              Output format MUST be a raw JSON array only, without any markdown formatting or code block wrapping.",
-            files_context, parent_hypothesis
+            files_context, constraints_injection, parent_hypothesis
         );
 
         let system_prompt = format!(
-            "You are an ideation assistant that outputs raw JSON arrays.{}",
-            wisdom_injection
+            "You are an ideation assistant that outputs raw JSON arrays.{}{}",
+            wisdom_injection, constraints_injection
         );
 
         self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(&system_prompt), &prompt).await
@@ -490,7 +501,13 @@ async fn send_with_retry(
                 let status = resp.status();
                 let body_text = resp.text().await.unwrap_or_default();
                 tracing::warn!("HTTP request failed with status {}: {}", status, body_text);
-                if attempt >= 5 {
+                let is_transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                    || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                    || status.as_u16() == 429
+                    || status.as_u16() == 500
+                    || status.as_u16() == 503;
+                if !is_transient || attempt >= 5 {
                     anyhow::bail!("HTTP request failed with status {}: {}", status, body_text);
                 }
             }

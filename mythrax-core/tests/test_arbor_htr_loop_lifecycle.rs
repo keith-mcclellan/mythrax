@@ -9,6 +9,7 @@ use tempfile::TempDir;
 use mythrax_core::contracts::HypothesisNode;
 use mythrax_core::cognitive::arbor::{ArborCoordinator, ArborLlmClient};
 
+#[derive(Clone)]
 pub struct MockLLMClient;
 
 impl Default for MockLLMClient {
@@ -30,6 +31,7 @@ impl ArborLlmClient for MockLLMClient {
         _parent_id: &str,
         _parent_hypothesis: &str,
         _target_files: &[(String, String)],
+        _constraints: &[String],
     ) -> Result<String> {
         Ok(r#"[
             {

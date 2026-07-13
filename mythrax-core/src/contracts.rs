@@ -121,6 +121,8 @@ pub struct Episode {
     pub confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub importance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -402,6 +404,10 @@ pub struct HypothesisNode {
     pub code_changes: Option<std::collections::HashMap<String, String>>,
     pub scope: Option<String>,
     pub vault_path: Option<String>,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    #[serde(default)]
+    pub visits: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -205,6 +205,29 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 ]
             }))
         }
+        "prune" => {
+            let llm = crate::llm::LLMClient::new();
+            let current_dir = std::env::current_dir()?;
+            let coordinator = ArborCoordinator::new(
+                surreal_backend.db.clone(),
+                state.store.vault_root.clone(),
+                current_dir,
+                llm,
+                scope,
+                "".to_string(),
+                vec![],
+            ).await;
+            coordinator.prune_failed_hypotheses().await?;
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "HTR prune complete. Deleted failed hypothesis branches and extracted preventive insights."
+                    }
+                ]
+            }))
+        }
         _ => anyhow::bail!("Invalid action for manage_htr: {}", action),
     }
 }

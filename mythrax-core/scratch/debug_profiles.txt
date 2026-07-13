@@ -9284,3 +9284,399 @@ fav: red
 
 ====================================
 
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_123 ===
+I started my study.
+I prefer coffee over tea.
+My occupation is a software engineer.
+I live in Boston.
+degree: physics
+favorite_color: blue
+====================================
+
+=== PROFILE FOR session_id = test_session_456 ===
+Weather is nice today so
+I went for a walk to
+deg: math
+fav: red
+====================================
+
+=== PROFILE FOR session_id = session123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_bar ===
+context_guard: Avoid concurrent RocksDB process lock by starting in client mode
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:ef3f18e1-4c31-43c1-b293-dff262e8fdda", "episode:872e557a-f8df-429b-b6c5-570615cde1e2"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_obs_test ===
+distilled_context_nodes: ["wisdom:delete"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_ttl ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_123 ===
+I started my study.
+I prefer coffee over tea.
+My occupation is a software engineer.
+I live in Boston.
+degree: physics
+favorite_color: blue
+====================================
+
+=== PROFILE FOR session_id = test_session_456 ===
+Weather is nice today so
+I went for a walk to
+deg: math
+fav: red
+====================================
+
+=== PROFILE FOR session_id = session123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_bar ===
+context_guard: Avoid concurrent RocksDB process lock by starting in client mode
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_obs_test ===
+distilled_context_nodes: ["wisdom:delete"]
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:2a36f391-0474-4cd0-9b04-34ea4d89a584", "episode:50aced54-8c30-42f7-9417-1e6795bce8ae"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_123 ===
+I started my study.
+I prefer coffee over tea.
+My occupation is a software engineer.
+I live in Boston.
+degree: physics
+favorite_color: blue
+====================================
+
+=== PROFILE FOR session_id = test_session_456 ===
+Weather is nice today so
+I went for a walk to
+deg: math
+fav: red
+====================================
+
+=== PROFILE FOR session_id = session123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_bar ===
+context_guard: Avoid concurrent RocksDB process lock by starting in client mode
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_obs_test ===
+distilled_context_nodes: ["wisdom:delete"]
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:b149be6a-6e22-4ff6-a251-54d87bede3e0", "episode:2b02de06-5c17-4071-8e79-e8e3768a8a63"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_123 ===
+I started my study.
+I prefer coffee over tea.
+My occupation is a software engineer.
+I live in Boston.
+degree: physics
+favorite_color: blue
+====================================
+
+=== PROFILE FOR session_id = test_session_456 ===
+Weather is nice today so
+I went for a walk to
+deg: math
+fav: red
+====================================
+
+=== PROFILE FOR session_id = session123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_bar ===
+context_guard: Avoid concurrent RocksDB process lock by starting in client mode
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_obs_test ===
+distilled_context_nodes: ["wisdom:delete"]
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:c935f577-e514-4012-b2e0-4e20f0dd8048", "episode:707cfdda-55c0-4b27-b837-49aa73aa712d"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+

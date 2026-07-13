@@ -116,6 +116,7 @@ async fn test_obsidian_compatibility_linking() -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct SimpleMockLLMClient;
 impl ArborLlmClient for SimpleMockLLMClient {
     async fn propose_hypotheses(
@@ -124,6 +125,7 @@ impl ArborLlmClient for SimpleMockLLMClient {
         _parent_id: &str,
         _parent_hypothesis: &str,
         _target_files: &[(String, String)],
+        _constraints: &[String],
     ) -> Result<String> {
         Ok(r#"[
             {
