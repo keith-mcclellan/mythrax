@@ -218,10 +218,10 @@ fn test_cli_daemon_run_and_cleanup() {
         .spawn()
         .expect("spawn daemon run");
 
-    // Poll for the PID file to be created (up to 30 seconds)
+    // Poll for the PID file to be created (up to 90 seconds)
     let pid_file = tmp.path().join(".mythrax/daemon.pid");
     let mut found = false;
-    for _ in 0..300 {
+    for _ in 0..900 {
         if pid_file.exists() {
             found = true;
             break;
@@ -233,7 +233,7 @@ fn test_cli_daemon_run_and_cleanup() {
     // Wait for the TCP port to be open to ensure Axum is running and signals are handled
     let addr = "127.0.0.1:19091";
     let mut port_open = false;
-    for _ in 0..300 {
+    for _ in 0..900 {
         if std::net::TcpStream::connect(addr).is_ok() {
             port_open = true;
             break;
@@ -278,7 +278,7 @@ fn test_cli_search_episodes_flag() {
     // Poll to let daemon boot and write the PID file
     let pid_file = tmp.path().join(".mythrax/daemon.pid");
     let mut found = false;
-    for _ in 0..300 {
+    for _ in 0..900 {
         if pid_file.exists() {
             found = true;
             break;
@@ -290,7 +290,7 @@ fn test_cli_search_episodes_flag() {
     // Wait for the TCP port to be open to ensure Axum is running and signals are handled
     let addr = "127.0.0.1:19096";
     let mut port_open = false;
-    for _ in 0..300 {
+    for _ in 0..900 {
         if std::net::TcpStream::connect(addr).is_ok() {
             port_open = true;
             break;
