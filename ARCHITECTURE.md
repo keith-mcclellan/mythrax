@@ -1,6 +1,6 @@
-# Mythrax 2.0 Architecture Reference
+# Mythrax 3.0 Architecture Reference
 
-This document outlines the technical architecture, data flows, concurrency boundaries, and safety safeguards of **Mythrax 2.0**. The system is designed as a high-performance, secure, and self-healing sidecar intelligence daemon that acts as a unified memory, cognitive, and model routing server for autonomous AI agents.
+This document outlines the technical architecture, data flows, concurrency boundaries, and safety safeguards of **Mythrax 3.0**. The system is designed as a high-performance, secure, and self-healing sidecar intelligence daemon that acts as a unified memory, cognitive, and model routing server for autonomous AI agents.
 
 ```
                   +-------------------------------------------------+
@@ -16,14 +16,14 @@ This document outlines the technical architecture, data flows, concurrency bound
                                            |
                                            v
                   +-------------------------------------------------+
-                  |             Mythrax 2.0 Core Daemon             |
+                  |             Mythrax 3.0 Core Daemon             |
                   +-------------------------------------------------+
                     |          |            |          |         |
                     v          v            v          v         v
              +----------+ +----------+ +--------+ +--------+ +-------+
-             | Surreal  | |  Model   | |   FS   | | Thread | | Size  |
-             |   KV /   | |  Broker  | | Watch  | |  Safe  | | Roll  |
-             | RocksDB  | | (MLX/ORT)| | (500ms)| |  WAL   | | Logger|
+             | Surreal  | |  Model   | |   FS   | |  Arbor | | Size  |
+             |   KV /   | |  Broker  | |  Watch  | |  HTR   | | Roll  |
+             | RocksDB  | | (MLX/ORT)| | (500ms)| |  Loops | | Logger|
              +----------+ +----------+ +--------+ +--------+ +-------+
 ```
 
@@ -31,7 +31,7 @@ This document outlines the technical architecture, data flows, concurrency bound
 
 ## 1. Single-Port API Gateway & Routing
 
-Mythrax 2.0 consolidates all administrative, memory, Model Context Protocol (MCP), and transparent completions proxy endpoints onto a unified, single-port gateway (**default port: 8090**).
+Mythrax 3.0 consolidates all administrative, memory, Model Context Protocol (MCP), and transparent completions proxy endpoints onto a unified, single-port gateway (**default port: 8090**).
 
 - **Unified Router & Request Processing Flow**:
   - The Gateway binds to default port `8090`. It hosts the Axum REST router, mapping paths `/v1/episodes`, `/v1/config/llm`, `/v1/mcp/call`, and `/v1/chat/completions`.
@@ -44,23 +44,23 @@ Mythrax 2.0 consolidates all administrative, memory, Model Context Protocol (MCP
 
 ## 2. Dual-Engine Storage & Persistent Lock Resiliency
 
-To guarantee database integrity and solve concurrent process contention, Mythrax 2.0 implements a robust dual-engine storage model and connection retry mechanism.
+To guarantee database integrity and solve concurrent process contention, Mythrax 3.0 implements a robust dual-engine storage model and connection retry mechanism.
 
 - **SurrealKV & RocksDB Engines**: Supports both `surrealkv://` and `rocksdb://` local storage prefixes, ensuring all agent memories, handoffs, and cognitive graphs are fully persisted to disk.
-- **Persistent Lock Retry Loop**: RocksDB and SurrealKV require exclusive file locks. In multi-process test runs or rapid daemon restarts, this often triggers lock contention errors. Mythrax 2.0 solves this by wrapping the database connection in a **retry loop with backoff** (up to 10 attempts, 500ms sleep) to wait for pending locks to release.
-- **Startup Bootstrapping & WAL Replay Sequence**:
+- **Persistent Lock Retry Loop**: RocksDB and SurrealKV require exclusive file locks. In multi-process test runs or rapid daemon restarts, this often triggers lock contention errors. Mythrax 3.0 solves this by wrapping the database connection in a **retry loop with backoff** (up to 10 attempts, 500ms sleep) to wait for pending locks to release.
+- **Startup Bootstrapping & Transaction Initialization Sequence**:
   1. **Port/Daemon Detection**: CLI detects running daemon port. If inactive, spawns detached daemon process and polls readiness.
   2. **Exclusive File Locking**: Database initializes via `SurrealBackend::new`. Reconnection retry attempts handle transient locks.
   3. **Schema Bootstrapping**: Runs schema definitions (`INIT_SCHEMA`) and inserts the default configuration `config:settings` (defaulting to `mlx-community/Qwen3.6-35B-A3B-4bit`).
-  4. **Self-Healing WAL Replay**: Calls `replay_wal_if_fresh` to replay uncommitted transactions from the WAL log if the `.initialized` marker is absent or database is empty, then writes `.initialized` to prevent redundant replays.
-  5. **Background WAL Actor**: Spawns a background WAL receiver task to write incoming transaction updates sequentially to disk with `0600` permissions.
+  4. **Transaction-Aware Ingestion**: Leverages SurrealDB `BEGIN TRANSACTION` and `COMMIT TRANSACTION` boundaries for safe, atomic batch insertions.
+  5. **Atomic File Operations**: Writes temporary candidate files to disk and renames them atomically to target destinations, preventing data corruption on abrupt termination.
 - **Startup Pruning**: On startup, the daemon automatically runs background pruning loops to sweep stale handoffs, orphaned context links, and transient session files, keeping the database footprint compact.
 
 ---
 
 ## 3. Three-Tiered Model Broker & VRAM Safeguards
 
-The cognitive and inference capabilities in Mythrax 2.0 are managed by a highly optimized, hardware-aware Model Broker.
+The cognitive and inference capabilities in Mythrax 3.0 are managed by a highly optimized, hardware-aware Model Broker.
 
 - **Three-Tiered Engine**: Dynamic routing supports:
   1. **MLX (Local Apple Silicon)**: Exploits metal GPU acceleration for ultra-fast local inference and embeddings.
@@ -76,12 +76,12 @@ The cognitive and inference capabilities in Mythrax 2.0 are managed by a highly 
 
 ---
 
-## 4. Cognitive Scheduling & Thread-Safe WAL
+## 4. Cognitive Scheduling & Arbor HTR Loop
 
-Mythrax 2.0 introduces advanced scheduling loops and transaction logging to guarantee durability and consistency.
+Mythrax 3.0 introduces advanced scheduling loops and transaction logging to guarantee durability and consistency.
 
 - **500ms File Watcher Coalescing**: The Obsidian vault watcher utilizes the `notify` crate to detect file edits. To prevent high-frequency write cascades and ingestion races, events are coalesced over a **500ms sliding window** before being committed to the database.
-- **Thread-Safe Write-Ahead Log (WAL)**: All database transactions and memory updates are journaled through a thread-safe WAL actor. In the event of an abrupt power loss or crash, the daemon replays transactions from the WAL using sequential replay markers to rebuild state.
+- **Arbor HTR Parallel Verification Loop**: Candidate changes and code refinements are evaluated within isolated git worktrees using distinct `CARGO_TARGET_DIR` folders and ports, preventing database/test environment pollution.
 - **DBSCAN Epsilon-Calibrated Compaction**: During the daily "dreaming" cycle, the compactor runs DBSCAN clustering on episodic memories. Epsilon parameters are dynamically calibrated to group related memories, which are then summarized via hierarchical RAPTOR trees into permanent `wiki_node` structures.
 - **Pre-Compaction Hook & Verbatim Ingestion**: Before dreaming runs, the daemon executes a pre-compaction hook to ingest the active transcript of a session. The hook parses the session's JSONL transcripts line-by-line:
   - Supports flat string schemas (`role` and `content` as text strings).
@@ -102,7 +102,7 @@ Mythrax 2.0 introduces advanced scheduling loops and transaction logging to guar
 
 ## 5. Thread-Safe Size-Rolling Logs & Graceful Shutdown
 
-For production-grade operations, Mythrax 2.0 implements robust logging and clean lifecycle termination.
+For production-grade operations, Mythrax 3.0 implements robust logging and clean lifecycle termination.
 
 - **Thread-Safe SizeRollingFileWriter**: A custom thread-safe rolling writer writes logs to `~/.mythrax/daemon.log`. It automatically rolls the log file upon reaching **50MB** and maintains up to **3 historical backups** (`daemon.log.1`, `daemon.log.2`, `daemon.log.3`). Tracing is integrated via non-blocking guards to ensure no logs are lost on exit.
 - **5-Second Graceful Shutdown Sequence**: Upon receiving a SIGINT (Ctrl+C) or SIGTERM signal, the daemon triggers a graceful shutdown sequence wrapped in a **5-second timeout**:

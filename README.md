@@ -31,7 +31,7 @@ For in-depth guides, architectural references, and developer playbooks, see the 
 
 ## 🏗️ Architectural Overview & Data Flow
 
-Mythrax 2.x employs a lightweight sidecar intelligence topology. The CLI and external MCP integrations act as thin HTTP/RPC clients, while heavy operations are offloaded to a persistent, central daemon process. This guarantees database locks are held exclusively by the daemon, eliminating process write contention.
+Mythrax 3.0 employs a lightweight sidecar intelligence topology. The CLI and external MCP integrations act as thin HTTP/RPC clients, while heavy operations are offloaded to a persistent, central daemon process. This guarantees database locks are held exclusively by the daemon, eliminating process write contention.
 
 **Zero-CLI Autonomy**: For agents interacting through the MCP server (e.g. in Cursor, VS Code, or Antigravity), the MCP server automatically pings and spawns the background daemon on startup. This detached daemon runs all background scheduling loops—including the Obsidian file watcher, the daily deep dreaming cycle, the inactivity-debounced compaction loop, and WAL flushing—without requiring any manual CLI interaction.
 
@@ -42,7 +42,7 @@ graph TB
         MCP[mythrax mcp<br/>MCP Thin Proxy Gateway]
     end
 
-    subgraph "Mythrax 2.x Core Daemon (Port 8090 / 8080)"
+    subgraph "Mythrax 3.0 Core Daemon (Port 8090 / 8080)"
         GATEWAY[Unified Gateway /v1/mcp/call<br/>127.0.0.1 with Token Auth]
         
         subgraph "Consolidated Tools Router"

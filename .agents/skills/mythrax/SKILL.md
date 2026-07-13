@@ -3,7 +3,7 @@ name: mythrax
 description: Always query Mythrax memory via the MCP server before starting tasks or making edits, verify vault/knowledge graph integrity, and run HTR cognitive execution loops.
 ---
 
-# Mythrax Unified Memory, Integrity & Cognitive Guidance (v2.5.2)
+# Mythrax Unified Memory, Integrity & Cognitive Guidance (v3.0.0)
 
 You are equipped with the **Mythrax** MCP server, which exposes tools for semantic memory storage, retrieval, reinforcement, compliance verification, vault integrity self-healing, cognitive hypothesis execution, short-term memory sharing between agents, and document ingestion via Forge.
 
@@ -42,7 +42,7 @@ To ensure high-quality execution and prevent duplicate coding effort:
 4. **Log Episodic Memory**: After completing a task, call `write(action="save_episode", title="...", content="...")` to persist your decisions and solutions.
 5. **Record Feedback**: After running tests (e.g. `cargo test`) and verifying they pass, call `write(action="record_feedback", episode_id="...", success=true)` to reinforce retrieved wisdom.
 
-### Mythrax 6-Signal Unified Retrieval Pipeline (v2.5.2)
+### Mythrax 6-Signal Unified Retrieval Pipeline (v3.0.0)
 
 The `read(action="search_memory")` and automatic pre-invocation retrieval utilize the **6-Signal Unified Retrieval** pipeline:
 1. **Vector Similarity**: Semantic embedding distance.

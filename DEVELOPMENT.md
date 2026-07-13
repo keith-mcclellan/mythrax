@@ -1,6 +1,6 @@
 # DEVELOPMENT.md
 
-## Mythrax 2.x: Developer Guide & Architecture Reference
+## Mythrax 3.0: Developer Guide & Architecture Reference
 
 This document serves as the authoritative reference for developers contributing to the Mythrax codebase. It details the architectural decisions behind the consolidated tool strategy and provides a guide for extending the system with new capabilities.
 
@@ -89,10 +89,10 @@ pub fn get_mcp_tools_schema() -> Value {
 ```
 
 ### Step 2: Update the Router Routing Arm
-Still in `mcp_routes.rs`, locate the handler function corresponding to the tool (in this case, `handle_read`). Map the action string to your handler logic:
+Open the corresponding sub-handler file in `mythrax-core/src/mcp_routes/` (e.g., `read_handlers.rs` for read actions, `write_handlers.rs` for write actions). Locate the action handler function corresponding to the tool (in this case, `handle_read`). Map the action string to your handler logic:
 
 ```rust
-// mythrax-core/src/mcp_routes.rs
+// mythrax-core/src/mcp_routes/read_handlers.rs
 
 async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
     let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?.to_string();
@@ -108,9 +108,11 @@ async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
 ```
 
 ### Step 3: Implement Handler & Backend Logic
-Implement your handler function in `mcp_routes.rs` or delegate to `StorageBackend` methods.
+Implement your handler function in `read_handlers.rs` or delegate to `StorageBackend` methods.
 
 ```rust
+// mythrax-core/src/mcp_routes/read_handlers.rs
+
 async fn handle_list_archives_action(state: &ApiState, args: Value) -> Result<Value> {
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
     let results = state.backend.get_archived_memories(limit).await?;
