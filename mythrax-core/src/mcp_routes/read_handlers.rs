@@ -19,6 +19,8 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
         "get_full" => "get_full",
         "root" | "get_vault_root" => "root",
         "get" | "get_short_term" | "get_config" => "get",
+        "search_by_concept" => "search_by_concept",
+        "diff_sessions" => "diff_sessions",
         other => other,
     };
     if let Some(obj) = args.as_object_mut() {
@@ -74,6 +76,19 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
             } else {
                 super::manage_handlers::handle_manage_config(state, args).await
             }
+        }
+        "search_by_concept" => {
+            let concept = args.get("concept").and_then(|v| v.as_str()).context("Missing concept")?;
+            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                .context("SurrealBackend required")?;
+            search_by_concept_db(surreal_backend, concept).await
+        }
+        "diff_sessions" => {
+            let session_a = args.get("session_a").and_then(|v| v.as_str()).context("Missing session_a")?;
+            let session_b = args.get("session_b").and_then(|v| v.as_str()).context("Missing session_b")?;
+            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                .context("SurrealBackend required")?;
+            diff_sessions_db(surreal_backend, session_a, session_b).await
         }
         _ => anyhow::bail!("Invalid action for read tool: {}", action),
     }
