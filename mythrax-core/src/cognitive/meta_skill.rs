@@ -217,7 +217,7 @@ impl MetaSkillSynthesizer {
             );
 
             tracing::info!("Synthesizing meta-skill for scope: {}", scope);
-            let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let response = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(sys_prompt), &prompt_text).await?;
             let stripped = crate::llm::strip_code_fences(&response);
 
             let project_skills_dir = store.vault_root.join("../.agents/skills");
@@ -260,7 +260,7 @@ impl MetaSkillSynthesizer {
                         skills[i].name, skills[i].description, skills[j].name, skills[j].description
                     );
 
-                    if let Ok(res_str) = self.llm.completion(db, Some(sys_prompt), &prompt_text).await {
+                    if let Ok(res_str) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &prompt_text).await {
                         let stripped = crate::llm::strip_code_fences(&res_str);
 
                         #[derive(serde::Deserialize)]
@@ -357,7 +357,7 @@ impl MetaSkillSynthesizer {
             target_name, combined_body
         );
 
-        let response = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+        let response = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(sys_prompt), &prompt_text).await?;
         let stripped = crate::llm::strip_code_fences(&response);
 
         let project_skills_dir = store.vault_root.join("../.agents/skills");

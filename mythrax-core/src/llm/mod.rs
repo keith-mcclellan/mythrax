@@ -24,6 +24,8 @@ pub mod mxbai_mlx;
 #[cfg(feature = "mlx")]
 pub use mxbai_mlx::MxbaiReranker;
 
+pub mod router;
+
 #[cfg(not(feature = "mlx"))]
 pub struct Qwen2Model;
 #[cfg(not(feature = "mlx"))]
@@ -43,6 +45,7 @@ pub fn metal_embedding_semaphore() -> &'static Semaphore {
     METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
+#[derive(Clone)]
 pub struct LLMClient {
     client: reqwest::Client,
 }
@@ -82,6 +85,53 @@ impl LLMClient {
             false,
         )
         .await
+    }
+
+    pub async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        let config = db.get_llm_config().await?;
+        let tier = crate::llm::router::route_task(db, profile).await;
+
+        if tier == crate::contracts::ModelTier::Cloud {
+            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                "gemini-1.5-flash"
+            } else {
+                &config.model
+            };
+            return self.completion_explicit(
+                db,
+                "cloud",
+                &config.cloud_provider,
+                cloud_model,
+                system_instruction,
+                prompt,
+                false,
+            ).await;
+        }
+
+        let _gpu_permit = crate::llm::router::gpu_reservation_lock().lock().await;
+
+        let local_model = match tier {
+            crate::contracts::ModelTier::Micro => "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+            crate::contracts::ModelTier::Small => "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+            crate::contracts::ModelTier::Medium => "mlx-community/Qwen2.5-7B-Instruct-4bit",
+            _ => &config.model,
+        };
+
+        self.completion_explicit(
+            db,
+            "local",
+            &config.cloud_provider,
+            local_model,
+            system_instruction,
+            prompt,
+            false,
+        ).await
     }
 
     pub async fn completion_explicit(
@@ -306,6 +356,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
         _parent_id: &str,
         parent_hypothesis: &str,
         target_files: &[(String, String)],
+        constraints: &[String],
     ) -> Result<String> {
         let mut files_context = String::new();
         for (path, content) in target_files {
@@ -338,8 +389,17 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             }
         }
 
+        let mut constraints_injection = String::new();
+        if !constraints.is_empty() {
+            constraints_injection.push_str("\n\nYou MUST respect the following constraints during code generation:\n");
+            for c in constraints {
+                constraints_injection.push_str(&format!("- {}\n", c));
+            }
+        }
+
         let prompt = format!(
             "You are an autonomous codebase researcher. We are modifying the following files:\n\n\
+             {}\n\
              {}\n\
              Based on the parent hypothesis: \"{}\", propose two alternative refinements.\n\
              For each refinement, suggest sequential node_id (e.g. \"1\", \"2\"), description, expected utility score (0.0 to 100.0), and a 'code_changes' map containing relative file paths to their COMPLETE updated file contents.\n\n\
@@ -355,19 +415,19 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                }}\n\
              ]\n\n\
              Output format MUST be a raw JSON array only, without any markdown formatting or code block wrapping.",
-            files_context, parent_hypothesis
+            files_context, constraints_injection, parent_hypothesis
         );
 
         let system_prompt = format!(
-            "You are an ideation assistant that outputs raw JSON arrays.{}",
-            wisdom_injection
+            "You are an ideation assistant that outputs raw JSON arrays.{}{}",
+            wisdom_injection, constraints_injection
         );
 
-        self.completion(db, Some(&system_prompt), &prompt).await
+        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(&system_prompt), &prompt).await
     }
 
     async fn evaluate_run(&self, db: &dyn StorageBackend, run_logs: &str) -> Result<String> {
-        self.completion(db, Some("You are a critic assistant that evaluates run logs and outputs JSON."), run_logs).await
+        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some("You are a critic assistant that evaluates run logs and outputs JSON."), run_logs).await
     }
 
     async fn abstract_insights(&self, db: &dyn StorageBackend, parent_insight: Option<&str>, child_insight: &str) -> Result<String> {
@@ -377,7 +437,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
              Summarize and merge these into a single updated insight containing all key takeaways.",
             parent_insight, child_insight
         );
-        self.completion(db, Some("You are a summarization assistant."), &prompt).await
+        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some("You are a summarization assistant."), &prompt).await
     }
 }
 
@@ -441,7 +501,13 @@ async fn send_with_retry(
                 let status = resp.status();
                 let body_text = resp.text().await.unwrap_or_default();
                 tracing::warn!("HTTP request failed with status {}: {}", status, body_text);
-                if attempt >= 5 {
+                let is_transient = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                    || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                    || status.as_u16() == 429
+                    || status.as_u16() == 500
+                    || status.as_u16() == 503;
+                if !is_transient || attempt >= 5 {
                     anyhow::bail!("HTTP request failed with status {}: {}", status, body_text);
                 }
             }

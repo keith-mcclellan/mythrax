@@ -9,6 +9,21 @@ impl SurrealBackend {
             let _res: serde_json::Value = self.daemon_post("/v1/forge/save", batch).await?;
             return Ok(());
         }
+        
+        // Calculate SHA-256 hash
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(batch.chunk_text.as_bytes());
+        let hash_str = hex::encode(hasher.finalize());
+
+        let check_query = "SELECT VALUE hash FROM forged_section_hash WHERE hash = $hash LIMIT 1;";
+        let mut check_resp = self.db.query(check_query).bind(("hash", hash_str.clone())).await?;
+        let existing_hash: Option<String> = check_resp.take(0)?;
+        if existing_hash.is_some() {
+            tracing::info!("Forged section with hash {} already exists. Skipping save.", hash_str);
+            return Ok(());
+        }
+
         let vault_root = crate::store::find_vault_root();
 
         // Helper to generate slugs
@@ -380,6 +395,14 @@ impl SurrealBackend {
                 return Err(e.into());
             }
         }
+
+        let save_hash_query = "
+            CREATE type::record('forged_section_hash', $hash) CONTENT {
+                hash: $hash,
+                created_at: time::now()
+            };
+        ";
+        let _ = self.db.query(save_hash_query).bind(("hash", hash_str)).await?;
 
         Ok(())
     }

@@ -36,7 +36,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS word_count ON episode TYPE option<int>;
     DEFINE FIELD IF NOT EXISTS metrics ON episode TYPE option<record<episode_metrics>>;
     DEFINE FIELD IF NOT EXISTS node_type ON episode TYPE string DEFAULT 'agent_thought';
-    DEFINE FIELD IF NOT EXISTS confidence ON episode TYPE float DEFAULT 0.90;
+    DEFINE FIELD IF NOT EXISTS confidence ON episode TYPE option<float> DEFAULT 0.90;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -84,6 +84,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wisdom TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON wisdom TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS rule_type ON wisdom TYPE string DEFAULT 'aesthetic';
+    DEFINE FIELD IF NOT EXISTS severity ON wisdom TYPE option<string> DEFAULT 'info';
+    DEFINE FIELD IF NOT EXISTS blocking ON wisdom TYPE option<bool> DEFAULT false;
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
     DEFINE INDEX OVERWRITE wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -150,6 +152,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS key ON short_term_memory TYPE string;
     DEFINE FIELD IF NOT EXISTS value ON short_term_memory TYPE string;
     DEFINE FIELD IF NOT EXISTS updated_at ON short_term_memory TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS expires_at ON short_term_memory TYPE option<datetime>;
     DEFINE INDEX IF NOT EXISTS stm_session_key ON short_term_memory FIELDS session_id, key UNIQUE;
 
     DEFINE TABLE IF NOT EXISTS followed_by SCHEMAFULL TYPE RELATION IN episode OUT episode;
@@ -391,4 +394,22 @@ pub const INIT_SCHEMA: &str = "
     UPSERT search_keyword:thursday CONTENT { word: 'thursday', category: 'Temporal' };
     UPSERT search_keyword:friday CONTENT { word: 'friday', category: 'Temporal' };
     UPSERT search_keyword:saturday CONTENT { word: 'saturday', category: 'Temporal' };
+
+    DEFINE TABLE IF NOT EXISTS cognitive_task SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS task_type ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS prompt ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS system_instruction ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS expected_format ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS priority ON cognitive_task TYPE string;
+    DEFINE FIELD IF NOT EXISTS created_at ON cognitive_task TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS status ON cognitive_task TYPE string DEFAULT 'Pending';
+    DEFINE FIELD IF NOT EXISTS result ON cognitive_task TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS ttl_minutes ON cognitive_task TYPE int DEFAULT 30;
+    DEFINE FIELD IF NOT EXISTS injected_at ON cognitive_task TYPE option<datetime>;
+
+    DEFINE TABLE IF NOT EXISTS pipeline_state SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS forged_section_hash SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS bootstrap_state SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS distilled_conversation SCHEMALESS;
 ";
+

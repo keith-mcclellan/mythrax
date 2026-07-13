@@ -52,7 +52,7 @@ impl Compactor {
             } else {
                 let compact_diff = if git_diff.len() > 200 {
                     let summary_prompt = format!("Summarize this git diff briefly (under 50 words):\n\n{}", git_diff);
-                    self.llm.completion(db, Some("You are a code summarizer."), &summary_prompt).await.unwrap_or_else(|_| "Git diff summary failed".to_string())
+                    self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some("You are a code summarizer."), &summary_prompt).await.unwrap_or_else(|_| "Git diff summary failed".to_string())
                 } else {
                     git_diff.to_string()
                 };
@@ -69,7 +69,7 @@ impl Compactor {
         }
 
         let sys_prompt = "You are a master systems architect. Analyze the sequence of checkpoints and summarize the transitions between them, detailing how the codebase evolved, what errors were resolved, and the progression of active changes.";
-        let summary = self.llm.completion(db, Some(sys_prompt), &prompt_content).await?;
+        let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_content).await?;
         Ok(summary)
     }
 
@@ -468,20 +468,13 @@ impl Compactor {
             }
         }
 
-        let labels = if !embeddings.is_empty() {
-            crate::cognitive::synthesis::dbscan(&embeddings, 0.10, 2)
-        } else {
-            Vec::new()
-        };
-
+        let result_clusters = compact_hierarchical_dbscan(&valid_insights, 0.10, 2);
         let mut clusters: std::collections::HashMap<usize, Vec<(crate::cognitive::synthesis::InsightNote, String)>> = std::collections::HashMap::new();
-
-        for (idx, label) in labels.into_iter().enumerate() {
-            let item = dbscan_indices[idx].clone();
-            if let Some(cluster_id) = label {
-                clusters.entry(cluster_id).or_default().push(item);
-            } else {
-                outlier_insights.push(item);
+        for (cluster_id, members) in result_clusters.into_iter().enumerate() {
+            if members.len() > 1 {
+                clusters.insert(cluster_id, members);
+            } else if let Some(single) = members.first() {
+                outlier_insights.push(single.clone());
             }
         }
 
@@ -497,7 +490,7 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -560,7 +553,7 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+            let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -607,6 +600,9 @@ impl Compactor {
 
             tracing::info!("Compacted scope '{}' outliers: miscellaneous summary saved", scope);
         }
+
+        // Wire graduation pipeline to run opportunistically during compaction
+        let _ = crate::db::graduation_pipeline::run_graduation_pipeline(db, scope).await;
 
         Ok(())
     }
@@ -670,7 +666,7 @@ impl Compactor {
 
         let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.";
         let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
-        let global_summary = self.llm.completion(db, Some(sys_prompt), &prompt_text).await?;
+        let global_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
         let global_summary = page_markdown_code_blocks(db, &global_summary).await?;
 
         let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -832,7 +828,7 @@ impl Compactor {
                     // 2. Generate high-level Raptor summary using the LLM
                     let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.";
                     let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
-                    if let Ok(summary) = self.llm.completion(db, Some(sys_prompt), &prompt).await {
+                    if let Ok(summary) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
                         // 3. Save as wiki Raptor summary node
                         let uuid = uuid::Uuid::new_v4().to_string();
                         let wiki_rel = format!("wiki/archive/raptor_summary_{}.md", &uuid[..8]);
@@ -1049,4 +1045,120 @@ pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) 
         }
         Ok(result)
     }
+}
+
+pub fn compact_hierarchical_dbscan(
+    valid_insights: &[(crate::cognitive::synthesis::InsightNote, String, Option<Vec<f32>>)],
+    eps: f32,
+    min_samples: usize,
+) -> Vec<Vec<(crate::cognitive::synthesis::InsightNote, String)>> {
+    if valid_insights.is_empty() {
+        return Vec::new();
+    }
+
+    let mut buckets: std::collections::HashMap<String, Vec<(crate::cognitive::synthesis::InsightNote, String, Vec<f32>)>> = std::collections::HashMap::new();
+    for (ins, id, emb_opt) in valid_insights {
+        if let Some(emb) = emb_opt {
+            let bucket = get_insight_chrono_bucket(ins);
+            buckets.entry(bucket).or_default().push((ins.clone(), id.clone(), emb.clone()));
+        }
+    }
+
+    let mut sub_clusters = Vec::new();
+    let mut outliers = Vec::new();
+
+    for (bucket_name, group) in buckets {
+        if group.is_empty() {
+            continue;
+        }
+
+        let embeddings: Vec<&[f32]> = group.iter().map(|(_, _, emb)| emb.as_slice()).collect();
+        let labels = crate::cognitive::synthesis::dbscan(&embeddings, eps, min_samples);
+        
+        let mut local_clusters: std::collections::HashMap<usize, Vec<(crate::cognitive::synthesis::InsightNote, String, Vec<f32>)>> = std::collections::HashMap::new();
+
+        for (idx, label) in labels.into_iter().enumerate() {
+            let item = &group[idx];
+            if let Some(cluster_id) = label {
+                local_clusters.entry(cluster_id).or_default().push(item.clone());
+            } else {
+                outliers.push((item.0.clone(), item.1.clone()));
+            }
+        }
+
+        for (lc_id, cluster_members) in local_clusters {
+            let mut centroid_emb = vec![0.0f32; cluster_members[0].2.len()];
+            let mut combined_content = String::new();
+            for member in &cluster_members {
+                for (k, val) in member.2.iter().enumerate() {
+                    centroid_emb[k] += val;
+                }
+                combined_content.push_str(&member.0.content);
+                combined_content.push('\n');
+            }
+            for val in &mut centroid_emb {
+                *val /= cluster_members.len() as f32;
+            }
+
+            let summary_ins = crate::cognitive::synthesis::InsightNote {
+                title: format!("Sub-cluster Summary ({} - {})", bucket_name, lc_id),
+                content: combined_content,
+                scope: cluster_members[0].0.scope.clone(),
+                source_episodes: vec![],
+                vault_path: String::new(),
+            };
+
+            sub_clusters.push((summary_ins, format!("sub_cluster_{}_{}", bucket_name, lc_id), centroid_emb, cluster_members.into_iter().map(|m| (m.0, m.1)).collect::<Vec<_>>()));
+        }
+    }
+
+    if sub_clusters.is_empty() {
+        return outliers.into_iter().map(|o| vec![o]).collect();
+    }
+
+    let summary_embeddings: Vec<&[f32]> = sub_clusters.iter().map(|(_, _, emb, _)| emb.as_slice()).collect();
+    let final_labels = crate::cognitive::synthesis::dbscan(&summary_embeddings, eps, min_samples);
+
+    let mut final_clusters: std::collections::HashMap<usize, Vec<(crate::cognitive::synthesis::InsightNote, String)>> = std::collections::HashMap::new();
+    let mut next_cluster_id = 0;
+
+    for (idx, label) in final_labels.into_iter().enumerate() {
+        let original_members = &sub_clusters[idx].3;
+        if let Some(cluster_id) = label {
+            final_clusters.entry(cluster_id).or_default().extend(original_members.clone());
+            if cluster_id >= next_cluster_id {
+                next_cluster_id = cluster_id + 1;
+            }
+        } else {
+            final_clusters.insert(next_cluster_id, original_members.clone());
+            next_cluster_id += 1;
+        }
+    }
+
+    let mut result = Vec::new();
+    for (_, members) in final_clusters {
+        result.push(members);
+    }
+    for outlier in outliers {
+        result.push(vec![outlier]);
+    }
+
+    result
+}
+
+fn get_insight_chrono_bucket(ins: &crate::cognitive::synthesis::InsightNote) -> String {
+    let path_str = &ins.vault_path;
+    for part in path_str.split(&['/', '_', '-'][..]) {
+        if part.len() == 10 && part.chars().all(|c| c.is_numeric() || c == '-') {
+            return part[..7].to_string();
+        }
+    }
+    if let Ok(metadata) = std::fs::metadata(&ins.vault_path) {
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(dt) = chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339().parse::<chrono::DateTime<chrono::Utc>>() {
+                return dt.format("%Y-%m").to_string();
+            }
+        }
+    }
+    "2026-07".to_string()
 }

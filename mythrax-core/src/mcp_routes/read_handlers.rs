@@ -527,3 +527,76 @@ fn make_subtitle(content: &str) -> String {
         format!("{}...", truncated)
     }
 }
+
+pub async fn search_by_concept_db(backend: &SurrealBackend, concept: &str) -> Result<Value> {
+    let sql = "SELECT * FROM episode WHERE archived = false AND ($concept IN concepts OR $concept IN facts OR string::contains(title, $concept) OR string::contains(content, $concept));";
+    let mut response = backend.db.query(sql).bind(("concept", concept)).await?.check()?;
+    let mut episodes: Vec<crate::contracts::Episode> = response.take(0)?;
+    for ep in &mut episodes {
+        ep.embedding = None;
+    }
+    
+    let sql_wiki = "SELECT * FROM wiki_node WHERE string::contains(name, $concept) OR string::contains(content, $concept);";
+    let mut resp_wiki = backend.db.query(sql_wiki).bind(("concept", concept)).await?.check()?;
+    let mut wiki_nodes: Vec<crate::contracts::WikiNode> = resp_wiki.take(0)?;
+    for wk in &mut wiki_nodes {
+        wk.embedding = None;
+    }
+
+    let sql_wisdom = "SELECT * FROM wisdom WHERE string::contains(target_pattern, $concept) OR string::contains(action_to_avoid, $concept) OR string::contains(causal_explanation, $concept) OR string::contains(prescribed_remedy, $concept);";
+    let mut resp_wisdom = backend.db.query(sql_wisdom).bind(("concept", concept)).await?.check()?;
+    let mut wisdom_rules: Vec<crate::contracts::WisdomRule> = resp_wisdom.take(0)?;
+    for ws in &mut wisdom_rules {
+        ws.embedding = None;
+    }
+
+    Ok(json!({
+        "episodes": episodes,
+        "wiki_nodes": wiki_nodes,
+        "wisdom_rules": wisdom_rules,
+    }))
+}
+
+pub async fn diff_sessions_db(backend: &SurrealBackend, session_a: &str, session_b: &str) -> Result<Value> {
+    let sql_a = "SELECT role, content FROM chat_history WHERE session_id = $session_a ORDER BY created_at ASC;";
+    let mut resp_a = backend.db.query(sql_a).bind(("session_a", session_a)).await?.check()?;
+    let chat_a: Vec<Value> = resp_a.take(0)?;
+
+    let sql_b = "SELECT role, content FROM chat_history WHERE session_id = $session_b ORDER BY created_at ASC;";
+    let mut resp_b = backend.db.query(sql_b).bind(("session_b", session_b)).await?.check()?;
+    let chat_b: Vec<Value> = resp_b.take(0)?;
+
+    let text_a = chat_a.iter().map(|msg| {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        format!("{}: {}", role, content)
+    }).collect::<Vec<_>>().join("\n");
+
+    let text_b = chat_b.iter().map(|msg| {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        format!("{}: {}", role, content)
+    }).collect::<Vec<_>>().join("\n");
+
+    let uuid = uuid::Uuid::new_v4().to_string();
+    let path_a = std::env::temp_dir().join(format!("diff_a_{}.txt", uuid));
+    let path_b = std::env::temp_dir().join(format!("diff_b_{}.txt", uuid));
+
+    std::fs::write(&path_a, &text_a)?;
+    std::fs::write(&path_b, &text_b)?;
+
+    let output = std::process::Command::new("diff")
+        .args(["-u", path_a.to_str().unwrap(), path_b.to_str().unwrap()])
+        .output()?;
+
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+
+    let diff_text = String::from_utf8_lossy(&output.stdout).to_string();
+
+    Ok(json!({
+        "session_a": session_a,
+        "session_b": session_b,
+        "diff": diff_text
+    }))
+}

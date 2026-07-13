@@ -64,6 +64,8 @@ pub async fn handle_merge_vault() -> Result<()> {
                             superseded_at: None,
                             superseded_by: None,
                             rule_type: None,
+                        
+                            ..Default::default()
                         };
                         rules_group.entry(rule.target_pattern.clone()).or_default().push((file_path.clone(), rule));
                     }
@@ -130,6 +132,8 @@ pub async fn handle_merge_vault() -> Result<()> {
                 superseded_at: None,
                 superseded_by: None,
                 rule_type: None,
+            
+                ..Default::default()
             };
 
             let frontmatter_str = vault::watcher::format_wisdom_markdown(&merged_rule);
@@ -205,7 +209,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         );
 
         let system_prompt = "You are a calibration assistant that generates synthetic search queries.";
-        let synthetic_query = match client.completion(backend, Some(system_prompt), &prompt).await {
+        let synthetic_query = match client.routed_completion(backend, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_prompt), &prompt).await {
             Ok(res) => res.trim().to_string(),
             Err(e) => {
                 println!("Failed to generate synthetic query: {:?}", e);

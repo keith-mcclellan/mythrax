@@ -10,3 +10,5 @@ pub mod ingestion;
 #[allow(unused_imports)]
 pub use watcher::{WatchIgnoreList, start_watching, save_episode_bidirectional};
 pub mod operations;
+pub mod distillation;
+

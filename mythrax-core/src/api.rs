@@ -35,6 +35,9 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/v1/forge/save", post(save_forged_assets_handler))
         .route("/v1/mcp/tools", get(get_mcp_tools_handler))
         .route("/v1/mcp/call", post(call_mcp_tool_handler))
+        .route("/v1/mcp/tools/call_batch", post(call_mcp_tool_batch_handler))
+        .route("/v1/mcp/resources", get(resources_list_handler))
+        .route("/v1/mcp/resources/read", post(resources_read_handler))
         .route("/v1/chat/completions", post(completions_proxy_handler))
         .route("/api/*path", post(ollama_proxy_handler).get(ollama_proxy_handler))
         .route("/v1/hooks/precompact", post(precompact_handler))
@@ -347,6 +350,97 @@ async fn call_mcp_tool_handler(
             tracing::error!("MCP tool call failed: {:?}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+async fn call_mcp_tool_batch_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let calls_val = if payload.is_array() {
+        &payload
+    } else {
+        payload.get("calls").ok_or(StatusCode::BAD_REQUEST)?
+    };
+
+    let calls_arr = calls_val.as_array().ok_or(StatusCode::BAD_REQUEST)?;
+    let mut futures = Vec::new();
+    for call in calls_arr {
+        let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let arguments = call.get("arguments").or_else(|| call.get("args")).cloned().unwrap_or(Value::Null);
+        let state_ref = state.clone();
+        futures.push(async move {
+            match crate::mcp_routes::call_mcp_tool(&state_ref, &name, arguments).await {
+                Ok(res) => json!({ "status": "success", "result": res }),
+                Err(e) => json!({ "status": "error", "message": e.to_string() }),
+            }
+        });
+    }
+
+    let results = futures_util::future::join_all(futures).await;
+    Ok(Json(Value::Array(results)))
+}
+
+async fn resources_list_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(Json(json!({
+        "resources": [
+            {
+                "uri": "htr://tree",
+                "name": "Active Hypothesis Tree",
+                "description": "Structured JSON representation of the active hypothesis tree.",
+                "mimeType": "application/json"
+            }
+        ]
+    })))
+}
+
+async fn resources_read_handler(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    if !check_auth(&headers, &state) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let uri = payload.get("uri").and_then(|v| v.as_str()).ok_or(StatusCode::BAD_REQUEST)?;
+    if uri == "htr://tree" {
+        let sql = "SELECT * FROM hypothesis_node;";
+        let surreal_backend = state.backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        let mut response = match surreal_backend.db.query(sql).await {
+            Ok(r) => r,
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        let nodes: Vec<crate::contracts::HypothesisNode> = match response.take(0) {
+            Ok(n) => n,
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        let tree_str = match serde_json::to_string_pretty(&nodes) {
+            Ok(s) => s,
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        };
+        Ok(Json(json!({
+            "contents": [
+                {
+                    "uri": "htr://tree",
+                    "mimeType": "application/json",
+                    "text": tree_str
+                }
+            ]
+        })))
+    } else {
+        Err(StatusCode::NOT_FOUND)
     }
 }
 

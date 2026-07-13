@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use anyhow::Result;
+use anyhow::{Result, Context};
 use crate::api::ApiState;
 use crate::db::{StorageBackend, SurrealBackend, parse_record_id, backend::format_record_id};
 use crate::contracts::BeliefState;
@@ -193,7 +193,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge", "save_forged_assets", "init", "ideate", "execute", "backprop", "merge", "run", "pre_invocation", "precompact", "audit_compliance"] },
+                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge", "save_forged_assets", "init", "ideate", "execute", "backprop", "merge", "run", "pre_invocation", "precompact", "audit_compliance", "clean", "bootstrap", "prune"] },
                         "fix": { "type": "boolean", "default": false },
                         "scope": { "type": "string" },
                         "workspace_path": { "type": "string", "default": "." },
@@ -207,7 +207,11 @@ pub fn get_mcp_tools_schema() -> Value {
                         "max_steps": { "type": "integer", "default": 5 },
                         "session_id": { "type": "string" },
                         "query": { "type": "string" },
-                        "transcript_path": { "type": "string" }
+                        "transcript_path": { "type": "string" },
+                        "dry_run": { "type": "boolean", "default": false },
+                        "since": { "type": "string" },
+                        "distill_model": { "type": "string" },
+                        "force": { "type": "boolean", "default": false }
                     },
                     "required": ["action"]
                 }
@@ -226,6 +230,29 @@ pub fn get_mcp_tools_schema() -> Value {
                     },
                     "required": ["action"]
                 }
+            },
+            {
+                "name": "search_by_concept",
+                "description": "Search memory nodes (episodes, wiki, wisdom) that match a given concept name.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "concept": { "type": "string" }
+                    },
+                    "required": ["concept"]
+                }
+            },
+            {
+                "name": "diff_sessions",
+                "description": "Compute a unified diff of chat history transcripts between two sessions.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_a": { "type": "string" },
+                        "session_b": { "type": "string" }
+                    },
+                    "required": ["session_a", "session_b"]
+                }
             }
         ]
     })
@@ -241,6 +268,19 @@ pub async fn call_mcp_tool(
         "write" => write_handlers::handle_write(state, args.clone()).await,
         "manage" => manage_handlers::handle_manage(state, args.clone()).await,
         "agent" => manage_handlers::handle_agent(state, args.clone()).await,
+        "search_by_concept" => {
+            let concept = args.get("concept").and_then(|v| v.as_str()).context("Missing concept")?;
+            let surreal_backend = state.backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+                .context("SurrealBackend required")?;
+            crate::mcp_routes::read_handlers::search_by_concept_db(surreal_backend, concept).await
+        }
+        "diff_sessions" => {
+            let session_a = args.get("session_a").and_then(|v| v.as_str()).context("Missing session_a")?;
+            let session_b = args.get("session_b").and_then(|v| v.as_str()).context("Missing session_b")?;
+            let surreal_backend = state.backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+                .context("SurrealBackend required")?;
+            crate::mcp_routes::read_handlers::diff_sessions_db(surreal_backend, session_a, session_b).await
+        }
         _ => anyhow::bail!("Tool not found: {}", name),
     };
 

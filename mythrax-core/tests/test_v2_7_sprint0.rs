@@ -53,10 +53,12 @@ async fn test_embed_batch_error_propagation() -> Result<()> {
         Err(e) => e.into_inner(),
     };
 
-    // Temporarily clear MYTHRAX_TEST_MOCK if it's set, to force an error (no embedder loaded)
+    // Temporarily clear MYTHRAX_TEST_MOCK and MYTHRAX_MOCK_LLM if they are set, to force an error (no embedder loaded)
     let original_mock = std::env::var("MYTHRAX_TEST_MOCK");
+    let original_llm_mock = std::env::var("MYTHRAX_MOCK_LLM");
     unsafe {
         std::env::remove_var("MYTHRAX_TEST_MOCK");
+        std::env::remove_var("MYTHRAX_MOCK_LLM");
     }
 
     let backend = SurrealBackend::new_in_memory().await?;
@@ -64,10 +66,15 @@ async fn test_embed_batch_error_propagation() -> Result<()> {
 
     let result = backend.embed_batch(&["test".to_string()]).await;
 
-    // Restore MYTHRAX_TEST_MOCK
+    // Restore environment variables
     if let Ok(ref val) = original_mock {
         unsafe {
             std::env::set_var("MYTHRAX_TEST_MOCK", val);
+        }
+    }
+    if let Ok(ref val) = original_llm_mock {
+        unsafe {
+            std::env::set_var("MYTHRAX_MOCK_LLM", val);
         }
     }
 

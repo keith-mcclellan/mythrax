@@ -104,7 +104,7 @@ fn count_files_recursive(path: &Path, depth: usize) -> usize {
 fn get_vault_paths() -> (PathBuf, PathBuf) {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/Users/keith".to_string());
+        .unwrap_or_else(|_| ".".to_string());
     let home_path = PathBuf::from(home);
     let vault_root = home_path.join("mythrax-vault");
     let global_dir = vault_root.join("global");
@@ -571,6 +571,8 @@ pub async fn sync_file_to_db(
                 superseded_at: frontmatter.superseded_at,
                 superseded_by: frontmatter.superseded_by,
                 rule_type: None,
+            
+                ..Default::default()
             };
 
             backend.save_wisdom_rule(&rule).await?;

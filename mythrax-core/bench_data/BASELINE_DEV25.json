@@ -1,0 +1,7 @@
+{
+  "split": "dev25",
+  "recall_any_5": 0.8800,
+  "recall_all_5": 0.7200,
+  "ndcg_10": 0.7379,
+  "avg_latency_ms": 93.5
+}

@@ -258,6 +258,8 @@ impl Forge {
                     superseded_at: None,
                     superseded_by: None,
                     rule_type: None,
+                
+                    ..Default::default()
                 };
                 let rule_id_str = self.backend.save_wisdom_rule(&rule_node).await?;
                 let rule_thing = crate::db::parse_record_id(&rule_id_str)?;
@@ -337,7 +339,7 @@ impl Forge {
             chunk_text
         );
         
-        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+        let res = self.llm.routed_completion(self.backend.as_ref(), &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_instruction), &prompt).await?;
         let stripped = crate::llm::strip_code_fences(&res);
         
         let concepts: Vec<ForgedConcept> = serde_json::from_str(&stripped)
@@ -369,7 +371,7 @@ impl Forge {
             chunk_text
         );
         
-        let res = self.llm.completion(self.backend.as_ref(), Some(system_instruction), &prompt).await?;
+        let res = self.llm.routed_completion(self.backend.as_ref(), &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_instruction), &prompt).await?;
         let stripped = crate::llm::strip_code_fences(&res);
         
         let rules: Vec<ForgedRule> = serde_json::from_str(&stripped)
@@ -395,7 +397,7 @@ impl Forge {
             content
         );
 
-        let res = self.llm.completion(&*self.backend, Some(system_instruction), &prompt).await?;
+        let res = self.llm.routed_completion(&*self.backend, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(system_instruction), &prompt).await?;
         let stripped = crate::llm::strip_code_fences(&res);
 
         #[derive(Deserialize)]

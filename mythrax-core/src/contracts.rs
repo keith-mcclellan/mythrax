@@ -119,6 +119,10 @@ pub struct Episode {
     pub node_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -140,6 +144,8 @@ pub struct EpisodeSave {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +166,7 @@ pub struct EpisodeSaveBuilder {
     pub node_type: Option<String>,
     pub confidence: Option<f32>,
     pub created_at: Option<String>,
+    pub importance: Option<f32>,
 }
 
 impl EpisodeSaveBuilder {
@@ -181,6 +188,7 @@ impl EpisodeSaveBuilder {
             node_type: None,
             confidence: None,
             created_at: None,
+            importance: None,
         }
     }
 
@@ -254,6 +262,11 @@ impl EpisodeSaveBuilder {
         self
     }
 
+    pub fn importance(mut self, importance: Option<f32>) -> Self {
+        self.importance = importance;
+        self
+    }
+
     pub fn build(self) -> EpisodeSave {
         EpisodeSave {
             title: self.title,
@@ -272,6 +285,7 @@ impl EpisodeSaveBuilder {
             node_type: self.node_type,
             confidence: self.confidence,
             created_at: self.created_at,
+            importance: self.importance,
         }
     }
 }
@@ -338,6 +352,12 @@ pub struct WisdomRule {
     pub superseded_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +375,7 @@ pub struct LlmConfigResponse {
     pub expires_at: Option<String>,
     pub api_key: Option<String>,
     pub llm_post_inference_delay_ms: Option<u64>,
+    pub model_tier_mappings: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,6 +386,7 @@ pub struct LlmConfigRequest {
     pub cloud_provider: Option<String>,
     pub api_key: Option<String>,
     pub llm_post_inference_delay_ms: Option<u64>,
+    pub model_tier_mappings: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
@@ -382,6 +404,10 @@ pub struct HypothesisNode {
     pub code_changes: Option<std::collections::HashMap<String, String>>,
     pub scope: Option<String>,
     pub vault_path: Option<String>,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    #[serde(default)]
+    pub visits: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -601,5 +627,51 @@ impl SearchParams {
     pub fn session_id(mut self, id: impl Into<String>) -> Self { self.session_id = Some(id.into()); self }
     pub fn include_archived(mut self, val: bool) -> Self { self.include_archived = val; self }
     pub fn temporal_anchor(mut self, anchor: impl Into<String>) -> Self { self.temporal_anchor = Some(anchor.into()); self }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModelTier {
+    Micro,
+    Small,
+    Medium,
+    Large,
+    Cloud,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskArchetype {
+    Summarization,
+    Extraction,
+    Reasoning,
+    Code,
+    Chat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskProfile {
+    pub archetype: TaskArchetype,
+    pub estimated_tokens: Option<usize>,
+    pub latency_sensitive: bool,
+}
+
+impl TaskProfile {
+    pub fn new(archetype: TaskArchetype) -> Self {
+        Self {
+            archetype,
+            estimated_tokens: None,
+            latency_sensitive: false,
+        }
+    }
+
+    pub fn with_tokens(mut self, tokens: usize) -> Self {
+        self.estimated_tokens = Some(tokens);
+        self
+    }
+
+    pub fn with_latency_sensitive(mut self, sensitive: bool) -> Self {
+        self.latency_sensitive = sensitive;
+        self
+    }
 }
 

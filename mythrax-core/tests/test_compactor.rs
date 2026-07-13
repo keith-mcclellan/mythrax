@@ -474,7 +474,9 @@ async fn test_wisdom_rule_deduplication_skills_anchor() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     let skills_id = backend.save_wisdom_rule(&existing_skills_rule).await?;
 
     // 2. Create a new rule with similar content that should be deduplicated
@@ -496,7 +498,9 @@ async fn test_wisdom_rule_deduplication_skills_anchor() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     // Write new rule's file to disk
     store.write_file("wisdom/dynamic/new_rule.md", "some content")?;
 
@@ -563,7 +567,9 @@ async fn test_wisdom_rule_deduplication_dynamic() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     let old_id = backend.save_wisdom_rule(&existing_rule).await?;
     store.write_file("wisdom/dynamic/rule1.md", "old rule content")?;
 
@@ -586,7 +592,9 @@ async fn test_wisdom_rule_deduplication_dynamic() -> Result<()> {
         superseded_at: None,
         superseded_by: None,
     
-        rule_type: None,};
+        rule_type: None,
+        ..Default::default()
+    };
     store.write_file("wisdom/dynamic/rule2.md", "new rule content")?;
 
     // Call save_wisdom_rule_with_deduplication

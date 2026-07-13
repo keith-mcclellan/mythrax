@@ -212,6 +212,7 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
             cloud_provider: Some("gemini".to_string()),
             api_key: None,
             llm_post_inference_delay_ms: None,
+            model_tier_mappings: None,
         });
     } else {
         print!("Select cloud provider (openai/anthropic/gemini) [default: openai]: ");
@@ -255,6 +256,7 @@ async fn run_onboarding_interview() -> Result<OnboardingConfig> {
             cloud_provider: Some(cloud_provider),
             api_key: Some(api_key),
             llm_post_inference_delay_ms: None,
+            model_tier_mappings: None,
         });
     }
 
@@ -603,6 +605,8 @@ async fn main() -> Result<()> {
                     superseded_at: None,
                     superseded_by: None,
                     rule_type: None,
+                
+                    ..Default::default()
                 },
                 WisdomRule {
                     id: None,
@@ -622,6 +626,8 @@ async fn main() -> Result<()> {
                     superseded_at: None,
                     superseded_by: None,
                     rule_type: None,
+                
+                    ..Default::default()
                 },
                 WisdomRule {
                     id: None,
@@ -641,6 +647,8 @@ async fn main() -> Result<()> {
                     superseded_at: None,
                     superseded_by: None,
                     rule_type: None,
+                
+                    ..Default::default()
                 },
                 WisdomRule {
                     id: None,
@@ -660,6 +668,8 @@ async fn main() -> Result<()> {
                     superseded_at: None,
                     superseded_by: None,
                     rule_type: None,
+                
+                    ..Default::default()
                 },
                 WisdomRule {
                     id: None,
@@ -679,6 +689,8 @@ async fn main() -> Result<()> {
                     superseded_at: None,
                     superseded_by: None,
                     rule_type: None,
+                
+                    ..Default::default()
                 },
             ];
 
@@ -844,6 +856,61 @@ async fn main() -> Result<()> {
                 VaultAction::Audit { workspace } => {
                     ("audit", serde_json::json!({ "workspace_path": workspace }))
                 }
+                VaultAction::Clean { dry_run, confirm } => {
+                    if dry_run {
+                        ("clean", serde_json::json!({ "dry_run": true, "confirm": false }))
+                    } else if confirm {
+                        ("clean", serde_json::json!({ "dry_run": false, "confirm": true }))
+                    } else {
+                        let home = std::env::var("HOME").context("HOME env var not set")?;
+                        let token_path = std::path::PathBuf::from(&home).join(".mythrax").join("token");
+                        let auth_token = mythrax_core::auth::get_or_create_token(&token_path)?;
+                        let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+                        let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
+                        
+                        ensure_daemon_active_for_cli(&auth_token, &daemon_url).await?;
+                        
+                        let client = reqwest::Client::new();
+                        let url = format!("{}/v1/mcp/call", daemon_url);
+                        let payload = serde_json::json!({
+                            "name": "manage",
+                            "arguments": {
+                                "action": "clean",
+                                "dry_run": true,
+                                "confirm": false
+                            }
+                        });
+                        
+                        let resp = client.post(&url)
+                            .header("X-Mythrax-Token", &auth_token)
+                            .json(&payload)
+                            .send()
+                            .await?;
+                            
+                        let result_json: serde_json::Value = resp.json().await?;
+                        let text = result_json.get("content")
+                            .and_then(|c| c.as_array())
+                            .and_then(|arr| arr.first())
+                            .and_then(|first| first.get("text"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                            
+                        println!("{}", text);
+                        
+                        print!("Do you want to proceed with the cleanup? [y/N]: ");
+                        std::io::Write::flush(&mut std::io::stdout())?;
+                        
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input)?;
+                        let trimmed = input.trim().to_lowercase();
+                        if trimmed == "y" || trimmed == "yes" {
+                            ("clean", serde_json::json!({ "dry_run": false, "confirm": true }))
+                        } else {
+                            println!("Cleanup aborted.");
+                            return Ok(());
+                        }
+                    }
+                }
             };
             let mut payload = args;
             payload["action"] = serde_json::Value::String(act_str.to_string());
@@ -882,6 +949,17 @@ async fn main() -> Result<()> {
         }
         Commands::Exec { command_name, args } => {
             handle_exec(&command_name, &args).await?;
+        }
+        Commands::Bootstrap { dry_run, since, scope, distill_model, force } => {
+            let payload = serde_json::json!({
+                "action": "bootstrap",
+                "dry_run": dry_run,
+                "since": since,
+                "scope": scope,
+                "distill_model": distill_model,
+                "force": force,
+            });
+            execute_cli_tool_call("manage", payload).await?;
         }
     }
 
