@@ -342,7 +342,10 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
         while let Some(idx) = content[start..].find(prefix) {
             let absolute_start = start + idx + prefix.len();
             let suffix = &content[absolute_start..];
-            let len = suffix.chars().take_while(|c| *c != '/' && !c.is_whitespace() && *c != '"' && *c != '\'' && *c != ',' && *c != '\\').count();
+            let len = suffix.chars()
+                .take_while(|c| *c != '/' && !c.is_whitespace() && *c != '"' && *c != '\'' && *c != ',' && *c != '\\')
+                .map(|c| c.len_utf8())
+                .sum();
             if len > 0 {
                 let scope = &suffix[..len];
                 let normalized: String = scope

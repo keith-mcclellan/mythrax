@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
-use anyhow::{Result, Context};
+use anyhow::Result;
 use crate::db::backend::{SurrealBackend, format_record_id};
 use surrealdb_types::SurrealValue;
 
