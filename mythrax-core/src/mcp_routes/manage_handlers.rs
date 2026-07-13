@@ -36,7 +36,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
     };
 
     match mapped_action {
-        "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk" | "ingest_forge" | "save_forged_assets" | "bootstrap" => {
+        "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk" | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
             match mapped_action {
                 "ingest_bulk" => {
                     let _source = args.get("source").and_then(|v| v.as_str()).context("Missing source parameter for ingest_bulk")?;
