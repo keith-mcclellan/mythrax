@@ -147,6 +147,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             let files: Vec<String> = files_val.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
             let test_command = args.get("test_command").and_then(|v| v.as_str()).context("Missing test_command")?.to_string();
             let max_steps = args.get("max_steps").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+            let max_time_secs = args.get("max_time_secs").and_then(|v| v.as_u64()).unwrap_or(14400);
 
             let llm = crate::llm::LLMClient::new();
             let current_dir = std::env::current_dir()?;
@@ -165,8 +166,13 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             let mut step = 0;
             let mut current_node = "ROOT".to_string();
             let mut status_msg = "HTR run loop completed without finding a candidate score >= 95.0.".to_string();
+            let start_time = std::time::Instant::now();
             
             loop {
+                if start_time.elapsed().as_secs() >= max_time_secs {
+                    status_msg = format!("HTR loop timed out after the maximum configured duration of {} seconds.", max_time_secs);
+                    break;
+                }
                 if step >= max_steps {
                     break;
                 }
