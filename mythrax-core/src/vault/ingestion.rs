@@ -379,6 +379,7 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
     // Fallback: Existing generic scanner
     let mut scopes: Vec<String> = Vec::new();
     let folder_prefixes = ["/Documents/", "/repos/", "/workspace/", "/workspaces/", "/projects/"];
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/keith".to_string());
     
     for prefix in &folder_prefixes {
         let mut start = 0;
@@ -399,7 +400,11 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
                     .trim_matches('.')
                     .to_string();
                 if !normalized.is_empty() {
-                    scopes.push(normalized);
+                    let clean_prefix = prefix.trim_matches('/');
+                    let full_path = Path::new(&home).join(clean_prefix).join(&normalized);
+                    if full_path.is_dir() {
+                        scopes.push(normalized);
+                    }
                 }
             }
             start = absolute_start + len;
