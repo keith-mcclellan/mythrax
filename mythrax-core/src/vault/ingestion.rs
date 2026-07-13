@@ -84,6 +84,31 @@ fn parse_antigravity_log(path: &Path) -> Result<String> {
     Ok(markdown)
 }
 
+fn get_transcript_created_at(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    use std::io::BufRead;
+    for line_res in reader.lines() {
+        if let Ok(line) = line_res {
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
+                if let Some(created_at) = obj["created_at"].as_str() {
+                    return Some(created_at.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_folder_created_at_fallback(path: &Path) -> String {
+    let metadata = std::fs::metadata(path);
+    let mtime = metadata
+        .and_then(|m| m.modified())
+        .unwrap_or_else(|_| std::time::SystemTime::now());
+    let dt: chrono::DateTime<chrono::Utc> = mtime.into();
+    dt.to_rfc3339()
+}
+
 fn parse_claude_log(path: &Path) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
@@ -416,7 +441,7 @@ pub async fn bulk_ingest_vault(
 
     match harness_type {
         "antigravity" => {
-            let mut dirs = Vec::new();
+            let mut dirs_with_time = Vec::new();
             if let Ok(entries) = std::fs::read_dir(source_dir) {
                 for entry in entries.flatten() {
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -454,15 +479,22 @@ pub async fn bulk_ingest_vault(
                         };
 
                         if log_exists || has_md {
-                            dirs.push(path);
+                            let mtime = std::fs::metadata(&path)
+                                .and_then(|m| m.modified())
+                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                            dirs_with_time.push((path, mtime));
                         }
                     }
                 }
             }
 
+            dirs_with_time.sort_by_key(|d| d.1);
+            let dirs: Vec<std::path::PathBuf> = dirs_with_time.into_iter().map(|d| d.0).collect();
+
             let total_dirs = dirs.len();
+            let mut last_episode_id: Option<String> = None;
             for (index, path) in dirs.into_iter().enumerate() {
-                let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                let dir_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 let title = format!("antigravity_{}", dir_name);
                 let part1_title = format!("{}_part1", title);
                 if existing_titles.contains(&title) || existing_titles.contains(&part1_title) {
@@ -524,14 +556,14 @@ pub async fn bulk_ingest_vault(
                             format!("{}/{}", resolved_scope, file_stem)
                         };
                         let wiki_rel = if total_art_chunks > 1 {
-                            format!("wiki/{}/{}_part{}.md", resolved_scope, file_stem, art_idx + 1)
+                            format!("wiki/{}/wiki_nodes/{}_part{}.md", resolved_scope, file_stem, art_idx + 1)
                         } else {
-                            format!("wiki/{}/{}.md", resolved_scope, file_stem)
+                            format!("wiki/{}/wiki_nodes/{}.md", resolved_scope, file_stem)
                         };
                         let wikilink = if total_art_chunks > 1 {
-                            format!("wiki/{}/{}_part{}", resolved_scope, file_stem, art_idx + 1)
+                            format!("wiki/{}/wiki_nodes/{}_part{}", resolved_scope, file_stem, art_idx + 1)
                         } else {
-                            format!("wiki/{}/{}", resolved_scope, file_stem)
+                            format!("wiki/{}/wiki_nodes/{}", resolved_scope, file_stem)
                         };
                         resolved_artifacts.push((node_name, wiki_rel, wikilink, chunk_text));
                     }
@@ -556,6 +588,12 @@ pub async fn bulk_ingest_vault(
                 } else {
                     continue;
                 };
+
+                let created_at_opt = if log_path.exists() {
+                    get_transcript_created_at(&log_path)
+                } else {
+                    None
+                }.unwrap_or_else(|| get_folder_created_at_fallback(&path));
 
                 let uuid_suffix = uuid::Uuid::new_v4().to_string()[..8].to_string();
 
@@ -588,6 +626,8 @@ pub async fn bulk_ingest_vault(
                         )
                         .scope(Some(resolved_scope.clone()))
                         .vault_path(Some(parent_relative_path.clone()))
+                        .session_id(Some(dir_name.clone()))
+                        .created_at(Some(created_at_opt.clone()))
                         .build();
                         if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
                             success_count += 1;
@@ -653,6 +693,8 @@ pub async fn bulk_ingest_vault(
                         )
                         .scope(Some(resolved_scope.clone()))
                         .vault_path(Some(relative_path.clone()))
+                        .session_id(Some(dir_name.clone()))
+                        .created_at(Some(created_at_opt.clone()))
                         .build();
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;
@@ -694,6 +736,32 @@ pub async fn bulk_ingest_vault(
                                 .bind(("part_n", part_n))
                                 .await;
                         }
+                    }
+                }
+
+                if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                    let current_primary_id = if total_chunks > 1 && !parent_saved_id.is_empty() {
+                        Some(parent_saved_id.clone())
+                    } else if !generated_parts.is_empty() {
+                        Some(generated_parts[0].2.clone())
+                    } else {
+                        None
+                    };
+
+                    if let Some(ref curr_id) = current_primary_id {
+                        if let Some(ref last_id) = last_episode_id {
+                            if let (Ok(last_thing), Ok(curr_thing)) = (
+                                crate::db::parse_record_id(last_id),
+                                crate::db::parse_record_id(curr_id),
+                            ) {
+                                let query_followed = "RELATE $last_thing -> followed_by -> $curr_thing UNIQUE CONTENT { created_at: time::now() };";
+                                let _ = surreal.db.query(query_followed)
+                                    .bind(("last_thing", last_thing))
+                                    .bind(("curr_thing", curr_thing))
+                                    .await;
+                            }
+                        }
+                        last_episode_id = Some(curr_id.clone());
                     }
                 }
 

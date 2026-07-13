@@ -241,6 +241,8 @@ pub const INIT_SCHEMA: &str = "
     UPSERT type::record('profile', 'search.stm_relevance_threshold') CONTENT { key: 'search.stm_relevance_threshold', value: '0.4' };
     UPSERT type::record('profile', 'search.gaussian_temporal_sigma') CONTENT { key: 'search.gaussian_temporal_sigma', value: '168.0' };
     UPSERT type::record('profile', 'search.tfidf_pool_size') CONTENT { key: 'search.tfidf_pool_size', value: '100' };
+    UPSERT type::record('profile', 'routing:archetype:summarization') CONTENT { key: 'routing:archetype:summarization', value: 'cloud' };
+    UPSERT type::record('profile', 'routing:archetype:reasoning') CONTENT { key: 'routing:archetype:reasoning', value: 'cloud' };
 
     DEFINE TABLE IF NOT EXISTS search_keyword SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS word ON search_keyword TYPE string;

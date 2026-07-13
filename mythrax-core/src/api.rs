@@ -12,6 +12,7 @@ use crate::vault::watcher::WatchIgnoreList;
 use serde_json::{json, Value};
 use bytes::Bytes;
 
+#[derive(Clone)]
 pub struct ApiState {
     pub backend: Arc<dyn StorageBackend>,
     pub auth_token: String,
@@ -453,43 +454,124 @@ async fn completions_proxy_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let client = reqwest::Client::new();
-    let url = "http://127.0.0.1:8080/v1/chat/completions";
-    
-    let req = client.post(url).json(&payload);
-    let is_stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
-    
-    if is_stream {
-        match req.send().await {
-            Ok(resp) => {
-                let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
-                let mut header_map = HeaderMap::new();
-                header_map.insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/event-stream"));
-                
-                use futures_util::StreamExt;
-                let stream = resp.bytes_stream().map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
-                (status, header_map, axum::body::Body::from_stream(stream)).into_response()
+    let external_url = std::env::var("MYTHRAX_COMPLETIONS_URL")
+        .ok()
+        .or_else(|| {
+            #[cfg(not(feature = "mlx"))]
+            {
+                Some("http://127.0.0.1:8080/v1/chat/completions".to_string())
             }
-            Err(e) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to proxy request: {}", e)).into_response()
+            #[cfg(feature = "mlx")]
+            {
+                None
+            }
+        });
+
+    if let Some(url) = external_url {
+        let client = reqwest::Client::new();
+        let req = client.post(&url).json(&payload);
+        let is_stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+        
+        if is_stream {
+            match req.send().await {
+                Ok(resp) => {
+                    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+                    let mut header_map = HeaderMap::new();
+                    header_map.insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/event-stream"));
+                    
+                    use futures_util::StreamExt;
+                    let stream = resp.bytes_stream().map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+                    (status, header_map, axum::body::Body::from_stream(stream)).into_response()
+                }
+                Err(e) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to proxy request: {}", e)).into_response()
+                }
+            }
+        } else {
+            match req.send().await {
+                Ok(resp) => {
+                    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+                    match resp.json::<Value>().await {
+                        Ok(json_val) => (status, Json(json_val)).into_response(),
+                        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to parse response: {}", e)).into_response(),
+                    }
+                }
+                Err(e) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to proxy request: {}", e)).into_response()
+                }
             }
         }
     } else {
-        match req.send().await {
-            Ok(resp) => {
-                let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
-                match resp.json::<Value>().await {
-                    Ok(json_val) => {
-                        (status, Json(json_val)).into_response()
-                    }
-                    Err(e) => {
-                        (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to parse response: {}", e)).into_response()
+        #[cfg(feature = "mlx")]
+        {
+            let model = payload.get("model").and_then(|v| v.as_str()).unwrap_or("mlx-community/Qwen3.6-35B-A3B-4bit");
+            let messages = payload.get("messages").and_then(|v| v.as_array());
+            
+            let mut system_instruction = None;
+            let mut prompt = String::new();
+            if let Some(msgs) = messages {
+                for msg in msgs {
+                    let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                    let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    if role == "system" {
+                        system_instruction = Some(content);
+                    } else if role == "user" {
+                        if !prompt.is_empty() {
+                            prompt.push_str("\n\n");
+                        }
+                        prompt.push_str(content);
+                    } else if role == "assistant" {
+                        if !prompt.is_empty() {
+                            prompt.push_str("\n\n");
+                        }
+                        prompt.push_str(content);
                     }
                 }
             }
-            Err(e) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to proxy request: {}", e)).into_response()
+
+            let client_llm = crate::llm::LLMClient::new();
+            match client_llm.completion_explicit(
+                state.backend.as_ref(),
+                "local",
+                "local",
+                model,
+                system_instruction,
+                &prompt,
+                false,
+            ).await {
+                Ok(response_text) => {
+                    let is_stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+                    if is_stream {
+                        let chunk = serde_json::json!({
+                            "choices": [{
+                                "delta": { "content": response_text },
+                                "index": 0,
+                                "finish_reason": "stop"
+                            }]
+                        });
+                        let sse_data = format!("data: {}\n\ndata: [DONE]\n\n", serde_json::to_string(&chunk).unwrap());
+                        let mut header_map = HeaderMap::new();
+                        header_map.insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/event-stream"));
+                        (StatusCode::OK, header_map, sse_data).into_response()
+                    } else {
+                        let res_json = serde_json::json!({
+                            "choices": [{
+                                "message": { "role": "assistant", "content": response_text },
+                                "index": 0,
+                                "finish_reason": "stop"
+                            }]
+                        });
+                        (StatusCode::OK, Json(res_json)).into_response()
+                    }
+                }
+                Err(e) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("In-process generation failed: {:?}", e)).into_response()
+                }
             }
+        }
+        #[cfg(not(feature = "mlx"))]
+        {
+            (StatusCode::SERVICE_UNAVAILABLE, "In-process MLX engine is disabled and no completions proxy URL is configured.").into_response()
         }
     }
 }

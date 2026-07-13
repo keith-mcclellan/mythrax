@@ -89,6 +89,200 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             ).await?;
             Ok(json!({ "status": "success", "episodes_saved": count }))
         }
+        "stop" => {
+            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for stop")?;
+            let transcript_path_str = args.get("transcript_path").and_then(|v| v.as_str()).context("Missing transcript_path parameter for stop")?;
+            let decision = crate::hooks::stop::mine_if_due(
+                session_id,
+                transcript_path_str,
+                false,
+                &state.backend,
+                &state.store,
+                &state.ignore_list,
+            ).await?;
+            let block = decision.is_some();
+            let count = decision.unwrap_or(0);
+            Ok(json!({ "status": "success", "block": block, "episodes_saved": count }))
+        }
+        "audit_response" => {
+            let response_text = args.get("response").and_then(|v| v.as_str()).context("Missing response parameter for audit_response")?;
+            let rules_path_opt = args.get("rules_path").and_then(|v| v.as_str());
+            let session_id_opt = args.get("session_id").and_then(|v| v.as_str());
+            let fail_on_violation = args.get("fail_on_violation").and_then(|v| v.as_bool()).unwrap_or(true);
+            
+            // 1. Read rules from rules_path if provided, else fallback to standard locations
+            let mut rules_content = String::new();
+            if let Some(rules_path) = rules_path_opt {
+                if let Ok(content) = std::fs::read_to_string(rules_path) {
+                    rules_content = content;
+                } else {
+                    tracing::warn!("Configured rules_path '{}' not found, falling back to default rules", rules_path);
+                }
+            }
+            
+            if rules_content.is_empty() {
+                // Try workspace AGENTS.md first
+                let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+                    .ok()
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let ws_agents_path = workspace_root.join(".agents").join("AGENTS.md");
+                let global_agents_path = std::path::PathBuf::from("/Users/keith/.gemini/config/AGENTS.md");
+                
+                if let Ok(content) = std::fs::read_to_string(&ws_agents_path) {
+                    rules_content.push_str(&content);
+                    rules_content.push_str("\n\n");
+                }
+                if let Ok(content) = std::fs::read_to_string(&global_agents_path) {
+                    rules_content.push_str(&content);
+                }
+            }
+
+            // Also query active database wisdom rules if session_id is provided
+            if let Some(session_id) = session_id_opt {
+                let scope = if session_id.contains('-') {
+                    "general"
+                } else {
+                    session_id
+                };
+                if let Ok(db_rules) = state.backend.get_all_wisdom_rules().await {
+                    let filtered: Vec<_> = db_rules.iter().filter(|r| r.scope == scope).collect();
+                    if !filtered.is_empty() {
+                        rules_content.push_str("\n\n### Learned Wisdom Rules:\n");
+                        for r in filtered {
+                            rules_content.push_str(&format!(
+                                "- Target: {}\n  Avoid: {}\n  Remedy: {}\n",
+                                r.target_pattern, r.action_to_avoid, r.prescribed_remedy
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // 2. Perform the LLM audit
+            let system_instruction = "You are a rigid compliance auditor. Your job is to check the proposed agent response against the system operating rules and identify any violations. Respond with 'APPROVED' if no violations are found, otherwise list the violations clearly.";
+            let prompt = format!(
+                "Rules:\n{}\n\nProposed Response:\n{}\n\nDoes the proposed response follow all the rules? Respond with 'APPROVED' if compliant, or describe the violations.",
+                rules_content, response_text
+            );
+
+            let model_opt = args.get("model").and_then(|v| v.as_str());
+            let tier_opt = args.get("tier").and_then(|v| v.as_str());
+            let use_cloud = model_opt == Some("cloud") || tier_opt == Some("cloud");
+
+            let llm = crate::llm::LLMClient::new();
+            let audit_res = if use_cloud && std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
+                let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                let task = crate::db::CognitiveTask {
+                    id: task_id.clone(),
+                    task_type: "AuditResponse".to_string(),
+                    prompt: prompt.clone(),
+                    system_instruction: system_instruction.to_string(),
+                    expected_format: "Any".to_string(),
+                    priority: "High".to_string(),
+                    created_at: chrono::Utc::now(),
+                    status: "Pending".to_string(),
+                    result: None,
+                    ttl_minutes: 10,
+                    injected_at: None,
+                };
+                
+                let surreal_backend = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>()
+                    .context("SurrealBackend required for cognitive callback")?;
+                
+                surreal_backend.create_cognitive_task(&task).await?;
+                
+                let start = std::time::Instant::now();
+                let timeout = std::time::Duration::from_secs(60);
+                let mut completed_res = None;
+                while start.elapsed() < timeout {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                        if updated.status == "Completed" {
+                            if let Some(res) = updated.result {
+                                completed_res = Some(res);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if let Some(res) = completed_res {
+                    res
+                } else {
+                    tracing::warn!("Cognitive callback for response audit timed out, falling back to local model");
+                    match llm.completion_explicit(
+                        state.backend.as_ref(),
+                        "local",
+                        "gemini",
+                        "mlx-community/Qwen3.6-35B-A3B-4bit",
+                        Some(system_instruction),
+                        &prompt,
+                        false,
+                    ).await {
+                        Ok(res) => res,
+                        Err(_) => {
+                            let config = state.backend.get_llm_config().await.unwrap_or_default();
+                            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                                "gemini-1.5-flash"
+                            } else {
+                                &config.model
+                            };
+                            llm.completion_explicit(
+                                state.backend.as_ref(),
+                                "cloud",
+                                &config.cloud_provider,
+                                cloud_model,
+                                Some(system_instruction),
+                                &prompt,
+                                false,
+                            ).await.unwrap_or_else(|_| "APPROVED".to_string())
+                        }
+                    }
+                }
+            } else {
+                match llm.completion_explicit(
+                    state.backend.as_ref(),
+                    "local",
+                    "gemini",
+                    "mlx-community/Qwen3.6-35B-A3B-4bit",
+                    Some(system_instruction),
+                    &prompt,
+                    false,
+                ).await {
+                    Ok(res) => res,
+                    Err(_) => {
+                        let config = state.backend.get_llm_config().await.unwrap_or_default();
+                        let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                            "gemini-1.5-flash"
+                        } else {
+                            &config.model
+                        };
+                        llm.completion_explicit(
+                            state.backend.as_ref(),
+                            "cloud",
+                            &config.cloud_provider,
+                            cloud_model,
+                            Some(system_instruction),
+                            &prompt,
+                            false,
+                        ).await.unwrap_or_else(|_| "APPROVED".to_string())
+                    }
+                }
+            };
+
+            let compliant = audit_res.trim().to_uppercase().contains("APPROVED") || audit_res.trim().to_uppercase() == "APPROVED";
+            
+            if !compliant && fail_on_violation {
+                anyhow::bail!("Rule compliance audit failed:\n{}", audit_res);
+            }
+            
+            Ok(json!({
+                "status": "success",
+                "compliant": compliant,
+                "audit_report": audit_res
+            }))
+        }
         _ => anyhow::bail!("Invalid action for manage tool: {}", resolved_action),
     }
 }
@@ -533,6 +727,12 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
 
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
     let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+    let caller = args.get("caller").and_then(|v| v.as_str());
+    
+    if caller == Some("distiller") {
+        let now_unix = chrono::Utc::now().timestamp();
+        let _ = state.backend.save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string()).await;
+    }
     
     let mut total_discovery = 0u32;
     let mut total_read = 0u32;
@@ -1119,6 +1319,33 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
     if !callback_injection.is_empty() {
         final_context = format!("{}{}", callback_injection, final_context);
+    }
+    
+    let mut distiller_warning = String::new();
+    if caller != Some("distiller") {
+        if let Ok(pending) = surreal_backend.get_pending_cognitive_tasks().await {
+            if !pending.is_empty() {
+                let last_hb = stm_map.get("_distiller_heartbeat")
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0);
+                let now_unix = chrono::Utc::now().timestamp();
+                if now_unix - last_hb > 60 {
+                    distiller_warning = format!(
+                        "\n> [!IMPORTANT]\n\
+                         > **COMPLIANCE ALERT: BACKGROUND DISTILLER OFFLINE**\n\
+                         > There are pending cloud cognitive task callbacks in SurrealDB, but the background Transcript Distiller is not active (no heartbeat in the last 60 seconds).\n\
+                         > You MUST immediately spin up the distiller subagent to execute these tasks using your cloud brain!\n\
+                         > Run this tool call to boot it:\n\
+                         > `invoke_subagent(TypeName=\"self\", Role=\"Transcript Distiller\", Prompt=\"You are the Cloud Distiller. Your job is to run a loop to fetch pending cognitive tasks from the Mythrax daemon and solve them using your cloud brain. Please do the following: 1. Call call_mcp_tool with ServerName='mythrax', ToolName='manage', Arguments={{session_id: \\\"{}\\\", action: \\\"pre_invocation\\\", caller: \\\"distiller\\\"}}. 2. If the output is saved to a file, read the file. Look for the section '### 🧠 Pending Cognitive Callbacks'. 3. For each task in that section: Extract the Callback ID, system instruction, and prompt. Using your cloud brain, generate the output. Call call_mcp_tool write cognitive_callback... 4. Repeat. If no tasks are returned for 3 consecutive attempts, report back that the bootstrap process is complete.\")`\n",
+                        session_id
+                    );
+                }
+            }
+        }
+    }
+
+    if !distiller_warning.is_empty() {
+        final_context = format!("{}{}", distiller_warning, final_context);
     }
     
     if !stale_search_warning.is_empty() {

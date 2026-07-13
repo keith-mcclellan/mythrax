@@ -86,29 +86,66 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             }))
         }
         "summarize" => {
-            let scope = args.get("scope").and_then(|v| v.as_str());
-            let compactor = Compactor::new();
-            let coordinator = DreamCoordinator::new();
-            let embedder = if let Some(backend) = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-                backend.embedder.clone()
-            } else {
-                None
-            };
+            let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let async_mode = args.get("async_mode").and_then(|v| v.as_bool()).unwrap_or(true);
 
-            coordinator.run_dream(&*state.backend, &state.store, None, embedder.clone()).await?;
+            let scope_clone = scope.clone();
+            if async_mode {
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    let compactor = Compactor::new();
+                    let coordinator = DreamCoordinator::new();
+                    let embedder = if let Some(backend) = state_clone.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                        backend.embedder.clone()
+                    } else {
+                        None
+                    };
 
-            let scope_name = scope.unwrap_or("general");
-            compactor.compact_scope(&*state.backend, &state.store, scope_name, embedder).await?;
-            compactor.compact_global(&*state.backend, &state.store).await?;
-
-            Ok(json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": format!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name)
+                    if let Err(e) = coordinator.run_dream(&*state_clone.backend, &state_clone.store, None, embedder.clone()).await {
+                        tracing::error!("Background dream run failed: {:?}", e);
                     }
-                ]
-            }))
+
+                    let scope_name = scope.as_deref().unwrap_or("general");
+                    if let Err(e) = compactor.compact_scope(&*state_clone.backend, &state_clone.store, scope_name, embedder).await {
+                        tracing::error!("Background compact_scope failed: {:?}", e);
+                    }
+                    if let Err(e) = compactor.compact_global(&*state_clone.backend, &state_clone.store).await {
+                        tracing::error!("Background compact_global failed: {:?}", e);
+                    }
+                });
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Compaction and synthesis dreaming started in the background for scope '{}'.", scope_clone.as_deref().unwrap_or("general"))
+                        }
+                    ]
+                }))
+            } else {
+                let compactor = Compactor::new();
+                let coordinator = DreamCoordinator::new();
+                let embedder = if let Some(backend) = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    backend.embedder.clone()
+                } else {
+                    None
+                };
+
+                coordinator.run_dream(&*state.backend, &state.store, None, embedder.clone()).await?;
+
+                let scope_name = scope.as_deref().unwrap_or("general");
+                compactor.compact_scope(&*state.backend, &state.store, scope_name, embedder).await?;
+                compactor.compact_global(&*state.backend, &state.store).await?;
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name)
+                        }
+                    ]
+                }))
+            }
         }
         "audit" => {
             let workspace_path_str = args.get("workspace_path").and_then(|v| v.as_str()).unwrap_or(".");
@@ -261,152 +298,41 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             }))
         }
         "bootstrap" => {
-            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
-                .context("SurrealBackend required for bootstrap")?;
-
             let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-            let since = args.get("since").and_then(|v| v.as_str());
-            let scope_str = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let since = args.get("since").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let scope_str = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
             let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+            let async_mode = args.get("async_mode").and_then(|v| v.as_bool()).unwrap_or(true);
 
-            let home_dir = std::env::var("HOME").context("HOME env var not set")?;
-            let brain_dir = std::path::Path::new(&home_dir).join(".gemini/antigravity/brain");
-            
-            let mut processed_convs = 0;
-            let mut distilled_count = 0;
-            let mut skipped_count = 0;
-            
-            if brain_dir.exists() {
-                if let Ok(entries) = std::fs::read_dir(brain_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            let conversation_id = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                            if conversation_id.starts_with('.') || conversation_id == "tempmediaStorage" {
-                                continue;
-                            }
-                            
-                            let mut already_processed = false;
-                            if !force {
-                                let check_query = "SELECT VALUE id FROM type::record('bootstrap_state', $id) LIMIT 1;";
-                                if let Ok(mut resp) = surreal_backend.db.query(check_query).bind(("id", conversation_id.to_string())).await {
-                                    let processed: Option<surrealdb::types::RecordId> = resp.take(0).unwrap_or(None);
-                                    if processed.is_some() {
-                                        already_processed = true;
-                                    }
-                                }
-                            }
-                            
-                            let transcript_path = path.join(".system_generated/logs/transcript.jsonl");
-                            if !transcript_path.exists() {
-                                continue;
-                            }
-                            
-                            if let Some(since_ts) = since {
-                                if let Ok(metadata) = std::fs::metadata(&transcript_path) {
-                                    if let Ok(modified) = metadata.modified() {
-                                        let modified_dt: chrono::DateTime<chrono::Utc> = modified.into();
-                                        if let Ok(since_dt) = chrono::DateTime::parse_from_rfc3339(since_ts) {
-                                            if modified_dt < since_dt.with_timezone(&chrono::Utc) {
-                                                skipped_count += 1;
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            if already_processed && !force {
-                                skipped_count += 1;
-                                continue;
-                            }
-                            
-                            if !dry_run {
-                                let client = crate::llm::LLMClient::new();
-                                if let Ok(distilled_list) = crate::vault::distillation::distill_transcript_file(
-                                    state.backend.as_ref(),
-                                    &client,
-                                    &transcript_path,
-                                    conversation_id,
-                                    scope_str
-                                ).await {
-                                    for distilled in distilled_list {
-                                        let save_query = "
-                                            CREATE type::record('distilled_conversation', $id) CONTENT {
-                                                conversation_id: $conversation_id,
-                                                title: $title,
-                                                scope: $scope,
-                                                timestamp: $timestamp,
-                                                decisions: $decisions,
-                                                constraints_discovered: $constraints_discovered,
-                                                code_changes: $code_changes,
-                                                commands_run: $commands_run,
-                                                errors_resolved: $errors_resolved,
-                                                user_preferences: $user_preferences,
-                                                summary: $summary,
-                                                key_takeaways: $key_takeaways
-                                            };
-                                        ";
-                                        let rec_id = format!("distilled_conversation:{}", uuid::Uuid::new_v4());
-                                        let _ = surreal_backend.db.query(save_query)
-                                            .bind(("id", rec_id))
-                                            .bind(("conversation_id", distilled.conversation_id.clone()))
-                                            .bind(("title", distilled.title.clone()))
-                                            .bind(("scope", distilled.scope.clone()))
-                                            .bind(("timestamp", distilled.timestamp.clone()))
-                                            .bind(("decisions", distilled.decisions.clone()))
-                                            .bind(("constraints_discovered", distilled.constraints_discovered.clone()))
-                                            .bind(("code_changes", distilled.code_changes.clone()))
-                                            .bind(("commands_run", distilled.commands_run.clone()))
-                                            .bind(("errors_resolved", distilled.errors_resolved.clone()))
-                                            .bind(("user_preferences", distilled.user_preferences.clone()))
-                                            .bind(("summary", distilled.summary.clone()))
-                                            .bind(("key_takeaways", distilled.key_takeaways.clone()))
-                                            .await;
-                                        distilled_count += 1;
-                                    }
-                                }
-                                
-                                let _ = crate::vault::distillation::ingest_artifacts_in_dir(
-                                    state.backend.as_ref(),
-                                    &path,
-                                    conversation_id,
-                                    scope_str
-                                ).await;
-                                
-                                let upsert_query = "UPSERT type::record('bootstrap_state', $id) SET processed_at = time::now();";
-                                let _ = surreal_backend.db.query(upsert_query).bind(("id", conversation_id.to_string())).await;
-                            }
-                            
-                            processed_convs += 1;
+            if async_mode {
+                let state_clone = state.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_bootstrap_internal(state_clone, dry_run, since, scope_str, force).await {
+                        tracing::error!("Background bootstrap failed: {:?}", e);
+                    }
+                });
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Incremental bootstrap and conversation distillation started in the background. Cognitive tasks will be injected into your prompt stream as turns progress."
                         }
-                    }
-                }
+                    ]
+                }))
+            } else {
+                unsafe { std::env::set_var("MYTHRAX_BOOTSTRAPPING", "1"); }
+                let report_res = run_bootstrap_internal(state.clone(), dry_run, since, scope_str, force).await;
+                unsafe { std::env::remove_var("MYTHRAX_BOOTSTRAPPING"); }
+                let report = report_res?;
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": report
+                        }
+                    ]
+                }))
             }
-            
-            let mut wisdom_count = 0;
-            if !dry_run {
-                if let Ok(w_count) = crate::vault::distillation::seed_wisdom_from_rules(
-                    state.backend.as_ref(),
-                    &state.store.vault_root
-                ).await {
-                    wisdom_count = w_count;
-                }
-            }
-            
-            let report = format!(
-                "Incremental bootstrap completed:\n- Processed conversations: {}\n- Skipped/Already processed: {}\n- Distilled chunks created: {}\n- Wisdom rules seeded: {}\n- Dry-run: {}",
-                processed_convs, skipped_count, distilled_count, wisdom_count, dry_run
-            );
-            
-            Ok(json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": report
-                    }
-                ]
-            }))
         }
         _ => anyhow::bail!("Invalid action for manage_vault: {}", action),
     }
@@ -414,28 +340,56 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
 
 pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Value> {
     let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
+    let async_mode = args.get("async_mode").and_then(|v| v.as_bool()).unwrap_or(true);
     match action {
         "bulk" => {
             let source = args.get("source").and_then(|v| v.as_str()).context("Missing source")?;
             let harness = args.get("harness").and_then(|v| v.as_str()).context("Missing harness")?;
             let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
             
-            let (count, errors) = bulk_ingest_vault(
-                &state.store.vault_root,
-                std::path::Path::new(source),
-                harness,
-                scope,
-                &*state.backend
-            ).await?;
-
-            Ok(json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": format!("Ingested {} logs successfully. Errors: {:?}", count, errors)
+            if async_mode {
+                let state_clone = state.clone();
+                let source_clone = source.to_string();
+                let harness_clone = harness.to_string();
+                let scope_clone = scope.to_string();
+                tokio::spawn(async move {
+                    if let Err(e) = bulk_ingest_vault(
+                        &state_clone.store.vault_root,
+                        std::path::Path::new(&source_clone),
+                        &harness_clone,
+                        &scope_clone,
+                        &*state_clone.backend
+                    ).await {
+                        tracing::error!("Background bulk ingestion failed: {:?}", e);
                     }
-                ]
-            }))
+                });
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Bulk ingestion started in the background. Ingestion will progress asynchronously."
+                        }
+                    ]
+                }))
+            } else {
+                let (count, errors) = bulk_ingest_vault(
+                    &state.store.vault_root,
+                    std::path::Path::new(source),
+                    harness,
+                    scope,
+                    &*state.backend
+                ).await?;
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Ingested {} logs successfully. Errors: {:?}", count, errors)
+                        }
+                    ]
+                }))
+            }
         }
         "forge" => {
             let source_path = args.get("source").or_else(|| args.get("source_path")).and_then(|v| v.as_str()).context("Missing source")?;
@@ -451,19 +405,42 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
             let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required for forge")?;
 
-            let surreal_backend_arc = Arc::new(surreal_backend.clone());
-
-            let forge = Forge::new(surreal_backend_arc, state.store.clone());
-            forge.ingest_document(&content, scope, source_path).await?;
-
-            Ok(json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": format!("Successfully forged source document '{}'", source_path)
+            if async_mode {
+                let state_clone = state.clone();
+                let source_path_clone = source_path.to_string();
+                let scope_clone = scope.to_string();
+                let content_clone = content;
+                let surreal_backend_clone = surreal_backend.clone();
+                tokio::spawn(async move {
+                    let surreal_backend_arc = Arc::new(surreal_backend_clone);
+                    let forge = Forge::new(surreal_backend_arc, state_clone.store.clone());
+                    if let Err(e) = forge.ingest_document(&content_clone, &scope_clone, &source_path_clone).await {
+                        tracing::error!("Background forge ingestion failed: {:?}", e);
                     }
-                ]
-            }))
+                });
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Document forging started in the background for '{}'.", source_path)
+                        }
+                    ]
+                }))
+            } else {
+                let surreal_backend_arc = Arc::new(surreal_backend.clone());
+                let forge = Forge::new(surreal_backend_arc, state.store.clone());
+                forge.ingest_document(&content, scope, source_path).await?;
+
+                Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Successfully forged source document '{}'", source_path)
+                        }
+                    ]
+                }))
+            }
         }
         "save_forged_assets" => {
             let batch: ForgedSectionBatch = serde_json::from_value(args.clone())
@@ -480,4 +457,147 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
         }
         _ => anyhow::bail!("Invalid action for ingest_knowledge: {}", action),
     }
+}
+
+pub async fn run_bootstrap_internal(
+    state: ApiState,
+    dry_run: bool,
+    since: Option<String>,
+    scope_str: String,
+    force: bool,
+) -> Result<String> {
+    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+        .context("SurrealBackend required for bootstrap")?;
+
+    let home_dir = std::env::var("HOME").context("HOME env var not set")?;
+    let brain_dir = std::path::Path::new(&home_dir).join(".gemini/antigravity/brain");
+    
+    let mut processed_convs = 0;
+    let mut distilled_count = 0;
+    let mut skipped_count = 0;
+    
+    if brain_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(brain_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let conversation_id = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                    if conversation_id.starts_with('.') || conversation_id == "tempmediaStorage" {
+                        continue;
+                    }
+                    
+                    let mut already_processed = false;
+                    if !force {
+                        let check_query = "SELECT VALUE id FROM type::record('bootstrap_state', $id) LIMIT 1;";
+                        if let Ok(mut resp) = surreal_backend.db.query(check_query).bind(("id", conversation_id.to_string())).await {
+                            let processed: Option<surrealdb::types::RecordId> = resp.take(0).unwrap_or(None);
+                            if processed.is_some() {
+                                already_processed = true;
+                            }
+                        }
+                    }
+                    
+                    let transcript_path = path.join(".system_generated/logs/transcript.jsonl");
+                    if !transcript_path.exists() {
+                        continue;
+                    }
+                    
+                    if let Some(ref since_ts) = since {
+                        if let Ok(metadata) = std::fs::metadata(&transcript_path) {
+                            if let Ok(modified) = metadata.modified() {
+                                let modified_dt: chrono::DateTime<chrono::Utc> = modified.into();
+                                if let Ok(since_dt) = chrono::DateTime::parse_from_rfc3339(since_ts) {
+                                    if modified_dt < since_dt.with_timezone(&chrono::Utc) {
+                                        skipped_count += 1;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if already_processed && !force {
+                        skipped_count += 1;
+                        continue;
+                    }
+                    
+                    if !dry_run {
+                        let client = crate::llm::LLMClient::new();
+                        if let Ok(distilled_list) = crate::vault::distillation::distill_transcript_file(
+                            state.backend.as_ref(),
+                            &client,
+                            &transcript_path,
+                            conversation_id,
+                            &scope_str
+                        ).await {
+                            for distilled in distilled_list {
+                                let save_query = "
+                                    CREATE type::record('distilled_conversation', $id) CONTENT {
+                                        conversation_id: $conversation_id,
+                                        title: $title,
+                                        scope: $scope,
+                                        timestamp: $timestamp,
+                                        decisions: $decisions,
+                                        constraints_discovered: $constraints_discovered,
+                                        code_changes: $code_changes,
+                                        commands_run: $commands_run,
+                                        errors_resolved: $errors_resolved,
+                                        user_preferences: $user_preferences,
+                                        summary: $summary,
+                                        key_takeaways: $key_takeaways
+                                    };
+                                ";
+                                let rec_id = format!("distilled_conversation:{}", uuid::Uuid::new_v4());
+                                let _ = surreal_backend.db.query(save_query)
+                                    .bind(("id", rec_id))
+                                    .bind(("conversation_id", distilled.conversation_id.clone()))
+                                    .bind(("title", distilled.title.clone()))
+                                    .bind(("scope", distilled.scope.clone()))
+                                    .bind(("timestamp", distilled.timestamp.clone()))
+                                    .bind(("decisions", distilled.decisions.clone()))
+                                    .bind(("constraints_discovered", distilled.constraints_discovered.clone()))
+                                    .bind(("code_changes", distilled.code_changes.clone()))
+                                    .bind(("commands_run", distilled.commands_run.clone()))
+                                    .bind(("errors_resolved", distilled.errors_resolved.clone()))
+                                    .bind(("user_preferences", distilled.user_preferences.clone()))
+                                    .bind(("summary", distilled.summary.clone()))
+                                    .bind(("key_takeaways", distilled.key_takeaways.clone()))
+                                    .await;
+                                distilled_count += 1;
+                            }
+                        }
+                        
+                        let _ = crate::vault::distillation::ingest_artifacts_in_dir(
+                            state.backend.as_ref(),
+                            &path,
+                            conversation_id,
+                            &scope_str
+                        ).await;
+                        
+                        let upsert_query = "UPSERT type::record('bootstrap_state', $id) SET processed_at = time::now();";
+                        let _ = surreal_backend.db.query(upsert_query).bind(("id", conversation_id.to_string())).await;
+                    }
+                    
+                    processed_convs += 1;
+                }
+            }
+        }
+    }
+    
+    let mut wisdom_count = 0;
+    if !dry_run {
+        if let Ok(w_count) = crate::vault::distillation::seed_wisdom_from_rules(
+            state.backend.as_ref(),
+            &state.store.vault_root
+        ).await {
+            wisdom_count = w_count;
+        }
+    }
+    
+    let report = format!(
+        "Incremental bootstrap completed:\n- Processed conversations: {}\n- Skipped/Already processed: {}\n- Distilled chunks created: {}\n- Wisdom rules seeded: {}\n- Dry-run: {}",
+        processed_convs, skipped_count, distilled_count, wisdom_count, dry_run
+    );
+    
+    Ok(report)
 }

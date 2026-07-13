@@ -305,6 +305,13 @@ impl MxbaiReranker {
             return Ok(Vec::new());
         }
 
+        let _permit = loop {
+            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
+                break permit;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+
         // 1. Compute null logits for query-only baseline
         let null_text = format!("query: {} document: ", query);
         let null_encoding = self.tokenizer.encode(null_text, false)

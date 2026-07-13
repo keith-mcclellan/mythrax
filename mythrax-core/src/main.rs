@@ -500,16 +500,73 @@ async fn main() -> Result<()> {
             // Generate token if not exists
             let token = mythrax_core::auth::get_or_create_token(&token_path)?;
 
+            // Preserve old scope_mappings and skip_scopes if configured
+            let (old_scope_mappings, old_skip_scopes) = if config_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&config_path) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        (val.get("scope_mappings").cloned(), val.get("skip_scopes").cloned())
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
             // Write config pointing to RocksDB
-            let config_data = serde_json::json!({
+            let mut config_data = serde_json::json!({
                 "vault_root": vault_root.to_string_lossy().to_string(),
                 "auth_token_path": token_path.to_string_lossy().to_string(),
                 "surrealdb_url": format!("rocksdb://{}", db_dir.to_string_lossy())
             });
+
+            // Set skip_scopes
+            if let Some(skips) = old_skip_scopes {
+                if let Some(obj) = config_data.as_object_mut() {
+                    obj.insert("skip_scopes".to_string(), skips);
+                }
+            } else {
+                let mut skips = vec![
+                    "repos".to_string(), "workspace".to_string(), "workspaces".to_string(),
+                    "projects".to_string(), "documents".to_string(), "brain".to_string(),
+                    "antigravity".to_string(), "general".to_string(), "archive".to_string(),
+                    "quarantine".to_string(), "logs".to_string(), "bin".to_string(),
+                    "lib".to_string(), "tests".to_string(), "test".to_string(),
+                    "users".to_string(), "git".to_string(), "refs".to_string(),
+                    "ref".to_string(), "github".to_string(), "deps".to_string(),
+                    "build".to_string(), "dist".to_string(), "node_modules".to_string(),
+                    "vendor".to_string()
+                ];
+                let user_var = std::env::var("USER").unwrap_or_default();
+                if !user_var.is_empty() && !skips.contains(&user_var) {
+                    skips.push(user_var);
+                }
+                if let Some(obj) = config_data.as_object_mut() {
+                    obj.insert("skip_scopes".to_string(), serde_json::json!(skips));
+                }
+            }
+
+            // Set scope_mappings
+            if let Some(mappings) = old_scope_mappings {
+                if let Some(obj) = config_data.as_object_mut() {
+                    obj.insert("scope_mappings".to_string(), mappings);
+                }
+            } else {
+                let default_mappings = serde_json::json!({
+                    "self-improvement-engine": "mythrax",
+                    "self-improvement-enginez": "mythrax"
+                });
+                if let Some(obj) = config_data.as_object_mut() {
+                    obj.insert("scope_mappings".to_string(), default_mappings);
+                }
+            }
+
             std::fs::write(&config_path, serde_json::to_string_pretty(&config_data)?)?;
 
             // Setup Obsidian subdirectories
-            let subfolders = ["episodes", "wiki", "wisdom", "general", "archive", "wisdom/permanent", "wiki/mythrax"];
+            let subfolders = ["episodes", "wiki", "wisdom", "archive", "wisdom/permanent", "wisdom/dynamic", "wiki/mythrax/wiki_nodes"];
             for sub in &subfolders {
                 std::fs::create_dir_all(vault_root.join(sub))?;
             }
@@ -543,7 +600,7 @@ async fn main() -> Result<()> {
                 "---\nname: \"Mythrax Architecture Spec\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
                 ARCHITECTURE_DOC
             );
-            let arch_rel = "wiki/mythrax/architecture.md";
+            let arch_rel = "wiki/mythrax/wiki_nodes/architecture.md";
             std::fs::write(vault_root.join(arch_rel), &arch_body)?;
             let arch_node = WikiNode {
                 id: None,
@@ -559,7 +616,7 @@ async fn main() -> Result<()> {
                 "---\nname: \"Mythrax User Guide\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
                 USER_GUIDE_DOC
             );
-            let user_guide_rel = "wiki/mythrax/user_guide.md";
+            let user_guide_rel = "wiki/mythrax/wiki_nodes/user_guide.md";
             std::fs::write(vault_root.join(user_guide_rel), &user_guide_body)?;
             let user_guide_node = WikiNode {
                 id: None,
@@ -571,7 +628,7 @@ async fn main() -> Result<()> {
             };
             backend.save_wiki_node(&user_guide_node).await?;
 
-            let skill_rel = "wiki/mythrax/skill_playbook.md";
+            let skill_rel = "wiki/mythrax/wiki_nodes/skill_playbook.md";
             std::fs::write(vault_root.join(skill_rel), SKILL_DOC)?;
             let (_skill_yaml, skill_body) = mythrax_core::vault::markdown::parse_frontmatter(SKILL_DOC);
             let skill_node = WikiNode {
@@ -845,13 +902,13 @@ async fn main() -> Result<()> {
                     ("reprocess", serde_json::json!({}))
                 }
                 VaultAction::Summarize { scope } => {
-                    ("summarize", serde_json::json!({ "scope": scope }))
+                    ("summarize", serde_json::json!({ "scope": scope, "async_mode": false }))
                 }
                 VaultAction::IngestBulk { source, harness, scope } => {
-                    ("ingest_bulk", serde_json::json!({ "source": source, "harness": harness, "scope": scope }))
+                    ("ingest_bulk", serde_json::json!({ "source": source, "harness": harness, "scope": scope, "async_mode": false }))
                 }
                 VaultAction::IngestForge { source_path, scope } => {
-                    ("ingest_forge", serde_json::json!({ "source_path": source_path, "scope": scope }))
+                    ("ingest_forge", serde_json::json!({ "source_path": source_path, "scope": scope, "async_mode": false }))
                 }
                 VaultAction::Audit { workspace } => {
                     ("audit", serde_json::json!({ "workspace_path": workspace }))
@@ -958,6 +1015,7 @@ async fn main() -> Result<()> {
                 "scope": scope,
                 "distill_model": distill_model,
                 "force": force,
+                "async_mode": false,
             });
             execute_cli_tool_call("manage", payload).await?;
         }

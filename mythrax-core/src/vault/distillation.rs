@@ -152,37 +152,39 @@ pub async fn run_summarization_task(
     let sys_prompt = "You are a code summarizer. You MUST enforce the Symbol Integrity prompt contract: if there is a '### Key Code Symbols & Paths' section in the context, you must maintain it verbatim in your response.";
     let user_prompt = format!("Summarize the following content:\n\n{}", content);
     
-    // Try cognitive callback first
-    if let Some(surreal_backend) = db.as_any().downcast_ref::<SurrealBackend>() {
-        let task_id = format!("cognitive_task:{}", Uuid::new_v4());
-        let task = CognitiveTask {
-            id: task_id.clone(),
-            task_type: "Summarization".to_string(),
-            prompt: user_prompt.clone(),
-            system_instruction: sys_prompt.to_string(),
-            expected_format: "Any".to_string(),
-            priority: "Normal".to_string(),
-            created_at: Utc::now(),
-            status: "Pending".to_string(),
-            result: None,
-            ttl_minutes: 10,
-            injected_at: None,
-        };
-        
-        if surreal_backend.create_cognitive_task(&task).await.is_ok() {
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(2);
-            while start.elapsed() < timeout {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
-                    if updated.status == "Completed" {
-                        if let Some(res) = updated.result {
-                            return Ok(enforce_symbol_integrity(content, &res));
+    // Try cognitive callback first if not bootstrapping in CLI mode
+    if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<SurrealBackend>() {
+            let task_id = format!("cognitive_task:{}", Uuid::new_v4());
+            let task = CognitiveTask {
+                id: task_id.clone(),
+                task_type: "Summarization".to_string(),
+                prompt: user_prompt.clone(),
+                system_instruction: sys_prompt.to_string(),
+                expected_format: "Any".to_string(),
+                priority: "Normal".to_string(),
+                created_at: Utc::now(),
+                status: "Pending".to_string(),
+                result: None,
+                ttl_minutes: 10,
+                injected_at: None,
+            };
+            
+            if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                let start = std::time::Instant::now();
+                let timeout = std::time::Duration::from_secs(60);
+                while start.elapsed() < timeout {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                        if updated.status == "Completed" {
+                            if let Some(res) = updated.result {
+                                return Ok(enforce_symbol_integrity(content, &res));
+                            }
                         }
                     }
                 }
+                tracing::warn!("Cognitive callback timed out, falling back to LargeLocal");
             }
-            tracing::warn!("Cognitive callback timed out, falling back to LargeLocal");
         }
     }
     
@@ -296,7 +298,50 @@ pub async fn distill_transcript_file(
         
         let profile = crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning);
         let sys_msg = "You are a transcript distillation agent that outputs JSON only.";
-        let res_json_str = client.routed_completion(db, &profile, Some(sys_msg), &prompt).await?;
+        
+        let mut res_json_str = None;
+        if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
+            if let Some(surreal_backend) = db.as_any().downcast_ref::<SurrealBackend>() {
+                let task_id = format!("cognitive_task:{}", Uuid::new_v4());
+                let task = CognitiveTask {
+                    id: task_id.clone(),
+                    task_type: "InsightExtraction".to_string(),
+                    prompt: prompt.clone(),
+                    system_instruction: sys_msg.to_string(),
+                    expected_format: "Json".to_string(),
+                    priority: "Normal".to_string(),
+                    created_at: Utc::now(),
+                    status: "Pending".to_string(),
+                    result: None,
+                    ttl_minutes: 10,
+                    injected_at: None,
+                };
+                
+                if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                    let start = std::time::Instant::now();
+                    let timeout = std::time::Duration::from_secs(60);
+                    while start.elapsed() < timeout {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                            if updated.status == "Completed" {
+                                if let Some(res) = updated.result {
+                                    res_json_str = Some(res);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if res_json_str.is_none() {
+                        tracing::warn!("InsightExtraction cognitive callback timed out, falling back to LargeLocal");
+                    }
+                }
+            }
+        }
+        
+        let res_json_str = match res_json_str {
+            Some(s) => s,
+            None => client.routed_completion(db, &profile, Some(sys_msg), &prompt).await?,
+        };
         
         #[derive(Deserialize, Default)]
         struct DistilledResponse {
@@ -491,7 +536,8 @@ pub async fn seed_wisdom_from_rules(
     let mut candidate_files = Vec::new();
     
     // 1. Global config paths
-    let global_config = Path::new("/Users/keith/.gemini/config");
+    let home = std::env::var("HOME").unwrap_or_default();
+    let global_config = std::path::PathBuf::from(&home).join(".gemini/config");
     if global_config.exists() {
         let gemini_glob = global_config.join("GEMINI.md");
         if gemini_glob.exists() { candidate_files.push(gemini_glob); }
@@ -560,7 +606,50 @@ pub async fn seed_wisdom_from_rules(
                 content
             );
             let profile = crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction);
-            client.routed_completion(db, &profile, Some(sys_prompt), &user_prompt).await?
+            
+            let mut wisdom_rule_res = None;
+            if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<SurrealBackend>() {
+                    let task_id = format!("cognitive_task:{}", Uuid::new_v4());
+                    let task = CognitiveTask {
+                        id: task_id.clone(),
+                        task_type: "WisdomCritique".to_string(),
+                        prompt: user_prompt.clone(),
+                        system_instruction: sys_prompt.to_string(),
+                        expected_format: "Json".to_string(),
+                        priority: "Normal".to_string(),
+                        created_at: Utc::now(),
+                        status: "Pending".to_string(),
+                        result: None,
+                        ttl_minutes: 10,
+                        injected_at: None,
+                    };
+                    
+                    if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                        let start = std::time::Instant::now();
+                        let timeout = std::time::Duration::from_secs(60);
+                        while start.elapsed() < timeout {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                                if updated.status == "Completed" {
+                                    if let Some(res) = updated.result {
+                                        wisdom_rule_res = Some(res);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if wisdom_rule_res.is_none() {
+                            tracing::warn!("WisdomCritique cognitive callback timed out, falling back to LargeLocal");
+                        }
+                    }
+                }
+            }
+            
+            match wisdom_rule_res {
+                Some(s) => s,
+                None => client.routed_completion(db, &profile, Some(sys_prompt), &user_prompt).await?,
+            }
         };
         
         #[derive(Deserialize, Default)]

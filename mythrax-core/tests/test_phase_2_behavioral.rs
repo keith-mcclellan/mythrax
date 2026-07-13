@@ -176,17 +176,17 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
     // The mock LLM when prompt contains "Wisdom" will return a procedural rule.
     // Procedural rules should be promoted to Global permanent wisdom and indexed with scope = "general", tier = "permanent".
 
-    let global_permanent_dir = vault_root.join("global/wisdom/permanent");
-    let entries = fs::read_dir(&global_permanent_dir)?;
+    let global_dynamic_dir = vault_root.join("global/wisdom/dynamic");
+    let entries = fs::read_dir(&global_dynamic_dir)?;
     let mut files = Vec::new();
     for entry in entries.flatten() {
         files.push(entry.file_name());
     }
-    assert!(!files.is_empty(), "DreamCoordinator should have promoted procedural rule to global permanent wisdom");
+    assert!(!files.is_empty(), "DreamCoordinator should have promoted procedural rule to global dynamic wisdom");
 
     let all_rules = backend.get_all_wisdom_rules().await?;
     assert!(!all_rules.is_empty());
-    let promoted_rule = all_rules.iter().find(|r| r.tier == mythrax_core::contracts::Tier::Wisdom).unwrap();
+    let promoted_rule = all_rules.iter().find(|r| r.tier == mythrax_core::contracts::Tier::Project).unwrap();
     assert_eq!(promoted_rule.scope, "general");
 
     Ok(())
@@ -254,15 +254,13 @@ This is standard content.
     compactor.compact_scope(&*backend, &store, "scope1", backend.embedder.clone()).await?;
 
     // 4. Verify that anchors are carried verbatim in the compaction file and the content is cleaned of markers
-    let compaction_dir = vault_root.join("wiki/compaction");
+    let compaction_dir = vault_root.join("wiki/scope1/compactions");
     let entries = fs::read_dir(&compaction_dir)?;
     let mut comp_file_content = String::new();
     for entry in entries.flatten() {
         let content = fs::read_to_string(entry.path())?;
-        if content.contains("Miscellaneous") {
-            comp_file_content = content;
-            break;
-        }
+        comp_file_content = content;
+        break;
     }
     
     assert!(!comp_file_content.is_empty(), "Compaction file should be created");

@@ -34,15 +34,14 @@ pub struct Tokenizer;
 pub struct MxbaiReranker;
 
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
-static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
-static METAL_EMBEDDING_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+static METAL_SHARED_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
 pub fn metal_inference_semaphore() -> &'static Semaphore {
-    METAL_INFERENCE_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+    METAL_SHARED_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
 pub fn metal_embedding_semaphore() -> &'static Semaphore {
-    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+    METAL_SHARED_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
 #[derive(Clone)]
@@ -95,7 +94,57 @@ impl LLMClient {
         prompt: &str,
     ) -> Result<String> {
         let config = db.get_llm_config().await?;
-        let tier = crate::llm::router::route_task(db, profile).await;
+        let mut tier = crate::llm::router::route_task(db, profile).await;
+
+        if tier == crate::contracts::ModelTier::Cloud {
+            // Try cognitive callback first if not bootstrapping in CLI mode
+            if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                    let task = crate::db::CognitiveTask {
+                        id: task_id.clone(),
+                        task_type: format!("{:?}", profile.archetype),
+                        prompt: prompt.to_string(),
+                        system_instruction: system_instruction.unwrap_or_default().to_string(),
+                        expected_format: "Any".to_string(),
+                        priority: "Normal".to_string(),
+                        created_at: chrono::Utc::now(),
+                        status: "Pending".to_string(),
+                        result: None,
+                        ttl_minutes: 10,
+                        injected_at: None,
+                    };
+                    
+                    if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                        let start = std::time::Instant::now();
+                        let timeout = std::time::Duration::from_secs(60);
+                        while start.elapsed() < timeout {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                            if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                                if updated.status == "Completed" {
+                                    if let Some(res) = updated.result {
+                                        return Ok(res);
+                                    }
+                                }
+                            }
+                        }
+                        tracing::warn!("Cognitive callback for cloud model timed out, falling back to direct API / local model");
+                    }
+                }
+            }
+
+            let api_key = config.api_key.clone().unwrap_or_else(|| {
+                if config.cloud_provider == "gemini" {
+                    std::env::var("GEMINI_API_KEY").unwrap_or_default()
+                } else {
+                    std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+                }
+            });
+            if api_key.is_empty() {
+                tracing::warn!("Cloud tier selected but no API key is configured. Degrading to local Large model.");
+                tier = crate::contracts::ModelTier::Large;
+            }
+        }
 
         if tier == crate::contracts::ModelTier::Cloud {
             let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
@@ -183,7 +232,7 @@ impl LLMClient {
             "local" => {
                 #[cfg(feature = "mlx")]
                 {
-                    let is_external = model.contains("35B") || model.contains("3.6") || model.contains("gemma-4-26b");
+                    let is_external = std::env::var("MYTHRAX_COMPLETIONS_URL").is_ok();
                     if !is_external {
                         if let Some(broker) = DYNAMIC_MODEL_BROKER.get() {
                             let tier = match model {
@@ -194,16 +243,20 @@ impl LLMClient {
                             tracing::info!("mlx feature active: routing local inference in-process via DynamicModelBroker for tier {:?}", tier);
                             let engine = broker.acquire_llm(tier).await?;
                             let raw = engine.generate(prompt, system_instruction).await?;
-                            return Ok(strip_think_block(&raw));
+                            let result = strip_think_block(&raw);
+                            if is_repetition_failure(&result) {
+                                anyhow::bail!("Local MLX model generated corrupted repeating output");
+                            }
+                            return Ok(result);
                         }
                     }
                 }
 
                 // Fallback to HTTP request when mlx feature is disabled or broker is uninitialized
-                tracing::debug!("mlx feature disabled or broker not initialized: routing local inference to mlx-lm HTTP server at :8080");
+                tracing::debug!("mlx feature disabled or broker not initialized: routing local inference to completions URL");
 
                 let url_str = std::env::var("MYTHRAX_COMPLETIONS_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:8080/v1/chat/completions".to_string());
+                    .unwrap_or_else(|_| "http://127.0.0.1:8090/v1/chat/completions".to_string());
                 let url = &url_str;
                 let truncated_prompt = if prompt.len() > 100_000 {
                     let truncated = truncate_to_boundary(prompt, 100_000);
@@ -258,6 +311,9 @@ impl LLMClient {
                 };
 
                 let result = strip_think_block(&raw);
+                if is_repetition_failure(&result) {
+                    anyhow::bail!("Local HTTP model generated corrupted repeating output");
+                }
 
                 let delay_ms = db.get_llm_config().await
                     .map(|cfg| cfg.llm_post_inference_delay_ms.unwrap_or(5000))
@@ -516,7 +572,7 @@ async fn send_with_retry(
                 let is_connection_refused = e.is_connect() || err_str.contains("Connection refused") || err_str.contains("connection refused");
                 if is_connection_refused {
                     tracing::warn!(
-                        "WARNING: Local LLM connection refused. If the server crashed, run: brew services restart mlx-lm"
+                        "WARNING: Local LLM connection refused. Please ensure completions server is running or check MYTHRAX_COMPLETIONS_URL."
                     );
                 } else {
                     tracing::warn!("HTTP request error on attempt {}: {}", attempt, e);
@@ -730,6 +786,8 @@ impl InferenceEngine for InProcessMlxEngine {
             let mut generated_text = String::new();
 
             let mut model = model_arc.lock().await;
+            let _permit = metal_inference_semaphore().acquire().await
+                .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
 
             // Initialize KV cache
             let num_layers = model.layers.len();
@@ -1199,4 +1257,25 @@ async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<(
     }
     tracing::info!("Successfully downloaded asset to {}", path.display());
     Ok(())
+}
+
+fn is_repetition_failure(text: &str) -> bool {
+    if text.len() < 20 {
+        return false;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut consecutive = 1;
+    let mut prev = ' ';
+    for &c in &chars {
+        if c == prev && !c.is_whitespace() {
+            consecutive += 1;
+            if consecutive >= 15 {
+                return true;
+            }
+        } else {
+            consecutive = 1;
+            prev = c;
+        }
+    }
+    false
 }

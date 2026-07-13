@@ -687,7 +687,7 @@ impl DreamCoordinator {
                     events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
                 }
 
-                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
+                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                 let prompt_text = format!(
                     "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
                     events_text
@@ -1031,7 +1031,7 @@ impl DreamCoordinator {
                             }
 
                             // Call LLM Synthesizer
-                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
+                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                             let prompt_text = format!(
                                 "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
                                 events_text
@@ -1328,7 +1328,7 @@ impl DreamCoordinator {
                     ));
                 }
 
-                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.";
+                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                 let user_prompt = format!(
                     "The following insights emerged independently in {} different projects:\n\n{}Respond with a JSON object containing target_pattern: string, action_to_avoid: string, causal_explanation: string, prescribed_remedy: string, and confidence: float.",
                     n,
@@ -1347,22 +1347,21 @@ impl DreamCoordinator {
                     let clean_resp = crate::llm::strip_code_fences(&resp_str);
                     if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
                         if res.confidence >= 0.80 {
-                            let all_procedural = cluster.iter().all(|c| c.is_procedural);
-                            let tier = if all_procedural { "permanent" } else { "dynamic" };
+                            let tier = "dynamic";
 
                             let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let rule_path = if all_procedural {
-                                format!("global/wisdom/permanent/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
-                            } else {
-                                format!("global/wisdom/dynamic/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
-                            };
+                            let rule_path = format!("global/wisdom/dynamic/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
 
-                            let rule_md = format!(
+                            let mut rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\nsource_nodes:\n{}\ngenerator_name: \"ScopeGraduator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                                 res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy, tier,
                                 cluster.iter().map(|c| format!("  - \"{}\"", c.id)).collect::<Vec<_>>().join("\n"),
                                 res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy
                             );
+                            rule_md.push_str("\n\n## Source Insights\n");
+                            for member in &cluster {
+                                rule_md.push_str(&format!("- [[{}]]\n", member.name));
+                            }
                             let _ = store.write_file(&rule_path, &rule_md);
 
                             let rule_contract = WisdomRule {
@@ -1371,7 +1370,7 @@ impl DreamCoordinator {
                                 action_to_avoid: res.action_to_avoid,
                                 causal_explanation: res.causal_explanation,
                                 prescribed_remedy: res.prescribed_remedy,
-                                tier: tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom),
+                                tier: crate::contracts::Tier::Project,
                                 scope: "general".to_string(),
                                 vault_path: Some(rule_path),
                                 embedding: None,
@@ -1382,7 +1381,7 @@ impl DreamCoordinator {
                                 status: None,
                                 superseded_at: None,
                                 superseded_by: None,
-                                rule_type: Some(if all_procedural { "procedural".to_string() } else { "aesthetic".to_string() }),
+                                rule_type: Some("aesthetic".to_string()),
                             
                                 ..Default::default()
                             };
