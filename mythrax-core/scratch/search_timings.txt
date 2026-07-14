@@ -2784,3 +2784,47 @@ query: "general context", profile: 18230us, embed: 6351us, terms: 1306us, db: 31
 query: "general context", profile: 10634us, embed: 6522us, terms: 1960us, db: 3478us, rerank_start: 2123us, total: 24745us
 query: "general context", profile: 7330us, embed: 2633us, terms: 697us, db: 2996us, rerank_start: 1274us, total: 14947us
 query: "general context", profile: 8307us, embed: 2624us, terms: 652us, db: 2940us, rerank_start: 1214us, total: 15757us
+query: "second step before", profile: 17297us, embed: 95373us, terms: 13578us, db: 28441us, rerank_start: 46221us, total: 201129us
+query: "Parent Insight", profile: 3us, embed: 22847us, terms: 1987us, db: 18157us, rerank_start: 2580us, total: 45701us
+query: "Parent Insight", profile: 1us, embed: 11099us, terms: 91us, db: 21551us, rerank_start: 2688us, total: 35721us
+query: "Redis", profile: 44us, embed: 10238us, terms: 71us, db: 21779us, rerank_start: 2680us, total: 35405us
+query: "failure", profile: 1us, embed: 11764us, terms: 80us, db: 16086us, rerank_start: 2611us, total: 30681us
+query: "Parent Insight", profile: 4us, embed: 12738us, terms: 171us, db: 22610us, rerank_start: 3034us, total: 38840us
+query: "Parent Insight", profile: 1us, embed: 17016us, terms: 248us, db: 12657us, rerank_start: 3102us, total: 33185us
+query: "Concurrency", profile: 6us, embed: 14585us, terms: 192us, db: 20201us, rerank_start: 5542us, total: 41328us
+query: "secret", profile: 4us, embed: 10805us, terms: 3498us, db: 14522us, rerank_start: 2820us, total: 31787us
+query: "secret", profile: 1us, embed: 10428us, terms: 3711us, db: 15177us, rerank_start: 2738us, total: 32209us
+query: "Secret", profile: 3us, embed: 13537us, terms: 112us, db: 9887us, rerank_start: 2722us, total: 26321us
+query: "Secret", profile: 1us, embed: 11161us, terms: 88us, db: 16879us, rerank_start: 2849us, total: 31130us
+query: "Multi-Paragraph", profile: 4us, embed: 11305us, terms: 4025us, db: 16060us, rerank_start: 6688us, total: 38985us
+query: "Multi-Paragraph", profile: 2us, embed: 12852us, terms: 4018us, db: 16367us, rerank_start: 3181us, total: 36914us
+query: "Single-Paragraph", profile: 4us, embed: 12742us, terms: 3853us, db: 15422us, rerank_start: 2986us, total: 36065us
+query: "redis", profile: 3us, embed: 10770us, terms: 86us, db: 15984us, rerank_start: 3080us, total: 30120us
+query: "Avoid", profile: 3us, embed: 13657us, terms: 3632us, db: 16589us, rerank_start: 2705us, total: 36976us
+query: "Avoid", profile: 1us, embed: 12845us, terms: 3931us, db: 19247us, rerank_start: 4051us, total: 40400us
+query: "Pattern", profile: 3us, embed: 13286us, terms: 128us, db: 22188us, rerank_start: 2932us, total: 39112us
+query: "Body content", profile: 4us, embed: 11128us, terms: 92us, db: 18343us, rerank_start: 2888us, total: 32588us
+query: "bidirectional sync", profile: 10us, embed: 11684us, terms: 92us, db: 17397us, rerank_start: 2887us, total: 32214us
+query: "updated body", profile: 3us, embed: 12442us, terms: 90us, db: 20172us, rerank_start: 3966us, total: 36890us
+query: "second step before", profile: 9763us, embed: 56329us, terms: 9027us, db: 20456us, rerank_start: 30685us, total: 126436us
+query: "Redis", profile: 4us, embed: 12739us, terms: 83us, db: 36504us, rerank_start: 3411us, total: 53466us
+query: "failure", profile: 1us, embed: 15763us, terms: 87us, db: 22241us, rerank_start: 2825us, total: 41055us
+query: "Parent Insight", profile: 5us, embed: 37979us, terms: 2087us, db: 22033us, rerank_start: 2619us, total: 64881us
+query: "Parent Insight", profile: 1us, embed: 12496us, terms: 82us, db: 20089us, rerank_start: 2866us, total: 35836us
+query: "Parent Insight", profile: 5us, embed: 11373us, terms: 113us, db: 20831us, rerank_start: 2731us, total: 35303us
+query: "Parent Insight", profile: 1us, embed: 10544us, terms: 83us, db: 10925us, rerank_start: 2634us, total: 24411us
+query: "Concurrency", profile: 2us, embed: 10467us, terms: 103us, db: 18154us, rerank_start: 2829us, total: 31911us
+query: "secret", profile: 3us, embed: 10140us, terms: 3674us, db: 14959us, rerank_start: 2534us, total: 31536us
+query: "secret", profile: 2us, embed: 10143us, terms: 3328us, db: 14202us, rerank_start: 2509us, total: 30298us
+query: "Secret", profile: 3us, embed: 10220us, terms: 63us, db: 7915us, rerank_start: 2364us, total: 20618us
+query: "Secret", profile: 1us, embed: 19320us, terms: 122us, db: 14862us, rerank_start: 2348us, total: 36773us
+query: "Multi-Paragraph", profile: 4us, embed: 11434us, terms: 3291us, db: 13538us, rerank_start: 2451us, total: 31550us
+query: "Multi-Paragraph", profile: 1us, embed: 11697us, terms: 3584us, db: 14518us, rerank_start: 2503us, total: 32809us
+query: "Single-Paragraph", profile: 3us, embed: 10590us, terms: 3432us, db: 14719us, rerank_start: 2634us, total: 32443us
+query: "Avoid", profile: 4us, embed: 13386us, terms: 4780us, db: 18919us, rerank_start: 3005us, total: 40690us
+query: "Avoid", profile: 2us, embed: 13461us, terms: 5144us, db: 18612us, rerank_start: 3572us, total: 41082us
+query: "Pattern", profile: 3us, embed: 10179us, terms: 107us, db: 17618us, rerank_start: 2542us, total: 30834us
+query: "redis", profile: 4us, embed: 9981us, terms: 130us, db: 16378us, rerank_start: 3020us, total: 29649us
+query: "bidirectional sync", profile: 6us, embed: 11160us, terms: 90us, db: 17301us, rerank_start: 2757us, total: 31458us
+query: "Body content", profile: 3us, embed: 12768us, terms: 232us, db: 22809us, rerank_start: 3181us, total: 39128us
+query: "updated body", profile: 3us, embed: 11556us, terms: 95us, db: 18710us, rerank_start: 2878us, total: 33389us
