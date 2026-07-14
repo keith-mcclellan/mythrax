@@ -566,7 +566,7 @@ async fn main() -> Result<()> {
             std::fs::write(&config_path, serde_json::to_string_pretty(&config_data)?)?;
 
             // Setup Obsidian subdirectories
-            let subfolders = ["episodes", "wiki", "wisdom", "archive", "wisdom/permanent", "wisdom/dynamic", "wiki/mythrax/wiki_nodes"];
+            let subfolders = ["episodes", "wiki", "wisdom", "archive", "wisdom/permanent", "wisdom/dynamic", "wiki/mythrax/raw"];
             for sub in &subfolders {
                 std::fs::create_dir_all(vault_root.join(sub))?;
             }
@@ -600,7 +600,7 @@ async fn main() -> Result<()> {
                 "---\nname: \"Mythrax Architecture Spec\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
                 ARCHITECTURE_DOC
             );
-            let arch_rel = "wiki/mythrax/wiki_nodes/architecture.md";
+            let arch_rel = "wiki/mythrax/raw/architecture.md";
             std::fs::write(vault_root.join(arch_rel), &arch_body)?;
             let arch_node = WikiNode {
                 id: None,
@@ -616,7 +616,7 @@ async fn main() -> Result<()> {
                 "---\nname: \"Mythrax User Guide\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
                 USER_GUIDE_DOC
             );
-            let user_guide_rel = "wiki/mythrax/wiki_nodes/user_guide.md";
+            let user_guide_rel = "wiki/mythrax/raw/user_guide.md";
             std::fs::write(vault_root.join(user_guide_rel), &user_guide_body)?;
             let user_guide_node = WikiNode {
                 id: None,
@@ -628,7 +628,7 @@ async fn main() -> Result<()> {
             };
             backend.save_wiki_node(&user_guide_node).await?;
 
-            let skill_rel = "wiki/mythrax/wiki_nodes/skill_playbook.md";
+            let skill_rel = "wiki/mythrax/raw/skill_playbook.md";
             std::fs::write(vault_root.join(skill_rel), SKILL_DOC)?;
             let (_skill_yaml, skill_body) = mythrax_core::vault::markdown::parse_frontmatter(SKILL_DOC);
             let skill_node = WikiNode {

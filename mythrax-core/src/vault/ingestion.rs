@@ -579,14 +579,14 @@ pub async fn bulk_ingest_vault(
                             format!("{}/{}", resolved_scope, file_stem)
                         };
                         let wiki_rel = if total_art_chunks > 1 {
-                            format!("wiki/{}/wiki_nodes/{}_part{}.md", resolved_scope, file_stem, art_idx + 1)
+                            format!("wiki/{}/raw/{}_part{}.md", resolved_scope, file_stem, art_idx + 1)
                         } else {
-                            format!("wiki/{}/wiki_nodes/{}.md", resolved_scope, file_stem)
+                            format!("wiki/{}/raw/{}.md", resolved_scope, file_stem)
                         };
                         let wikilink = if total_art_chunks > 1 {
-                            format!("wiki/{}/wiki_nodes/{}_part{}", resolved_scope, file_stem, art_idx + 1)
+                            format!("wiki/{}/raw/{}_part{}", resolved_scope, file_stem, art_idx + 1)
                         } else {
-                            format!("wiki/{}/wiki_nodes/{}", resolved_scope, file_stem)
+                            format!("wiki/{}/raw/{}", resolved_scope, file_stem)
                         };
                         resolved_artifacts.push((node_name, wiki_rel, wikilink, chunk_text));
                     }

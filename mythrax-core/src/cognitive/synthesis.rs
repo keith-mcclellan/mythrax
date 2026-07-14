@@ -122,17 +122,20 @@ pub fn load_insights(vault_root: &Path) -> Vec<InsightNote> {
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let scope = entry.file_name().to_string_lossy().to_string();
-                let insights_dir = entry.path().join("insights");
-                if insights_dir.exists()
-                    && let Ok(files) = std::fs::read_dir(&insights_dir) {
-                        for file in files.flatten() {
-                            if file.path().extension().map(|s| s == "md").unwrap_or(false)
-                                && let Ok(content) = std::fs::read_to_string(file.path())
-                                    && let Ok(note) = parse_insight_note(&content, &file.path(), &scope) {
-                                        insights.push(note);
-                                    }
+                
+                for sub in &["insights", "raw"] {
+                    let dir = entry.path().join(sub);
+                    if dir.exists()
+                        && let Ok(files) = std::fs::read_dir(&dir) {
+                            for file in files.flatten() {
+                                if file.path().extension().map(|s| s == "md").unwrap_or(false)
+                                    && let Ok(content) = std::fs::read_to_string(file.path())
+                                        && let Ok(note) = parse_insight_note(&content, &file.path(), &scope) {
+                                            insights.push(note);
+                                        }
+                            }
                         }
-                    }
+                }
             }
         }
     }
@@ -152,15 +155,19 @@ fn parse_insight_note(content: &str, path: &Path, scope: &str) -> Result<Insight
 
     #[derive(serde::Deserialize)]
     struct Frontmatter {
-        title: String,
-        source_episodes: Vec<String>,
+        title: Option<String>,
+        name: Option<String>,
+        source_episodes: Option<Vec<String>>,
     }
     let fm: Frontmatter = serde_yaml::from_str(yaml_str)?;
+    let title = fm.title.or(fm.name).unwrap_or_else(|| "Untitled Note".to_string());
+    let source_episodes = fm.source_episodes.unwrap_or_default();
+
     Ok(InsightNote {
-        title: fm.title,
+        title,
         content: body.trim().to_string(),
         scope: scope.to_string(),
-        source_episodes: fm.source_episodes,
+        source_episodes,
         vault_path: path.to_string_lossy().to_string(),
     })
 }
