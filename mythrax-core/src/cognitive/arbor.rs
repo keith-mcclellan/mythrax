@@ -52,8 +52,7 @@ impl HeldOutEvaluator for TestCommandEvaluator {
                     }
                     ' ' | '\t' if !in_quotes => {
                         if !current_arg.is_empty() {
-                            args.push(current_arg.clone());
-                            current_arg.clear();
+                            args.push(std::mem::replace(&mut current_arg, String::new()));
                         }
                     }
                     _ => {
