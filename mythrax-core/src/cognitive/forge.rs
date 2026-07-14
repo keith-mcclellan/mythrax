@@ -220,9 +220,8 @@ impl Forge {
 
             // Save extracted rules and relate them to the chunk and concepts
             for rule in rules {
-                let sanitized_rule_name = rule.target_pattern.replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
-                let rule_uuid_prefix = &uuid::Uuid::new_v4().to_string()[..8];
-                let rule_path = format!("wisdom/{}/rule_{}_{}.md", normalized_scope, sanitized_rule_name, rule_uuid_prefix);
+                let rule_slug = crate::cognitive::synthesis::slugify_title(&rule.action_to_avoid);
+                let rule_path = format!("wisdom/{}/{}.md", normalized_scope, rule_slug);
                 let rule_md = format!(
                     "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"forge\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                     rule.target_pattern.replace('"', "\\\""),

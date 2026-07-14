@@ -214,7 +214,8 @@ pub fn get_mcp_tools_schema() -> Value {
                         "dry_run": { "type": "boolean", "default": false },
                         "since": { "type": "string" },
                         "distill_model": { "type": "string" },
-                        "force": { "type": "boolean", "default": false }
+                        "force": { "type": "boolean", "default": false },
+                        "async_mode": { "type": "boolean", "default": true }
                     },
                     "required": ["action"]
                 }

@@ -130,7 +130,7 @@ Insight Three content."#;
     compactor.compact_scope(&backend, &store, "scope1", backend.embedder.clone()).await?;
 
     // Verify compactions on disk
-    let compaction_dir = vault_root.join("wiki/compaction");
+    let compaction_dir = vault_root.join("wiki/scope1/compactions");
     assert!(compaction_dir.exists());
 
     let entries = fs::read_dir(&compaction_dir)?;

@@ -432,36 +432,153 @@ struct WikiFrontmatter {
     edges: Option<Vec<FrontmatterEdge>>,
 }
 
+pub struct TargetResolveCache {
+    pub target_to_id: HashMap<String, surrealdb::types::RecordId>,
+}
+
+impl TargetResolveCache {
+    pub async fn new(backend: &crate::db::SurrealBackend) -> Self {
+        let mut target_to_id = HashMap::new();
+        
+        // 1. Fetch wiki_nodes
+        if let Ok(mut resp) = backend.db.query("SELECT id, name, vault_path FROM wiki_node;").await {
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+            struct WikiNodeLight {
+                id: surrealdb::types::RecordId,
+                name: String,
+                vault_path: Option<String>,
+            }
+            if let Ok(nodes) = resp.take::<Vec<WikiNodeLight>>(0) {
+                for n in nodes {
+                    target_to_id.insert(n.name.clone(), n.id.clone());
+                    if let Some(ref vp) = n.vault_path {
+                        target_to_id.insert(vp.clone(), n.id.clone());
+                        let stripped = vp.trim_end_matches(".md").to_string();
+                        target_to_id.insert(stripped, n.id.clone());
+                    }
+                }
+            }
+        }
+
+        // 2. Fetch episodes
+        if let Ok(mut resp) = backend.db.query("SELECT id, title, vault_path FROM episode;").await {
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+            struct EpisodeLight {
+                id: surrealdb::types::RecordId,
+                title: String,
+                vault_path: Option<String>,
+            }
+            if let Ok(episodes) = resp.take::<Vec<EpisodeLight>>(0) {
+                for e in episodes {
+                    target_to_id.insert(e.title.clone(), e.id.clone());
+                    if let Some(ref vp) = e.vault_path {
+                        target_to_id.insert(vp.clone(), e.id.clone());
+                        let stripped = vp.trim_end_matches(".md").to_string();
+                        target_to_id.insert(stripped, e.id.clone());
+                    }
+                }
+            }
+        }
+
+        // 3. Fetch wisdom rules
+        if let Ok(mut resp) = backend.db.query("SELECT id, target_pattern, vault_path FROM wisdom;").await {
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+            struct WisdomLight {
+                id: surrealdb::types::RecordId,
+                target_pattern: String,
+                vault_path: Option<String>,
+            }
+            if let Ok(rules) = resp.take::<Vec<WisdomLight>>(0) {
+                for r in rules {
+                    target_to_id.insert(r.target_pattern.clone(), r.id.clone());
+                    if let Some(ref vp) = r.vault_path {
+                        target_to_id.insert(vp.clone(), r.id.clone());
+                        let stripped = vp.trim_end_matches(".md").to_string();
+                        target_to_id.insert(stripped, r.id.clone());
+                    }
+                }
+            }
+        }
+
+        Self { target_to_id }
+    }
+
+    pub fn resolve(&self, target: &str) -> Option<surrealdb::types::RecordId> {
+        let cleaned = target.trim_start_matches("[[").trim_end_matches("]]").trim();
+        if cleaned.contains(':') {
+            if let Ok(rec_id) = crate::db::parse_record_id(cleaned) {
+                return Some(rec_id);
+            }
+        }
+        
+        if let Some(id) = self.target_to_id.get(cleaned) {
+            return Some(id.clone());
+        }
+        
+        let target_path = cleaned.trim_end_matches(".md").to_string();
+        if let Some(id) = self.target_to_id.get(&target_path) {
+            return Some(id.clone());
+        }
+        
+        let path_md = format!("{}.md", target_path);
+        if let Some(id) = self.target_to_id.get(&path_md) {
+            return Some(id.clone());
+        }
+        
+        None
+    }
+}
+
 async fn resolve_target_to_id(
     target: &str,
     surreal_backend: &crate::db::SurrealBackend,
+    cache: Option<&TargetResolveCache>,
 ) -> Option<surrealdb::types::RecordId> {
+    if let Some(c) = cache {
+        return c.resolve(target);
+    }
     let cleaned = target.trim_start_matches("[[").trim_end_matches("]]").trim();
     if cleaned.contains(':') {
         if let Ok(rec_id) = crate::db::parse_record_id(cleaned) {
             return Some(rec_id);
         }
     }
+    let target_path = cleaned.trim_end_matches(".md").to_string();
     
     // Query wiki_node
-    let q = "SELECT VALUE id FROM wiki_node WHERE name = $target LIMIT 1;";
-    if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
+    let q = "SELECT VALUE id FROM wiki_node WHERE name = $target OR vault_path = $path OR vault_path = $path_md LIMIT 1;";
+    if let Ok(mut resp) = surreal_backend.db.query(q)
+        .bind(("target", cleaned))
+        .bind(("path", target_path.clone()))
+        .bind(("path_md", format!("{}.md", target_path)))
+        .await 
+    {
         if let Ok(Some(id)) = resp.take::<Option<surrealdb::types::RecordId>>(0) {
             return Some(id);
         }
     }
     
     // Fallback to episode
-    let q = "SELECT VALUE id FROM episode WHERE title = $target LIMIT 1;";
-    if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
+    let q = "SELECT VALUE id FROM episode WHERE title = $target OR vault_path = $path OR vault_path = $path_md LIMIT 1;";
+    if let Ok(mut resp) = surreal_backend.db.query(q)
+        .bind(("target", cleaned))
+        .bind(("path", target_path.clone()))
+        .bind(("path_md", format!("{}.md", target_path)))
+        .await 
+    {
         if let Ok(Some(id)) = resp.take::<Option<surrealdb::types::RecordId>>(0) {
             return Some(id);
         }
     }
     
     // Fallback to wisdom
-    let q = "SELECT VALUE id FROM wisdom WHERE target_pattern = $target LIMIT 1;";
-    if let Ok(mut resp) = surreal_backend.db.query(q).bind(("target", cleaned)).await {
+    let q = "SELECT VALUE id FROM wisdom WHERE target_pattern = $target OR vault_path = $path OR vault_path = $path_md LIMIT 1;";
+    if let Ok(mut resp) = surreal_backend.db.query(q)
+        .bind(("target", cleaned))
+        .bind(("path", target_path.clone()))
+        .bind(("path_md", format!("{}.md", target_path)))
+        .await 
+    {
         if let Ok(Some(id)) = resp.take::<Option<surrealdb::types::RecordId>>(0) {
             return Some(id);
         }
@@ -484,12 +601,22 @@ struct WisdomFrontmatter {
     status: Option<String>,
     superseded_at: Option<String>,
     superseded_by: Option<String>,
+    edges: Option<Vec<FrontmatterEdge>>,
 }
 
 pub async fn sync_file_to_db(
     path: &Path,
     backend: &Arc<dyn StorageBackend>,
     store: &Arc<MarkdownStore>,
+) -> Result<()> {
+    sync_file_to_db_with_cache(path, backend, store, None).await
+}
+
+pub async fn sync_file_to_db_with_cache(
+    path: &Path,
+    backend: &Arc<dyn StorageBackend>,
+    store: &Arc<MarkdownStore>,
+    cache: Option<&TargetResolveCache>,
 ) -> Result<()> {
     let content = std::fs::read_to_string(path)
         .context("Failed to read file for sync")?;
@@ -534,17 +661,15 @@ pub async fn sync_file_to_db(
             ).context("Failed to parse Wisdom frontmatter")?;
 
             let is_global = rel_path.starts_with("global/") || rel_path.contains("/global/");
-            let final_tier = if is_global {
-                "permanent".to_string()
-            } else {
-                frontmatter.tier.unwrap_or_else(|| {
-                    if rel_path.contains("wisdom/skills/") {
-                        "skills".to_string()
-                    } else {
-                        "dynamic".to_string()
-                    }
-                })
-            };
+            let final_tier = frontmatter.tier.unwrap_or_else(|| {
+                if rel_path.contains("wisdom/permanent/") {
+                    "permanent".to_string()
+                } else if rel_path.contains("wisdom/skills/") {
+                    "skills".to_string()
+                } else {
+                    "dynamic".to_string()
+                }
+            });
             let final_tier_enum = final_tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom);
 
             let final_scope = if is_global {
@@ -575,7 +700,72 @@ pub async fn sync_file_to_db(
                 ..Default::default()
             };
 
-            backend.save_wisdom_rule(&rule).await?;
+            let db_id = backend.save_wisdom_rule(&rule).await?;
+
+            if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                if let Ok(from_id) = crate::db::parse_record_id(&db_id) {
+                    let body_links = crate::parser::extract_wiki_links(&body);
+                    let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();
+                    if let Some(ref edges) = frontmatter.edges {
+                        for edge in edges {
+                            if let Some(target_id) = resolve_target_to_id(&edge.target, surreal_backend, cache).await {
+                                let relation = edge.relation.clone().unwrap_or_else(|| "related".to_string());
+                                desired.push((target_id, relation, edge.strength));
+                            }
+                        }
+                    }
+                    for link in body_links {
+                        if let Some(target_id) = resolve_target_to_id(&link, surreal_backend, cache).await {
+                            if !desired.iter().any(|(tid, rel, _)| tid == &target_id && rel == "related") {
+                                desired.push((target_id, "related".to_string(), None));
+                            }
+                        }
+                    }
+
+                    // Query existing relations
+                    if let Ok(mut existing_resp) = surreal_backend.db.query("SELECT id, relation, out FROM relates_to WHERE in = $from;")
+                        .bind(("from", from_id.clone()))
+                        .await 
+                    {
+                        #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                        struct RelatesToRaw {
+                            id: surrealdb::types::RecordId,
+                            relation: String,
+                            out: surrealdb::types::RecordId,
+                        }
+                        if let Ok(existing) = existing_resp.take::<Vec<RelatesToRaw>>(0) {
+                            // Delete removed relations
+                            for ext in &existing {
+                                let is_still_desired = desired.iter().any(|(tid, rel, _)| {
+                                    tid == &ext.out && rel == &ext.relation
+                                });
+                                if !is_still_desired {
+                                    let delete_q = "DELETE FROM relates_to WHERE id = $rel_id;";
+                                    let _ = surreal_backend.db.query(delete_q)
+                                        .bind(("rel_id", ext.id.clone()))
+                                        .await;
+                                }
+                            }
+
+                            // Create new relations
+                            for (tid, rel, strength_opt) in desired {
+                                let already_exists = existing.iter().any(|ext| {
+                                    &ext.out == &tid && &ext.relation == &rel
+                                });
+                                if !already_exists {
+                                    let relate_q = "RELATE $from->relates_to->$to CONTENT { relation: $relation, strength: $strength };";
+                                    let _ = surreal_backend.db.query(relate_q)
+                                        .bind(("from", from_id.clone()))
+                                        .bind(("to", tid))
+                                        .bind(("relation", rel))
+                                        .bind(("strength", strength_opt))
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     } else {
         let frontmatter: WikiFrontmatter = yaml_opt
@@ -608,7 +798,7 @@ pub async fn sync_file_to_db(
             let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();
             if let Some(ref edges) = frontmatter.edges {
                 for edge in edges {
-                    if let Some(target_id) = resolve_target_to_id(&edge.target, surreal_backend).await {
+                    if let Some(target_id) = resolve_target_to_id(&edge.target, surreal_backend, cache).await {
                         let relation = edge.relation.clone().unwrap_or_else(|| "related".to_string());
                         desired.push((target_id, relation, edge.strength));
                     }
@@ -616,7 +806,7 @@ pub async fn sync_file_to_db(
             }
             
             for link in body_links {
-                if let Some(target_id) = resolve_target_to_id(&link, surreal_backend).await {
+                if let Some(target_id) = resolve_target_to_id(&link, surreal_backend, cache).await {
                     if !desired.iter().any(|(tid, rel, _)| tid == &target_id && rel == "related") {
                         desired.push((target_id, "related".to_string(), None));
                     }

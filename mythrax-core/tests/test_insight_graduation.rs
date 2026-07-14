@@ -78,6 +78,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
         .find(|r| r.scope == "general" && r.generator_name == "ScopeGraduator")
         .expect("Graduated WisdomRule should exist");
 
+    println!("GRADUATED RULE: {:?}", graduated_rule);
     assert_eq!(graduated_rule.target_pattern, "test_graduated_pattern");
     assert_eq!(graduated_rule.tier, mythrax_core::contracts::Tier::Project); // Because wiki nodes are dynamic, not all procedural
 
@@ -96,7 +97,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
     for file in files {
         let f = file?;
         let name = f.file_name().to_string_lossy().into_owned();
-        if name.starts_with("test_graduated_pattern") && name.ends_matches(".md") {
+        if name.starts_with("avoid_test") && name.ends_matches(".md") {
             found_file = true;
             let file_content = fs::read_to_string(f.path())?;
             assert!(file_content.contains("generator_name: \"ScopeGraduator\""));

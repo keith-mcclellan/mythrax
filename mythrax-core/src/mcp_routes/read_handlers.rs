@@ -81,14 +81,32 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
             let concept = args.get("concept").and_then(|v| v.as_str()).context("Missing concept")?;
             let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required")?;
-            search_by_concept_db(surreal_backend, concept).await
+            let res = search_by_concept_db(surreal_backend, concept).await?;
+            let text = serde_json::to_string_pretty(&res)?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            }))
         }
         "diff_sessions" => {
             let session_a = args.get("session_a").and_then(|v| v.as_str()).context("Missing session_a")?;
             let session_b = args.get("session_b").and_then(|v| v.as_str()).context("Missing session_b")?;
             let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required")?;
-            diff_sessions_db(surreal_backend, session_a, session_b).await
+            let res = diff_sessions_db(surreal_backend, session_a, session_b).await?;
+            let text = serde_json::to_string_pretty(&res)?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": text
+                    }
+                ]
+            }))
         }
         _ => anyhow::bail!("Invalid action for read tool: {}", action),
     }
@@ -546,24 +564,30 @@ fn make_subtitle(content: &str) -> String {
 pub async fn search_by_concept_db(backend: &SurrealBackend, concept: &str) -> Result<Value> {
     let sql = "SELECT * FROM episode WHERE archived = false AND ($concept IN concepts OR $concept IN facts OR string::contains(title, $concept) OR string::contains(content, $concept));";
     let mut response = backend.db.query(sql).bind(("concept", concept)).await?.check()?;
-    let mut episodes: Vec<crate::contracts::Episode> = response.take(0)?;
-    for ep in &mut episodes {
+    let raw_episodes: Vec<crate::db::backend::EpisodeRaw> = response.take(0)?;
+    let episodes: Vec<crate::contracts::Episode> = raw_episodes.into_iter().map(|raw| {
+        let mut ep = crate::contracts::Episode::from(raw);
         ep.embedding = None;
-    }
+        ep
+    }).collect();
     
     let sql_wiki = "SELECT * FROM wiki_node WHERE string::contains(name, $concept) OR string::contains(content, $concept);";
     let mut resp_wiki = backend.db.query(sql_wiki).bind(("concept", concept)).await?.check()?;
-    let mut wiki_nodes: Vec<crate::contracts::WikiNode> = resp_wiki.take(0)?;
-    for wk in &mut wiki_nodes {
+    let raw_wiki: Vec<crate::db::backend::WikiNodeRaw> = resp_wiki.take(0)?;
+    let wiki_nodes: Vec<crate::contracts::WikiNode> = raw_wiki.into_iter().map(|raw| {
+        let mut wk = raw.into_wiki_node();
         wk.embedding = None;
-    }
+        wk
+    }).collect();
 
     let sql_wisdom = "SELECT * FROM wisdom WHERE string::contains(target_pattern, $concept) OR string::contains(action_to_avoid, $concept) OR string::contains(causal_explanation, $concept) OR string::contains(prescribed_remedy, $concept);";
     let mut resp_wisdom = backend.db.query(sql_wisdom).bind(("concept", concept)).await?.check()?;
-    let mut wisdom_rules: Vec<crate::contracts::WisdomRule> = resp_wisdom.take(0)?;
-    for ws in &mut wisdom_rules {
+    let raw_wisdom: Vec<crate::db::backend::WisdomRaw> = resp_wisdom.take(0)?;
+    let wisdom_rules: Vec<crate::contracts::WisdomRule> = raw_wisdom.into_iter().map(|raw| {
+        let mut ws = raw.into_wisdom_rule();
         ws.embedding = None;
-    }
+        ws
+    }).collect();
 
     Ok(json!({
         "episodes": episodes,
@@ -573,11 +597,11 @@ pub async fn search_by_concept_db(backend: &SurrealBackend, concept: &str) -> Re
 }
 
 pub async fn diff_sessions_db(backend: &SurrealBackend, session_a: &str, session_b: &str) -> Result<Value> {
-    let sql_a = "SELECT role, content FROM chat_history WHERE session_id = $session_a ORDER BY created_at ASC;";
+    let sql_a = "SELECT role, content, created_at FROM chat_history WHERE session_id = $session_a ORDER BY created_at ASC;";
     let mut resp_a = backend.db.query(sql_a).bind(("session_a", session_a)).await?.check()?;
     let chat_a: Vec<Value> = resp_a.take(0)?;
 
-    let sql_b = "SELECT role, content FROM chat_history WHERE session_id = $session_b ORDER BY created_at ASC;";
+    let sql_b = "SELECT role, content, created_at FROM chat_history WHERE session_id = $session_b ORDER BY created_at ASC;";
     let mut resp_b = backend.db.query(sql_b).bind(("session_b", session_b)).await?.check()?;
     let chat_b: Vec<Value> = resp_b.take(0)?;
 
@@ -600,9 +624,10 @@ pub async fn diff_sessions_db(backend: &SurrealBackend, session_a: &str, session
     std::fs::write(&path_a, &text_a)?;
     std::fs::write(&path_b, &text_b)?;
 
-    let output = std::process::Command::new("diff")
+    let output = tokio::process::Command::new("diff")
         .args(["-u", path_a.to_str().unwrap(), path_b.to_str().unwrap()])
-        .output()?;
+        .output()
+        .await?;
 
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);

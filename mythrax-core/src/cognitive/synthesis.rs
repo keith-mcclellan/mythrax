@@ -11,6 +11,30 @@ pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
     1.0 - crate::math::cosine_similarity(u, v)
 }
 
+pub fn slugify_title(text: &str) -> String {
+    let mut slug = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '-' {
+            slug.push(c);
+        } else if c.is_whitespace() || c == '_' || c == '/' || c == '\\' {
+            slug.push('_');
+        }
+    }
+    while slug.contains("__") {
+        slug = slug.replace("__", "_");
+    }
+    let trimmed = slug.trim_matches(|c| c == '_' || c == '-').to_string();
+    if trimmed.len() > 100 {
+        if let Some(pos) = trimmed[..100].rfind('_') {
+            trimmed[..pos].to_string()
+        } else {
+            trimmed[..100].to_string()
+        }
+    } else {
+        trimmed
+    }
+}
+
 pub fn dbscan(
     embeddings: &[&[f32]],
     eps: f32,
@@ -122,17 +146,20 @@ pub fn load_insights(vault_root: &Path) -> Vec<InsightNote> {
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let scope = entry.file_name().to_string_lossy().to_string();
-                let insights_dir = entry.path().join("insights");
-                if insights_dir.exists()
-                    && let Ok(files) = std::fs::read_dir(&insights_dir) {
-                        for file in files.flatten() {
-                            if file.path().extension().map(|s| s == "md").unwrap_or(false)
-                                && let Ok(content) = std::fs::read_to_string(file.path())
-                                    && let Ok(note) = parse_insight_note(&content, &file.path(), &scope) {
-                                        insights.push(note);
-                                    }
+                
+                for sub in &["insights", "raw"] {
+                    let dir = entry.path().join(sub);
+                    if dir.exists()
+                        && let Ok(files) = std::fs::read_dir(&dir) {
+                            for file in files.flatten() {
+                                if file.path().extension().map(|s| s == "md").unwrap_or(false)
+                                    && let Ok(content) = std::fs::read_to_string(file.path())
+                                        && let Ok(note) = parse_insight_note(&content, &file.path(), &scope) {
+                                            insights.push(note);
+                                        }
+                            }
                         }
-                    }
+                }
             }
         }
     }
@@ -152,15 +179,19 @@ fn parse_insight_note(content: &str, path: &Path, scope: &str) -> Result<Insight
 
     #[derive(serde::Deserialize)]
     struct Frontmatter {
-        title: String,
-        source_episodes: Vec<String>,
+        title: Option<String>,
+        name: Option<String>,
+        source_episodes: Option<Vec<String>>,
     }
     let fm: Frontmatter = serde_yaml::from_str(yaml_str)?;
+    let title = fm.title.or(fm.name).unwrap_or_else(|| "Untitled Note".to_string());
+    let source_episodes = fm.source_episodes.unwrap_or_default();
+
     Ok(InsightNote {
-        title: fm.title,
+        title,
         content: body.trim().to_string(),
         scope: scope.to_string(),
-        source_episodes: fm.source_episodes,
+        source_episodes,
         vault_path: path.to_string_lossy().to_string(),
     })
 }
@@ -687,7 +718,7 @@ impl DreamCoordinator {
                     events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
                 }
 
-                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
+                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                 let prompt_text = format!(
                     "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
                     events_text
@@ -713,9 +744,8 @@ impl DreamCoordinator {
 
                 let cluster_ep_ids: Vec<String> = cluster_eps.iter().map(|ep| ep.id.clone().unwrap_or_default()).collect();
 
-                let clean_title = analysis.title.replace([' ', '/'], "_");
-                let insight_uuid = uuid::Uuid::new_v4().to_string();
-                let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+                let clean_title = slugify_title(&analysis.title);
+                let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
                 let insight_content = format!(
                     "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
                     analysis.title,
@@ -782,8 +812,7 @@ impl DreamCoordinator {
                                 String::new()
                             };
 
-                            let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                            let rule_path = format!("wisdom/dynamic/{}.md", slugify_title(&r.action_to_avoid));
                             let final_tier_str = "dynamic".to_string();
                             let final_scope = scope.clone();
 
@@ -1031,7 +1060,7 @@ impl DreamCoordinator {
                             }
 
                             // Call LLM Synthesizer
-                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.";
+                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                             let prompt_text = format!(
                                 "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
                                 events_text
@@ -1055,9 +1084,8 @@ impl DreamCoordinator {
                                 };
 
                                 // Write new insight to disk
-                                let clean_title = analysis.title.replace([' ', '/'], "_");
-                                let insight_uuid = uuid::Uuid::new_v4().to_string();
-                                let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+                                let clean_title = slugify_title(&analysis.title);
+                                let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
 
                                 let mut source_ep_links = Vec::new();
                                 for ep in &group {
@@ -1328,7 +1356,7 @@ impl DreamCoordinator {
                     ));
                 }
 
-                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.";
+                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                 let user_prompt = format!(
                     "The following insights emerged independently in {} different projects:\n\n{}Respond with a JSON object containing target_pattern: string, action_to_avoid: string, causal_explanation: string, prescribed_remedy: string, and confidence: float.",
                     n,
@@ -1347,22 +1375,20 @@ impl DreamCoordinator {
                     let clean_resp = crate::llm::strip_code_fences(&resp_str);
                     if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
                         if res.confidence >= 0.80 {
-                            let all_procedural = cluster.iter().all(|c| c.is_procedural);
-                            let tier = if all_procedural { "permanent" } else { "dynamic" };
+                            let tier = "dynamic";
 
-                            let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let rule_path = if all_procedural {
-                                format!("global/wisdom/permanent/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
-                            } else {
-                                format!("global/wisdom/dynamic/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8])
-                            };
+                            let rule_path = format!("global/wisdom/dynamic/{}.md", slugify_title(&res.action_to_avoid));
 
-                            let rule_md = format!(
+                            let mut rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\nsource_nodes:\n{}\ngenerator_name: \"ScopeGraduator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
                                 res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy, tier,
                                 cluster.iter().map(|c| format!("  - \"{}\"", c.id)).collect::<Vec<_>>().join("\n"),
                                 res.target_pattern, res.action_to_avoid, res.causal_explanation, res.prescribed_remedy
                             );
+                            rule_md.push_str("\n\n## Source Insights\n");
+                            for member in &cluster {
+                                rule_md.push_str(&format!("- [[{}]]\n", member.name));
+                            }
                             let _ = store.write_file(&rule_path, &rule_md);
 
                             let rule_contract = WisdomRule {
@@ -1371,7 +1397,7 @@ impl DreamCoordinator {
                                 action_to_avoid: res.action_to_avoid,
                                 causal_explanation: res.causal_explanation,
                                 prescribed_remedy: res.prescribed_remedy,
-                                tier: tier.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom),
+                                tier: crate::contracts::Tier::Project,
                                 scope: "general".to_string(),
                                 vault_path: Some(rule_path),
                                 embedding: None,
@@ -1382,7 +1408,7 @@ impl DreamCoordinator {
                                 status: None,
                                 superseded_at: None,
                                 superseded_by: None,
-                                rule_type: Some(if all_procedural { "procedural".to_string() } else { "aesthetic".to_string() }),
+                                rule_type: Some("aesthetic".to_string()),
                             
                                 ..Default::default()
                             };
@@ -1575,7 +1601,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                         } else if let Some(ref path) = matched.vault_path {
                             path.clone()
                         } else {
-                            format!("wisdom/dynamic/merged_{}.md", &uuid::Uuid::new_v4().to_string()[..8])
+                            format!("wisdom/dynamic/{}.md", slugify_title(&fields.action_to_avoid))
                         };
 
                         let rule_md = format!(

@@ -488,7 +488,7 @@ impl Compactor {
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
+            let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
@@ -504,7 +504,7 @@ impl Compactor {
             let first_title = member_insights.first().map(|(c, _)| c.title.as_str()).unwrap_or("compaction");
             let slug = first_title.to_lowercase().replace([' ', '/'], "_");
             let uuid = uuid::Uuid::new_v4().to_string();
-            let relative_path = format!("wiki/compaction/{}_{}_{}.md", scope, slug, &uuid[..8]);
+            let relative_path = format!("wiki/{}/compactions/{}_{}.md", scope, slug, &uuid[..8]);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
@@ -513,6 +513,11 @@ impl Compactor {
                 scope,
                 summary
             );
+
+            file_content.push_str("\n\n## Component Insights\n");
+            for (ins, _) in member_insights {
+                file_content.push_str(&format!("- [[{}]]\n", ins.title));
+            }
 
             if !all_anchors.is_empty() {
                 file_content.push_str("\n\n## Attention Anchors\n");
@@ -551,7 +556,7 @@ impl Compactor {
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.";
+            let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
@@ -565,7 +570,7 @@ impl Compactor {
             }
 
             let uuid = uuid::Uuid::new_v4().to_string();
-            let relative_path = format!("wiki/compaction/{}_miscellaneous_{}.md", scope, &uuid[..8]);
+            let relative_path = format!("wiki/{}/compactions/miscellaneous_{}.md", scope, &uuid[..8]);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: \"miscellaneous\"\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
@@ -573,6 +578,11 @@ impl Compactor {
                 scope,
                 summary
             );
+
+            file_content.push_str("\n\n## Component Insights\n");
+            for (ins, _) in &outlier_insights {
+                file_content.push_str(&format!("- [[{}]]\n", ins.title));
+            }
 
             if !all_anchors.is_empty() {
                 file_content.push_str("\n\n## Attention Anchors\n");
@@ -634,7 +644,7 @@ impl Compactor {
                 .bind(("threshold", threshold.to_rfc3339()))
                 .await;
         }
-        let compaction_dir = store.vault_root.join("wiki/compaction");
+        let compaction_dir = store.vault_root.join("wiki/general/compactions");
         if !compaction_dir.exists() {
             return Ok(());
         }
@@ -664,7 +674,7 @@ impl Compactor {
 
         let (cleaned_compaction, extracted_anchors) = extract_attention_anchors(&combined_compaction);
 
-        let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.";
+        let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
         let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
         let global_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
         let global_summary = page_markdown_code_blocks(db, &global_summary).await?;
@@ -678,11 +688,17 @@ impl Compactor {
         }
 
         let uuid = uuid::Uuid::new_v4().to_string();
-        let relative_path = format!("wiki/general/global_compaction_{}.md", &uuid[..8]);
+        let relative_path = format!("wiki/general/compactions/global_compaction_{}.md", &uuid[..8]);
         let mut file_content = format!(
             "---\ntype: \"global_compaction\"\n---\n\n# Global Systems Synthesis\n\n{}",
             global_summary
         );
+
+        file_content.push_str("\n\n## Component Compactions\n");
+        for comp_path in &compaction_paths {
+            let name_target = comp_path.strip_suffix(".md").unwrap_or(comp_path);
+            file_content.push_str(&format!("- [[{}]]\n", name_target));
+        }
 
         if !all_anchors.is_empty() {
             file_content.push_str("\n\n## Attention Anchors\n");
@@ -748,7 +764,11 @@ impl Compactor {
             if ep.archived.unwrap_or(false) {
                 continue;
             }
-            let last_ret = if let Some(ref lr_str) = ep.last_retrieved_at {
+            let last_ret = if let Some(ref ca_str) = ep.created_at {
+                chrono::DateTime::parse_from_rfc3339(ca_str)
+                    .map(|dt| std::time::SystemTime::from(dt))
+                    .unwrap_or(now)
+            } else if let Some(ref lr_str) = ep.last_retrieved_at {
                 chrono::DateTime::parse_from_rfc3339(lr_str)
                     .map(|dt| std::time::SystemTime::from(dt))
                     .unwrap_or(now)
@@ -812,11 +832,11 @@ impl Compactor {
                     continue;
                 }
 
-                // Move physical file to vault/archive/
+                // Move physical file to archive/
                 if let Some(ref vp) = ep.vault_path {
                     let src_file = store.vault_root.join(vp);
                     if src_file.exists() {
-                        let archive_dir = store.vault_root.join("vault/archive");
+                        let archive_dir = store.vault_root.join("archive");
                         let _ = std::fs::create_dir_all(&archive_dir);
                         let filename = std::path::Path::new(vp)
                             .file_name()
@@ -826,12 +846,12 @@ impl Compactor {
                     }
                     
                     // 2. Generate high-level Raptor summary using the LLM
-                    let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.";
+                    let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                     let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
                     if let Ok(summary) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
                         // 3. Save as wiki Raptor summary node
                         let uuid = uuid::Uuid::new_v4().to_string();
-                        let wiki_rel = format!("wiki/archive/raptor_summary_{}.md", &uuid[..8]);
+                        let wiki_rel = format!("wiki/general/compactions/raptor_summary_{}.md", &uuid[..8]);
                         let wiki_content = format!(
                             "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
                             ep.title, ep.title, summary
@@ -855,7 +875,7 @@ impl Compactor {
                         let filename = std::path::Path::new(vp)
                             .file_name()
                             .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
-                        let new_vp = format!("vault/archive/{}", filename.to_string_lossy());
+                        let new_vp = format!("archive/{}", filename.to_string_lossy());
 
                         let query_sql = "UPDATE type::record('episode', $id) MERGE {
                             archived: true,

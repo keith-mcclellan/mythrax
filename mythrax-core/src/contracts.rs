@@ -366,7 +366,7 @@ pub struct Feedback {
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct LlmConfigResponse {
     pub active_provider: String,
     pub cloud_provider: String,

@@ -267,6 +267,12 @@ pub async fn sync_vault_to_db(
     let mut count = 0;
     let mut dirs_to_scan = vec![store.vault_root.clone()];
     
+    let cache = if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        Some(crate::vault::watcher::TargetResolveCache::new(surreal_backend).await)
+    } else {
+        None
+    };
+    
     while let Some(dir) = dirs_to_scan.pop() {
         if !dir.exists() {
             continue;
@@ -291,7 +297,7 @@ pub async fn sync_vault_to_db(
                 dirs_to_scan.push(path);
             } else if path.is_file() {
                 if path.extension().map_or(false, |ext| ext == "md") {
-                    match crate::vault::watcher::sync_file_to_db(&path, backend, store).await {
+                    match crate::vault::watcher::sync_file_to_db_with_cache(&path, backend, store, cache.as_ref()).await {
                         Ok(_) => {
                             count += 1;
                         }

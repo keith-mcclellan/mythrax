@@ -330,10 +330,10 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
     assert_eq!(active_eps_after.len(), 1);
     assert!(active_eps_after[0].archived.unwrap_or(false));
 
-    // 2. Verify physical file is moved to vault/archive/
+    // 2. Verify physical file is moved to archive/
     let old_file = vault_root.join(ep_vault_path);
     assert!(!old_file.exists());
-    let archived_file = vault_root.join("vault/archive/decayed_ep.md");
+    let archived_file = vault_root.join("archive/decayed_ep.md");
     assert!(archived_file.exists());
 
     // 3. Verify high-level Raptor summary WikiNode is created in DB

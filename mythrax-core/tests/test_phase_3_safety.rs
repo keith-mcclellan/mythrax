@@ -268,7 +268,7 @@ This is a test insight that references `page_fn_test_fn`.
     assert_eq!(current_content, original_content, "Source file should not be modified by compaction");
 
     // Find the compaction summary file
-    let compaction_dir = vault_root.join("wiki/compaction");
+    let compaction_dir = vault_root.join("wiki/test_scope/compactions");
     let mut found_compaction_file = None;
     
     if let Ok(entries) = std::fs::read_dir(&compaction_dir) {

@@ -23,3 +23,13 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
 - **Gaussian Temporal Proximity decay**: Replace hard time-demotions with \(\exp(-\Delta t^2 / 2\sigma^2)\) scoring, default \(\sigma = 168h\).
 - **Active VRAM Model Broker**: Dynamic coordination unloads embedding models before loading reranking/inference models to prevent OOM.
 - **Cross-Scope Graduation**: Promotes project-scoped insights and procedural episodes (365-day half-life, 500-node LRU cap) to generalized global wisdom rules upon convergence across multiple projects (cosine \(\ge 0.85\)).
+
+## Thinking and Writing Concision (docs:write-concisely)
+- **Mandate**: All agents (including subagents) MUST apply the `/docs:write-concisely` Strunk & White principles to all outputs, including **inner thoughts (thinking blocks)**, planning documents, and formal vault markdown files.
+- **Rules**:
+  - **Omit needless words**: Be direct, clean, and concise. Eliminate throat-clearing, introductory fillers, and repetitive summaries.
+  - **Use active voice**: Make the subject perform the action to keep descriptions vigorous.
+  - **Use positive form**: Make definite assertions instead of evasive/negative qualifiers.
+  - **Use definite, specific, concrete language**: Avoid vague generalizations.
+  - **Keep paragraphs focused**: Stick to one topic per paragraph.
+
