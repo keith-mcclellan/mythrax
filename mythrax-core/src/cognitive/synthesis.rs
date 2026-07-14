@@ -11,6 +11,30 @@ pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
     1.0 - crate::math::cosine_similarity(u, v)
 }
 
+pub fn slugify_title(text: &str) -> String {
+    let mut slug = String::new();
+    for c in text.chars() {
+        if c.is_alphanumeric() || c == '-' {
+            slug.push(c);
+        } else if c.is_whitespace() || c == '_' || c == '/' || c == '\\' {
+            slug.push('_');
+        }
+    }
+    while slug.contains("__") {
+        slug = slug.replace("__", "_");
+    }
+    let trimmed = slug.trim_matches(|c| c == '_' || c == '-').to_string();
+    if trimmed.len() > 100 {
+        if let Some(pos) = trimmed[..100].rfind('_') {
+            trimmed[..pos].to_string()
+        } else {
+            trimmed[..100].to_string()
+        }
+    } else {
+        trimmed
+    }
+}
+
 pub fn dbscan(
     embeddings: &[&[f32]],
     eps: f32,
@@ -720,9 +744,8 @@ impl DreamCoordinator {
 
                 let cluster_ep_ids: Vec<String> = cluster_eps.iter().map(|ep| ep.id.clone().unwrap_or_default()).collect();
 
-                let clean_title = analysis.title.replace([' ', '/'], "_");
-                let insight_uuid = uuid::Uuid::new_v4().to_string();
-                let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+                let clean_title = slugify_title(&analysis.title);
+                let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
                 let insight_content = format!(
                     "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
                     analysis.title,
@@ -789,8 +812,7 @@ impl DreamCoordinator {
                                 String::new()
                             };
 
-                            let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let rule_path = format!("wisdom/dynamic/{}_{}.md", r.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                            let rule_path = format!("wisdom/dynamic/{}.md", slugify_title(&r.action_to_avoid));
                             let final_tier_str = "dynamic".to_string();
                             let final_scope = scope.clone();
 
@@ -1062,9 +1084,8 @@ impl DreamCoordinator {
                                 };
 
                                 // Write new insight to disk
-                                let clean_title = analysis.title.replace([' ', '/'], "_");
-                                let insight_uuid = uuid::Uuid::new_v4().to_string();
-                                let relative_path = format!("wiki/{}/insights/{}_{}.md", scope, clean_title, &insight_uuid[..8]);
+                                let clean_title = slugify_title(&analysis.title);
+                                let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
 
                                 let mut source_ep_links = Vec::new();
                                 for ep in &group {
@@ -1356,8 +1377,7 @@ impl DreamCoordinator {
                         if res.confidence >= 0.80 {
                             let tier = "dynamic";
 
-                            let rule_uuid = uuid::Uuid::new_v4().to_string();
-                            let rule_path = format!("global/wisdom/dynamic/{}_{}.md", res.target_pattern.replace([' ', '/'], "_"), &rule_uuid[..8]);
+                            let rule_path = format!("global/wisdom/dynamic/{}.md", slugify_title(&res.action_to_avoid));
 
                             let mut rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\nsource_nodes:\n{}\ngenerator_name: \"ScopeGraduator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
@@ -1581,7 +1601,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                         } else if let Some(ref path) = matched.vault_path {
                             path.clone()
                         } else {
-                            format!("wisdom/dynamic/merged_{}.md", &uuid::Uuid::new_v4().to_string()[..8])
+                            format!("wisdom/dynamic/{}.md", slugify_title(&fields.action_to_avoid))
                         };
 
                         let rule_md = format!(

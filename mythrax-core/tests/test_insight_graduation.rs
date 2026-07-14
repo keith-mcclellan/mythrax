@@ -97,7 +97,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
     for file in files {
         let f = file?;
         let name = f.file_name().to_string_lossy().into_owned();
-        if name.starts_with("test_graduated_pattern") && name.ends_matches(".md") {
+        if name.starts_with("avoid_test") && name.ends_matches(".md") {
             found_file = true;
             let file_content = fs::read_to_string(f.path())?;
             assert!(file_content.contains("generator_name: \"ScopeGraduator\""));

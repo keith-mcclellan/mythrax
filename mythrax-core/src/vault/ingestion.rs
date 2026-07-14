@@ -400,10 +400,21 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
                     .trim_matches('.')
                     .to_string();
                 if !normalized.is_empty() {
-                    let clean_prefix = prefix.trim_matches('/');
-                    let full_path = Path::new(&home).join(clean_prefix).join(&normalized);
-                    if full_path.is_dir() {
-                        scopes.push(normalized);
+                    let skip_names = [
+                        "brain", "antigravity", ".gemini", "episodes", "wiki", "wisdom", 
+                        "general", "archive", "users", "keith", "documents", "repos", 
+                        "workspace", "workspaces", "projects", ".system_generated", 
+                        "logs", "messages", "quarantine", "tempmediastorage", "target", 
+                        "src", "release", "debug",
+                        "git", "refs", "ref", "github", "lib", "bin", "tests", "test",
+                        "deps", "build", "dist", "node_modules", "vendor"
+                    ];
+                    if !skip_names.iter().any(|&s| s == normalized) {
+                        let clean_prefix = prefix.trim_matches('/');
+                        let full_path = Path::new(&home).join(clean_prefix).join(&normalized);
+                        if full_path.is_dir() {
+                            scopes.push(normalized);
+                        }
                     }
                 }
             }

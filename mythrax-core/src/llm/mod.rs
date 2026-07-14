@@ -34,14 +34,15 @@ pub struct Tokenizer;
 pub struct MxbaiReranker;
 
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
-static METAL_SHARED_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+static METAL_EMBEDDING_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
 pub fn metal_inference_semaphore() -> &'static Semaphore {
-    METAL_SHARED_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+    METAL_INFERENCE_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
 pub fn metal_embedding_semaphore() -> &'static Semaphore {
-    METAL_SHARED_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(50))
 }
 
 #[derive(Clone)]
@@ -240,6 +241,8 @@ impl LLMClient {
                                 m if m.contains("35B") || m.contains("3.6") || m.contains("Tier3") || m.contains("Tier2") || m.contains("a3b") || m.contains("a4b") => ModelTier::Tier3,
                                 _ => ModelTier::Tier2,
                             };
+                            let _permit = metal_inference_semaphore().acquire().await
+                                .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
                             tracing::info!("mlx feature active: routing local inference in-process via DynamicModelBroker for tier {:?}", tier);
                             let engine = broker.acquire_llm(tier).await?;
                             let raw = engine.generate(prompt, system_instruction).await?;
@@ -786,8 +789,6 @@ impl InferenceEngine for InProcessMlxEngine {
             let mut generated_text = String::new();
 
             let mut model = model_arc.lock().await;
-            let _permit = metal_inference_semaphore().acquire().await
-                .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
 
             // Initialize KV cache
             let num_layers = model.layers.len();

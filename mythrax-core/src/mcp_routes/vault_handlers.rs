@@ -210,10 +210,11 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
 
             let mut stale_branches = Vec::new();
             if repo_root.join(".git").exists() {
-                let git_output = std::process::Command::new("git")
+                let git_output = tokio::process::Command::new("git")
                     .args(["for-each-ref", "--format=%(refname:short) %(committerdate:unix)", "refs/heads/htr_branch_*"])
                     .current_dir(&repo_root)
-                    .output();
+                    .output()
+                    .await;
                 if let Ok(output) = git_output {
                     let stdout_str = String::from_utf8_lossy(&output.stdout);
                     for line in stdout_str.lines() {
@@ -276,10 +277,11 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             }
 
             for (branch, _) in &stale_branches {
-                let _ = std::process::Command::new("git")
+                let _ = tokio::process::Command::new("git")
                     .args(["branch", "-D", branch])
                     .current_dir(&repo_root)
-                    .status();
+                    .status()
+                    .await;
             }
 
             let text = format!(

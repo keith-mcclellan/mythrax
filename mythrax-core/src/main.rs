@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
 use db::{SurrealBackend, StorageBackend};
 use cli::{Cli, Commands, ConfigAction, VaultAction, MemoryAction, HtrAction, StmAction};
-use mythrax_core::contracts::{WikiNode, WisdomRule};
+use mythrax_core::contracts::WikiNode;
 
 // Embed Mythrax Documentation
 const ARCHITECTURE_DOC: &str = include_str!("../../ARCHITECTURE.md");
@@ -572,10 +572,11 @@ async fn main() -> Result<()> {
             }
 
             // Check models
-            let model_path = mythrax_dir.join("models/nomic-embed-text-v1.5.onnx");
+            let onnx_path = mythrax_dir.join("models/nomic-embed-text-v1.5.onnx");
+            let mlx_path = mythrax_dir.join("models/model.safetensors");
             let tokenizer_path = mythrax_dir.join("models/tokenizer.json");
-            if !model_path.exists() || !tokenizer_path.exists() {
-                println!("WARNING: Nomis embedding model files not found under ~/.mythrax/models/. Local embeddings will fallback to None.");
+            if (!onnx_path.exists() && !mlx_path.exists()) || !tokenizer_path.exists() {
+                println!("WARNING: Nomic embedding model files (model.safetensors or nomic-embed-text-v1.5.onnx) not found under ~/.mythrax/models/. Local embeddings will fallback to None.");
             }
 
             // Always initialize the database in-process for pre-ingestion
@@ -640,127 +641,6 @@ async fn main() -> Result<()> {
                 embedding: None,
             };
             backend.save_wiki_node(&skill_node).await?;
-
-            // Ingest pre-dreamed wisdom rules
-            println!("Pre-dreaming core wisdom rules...");
-            let wisdom_rules = vec![
-                WisdomRule {
-                    id: None,
-                    target_pattern: "rocksdb lock contention or multiple process access".to_string(),
-                    action_to_avoid: "Opening RocksDB database directly from multiple concurrent CLI or client processes.".to_string(),
-                    causal_explanation: "RocksDB is a single-writer database. Multiple processes attempting to acquire the write lock simultaneously will cause panic or crash due to lock contention.".to_string(),
-                    prescribed_remedy: "Always route all queries and operations through the centralized Mythrax background daemon. The daemon exclusively holds the write lock and serves requests over HTTP.".to_string(),
-                    tier: mythrax_core::contracts::Tier::Project,
-                    scope: "general".to_string(),
-                    vault_path: Some("wisdom/dynamic/rocksdb_integrity.md".to_string()),
-                    embedding: None,
-                    source_episodes: vec![],
-                    generator_name: "PreDreamedWisdom".to_string(),
-                    similarity: None,
-                    utility: Some(100.0),
-                    status: None,
-                    superseded_at: None,
-                    superseded_by: None,
-                    rule_type: None,
-                
-                    ..Default::default()
-                },
-                WisdomRule {
-                    id: None,
-                    target_pattern: "subagent delegation or sharing context between agents".to_string(),
-                    action_to_avoid: "Pasting full file contents, database dumps, or extensive histories directly into the subagent prompt.".to_string(),
-                    causal_explanation: "Pasting full context wastes token budget, causes context window pollution, and degrades subagent focus.".to_string(),
-                    prescribed_remedy: "Store context node record IDs in Short Term Memory (STM) and write a minimal contract file under `.handoffs/handoff_<task_id>.md`. Spawn the subagent pointing to the handoff file URL and let it hydrate context dynamically.".to_string(),
-                    tier: mythrax_core::contracts::Tier::Project,
-                    scope: "general".to_string(),
-                    vault_path: Some("wisdom/dynamic/smart_handoffs.md".to_string()),
-                    embedding: None,
-                    source_episodes: vec![],
-                    generator_name: "PreDreamedWisdom".to_string(),
-                    similarity: None,
-                    utility: Some(100.0),
-                    status: None,
-                    superseded_at: None,
-                    superseded_by: None,
-                    rule_type: None,
-                
-                    ..Default::default()
-                },
-                WisdomRule {
-                    id: None,
-                    target_pattern: "agent boot initialization and compliance check".to_string(),
-                    action_to_avoid: "Proceeding with code modification or tool execution without checking the pre-invocation hook context.".to_string(),
-                    causal_explanation: "Failing to verify pre-invocation hook context leads to duplicate effort, rule violations, and lack of alignment with parent guidelines.".to_string(),
-                    prescribed_remedy: "Output a 1-line compliance check (`Execution Check: ...`) on the very first line of your response, and query Mythrax memory if hook context is empty.".to_string(),
-                    tier: mythrax_core::contracts::Tier::Project,
-                    scope: "general".to_string(),
-                    vault_path: Some("wisdom/dynamic/pre_invocation_compliance.md".to_string()),
-                    embedding: None,
-                    source_episodes: vec![],
-                    generator_name: "PreDreamedWisdom".to_string(),
-                    similarity: None,
-                    utility: Some(100.0),
-                    status: None,
-                    superseded_at: None,
-                    superseded_by: None,
-                    rule_type: None,
-                
-                    ..Default::default()
-                },
-                WisdomRule {
-                    id: None,
-                    target_pattern: "file deletion or cleanup".to_string(),
-                    action_to_avoid: "Using `rm` to permanently delete files in the vault or workspace.".to_string(),
-                    causal_explanation: "Permanent deletions are irreversible, making accidental data loss or breaking changes impossible to recover from.".to_string(),
-                    prescribed_remedy: "Always move deleted files to the `.trash/` directory under the vault or workspace root.".to_string(),
-                    tier: mythrax_core::contracts::Tier::Project,
-                    scope: "general".to_string(),
-                    vault_path: Some("wisdom/dynamic/safe_deletions.md".to_string()),
-                    embedding: None,
-                    source_episodes: vec![],
-                    generator_name: "PreDreamedWisdom".to_string(),
-                    similarity: None,
-                    utility: Some(100.0),
-                    status: None,
-                    superseded_at: None,
-                    superseded_by: None,
-                    rule_type: None,
-                
-                    ..Default::default()
-                },
-                WisdomRule {
-                    id: None,
-                    target_pattern: "mythrax v1.2 capabilities and tools".to_string(),
-                    action_to_avoid: "Using old granular file tools (view_file, replace_file_content) or old standalone audit tools, or bypassing MemoryOS virtual paging.".to_string(),
-                    causal_explanation: "Old tools are deprecated and removed. Bypassing virtual paging and paging-aware editing leads to token budget exhaustion and context window bloat.".to_string(),
-                    prescribed_remedy: "Always use 'manage_file' (actions: 'view', 'replace', 'multi_replace') for files, and 'manage_vault' (action: 'audit') for compliance. Target virtual placeholders directly during edits as the paging-aware manager resolves them on disk.".to_string(),
-                    tier: mythrax_core::contracts::Tier::Project,
-                    scope: "general".to_string(),
-                    vault_path: Some("wisdom/dynamic/mythrax_v1_2_capabilities.md".to_string()),
-                    embedding: None,
-                    source_episodes: vec![],
-                    generator_name: "PreDreamedWisdom".to_string(),
-                    similarity: None,
-                    utility: Some(100.0),
-                    status: None,
-                    superseded_at: None,
-                    superseded_by: None,
-                    rule_type: None,
-                
-                    ..Default::default()
-                },
-            ];
-
-            for rule in wisdom_rules {
-                let frontmatter = mythrax_core::vault::watcher::format_wisdom_markdown(&rule);
-                let rule_body = format!(
-                    "{}\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
-                    frontmatter, rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
-                );
-                let vp = rule.vault_path.as_ref().unwrap();
-                std::fs::write(vault_root.join(vp), &rule_body)?;
-                backend.save_wisdom_rule(&rule).await?;
-            }
 
             println!("Mythrax initialized successfully.");
             println!("Config path: {:?}", config_path);

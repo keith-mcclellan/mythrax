@@ -388,14 +388,16 @@ async fn resume_pipeline_continuation(
     let candidate_branch = state_val.get("candidate_branch").and_then(|v| v.as_str());
     
     if let (Some(path), Some(branch)) = (worktree_path, candidate_branch) {
-        let _ = std::process::Command::new("git")
+        let _ = tokio::process::Command::new("git")
             .args(&["checkout", "-B", branch])
             .current_dir(path)
-            .output();
-        let _ = std::process::Command::new("git")
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
             .args(&["reset", "--hard", "HEAD"])
             .current_dir(path)
-            .output();
+            .output()
+            .await;
     }
 
     if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
