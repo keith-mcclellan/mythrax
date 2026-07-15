@@ -175,8 +175,7 @@ impl ArborExecutor {
                     }
                     ' ' | '\t' if !in_quotes => {
                         if !current_arg.is_empty() {
-                            args.push(current_arg.clone());
-                            current_arg.clear();
+                            args.push(std::mem::take(&mut current_arg));
                         }
                     }
                     _ => {

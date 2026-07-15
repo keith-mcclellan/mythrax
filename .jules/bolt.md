@@ -1,0 +1,3 @@
+## 2024-07-15 - [Avoid String reallocation in loops]
+**Learning:** In Rust string processing loops, `String::clear()` sets length to 0 but retains capacity, while `std::mem::take()` yields a zero-capacity string. Replacing `.clone()` + `.clear()` with `std::mem::replace(&mut var, String::with_capacity(capacity))` can cause severe memory bloat over time if the string buffer grows.
+**Action:** When refactoring Rust text processing loops, use `std::mem::replace(&mut var, new_val)` to avoid `.clone()` during variable reassignment. You may replace `.clone()` + `.clear()` with `std::mem::take()` if the O(N) clone cost outweighs the minor reallocation cost of a zero-capacity buffer for short-lived accumulators.
