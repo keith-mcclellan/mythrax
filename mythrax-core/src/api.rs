@@ -549,7 +549,7 @@ async fn completions_proxy_handler(
                                 "finish_reason": "stop"
                             }]
                         });
-                        let sse_data = format!("data: {}\n\ndata: [DONE]\n\n", serde_json::to_string(&chunk).unwrap());
+                        let sse_data = format!("data: {}\n\ndata: [DONE]\n\n", serde_json::to_string(&chunk).unwrap_or_else(|_| "{}".to_string()));
                         let mut header_map = HeaderMap::new();
                         header_map.insert(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/event-stream"));
                         (StatusCode::OK, header_map, sse_data).into_response()

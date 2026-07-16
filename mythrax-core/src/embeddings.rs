@@ -529,7 +529,7 @@ impl LocalEmbedder {
             }
         }
 
-        let final_embeddings = results.into_iter().map(|opt| opt.unwrap()).collect();
+        let final_embeddings = results.into_iter().map(|opt| opt.ok_or_else(|| anyhow::anyhow!("Failed to generate embedding for all inputs"))).collect::<Result<Vec<_>>>()?;
         Ok(final_embeddings)
     }
 
@@ -816,7 +816,7 @@ impl LocalEmbedder {
             }
         }
 
-        let final_embeddings = results.into_iter().map(|opt| opt.unwrap()).collect();
+        let final_embeddings = results.into_iter().map(|opt| opt.ok_or_else(|| anyhow::anyhow!("Failed to generate embedding for all inputs"))).collect::<Result<Vec<_>>>()?;
         Ok(final_embeddings)
     }
 

@@ -80,7 +80,10 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         let decayed_util = util * (-age_days * ln2 / half_life_days).exp();
         rule.utility = Some(decayed_util as f32);
 
-        let id_raw = rule.id.as_ref().unwrap().split(':').nth(1).unwrap_or(rule.id.as_ref().unwrap()).to_string();
+        let id_raw = match rule.id.as_ref() {
+            Some(id) => id.split(':').nth(1).unwrap_or(id).to_string(),
+            None => continue,
+        };
         let _ = surreal_backend.db.query("UPDATE type::record('wisdom', $id) MERGE { utility: $utility };")
             .bind(("id", id_raw))
             .bind(("utility", decayed_util as f32))

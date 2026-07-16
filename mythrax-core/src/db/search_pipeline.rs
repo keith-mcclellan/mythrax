@@ -1509,7 +1509,7 @@ impl SurrealBackend {
                     _ => 200,
                 }
             };
-            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            let mut keyword_candidates = parse_results(keyword_resp_res.ok_or_else(|| anyhow::anyhow!("Hybrid search enabled but keyword response is missing"))?, false)?;
             keyword_candidates.truncate(fts_cap);
 
             // Stage 3: Parallel Vector / FTS (BM25) Retrieval & Fusion (Reciprocal Rank Fusion or Score Blending)
@@ -1738,8 +1738,11 @@ impl SurrealBackend {
                 let active_prefix = get_user_prefix(active_sess);
                 candidates.retain(|c| {
                     c.session_id.is_none() || {
-                        let sess = c.session_id.as_ref().unwrap();
-                        get_user_prefix(sess) == active_prefix
+                        if let Some(sess) = c.session_id.as_ref() {
+                            get_user_prefix(sess) == active_prefix
+                        } else {
+                            true
+                        }
                     }
                 });
             }

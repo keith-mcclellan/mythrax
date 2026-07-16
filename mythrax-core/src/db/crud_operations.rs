@@ -436,20 +436,22 @@ impl SurrealBackend {
 
         // 6. Relate temporal followed_by connections
         for rel in relations {
-            let from_uuid = rel.get("from_str").unwrap().as_str().unwrap();
-            let to_uuid = rel.get("to_str").unwrap().as_str().unwrap();
+            let from_uuid = rel.get("from_str").and_then(|v| v.as_str());
+            let to_uuid = rel.get("to_str").and_then(|v| v.as_str());
 
-            let from_thing = parse_record_id(&format!("episode:{}", from_uuid));
-            let to_thing = parse_record_id(&format!("episode:{}", to_uuid));
+            if let (Some(f), Some(t)) = (from_uuid, to_uuid) {
+                let from_thing = parse_record_id(&format!("episode:{}", f));
+                let to_thing = parse_record_id(&format!("episode:{}", t));
 
-            if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
-                let relate_query = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
-                if let Err(e) = self.db.query(relate_query)
-                    .bind(("from", from))
-                    .bind(("to", to))
-                    .await
-                {
-                    tracing::warn!("Failed to relate temporal followed_by in batch: {:?}", e);
+                if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
+                    let relate_query = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
+                    if let Err(e) = self.db.query(relate_query)
+                        .bind(("from", from))
+                        .bind(("to", to))
+                        .await
+                    {
+                        tracing::error!("Failed to temporal relate episodes in batch: {}", e);
+                    }
                 }
             }
         }
@@ -756,8 +758,8 @@ impl SurrealBackend {
             }
         }
 
-        let model = current_model.unwrap();
-        let cloud_provider = current_cloud_provider.unwrap();
+        let model = current_model.unwrap_or_else(|| "default_model".to_string());
+        let cloud_provider = current_cloud_provider.unwrap_or_else(|| "default_provider".to_string());
 
         let expires_at: Option<String> = None;
         let delay = req.llm_post_inference_delay_ms
