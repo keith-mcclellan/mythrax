@@ -275,11 +275,12 @@ impl DreamCoordinator {
 
         let mut candidates = Vec::new();
         if let Some(ref new_emb) = node.embedding {
+            // Bolt: Cache norm_u calculation outside the loop for performance
+            let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
             for existing in same_scope_nodes {
                 if let Some(ref ext_emb) = existing.embedding {
                     let sim = {
                         let dot: f32 = new_emb.iter().zip(ext_emb.iter()).map(|(a, b)| a * b).sum();
-                        let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         let norm_v: f32 = ext_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         if norm_u == 0.0 || norm_v == 0.0 {
                             0.0
@@ -1255,12 +1256,13 @@ impl DreamCoordinator {
                 }
 
                 // In-memory similarity fallbacks for testing / mocked environments where index is not dynamically built
+                let mut norm_u_opt: Option<f32> = None; // Bolt: cache norm_u for both loop fallbacks
                 if matches_wiki.is_empty() {
+                    let norm_u = *norm_u_opt.get_or_insert_with(|| cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt());
                     for other in &candidates {
                         if !other.is_procedural && other.scope != cand.scope {
                             let sim = {
                                 let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
-                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                                 let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
@@ -1287,11 +1289,11 @@ impl DreamCoordinator {
                 }
 
                 if matches_ep.is_empty() {
+                    let norm_u = *norm_u_opt.get_or_insert_with(|| cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt());
                     for other in &candidates {
                         if other.is_procedural && other.scope != cand.scope {
                             let sim = {
                                 let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
-                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                                 let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
