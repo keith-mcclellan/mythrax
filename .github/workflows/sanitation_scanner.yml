@@ -1,0 +1,53 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 10 # Need enough history for the last 5 commits comparison
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Run Sanitation Scanner
+        run: |
+          python3 scripts/sanitation_scanner.py --commits 5
+
+      - name: Comment on PR
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f sanitation_report.md ]; then
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              gh pr comment ${{ github.event.pull_request.number }} -F sanitation_report.md
+            else
+              # For push events, try to find an open PR for the branch
+              PR_NUM=$(gh pr list --head ${GITHUB_REF#refs/heads/} --state open --json number -q '.[0].number')
+              if [ -n "$PR_NUM" ] && [ "$PR_NUM" != "null" ]; then
+                gh pr comment $PR_NUM -F sanitation_report.md
+              else
+                echo "No open PR found for branch ${GITHUB_REF#refs/heads/}"
+              fi
+            fi
+          fi
