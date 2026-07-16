@@ -1,0 +1,4 @@
+## 2024-07-16 - Prevent SQL Injection via Table Name Interpolation in SurrealDB
+**Vulnerability:** A query used string interpolation to insert a table name directly into the SQL string (`format!("SELECT scope FROM {};", rec_id.table)`). This is a severe SQL injection vector because it directly parses the string instead of using bound parameters.
+**Learning:** In SurrealDB, while it's tempting to extract the table name from a parsed ID and insert it into a query string, the safest approach to select a specific record is to parameterize the entire query (e.g., `SELECT ... FROM $id`) and bind the fully qualified `surrealdb::types::RecordId` object to `$id`. Using interpolation bypasses the driver's native escaping mechanisms.
+**Prevention:** Avoid `format!()` for dynamic table names or record selection in SurrealDB queries. Always use `$param` binding in the query string and bind a typed `RecordId` directly.
