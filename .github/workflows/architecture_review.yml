@@ -1,0 +1,36 @@
+name: Red Team Architecture Review
+
+on:
+  schedule:
+    - cron: '0 0 */14 * *' # Bi-weekly
+  push:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+
+permissions:
+  pull-requests: write
+  contents: read
+  issues: write
+
+jobs:
+  red_team_review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Runner
+        run: |
+          echo "Setting up environment for Red Team analysis..."
+          # Mock step for executing agent
+
+      - name: Execute Red Team Analysis
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # In a real environment, this would run the adversarial agent to analyze code.
+          # The agent would produce issues using the format required:
+          # Finding -> Current Assumption -> Attack Scenario -> Blast Radius -> Recommended Structural Change
+          echo "Run Adversarial CTO Agent..."
