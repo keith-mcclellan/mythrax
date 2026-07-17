@@ -1,0 +1,3 @@
+## 2024-03-24 - Precomputing Vector Norms for High-Dimensional Embeddings
+**Learning:** Re-calculating the Euclidean norm of high-dimensional vectors (e.g., 1536d OpenAI embeddings) during inner loops (like scope comparisons and in-memory HNSW fallbacks) causes severe O(N^2) latency bottlenecks in `mythrax-core`. Standard `.iter().map(|x| x * x).sum::<f32>().sqrt()` calls must not be inside nested execution loops.
+**Action:** When working with embedding similarity or clustering logic, always hoist heavy vector norm computations outside the loops or precompute and lazily cache them in the relevant data structures (e.g., struct properties).
