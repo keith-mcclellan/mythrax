@@ -1,0 +1,4 @@
+## 2024-07-17 - SQL Injection via unvalidated Record ID in get_node_scope
+**Vulnerability:** A SQL injection vulnerability existed in `get_node_scope` because it constructed a SurrealDB query via `format!("SELECT scope FROM {};", rec_id.table)`. The `rec_id.table` value comes from an unvalidated split of the `id` string (e.g. `table_name:raw_id`).
+**Learning:** String interpolation for queries in SurrealDB is dangerous when derived from external inputs, even when seemingly innocuous fields like table names are constructed from `parse_record_id`.
+**Prevention:** When using SurrealDB in Rust, always select directly from a bound record ID (e.g., `SELECT ... FROM $id`) or parameterize dynamic table names using `type::table($param)` instead of string interpolation to prevent SQL injection vulnerabilities.

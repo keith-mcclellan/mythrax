@@ -1,0 +1,5 @@
+1. Modify `get_node_scope` in `mythrax-core/src/mcp_routes/manage_handlers.rs`.
+   - Update `format!("SELECT scope FROM {};", rec_id.table)` to `format!("SELECT scope FROM type::table($table);")`.
+   - Bind the parameter: `.bind(("table", rec_id.table.to_string()))`.
+   - Note: The memory states "When using SurrealDB in Rust, parameterize dynamic table names using `type::table($param)` instead of string interpolation (e.g., `format!()`) to prevent SQL injection vulnerabilities. To select a specific record by ID, use `SELECT ... FROM $id` and bind the `surrealdb::types::RecordId` directly."
+   - Wait, since we have the ID, we can just do `SELECT scope FROM $id` instead.

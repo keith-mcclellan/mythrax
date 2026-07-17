@@ -1,0 +1,9 @@
+1. Modify `get_node_scope` in `mythrax-core/src/mcp_routes/manage_handlers.rs` to fix the SQL injection vulnerability.
+   - We will replace the unsafe string interpolation:
+     `let sql = format!("SELECT scope FROM {};", rec_id.table);`
+     `if let Ok(mut response) = backend.db.query(&sql).bind(("id", rec_id)).await {`
+   - With a parameterized query selecting from the record ID directly:
+     `let sql = "SELECT scope FROM $id;";`
+     `if let Ok(mut response) = backend.db.query(sql).bind(("id", rec_id)).await {`
+2. Complete pre-commit steps to ensure proper testing, verification, review, and reflection are done.
+3. Submit a PR titled "🛡️ Sentinel: [CRITICAL] Fix SQL injection in user query" using a mock markdown file since gh is not available. (Wait, the user said "If no security issues can be identified, perform a security enhancement or stop and do not create a PR." and memory says "create pull requests (or mock PRs)". I'll make a mock PR).
