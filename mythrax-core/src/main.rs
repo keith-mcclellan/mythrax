@@ -899,6 +899,103 @@ async fn main() -> Result<()> {
             });
             execute_cli_tool_call("manage", payload).await?;
         }
+        Commands::PreInvocation => {
+            use std::io::Read;
+            let mut input_data = String::new();
+            let _ = std::io::stdin().read_to_string(&mut input_data);
+            let ctx: serde_json::Value = serde_json::from_str(&input_data).unwrap_or(serde_json::Value::Null);
+
+            let session_id = ctx.get("conversationId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("MYTHRAX_SESSION_ID").ok())
+                .unwrap_or_else(|| "general".to_string());
+
+            let workspace_path = ctx.get("workspacePaths")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|f| f.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("MYTHRAX_WORKSPACE_ROOT").ok())
+                .unwrap_or_else(|| ".".to_string());
+
+            let query = ctx.get("nextPrompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let home = std::env::var("HOME").context("HOME env var not set")?;
+            let token_path = std::path::PathBuf::from(&home).join(".mythrax").join("token");
+            let mut auth_token = String::new();
+            if token_path.exists() {
+                if let Ok(mut f) = std::fs::File::open(&token_path) {
+                    let _ = f.read_to_string(&mut auth_token);
+                    auth_token = auth_token.trim().to_string();
+                }
+            }
+            if let Ok(env_tok) = std::env::var("MYTHRAX_TOKEN") {
+                auth_token = env_tok;
+            } else if let Ok(env_tok) = std::env::var("MYTHRAX_DAEMON_TOKEN") {
+                auth_token = env_tok;
+            }
+
+            let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+            let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(1500))
+                .build()?;
+
+            let url = format!("{}/v1/mcp/call", daemon_url);
+            let payload = serde_json::json!({
+                "name": "manage",
+                "arguments": {
+                    "action": "pre_invocation",
+                    "session_id": session_id,
+                    "query": query,
+                    "workspace_path": workspace_path
+                }
+            });
+
+            let mut success = false;
+            let mut response_text = String::new();
+
+            if let Ok(resp) = client.post(&url)
+                .header("X-Mythrax-Token", &auth_token)
+                .json(&payload)
+                .send()
+                .await
+            {
+                if resp.status() == reqwest::StatusCode::OK {
+                    if let Ok(result_json) = resp.json::<serde_json::Value>().await {
+                        if let Some(text) = result_json.get("content")
+                            .and_then(|c| c.as_array())
+                            .and_then(|arr| arr.first())
+                            .and_then(|first| first.get("text"))
+                            .and_then(|t| t.as_str())
+                        {
+                            response_text = text.to_string();
+                            success = true;
+                        }
+                    }
+                }
+            }
+
+            if !success || response_text.is_empty() {
+                response_text = format!(
+                    "### ⛔ Known Failed Approaches\n- [Mythrax Pre-Invocation Hook Warning: SurrealDB Daemon offline. Memory retrieval and state synchronization skipped.]\n\n### ⚠️ Known Knowledge Boundaries / Conflicts\n- [Mythrax Pre-Invocation Hook Warning: SurrealDB Daemon offline. Memory retrieval and state synchronization skipped.]"
+                );
+            }
+
+            let out_json = serde_json::json!({
+                "injectSteps": [
+                    {
+                        "ephemeralMessage": response_text
+                    }
+                ]
+            });
+
+            println!("{}", serde_json::to_string_pretty(&out_json)?);
+        }
         Commands::Ingest { source, harness, scope, batch_size } => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");

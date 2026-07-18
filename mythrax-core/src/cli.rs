@@ -96,6 +96,8 @@ pub enum Commands {
         #[arg(long, default_value_t = 50)]
         batch_size: usize,
     },
+    /// Run the pre-invocation hook (reads stdin, queries daemon, prints stdout)
+    PreInvocation,
 }
 
 #[derive(Subcommand, Debug, Clone)]
