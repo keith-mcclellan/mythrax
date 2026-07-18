@@ -77,8 +77,8 @@ Granular legacy tools are consolidated into 4 action-based tools to reduce conte
   - *Parameters*: `scope: String`, `chunks: Vec<Value>`
   - *Usage*: Internal compactor pipeline writes.
 - **`ingest_bulk`**: Bulk ingest directories or files.
-  - *Parameters*: `paths: Vec<String>`, `scope: String`
-  - *Usage*: Use to index new vault or code directories.
+  - *Parameters*: `paths: Vec<String>`, `scope: String`, `limit: Option<u32>`, `offset: Option<u32>`
+  - *Usage*: Use to index new vault or code directories incrementally in chronological batches.
 - **`ingest_forge`**: Ingest candidate wisdom rules.
   - *Parameters*: `path: String`, `scope: String`
   - *Usage*: Use to graduate rules.
@@ -107,7 +107,7 @@ Granular legacy tools are consolidated into 4 action-based tools to reduce conte
   - *Usage*: Use to regenerate embeddings and re-chunk files.
 - **`summarize_vault`**: Trigger compactions.
   - *Parameters*: `scope: String`
-  - *Usage*: Use to manually start background dreaming loops.
+  - *Usage*: Use to manually start background dreaming loops. *CAUTION*: On macOS, to prevent Metal GPU Hang/Timeout crashes, always call this synchronously and sequentially (one scope at a time) rather than concurrently.
 - **`audit_compliance`**: Scan codebase against rules.
   - *Parameters*: `files: Vec<String>`
   - *Usage*: Use to identify compliance violations.

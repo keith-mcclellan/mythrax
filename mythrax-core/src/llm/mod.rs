@@ -42,7 +42,7 @@ pub fn metal_inference_semaphore() -> &'static Semaphore {
 }
 
 pub fn metal_embedding_semaphore() -> &'static Semaphore {
-    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(50))
+    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
 #[derive(Clone)]
@@ -118,7 +118,11 @@ impl LLMClient {
                     
                     if surreal_backend.create_cognitive_task(&task).await.is_ok() {
                         let start = std::time::Instant::now();
-                        let timeout = std::time::Duration::from_secs(60);
+                        let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
+                            .ok()
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(60);
+                        let timeout = std::time::Duration::from_secs(timeout_secs);
                         while start.elapsed() < timeout {
                             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                             if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
@@ -130,6 +134,17 @@ impl LLMClient {
                             }
                         }
                         tracing::warn!("Cognitive callback for cloud model timed out, falling back to direct API / local model");
+                        let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                            || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                        if disable_fallback {
+                            anyhow::bail!("Cognitive callback for cloud model timed out and fallbacks are disabled");
+                        }
+                    } else {
+                        let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                            || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                        if disable_fallback {
+                            anyhow::bail!("Failed to create cognitive task and fallbacks are disabled");
+                        }
                     }
                 }
             }
@@ -219,6 +234,8 @@ impl LLMClient {
                     return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
                 } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {
                     return Ok(r#"{"contradicts": true, "conflicting_field": "database", "resolution": "We should use SurrealDB for the database because Postgres was deprecated.", "confidence": 0.95}"#.to_string());
+                } else if prompt.contains("Please merge and generalize these two similar rules") {
+                    return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test"}"#.to_string());
                 } else if prompt.contains("knowledge generalizer") || prompt.contains("emerged independently") {
                     return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test", "confidence": 0.95}"#.to_string());
                 } else {
@@ -416,6 +433,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
         parent_hypothesis: &str,
         target_files: &[(String, String)],
         constraints: &[String],
+        stm_anchors: &[String],
     ) -> Result<String> {
         let mut files_context = String::new();
         for (path, content) in target_files {
@@ -456,10 +474,18 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             }
         }
 
+        let mut stm_injection = String::new();
+        if !stm_anchors.is_empty() {
+            stm_injection.push_str("\n\nActive Short Term Memory (STM) anchors to guide your ideation:\n");
+            for anchor in stm_anchors {
+                stm_injection.push_str(&format!("- {}\n", anchor));
+            }
+        }
+
         let prompt = format!(
             "You are an autonomous codebase researcher. We are modifying the following files:\n\n\
              {}\n\
-             {}\n\
+             {}{}\n\
              Based on the parent hypothesis: \"{}\", propose two alternative refinements.\n\
              For each refinement, suggest sequential node_id (e.g. \"1\", \"2\"), description, expected utility score (0.0 to 100.0), and a 'code_changes' map containing relative file paths to their COMPLETE updated file contents.\n\n\
              Return a JSON array of objects with exactly this structure:\n\
@@ -474,12 +500,12 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                }}\n\
              ]\n\n\
              Output format MUST be a raw JSON array only, without any markdown formatting or code block wrapping.",
-            files_context, constraints_injection, parent_hypothesis
+            files_context, constraints_injection, stm_injection, parent_hypothesis
         );
 
         let system_prompt = format!(
-            "You are an ideation assistant that outputs raw JSON arrays.{}{}",
-            wisdom_injection, constraints_injection
+            "You are an ideation assistant that outputs raw JSON arrays.{}{}{}",
+            wisdom_injection, constraints_injection, stm_injection
         );
 
         self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(&system_prompt), &prompt).await
@@ -1268,7 +1294,7 @@ fn is_repetition_failure(text: &str) -> bool {
     let mut consecutive = 1;
     let mut prev = ' ';
     for &c in &chars {
-        if c == prev && !c.is_whitespace() {
+        if c == prev && !c.is_whitespace() && c.is_alphanumeric() {
             consecutive += 1;
             if consecutive >= 15 {
                 return true;

@@ -97,6 +97,7 @@ pub trait StorageBackend: Send + Sync {
     async fn get_profile_key(&self, key: &str) -> Result<Option<String>>;
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
+    async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()>;
     async fn relate_nodes(
         &self,
         from_id: &str,
@@ -179,6 +180,7 @@ pub struct SurrealBackend {
     pub search_mode: Arc<tokio::sync::Mutex<String>>,
     pub reranker: Arc<tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>>>,
     pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(crate) blackboard_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
 }
 
 impl SurrealBackend {
@@ -513,6 +515,7 @@ impl SurrealBackend {
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
             reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            blackboard_tx: std::sync::OnceLock::new(),
         };
         let _ = GLOBAL_BACKEND.set(Arc::new(backend.clone()));
         Ok(backend)
@@ -535,11 +538,18 @@ impl SurrealBackend {
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
             reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            blackboard_tx: std::sync::OnceLock::new(),
         }
     }
 
     pub fn is_client_mode(&self) -> bool {
         self.client_port.is_some()
+    }
+
+    pub fn set_blackboard_sender(&self, tx: tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>) {
+        if let Err(_) = self.blackboard_tx.set(tx) {
+            tracing::warn!("blackboard_tx already initialized");
+        }
     }
 
     pub async fn set_search_mode(&self, mode: &str) {
@@ -896,6 +906,7 @@ pub(crate) struct WisdomRaw {
     pub(crate) embedding: Option<Vec<f32>>,
     pub(crate) source_episodes: Option<Vec<String>>,
     pub(crate) generator_name: String,
+    pub(crate) similarity: Option<f32>,
     pub(crate) utility: Option<f32>,
     pub(crate) status: Option<String>,
     pub(crate) superseded_at: Option<String>,
@@ -921,7 +932,7 @@ impl WisdomRaw {
             embedding: self.embedding,
             source_episodes: self.source_episodes.unwrap_or_default(),
             generator_name: self.generator_name,
-            similarity: None,
+            similarity: self.similarity,
             utility: self.utility,
             status: self.status,
             superseded_at: self.superseded_at,
@@ -1387,7 +1398,32 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String> {
-        self.save_wiki_node_db(node).await
+        if let Some(tx) = self.blackboard_tx.get() {
+            let (respond_to, rx) = tokio::sync::oneshot::channel();
+            tx.send(crate::db::blackboard::EventMessage {
+                event: crate::db::blackboard::WikiNodeEvent::Insert(node.clone()),
+                respond_to,
+            }).await.map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
+            rx.await?
+        } else {
+            self.save_wiki_node_db(node).await
+        }
+    }
+
+    async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()> {
+        if let Some(tx) = self.blackboard_tx.get() {
+            let (respond_to, rx) = tokio::sync::oneshot::channel();
+            tx.send(crate::db::blackboard::EventMessage {
+                event: crate::db::blackboard::WikiNodeEvent::Delete {
+                    name: name.to_string(),
+                    scope: scope.to_string(),
+                },
+                respond_to,
+            }).await.map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
+            rx.await?.map(|_| ())
+        } else {
+            self.delete_wiki_node_db(name, scope).await
+        }
     }
 
     async fn relate_nodes(
@@ -1516,7 +1552,21 @@ impl StorageBackend for SurrealBackend {
             if let Some(ref emp) = embedder {
                 emp.embed(&text_str)
             } else {
-                anyhow::bail!("No embedder configured")
+                if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = DefaultHasher::new();
+                    text_str.hash(&mut hasher);
+                    let seed = hasher.finish();
+                    let mut vec = vec![0.0; 768];
+                    for i in 0..768 {
+                        let val = (((seed ^ (i as u64)) % 1000) as f32 / 5000.0) - 0.1;
+                        vec[i] = val;
+                    }
+                    Ok(vec)
+                } else {
+                    anyhow::bail!("No embedder configured")
+                }
             }
         }).await?;
 
@@ -1564,18 +1614,23 @@ impl StorageBackend for SurrealBackend {
                 if let Some(ref emp) = embedder {
                     emp.embed_batch(&missing_texts_clone)
                 } else {
-                    let is_mock = {
-                        #[cfg(any(test, debug_assertions))]
-                        {
-                            std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
-                        }
-                        #[cfg(not(any(test, debug_assertions)))]
-                        {
-                            false
-                        }
-                    };
+                    let is_mock = std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok();
                     if is_mock {
-                        Ok(vec![vec![0.0f32; 768]; missing_texts_clone.len()])
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut batch_res = Vec::new();
+                        for text in &missing_texts_clone {
+                            let mut hasher = DefaultHasher::new();
+                            text.hash(&mut hasher);
+                            let seed = hasher.finish();
+                            let mut vec = vec![0.0; 768];
+                            for i in 0..768 {
+                                let val = (((seed ^ (i as u64)) % 1000) as f32 / 5000.0) - 0.1;
+                                vec[i] = val;
+                            }
+                            batch_res.push(vec);
+                        }
+                        Ok(batch_res)
                     } else {
                         Err(anyhow::anyhow!("No embedding model loaded"))
                     }
@@ -3039,6 +3094,26 @@ mod tests {
 
         let ep3_found = results.iter().any(|ep| ep.id == ep3_id);
         assert!(!ep3_found, "Episode 3 from different session must not be returned");
+    }
+
+    #[tokio::test]
+    async fn test_schema_migration() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let check_sql = "INFO FOR TABLE wisdom;";
+        let mut response = backend.db.query(check_sql).await.unwrap();
+        let info_opt: Option<serde_json::Value> = response.take(0).unwrap();
+        let info_str = info_opt.unwrap().to_string();
+        
+        assert!(info_str.contains("HNSW DIMENSION 768"));
+        
+        let check_sql = "INFO FOR TABLE episode;";
+        let mut response = backend.db.query(check_sql).await.unwrap();
+        let info_opt: Option<serde_json::Value> = response.take(0).unwrap();
+        let info_str = info_opt.unwrap().to_string();
+        
+        assert!(info_str.contains("HNSW DIMENSION 768"));
     }
 }
 

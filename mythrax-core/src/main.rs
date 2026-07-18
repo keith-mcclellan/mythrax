@@ -2,7 +2,7 @@
 #![recursion_limit = "512"]
 
 use mythrax_core::{
-    cli, db, daemon, mcp, vault,
+    cli, db, daemon, mcp,
 };
 
 use clap::Parser;
@@ -454,7 +454,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { harness, source, non_interactive } => {
+        Commands::Init { harness, source: _, non_interactive } => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             
@@ -591,14 +591,14 @@ async fn main() -> Result<()> {
 
             // Configure harness if provided
             if let Some(ref h) = harness_to_use {
-                config_harness_action(h, source, &vault_root, &backend).await?;
+                config_harness_action(h, &vault_root).await?;
             }
 
             // Ingest core documentation (WikiNodes)
             println!("Pre-ingesting core documentation memories...");
             
             let arch_body = format!(
-                "---\nname: \"Mythrax Architecture Spec\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
+                "---\nname: \"Mythrax Architecture Spec\"\nscope: \"mythrax\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
                 ARCHITECTURE_DOC
             );
             let arch_rel = "wiki/mythrax/raw/architecture.md";
@@ -607,14 +607,14 @@ async fn main() -> Result<()> {
                 id: None,
                 name: "Mythrax Architecture Spec".to_string(),
                 content: mythrax_core::vault::markdown::extract_plain_text(ARCHITECTURE_DOC).to_string(),
-                scope: "general".to_string(),
+                scope: "mythrax".to_string(),
                 vault_path: Some(arch_rel.to_string()),
                 embedding: None,
             };
             backend.save_wiki_node(&arch_node).await?;
 
             let user_guide_body = format!(
-                "---\nname: \"Mythrax User Guide\"\nscope: \"general\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
+                "---\nname: \"Mythrax User Guide\"\nscope: \"mythrax\"\ngenerator_name: \"PreIngested\"\n---\n\n{}",
                 USER_GUIDE_DOC
             );
             let user_guide_rel = "wiki/mythrax/raw/user_guide.md";
@@ -623,7 +623,7 @@ async fn main() -> Result<()> {
                 id: None,
                 name: "Mythrax User Guide".to_string(),
                 content: mythrax_core::vault::markdown::extract_plain_text(USER_GUIDE_DOC).to_string(),
-                scope: "general".to_string(),
+                scope: "mythrax".to_string(),
                 vault_path: Some(user_guide_rel.to_string()),
                 embedding: None,
             };
@@ -636,7 +636,7 @@ async fn main() -> Result<()> {
                 id: None,
                 name: "mythrax".to_string(),
                 content: mythrax_core::vault::markdown::extract_plain_text(&skill_body).to_string(),
-                scope: "general".to_string(),
+                scope: "mythrax".to_string(),
                 vault_path: Some(skill_rel.to_string()),
                 embedding: None,
             };
@@ -899,6 +899,71 @@ async fn main() -> Result<()> {
             });
             execute_cli_tool_call("manage", payload).await?;
         }
+        Commands::Ingest { source, harness, scope, batch_size } => {
+            let home = std::env::var("HOME").context("HOME env var not set")?;
+            let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");
+            let token_path = mythrax_dir.join("token");
+            let auth_token = mythrax_core::auth::get_or_create_token(&token_path)?;
+
+            let daemon_port = std::env::var("MYTHRAX_DAEMON_PORT").unwrap_or_else(|_| "8090".to_string());
+            let daemon_url = format!("http://127.0.0.1:{}", daemon_port);
+            
+            ensure_daemon_active_for_cli(&auth_token, &daemon_url).await?;
+            
+            let client = reqwest::Client::new();
+            let url = format!("{}/v1/mcp/call", daemon_url);
+            
+            let mut offset = 0;
+            loop {
+                println!("Ingesting batch (offset: {}, limit: {})...", offset, batch_size);
+                let payload = serde_json::json!({
+                    "name": "manage",
+                    "arguments": {
+                        "action": "ingest_bulk",
+                        "source": source,
+                        "harness": harness,
+                        "scope": scope,
+                        "offset": offset,
+                        "limit": batch_size,
+                        "async_mode": false
+                    }
+                });
+                
+                let resp = client.post(&url)
+                    .header("X-Mythrax-Token", &auth_token)
+                    .json(&payload)
+                    .send()
+                    .await
+                    .context("Failed to forward Ingest command to daemon")?;
+                
+                if resp.status() != reqwest::StatusCode::OK {
+                    let err_text = resp.text().await.unwrap_or_default();
+                    anyhow::bail!("Daemon returned error executing Ingest batch: {}", err_text);
+                }
+                
+                let result_json: serde_json::Value = resp.json().await.context("Failed to parse Ingest response")?;
+                
+                if let Some(text) = result_json.get("content")
+                    .and_then(|c| c.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|first| first.get("text"))
+                    .and_then(|t| t.as_str()) 
+                {
+                    println!("{}", text);
+                }
+                
+                let has_more = result_json.get("has_more")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                
+                if !has_more {
+                    println!("Ingestion complete.");
+                    break;
+                }
+                
+                offset += batch_size;
+            }
+        }
     }
 
     Ok(())
@@ -1065,56 +1130,9 @@ fn merge_toml_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_default_history(harness: &str) -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    let path = match harness {
-        "antigravity" => PathBuf::from(&home).join(".gemini/antigravity/brain/"),
-        "claude" => PathBuf::from(&home).join(".claude/projects/"),
-        "cursor" => {
-            #[cfg(target_os = "macos")]
-            {
-                PathBuf::from(&home).join("Library/Application Support/Cursor/User/globalStorage/")
-            }
-            #[cfg(target_os = "linux")]
-            {
-                PathBuf::from(&home).join(".config/Cursor/User/globalStorage/")
-            }
-            #[cfg(target_os = "windows")]
-            {
-                if let Ok(appdata) = std::env::var("APPDATA") {
-                    PathBuf::from(&appdata).join("Cursor/User/globalStorage/")
-                } else {
-                    return None;
-                }
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-            return None;
-        }
-        "codex" => {
-            let p1 = PathBuf::from(&home).join(".codex/history/");
-            if p1.exists() {
-                p1
-            } else {
-                PathBuf::from(&home).join(".codex/logs/")
-            }
-        }
-        "opencode" => PathBuf::from(&home).join(".opencode/sessions/"),
-        "openclaw" => PathBuf::from(&home).join(".openclaw/history/"),
-        "hermes" => PathBuf::from(&home).join(".hermes/"),
-        _ => return None,
-    };
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
-}
-
 async fn config_harness_action(
     harness: &str,
-    source: Option<String>,
-    vault_root: &std::path::Path,
-    backend: &SurrealBackend,
+    _vault_root: &std::path::Path,
 ) -> Result<()> {
     let home = std::env::var("HOME").context("HOME env var not set")?;
     let exe_path = std::env::current_exe()?.to_string_lossy().to_string();
@@ -1187,43 +1205,6 @@ async fn config_harness_action(
     }
     
     println!("Configured MCP server and settings for harness: {}", harness);
-    
-    let history_path = if let Some(ref s) = source {
-        let p = std::path::PathBuf::from(s);
-        if p.exists() {
-            Some(p)
-        } else {
-            println!("WARNING: Provided source path {:?} does not exist. Skipping ingestion.", p);
-            None
-        }
-    } else {
-        resolve_default_history(harness)
-    };
-    
-    if let Some(path) = history_path {
-        println!("Auto-discovered/provided history source found at: {:?}", path);
-        println!("Running bulk ingestion of historical transcripts...");
-        match vault::ingestion::bulk_ingest_vault(
-            vault_root,
-            &path,
-            harness,
-            "general",
-            backend,
-        ).await {
-            Ok((count, errs)) => {
-                println!("Ingested {} episodes successfully.", count);
-                if !errs.is_empty() {
-                    println!("Warnings/Errors during ingestion: {:?}", errs);
-                }
-            }
-            Err(e) => {
-                println!("WARNING: History ingestion failed: {:?}", e);
-            }
-        }
-    } else {
-        println!("No pre-existing history source resolved or provided. Skipping initial ingestion.");
-    }
-    
     Ok(())
 }
 

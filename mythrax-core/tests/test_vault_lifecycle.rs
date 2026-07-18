@@ -94,12 +94,14 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     fs::write(logs_dir.join("transcript.jsonl"), transcript_content)?;
 
     // Run bulk ingestion for Antigravity
-    let (count, errors) = bulk_ingest_vault(
+    let (count, errors, _has_more) = bulk_ingest_vault(
         &vault_root,
         &source_dir,
         "antigravity",
         "antigravity-scope",
-        &backend
+        &backend,
+        None,
+        None,
     ).await?;
 
     assert_eq!(count, 1);
@@ -283,12 +285,14 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     fs::write(session_dir.join("implementation_plan.md"), "Plan artifact content")?;
 
     // Run bulk ingestion
-    let (count, errors) = bulk_ingest_vault(
+    let (count, errors, _has_more) = bulk_ingest_vault(
         &vault_root,
         &source_dir,
         "antigravity",
         "testing-linking-scope",
-        &backend
+        &backend,
+        None,
+        None,
     ).await?;
 
     // We ingested 8 episode parts + 1 parent index + 2 artifacts = 11 success counts
@@ -369,12 +373,14 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     fs::write(session_dir.join("large_plan.md"), &large_artifact)?;
 
     // Run bulk ingestion
-    let (count, errors) = bulk_ingest_vault(
+    let (count, errors, _has_more) = bulk_ingest_vault(
         &vault_root,
         &source_dir,
         "antigravity",
         "testing-art-chunking-scope",
-        &backend
+        &backend,
+        None,
+        None,
     ).await?;
 
     // We ingested 1 episode part + 3 artifact parts = 4 success counts

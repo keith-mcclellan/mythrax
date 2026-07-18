@@ -58,13 +58,13 @@ async fn test_zero_touch_correction_and_critic_extraction() -> Result<()> {
     mythrax_core::mcp::run_llm_critic(backend.clone(), store.clone(), "Wait, that was a mistake! You forgot to run the tests first.".to_string(), Some("test-project".to_string())).await?;
 
     // Verify wisdom rule was written to dynamic wisdom directory
-    let wisdom_dynamic_dir = vault_root.join("wisdom/dynamic");
+    let wisdom_dynamic_dir = vault_root.join("wisdom/dynamic/test-project");
     let entries = fs::read_dir(&wisdom_dynamic_dir)?;
     let mut files = Vec::new();
     for entry in entries.flatten() {
         files.push(entry.file_name());
     }
-    assert!(!files.is_empty(), "LLM Critic should have saved a wisdom rule file under wisdom/dynamic/");
+    assert!(!files.is_empty(), "LLM Critic should have saved a wisdom rule file under wisdom/dynamic/test-project/");
 
     // Verify registered in SurrealDB with utility = 50.0 and active project scope
     let all_rules = backend.get_all_wisdom_rules().await?;

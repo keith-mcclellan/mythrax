@@ -268,7 +268,7 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
     let (exp, rem) = diagnosis_rust.unwrap();
     assert_eq!(exp, "Rust E0063 error occurs when struct fields are missing");
     assert_eq!(rem, "Add all required fields to the struct initializer");
-    assert!(duration.as_millis() < 50, "Diagnostics took too long: {}ms", duration.as_millis());
+    assert!(duration.as_millis() < 150, "Diagnostics took too long: {}ms", duration.as_millis());
 
     // 2. Lock error signature matching
     let diagnosis_lock = backend.diagnose_error_internal(

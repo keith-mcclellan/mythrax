@@ -253,6 +253,39 @@ async fn test_cognitive_callback_validation() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn test_cognitive_fallback_disabled() -> anyhow::Result<()> {
+    setup_env_vars();
+    let _temp_dir = tempdir()?;
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+    let llm = mythrax_core::llm::LLMClient::new();
+    let profile = mythrax_core::contracts::TaskProfile::new(mythrax_core::contracts::TaskArchetype::Reasoning);
+
+    unsafe {
+        std::env::set_var("MYTHRAX_DISABLE_FALLBACK", "true");
+        std::env::set_var("MYTHRAX_TEST_TIMEOUT_SECS", "0");
+        std::env::remove_var("MYTHRAX_TEST_MOCK");
+    }
+
+    let res = llm.routed_completion(&backend, &profile, None, "test prompt").await;
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_DISABLE_FALLBACK");
+        std::env::remove_var("MYTHRAX_TEST_TIMEOUT_SECS");
+        std::env::set_var("MYTHRAX_TEST_MOCK", "1");
+    }
+
+    assert!(res.is_err(), "Completion must fail when fallback is disabled");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Cognitive callback for cloud model timed out and fallbacks are disabled"),
+        "Unexpected error: {}", err_msg
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_pipeline_state_serialization() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;

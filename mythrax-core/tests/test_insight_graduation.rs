@@ -70,10 +70,13 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
 
     // Enable cross-scope graduation and run dream
     backend.save_profile_key("compactor.enable_cross_scope_graduation", "true").await?;
+    println!("DEBUG - ALL WIKI NODES IN DB: {:#?}", backend.get_all_wiki_nodes().await?);
     coordinator.run_dream(&backend, &store, None, None).await?;
 
     // Verify a general scope WisdomRule has been created in DB
     let all_rules = backend.get_all_wisdom_rules().await?;
+    println!("DEBUG - ALL RULES IN DB: {:#?}", all_rules);
+    println!("DEBUG - SELECT * FROM wisdom: {:#?}", backend.db.query("SELECT * FROM wisdom;").await?.take::<Vec<serde_json::Value>>(0)?);
     let graduated_rule = all_rules.iter()
         .find(|r| r.scope == "general" && r.generator_name == "ScopeGraduator")
         .expect("Graduated WisdomRule should exist");

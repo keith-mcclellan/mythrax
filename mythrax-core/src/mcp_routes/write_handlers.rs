@@ -305,8 +305,7 @@ pub async fn run_llm_critic(
         std::env::var("MYTHRAX_ACTIVE_SCOPE").unwrap_or_else(|_| "general".to_string())
     });
 
-    let rule_uuid = uuid::Uuid::new_v4().to_string();
-    let rule_path = format!("wisdom/dynamic/wisdom_rule_{}.md", &rule_uuid[..8]);
+    let rule_path = crate::cognitive::synthesis::resolve_rule_path(&active_scope, &critic_wisdom.action_to_avoid);
 
     let rule_save = crate::contracts::WisdomRule {
         id: None,

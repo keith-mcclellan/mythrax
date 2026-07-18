@@ -6,6 +6,7 @@ pub mod forge_pipeline;
 pub mod search_pipeline;
 pub mod cognitive_tasks;
 pub mod graduation_pipeline;
+pub mod blackboard;
 
 pub use backend::{StorageBackend, SurrealBackend, GLOBAL_BACKEND, EpisodeRaw};
 pub use backend::parse_record_id;

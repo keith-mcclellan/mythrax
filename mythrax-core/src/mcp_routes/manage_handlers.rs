@@ -728,10 +728,47 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
     let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
     let caller = args.get("caller").and_then(|v| v.as_str());
-    
+
+    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+        .context("SurrealBackend required for pre_invocation_hook")?;
+
     if caller == Some("distiller") {
         let now_unix = chrono::Utc::now().timestamp();
         let _ = state.backend.save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string()).await;
+        let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(state).await;
+
+        let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
+        let mut selected_tasks = Vec::new();
+        let immediate_task = pending_tasks.iter().find(|t| t.priority == "Immediate");
+        if let Some(t) = immediate_task {
+            selected_tasks.push(t.clone());
+        } else {
+            for t in pending_tasks.iter().filter(|t| t.priority != "Immediate").take(3) {
+                selected_tasks.push(t.clone());
+            }
+        }
+
+        let mut callback_injection = String::new();
+        if !selected_tasks.is_empty() {
+            callback_injection.push_str("### 🧠 Pending Cognitive Callbacks\n");
+            for task in &selected_tasks {
+                callback_injection.push_str(&format!(
+                    "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
+                    task.id, task.task_type, task.prompt, task.system_instruction, task.expected_format, task.priority
+                ));
+                surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None).await?;
+            }
+            callback_injection.push('\n');
+        }
+
+        return Ok(json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": callback_injection
+                }
+            ]
+        }));
     }
     
     let mut total_discovery = 0u32;

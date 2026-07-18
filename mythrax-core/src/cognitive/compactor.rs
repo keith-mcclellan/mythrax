@@ -395,6 +395,23 @@ impl Compactor {
                 Err(_) => {}
             }
         }
+        // Clean up previous compactions for this scope to prevent duplicates
+        let compactions_dir = store.vault_root.join(format!("wiki/{}/compactions", scope));
+        if compactions_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&compactions_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().map(|s| s == "md").unwrap_or(false) {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let delete_query = "DELETE wiki_node WHERE scope = $scope AND (vault_path CONTAINS 'compactions/' OR name CONTAINS 'Compaction:');";
+            let _ = surreal_backend.db.query(delete_query).bind(("scope", scope)).await;
+        }
+
         let insights = load_insights(&store.vault_root);
         let scope_insights: Vec<_> = insights
             .into_iter()
@@ -503,8 +520,7 @@ impl Compactor {
 
             let first_title = member_insights.first().map(|(c, _)| c.title.as_str()).unwrap_or("compaction");
             let slug = first_title.to_lowercase().replace([' ', '/'], "_");
-            let uuid = uuid::Uuid::new_v4().to_string();
-            let relative_path = format!("wiki/{}/compactions/{}_{}.md", scope, slug, &uuid[..8]);
+            let relative_path = format!("wiki/{}/compactions/{}_cluster_{}.md", scope, slug, cluster_id);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
@@ -516,7 +532,17 @@ impl Compactor {
 
             file_content.push_str("\n\n## Component Insights\n");
             for (ins, _) in member_insights {
-                file_content.push_str(&format!("- [[{}]]\n", ins.title));
+                let link_target = if !ins.vault_path.is_empty() {
+                    let clean_vp = if ins.vault_path.ends_with(".md") {
+                        &ins.vault_path[..ins.vault_path.len() - 3]
+                    } else {
+                        &ins.vault_path
+                    };
+                    format!("{}|{}", clean_vp, ins.title)
+                } else {
+                    ins.title.clone()
+                };
+                file_content.push_str(&format!("- [[{}]]\n", link_target));
             }
 
             if !all_anchors.is_empty() {
@@ -569,8 +595,7 @@ impl Compactor {
                 }
             }
 
-            let uuid = uuid::Uuid::new_v4().to_string();
-            let relative_path = format!("wiki/{}/compactions/miscellaneous_{}.md", scope, &uuid[..8]);
+            let relative_path = format!("wiki/{}/compactions/miscellaneous.md", scope);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: \"miscellaneous\"\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
@@ -581,7 +606,17 @@ impl Compactor {
 
             file_content.push_str("\n\n## Component Insights\n");
             for (ins, _) in &outlier_insights {
-                file_content.push_str(&format!("- [[{}]]\n", ins.title));
+                let link_target = if !ins.vault_path.is_empty() {
+                    let clean_vp = if ins.vault_path.ends_with(".md") {
+                        &ins.vault_path[..ins.vault_path.len() - 3]
+                    } else {
+                        &ins.vault_path
+                    };
+                    format!("{}|{}", clean_vp, ins.title)
+                } else {
+                    ins.title.clone()
+                };
+                file_content.push_str(&format!("- [[{}]]\n", link_target));
             }
 
             if !all_anchors.is_empty() {
@@ -644,7 +679,24 @@ impl Compactor {
                 .bind(("threshold", threshold.to_rfc3339()))
                 .await;
         }
+        // Clean up previous global compactions to prevent duplication and circular aggregation
         let compaction_dir = store.vault_root.join("wiki/general/compactions");
+        if compaction_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&compaction_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let filename = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                    if filename.starts_with("global_compaction_") && path.extension().map(|s| s == "md").unwrap_or(false) {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let delete_query = "DELETE wiki_node WHERE scope = 'general' AND (vault_path CONTAINS 'global_compaction_' OR name = 'Global Systems Synthesis');";
+            let _ = surreal_backend.db.query(delete_query).await;
+        }
+
         if !compaction_dir.exists() {
             return Ok(());
         }
@@ -687,8 +739,7 @@ impl Compactor {
             }
         }
 
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let relative_path = format!("wiki/general/compactions/global_compaction_{}.md", &uuid[..8]);
+        let relative_path = "wiki/general/compactions/global_compaction.md".to_string();
         let mut file_content = format!(
             "---\ntype: \"global_compaction\"\n---\n\n# Global Systems Synthesis\n\n{}",
             global_summary
@@ -848,25 +899,33 @@ impl Compactor {
                     // 2. Generate high-level Raptor summary using the LLM
                     let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                     let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
-                    if let Ok(summary) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
-                        // 3. Save as wiki Raptor summary node
-                        let uuid = uuid::Uuid::new_v4().to_string();
-                        let wiki_rel = format!("wiki/general/compactions/raptor_summary_{}.md", &uuid[..8]);
-                        let wiki_content = format!(
-                            "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
-                            ep.title, ep.title, summary
-                        );
-                        let _ = store.write_file(&wiki_rel, &wiki_content);
+                    match self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
+                        Ok(summary) => {
+                            // 3. Save as wiki Raptor summary node
+                            let uuid = uuid::Uuid::new_v4().to_string();
+                            let resolved_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                            let archive_dir = store.vault_root.join(format!("wiki/{}/archive", resolved_scope));
+                            let _ = std::fs::create_dir_all(&archive_dir);
+                            let wiki_rel = format!("wiki/{}/archive/raptor_summary_{}.md", resolved_scope, &uuid[..8]);
+                            let wiki_content = format!(
+                                "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
+                                ep.title, ep.title, summary
+                            );
+                            let _ = store.write_file(&wiki_rel, &wiki_content);
 
-                        let node_contract = WikiNode {
-                            id: None,
-                            name: format!("Raptor Summary: {}", ep.title),
-                            content: summary,
-                            scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
-                            vault_path: Some(wiki_rel),
-                            embedding: None,
-                        };
-                        let _ = db.save_wiki_node(&node_contract).await;
+                            let node_contract = WikiNode {
+                                id: None,
+                                name: format!("Raptor Summary: {}", ep.title),
+                                content: summary,
+                                scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+                                vault_path: Some(wiki_rel),
+                                embedding: None,
+                            };
+                            let _ = db.save_wiki_node(&node_contract).await;
+                        }
+                        Err(e) => {
+                            eprintln!("COMPACTOR SUMMARY ERROR: {:?}", e);
+                        }
                     }
 
                     // 4. Demote the record in the database instead of deleting it (Epic 3)
@@ -944,7 +1003,7 @@ pub fn extract_attention_anchors(text: &str) -> (String, Vec<String>) {
     (clean_lines.join("\n"), anchors)
 }
 
-fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
+pub(crate) fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
     let mut anchors = Vec::new();
     let handoffs_dir = vault_root.join(".handoffs");
     if !handoffs_dir.exists() {

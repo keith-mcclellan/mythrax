@@ -32,6 +32,7 @@ impl ArborLlmClient for MockLLMClient {
         _parent_hypothesis: &str,
         _target_files: &[(String, String)],
         _constraints: &[String],
+        _stm_anchors: &[String],
     ) -> Result<String> {
         Ok(r#"[
             {

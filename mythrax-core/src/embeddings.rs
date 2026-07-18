@@ -383,7 +383,7 @@ impl LocalEmbedder {
         // Note: ort 2.0 uses session builder
         let session = ort::session::Session::builder()
             .map_err(|e| anyhow::anyhow!("Failed to create session builder: {}", e))?
-            .with_intra_threads(2)
+            .with_intra_threads(1)
             .map_err(|e| anyhow::anyhow!("Failed to set intra threads: {}", e))?
             .commit_from_file(&model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load ONNX model session: {}", e))?;

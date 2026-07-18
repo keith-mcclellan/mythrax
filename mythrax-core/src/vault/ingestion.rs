@@ -443,9 +443,12 @@ pub async fn bulk_ingest_vault(
     harness_type: &str,
     scope: &str,
     db: &dyn StorageBackend,
-) -> Result<(usize, Vec<String>)> {
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<(usize, Vec<String>, bool)> {
     let mut success_count = 0;
     let mut errors = Vec::new();
+    let mut has_more = false;
 
     let store = MarkdownStore::new(vault_root)?;
 
@@ -523,16 +526,22 @@ pub async fn bulk_ingest_vault(
             }
 
             dirs_with_time.sort_by_key(|d| d.1);
-            let dirs: Vec<std::path::PathBuf> = dirs_with_time.into_iter().map(|d| d.0).collect();
+            let total_dirs = dirs_with_time.len();
+            let start = offset.unwrap_or(0);
+            let count = limit.unwrap_or(total_dirs);
+            let end = (start + count).min(total_dirs);
+            has_more = end < total_dirs;
 
-            let total_dirs = dirs.len();
+            let dirs: Vec<std::path::PathBuf> = dirs_with_time[start..end].iter().map(|d| d.0.clone()).collect();
+
             let mut last_episode_id: Option<String> = None;
             for (index, path) in dirs.into_iter().enumerate() {
+                let current_index = start + index;
                 let dir_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 let title = format!("antigravity_{}", dir_name);
                 let part1_title = format!("{}_part1", title);
                 if existing_titles.contains(&title) || existing_titles.contains(&part1_title) {
-                    tracing::info!("processing episode {} of {} complete (skipped - already exists)", index + 1, total_dirs);
+                    tracing::info!("processing episode {} of {} complete (skipped - already exists)", current_index + 1, total_dirs);
                     continue;
                 }
 
@@ -836,7 +845,7 @@ pub async fn bulk_ingest_vault(
                 }
 
                 // Log a clean progress message at INFO level
-                tracing::info!("processing episode {} of {} complete", index + 1, total_dirs);
+                tracing::info!("processing episode {} of {} complete", current_index + 1, total_dirs);
             }
         }
         "claude" => {
@@ -883,7 +892,7 @@ pub async fn bulk_ingest_vault(
             if db_path.exists() {
                 let title = "cursor_chat".to_string();
                 if existing_titles.contains(&title) {
-                    return Ok((0, vec![]));
+                    return Ok((0, vec![], false));
                 }
                 match ingest_cursor(&db_path) {
                     Ok(content) => {
@@ -1038,7 +1047,7 @@ pub async fn bulk_ingest_vault(
             if db_path.exists() {
                 let title = "hermes_chat".to_string();
                 if existing_titles.contains(&title) {
-                    return Ok((0, vec![]));
+                    return Ok((0, vec![], false));
                 }
                 match ingest_hermes(&db_path) {
                     Ok(content) => {
@@ -1148,7 +1157,7 @@ pub async fn bulk_ingest_vault(
         other => anyhow::bail!("Unsupported harness type: {}", other),
     }
 
-    Ok((success_count, errors))
+    Ok((success_count, errors, has_more))
 }
 
 fn split_by_page_breaks(text: &str) -> Vec<String> {

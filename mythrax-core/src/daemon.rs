@@ -17,6 +17,20 @@ use crate::vault;
 pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
     match action {
         DaemonAction::Start { port, vault } | DaemonAction::Run { port, vault } => {
+            #[cfg(unix)]
+            {
+                if let Ok((soft, hard)) = rlimit::getrlimit(rlimit::Resource::NOFILE) {
+                    if soft < 1024 {
+                        let new_soft = if hard >= 1024 { 1024 } else { hard };
+                        if let Err(e) = rlimit::setrlimit(rlimit::Resource::NOFILE, new_soft, hard) {
+                            tracing::warn!("Failed to set RLIMIT_NOFILE soft limit to {}: {:?}", new_soft, e);
+                        } else {
+                            tracing::info!("Successfully increased RLIMIT_NOFILE soft limit to {}", new_soft);
+                        }
+                    }
+                }
+            }
+
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = PathBuf::from(&home).join(".mythrax");
             let config_path = mythrax_dir.join("config.json");
@@ -45,7 +59,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                         None
                     }
                 })
-                .unwrap_or_else(|| format!("surrealkv://{}/.mythrax/db", home));
+                .unwrap_or_else(|| format!("surrealkv://{}/.mythrax/db.nosync", home));
 
             println!("Starting Mythrax Core Daemon...");
             println!("Vault root: {:?}", vault_path);
@@ -62,6 +76,14 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 // Initialize storage backend
                 let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
                 backend.init().await?;
+
+                // Initialize Bounded MPSC Blackboard channel
+                let (blackboard_tx, blackboard_rx) = tokio::sync::mpsc::channel(1000);
+                backend.set_blackboard_sender(blackboard_tx.clone());
+
+                // Spawn MaterializerActor loop as a background Tokio task
+                let blackboard_actor = crate::db::blackboard::MaterializerActor::new(backend.clone(), blackboard_rx);
+                let blackboard_handle = tokio::spawn(blackboard_actor.run());
 
                 // Initialize Model Broker and set globalOnceLock
                 if let Ok(broker) = crate::llm::DynamicModelBroker::new(mythrax_dir.join("models")).await {
@@ -327,8 +349,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 // Build router and start Axum listener
                 let app = api::create_router(state);
                 let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-                
-                let listener = tokio::net::TcpListener::bind(&addr).await?;
+                let bind_addr = if addr.is_ipv6() {
+                    std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port))
+                } else {
+                    std::net::SocketAddr::from(([127, 0, 0, 1], port))
+                };
+                let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
                 let pid_path_clone = pid_path.clone();
                 
                 #[cfg(unix)]
@@ -347,14 +373,6 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     }
                     _ = shutdown_rx.recv() => {
                         tracing::info!("Shutdown channel triggered. Initiating graceful shutdown...");
-                        let shutdown_sequence = async {
-                            run_shutdown(pid_path_clone).await;
-                        };
-                        if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(5), shutdown_sequence).await {
-                            tracing::warn!("Graceful shutdown timed out after 5 seconds.");
-                            let _ = std::fs::remove_file(&pid_path);
-                        }
-                        tracing::info!("Shutdown complete.");
                     }
                     _ = async {
                         #[cfg(unix)]
@@ -367,14 +385,6 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                         }
                     } => {
                          tracing::info!("SIGINT received. Initiating graceful shutdown...");
-                         let shutdown_sequence = async {
-                             run_shutdown(pid_path_clone).await;
-                         };
-                         if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(5), shutdown_sequence).await {
-                             tracing::warn!("Graceful shutdown timed out after 5 seconds.");
-                             let _ = std::fs::remove_file(&pid_path);
-                         }
-                         tracing::info!("Shutdown complete.");
                     }
                     _ = async {
                         #[cfg(unix)]
@@ -387,16 +397,29 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                         }
                     } => {
                         tracing::info!("SIGTERM received. Initiating graceful shutdown...");
-                        let shutdown_sequence = async {
-                            run_shutdown(pid_path_clone).await;
-                        };
-                        if let Err(_) = tokio::time::timeout(tokio::time::Duration::from_secs(5), shutdown_sequence).await {
-                            tracing::warn!("Graceful shutdown timed out after 5 seconds.");
-                            let _ = std::fs::remove_file(&pid_path);
-                        }
-                        tracing::info!("Shutdown complete.");
                     }
                 }
+
+                let shutdown_sequence = async {
+                    tracing::info!("Sending Shutdown event to blackboard actor...");
+                    let (respond_to, rx) = tokio::sync::oneshot::channel();
+                    if let Ok(_) = blackboard_tx.send(crate::db::blackboard::EventMessage {
+                        event: crate::db::blackboard::WikiNodeEvent::Shutdown,
+                        respond_to,
+                    }).await {
+                        let _ = rx.await;
+                    }
+                    tracing::info!("Waiting for blackboard actor to finish...");
+                    if let Err(_) = tokio::time::timeout(std::time::Duration::from_secs(5), blackboard_handle).await {
+                        tracing::warn!("Waiting for blackboard actor to finish timed out.");
+                    }
+                    run_shutdown(pid_path_clone).await;
+                };
+                if let Err(_) = tokio::time::timeout(std::time::Duration::from_secs(10), shutdown_sequence).await {
+                    tracing::warn!("Graceful shutdown timed out.");
+                    let _ = std::fs::remove_file(&pid_path);
+                }
+                tracing::info!("Shutdown complete.");
                 Ok::<(), anyhow::Error>(())
             }.await;
 

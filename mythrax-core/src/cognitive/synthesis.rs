@@ -35,6 +35,15 @@ pub fn slugify_title(text: &str) -> String {
     }
 }
 
+pub fn resolve_rule_path(scope: &str, action_to_avoid: &str) -> String {
+    if scope == "general" {
+        format!("global/wisdom/dynamic/{}.md", slugify_title(action_to_avoid))
+    } else {
+        format!("wisdom/dynamic/{}/{}.md", scope, slugify_title(action_to_avoid))
+    }
+}
+
+
 pub fn dbscan(
     embeddings: &[&[f32]],
     eps: f32,
@@ -167,29 +176,86 @@ pub fn load_insights(vault_root: &Path) -> Vec<InsightNote> {
 }
 
 fn parse_insight_note(content: &str, path: &Path, scope: &str) -> Result<InsightNote> {
-    if !content.starts_with("---") {
-        anyhow::bail!("No frontmatter");
-    }
-    let parts: Vec<&str> = content.split("---").collect();
-    if parts.len() < 3 {
-        anyhow::bail!("Invalid frontmatter");
-    }
-    let yaml_str = parts[1];
-    let body = parts[2..].join("---");
+    if content.starts_with("---") {
+        let parts: Vec<&str> = content.split("---").collect();
+        if parts.len() >= 3 {
+            let yaml_str = parts[1];
+            let body = parts[2..].join("---");
 
-    #[derive(serde::Deserialize)]
-    struct Frontmatter {
-        title: Option<String>,
-        name: Option<String>,
-        source_episodes: Option<Vec<String>>,
+            #[derive(serde::Deserialize)]
+            struct Frontmatter {
+                title: Option<String>,
+                name: Option<String>,
+                source_episodes: Option<Vec<String>>,
+            }
+            if let Ok(fm) = serde_yaml::from_str::<Frontmatter>(yaml_str) {
+                let title = fm.title.or(fm.name).unwrap_or_else(|| "Untitled Note".to_string());
+                let source_episodes = fm.source_episodes.unwrap_or_default();
+
+                return Ok(InsightNote {
+                    title,
+                    content: body.trim().to_string(),
+                    scope: scope.to_string(),
+                    source_episodes,
+                    vault_path: path.to_string_lossy().to_string(),
+                });
+            }
+        }
     }
-    let fm: Frontmatter = serde_yaml::from_str(yaml_str)?;
-    let title = fm.title.or(fm.name).unwrap_or_else(|| "Untitled Note".to_string());
-    let source_episodes = fm.source_episodes.unwrap_or_default();
+
+    // Fallback for raw files or files with invalid frontmatter
+    let mut title = path.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Untitled Note".to_string());
+        
+    // Look for the first # header for a better title
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("# ") {
+            title = trimmed[2..].trim().to_string();
+            break;
+        }
+    }
+
+    let mut source_episodes = Vec::new();
+    // Parse wikilinks to episodes or archive
+    let mut pos = 0;
+    while let Some(start_idx) = content[pos..].find("[[") {
+        let actual_start = pos + start_idx + 2;
+        if let Some(end_idx) = content[actual_start..].find("]]") {
+            let link_content = &content[actual_start..actual_start + end_idx];
+            let link_path = if let Some(pipe_idx) = link_content.find('|') {
+                &link_content[..pipe_idx]
+            } else {
+                link_content
+            };
+            
+            let link_path = link_path.trim();
+            let clean_id = if let Some(stripped) = link_path.strip_prefix("episodes/") {
+                Some(stripped)
+            } else if let Some(stripped) = link_path.strip_prefix("archive/") {
+                Some(stripped)
+            } else {
+                None
+            };
+            
+            if let Some(id) = clean_id {
+                let id_no_ext = Path::new(id).file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| id.to_string());
+                if !source_episodes.contains(&id_no_ext) {
+                    source_episodes.push(id_no_ext);
+                }
+            }
+            pos = actual_start + end_idx + 2;
+        } else {
+            break;
+        }
+    }
 
     Ok(InsightNote {
         title,
-        content: body.trim().to_string(),
+        content: content.trim().to_string(),
         scope: scope.to_string(),
         source_episodes,
         vault_path: path.to_string_lossy().to_string(),
@@ -506,7 +572,7 @@ impl DreamCoordinator {
                     Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
                     _ => None,
                 };
-                user_override_val.unwrap_or(0.55)
+                user_override_val.unwrap_or(0.12)
             }
         };
 
@@ -540,7 +606,7 @@ impl DreamCoordinator {
                     if let Some(ref ep_emb) = ep.embedding {
                         for (ins, cent) in &centroids {
                             let dist = cosine_distance(ep_emb, cent);
-                            if dist < 0.25 {
+                            if dist < 0.10 {
                                 if let Some((_, best_dist)) = matched_insight {
                                     if dist < best_dist {
                                         matched_insight = Some((ins, dist));
@@ -611,7 +677,7 @@ impl DreamCoordinator {
                             String::new()
                         };
 
-                        let relative_path = format!("wiki/{}/insights/{}.md", scope, ins.title.replace(' ', "_"));
+                        let relative_path = format!("wiki/{}/insights/{}.md", scope, slugify_title(&ins.title));
                         let new_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
                             ins.title,
@@ -812,9 +878,9 @@ impl DreamCoordinator {
                                 String::new()
                             };
 
-                            let rule_path = format!("wisdom/dynamic/{}.md", slugify_title(&r.action_to_avoid));
-                            let final_tier_str = "dynamic".to_string();
                             let final_scope = scope.clone();
+                            let rule_path = resolve_rule_path(&final_scope, &r.action_to_avoid);
+                            let final_tier_str = "dynamic".to_string();
 
                             let rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
@@ -1171,7 +1237,7 @@ impl DreamCoordinator {
                 for node in wiki_nodes {
                     if let Some(ref emb) = node.embedding {
                         candidates.push(GradCandidate {
-                            id: node.id.unwrap_or_default(),
+                            id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
@@ -1188,7 +1254,7 @@ impl DreamCoordinator {
                     if !ep.archived.unwrap_or(false) {
                         if let Some(ref emb) = ep.embedding {
                             candidates.push(GradCandidate {
-                                id: ep.id.unwrap_or_default(),
+                                id: ep.id.unwrap_or_default().replace("`", ""),
                                 scope: ep.scope.unwrap_or_else(|| "general".to_string()),
                                 name: ep.title,
                                 content: ep.content,
@@ -1276,7 +1342,7 @@ impl DreamCoordinator {
                 } else {
                     for node in matches_wiki {
                         cluster.push(GradCandidate {
-                            id: node.id.unwrap_or_default(),
+                            id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
@@ -1310,7 +1376,7 @@ impl DreamCoordinator {
                     for ep in matches_ep {
                         let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
                         cluster.push(GradCandidate {
-                            id: ep.id.unwrap_or_default(),
+                            id: ep.id.unwrap_or_default().replace("`", ""),
                             scope: ep_scope,
                             name: ep.title,
                             content: ep.content,
@@ -1345,6 +1411,10 @@ impl DreamCoordinator {
                 }
                 accepted_clusters.push(cluster);
             }
+            println!("DEBUG - accepted_clusters.len() = {}", accepted_clusters.len());
+            for (idx, c) in accepted_clusters.iter().enumerate() {
+                println!("DEBUG - cluster {} members: {:?}", idx, c.iter().map(|m| &m.id).collect::<Vec<_>>());
+            }
 
             for cluster in accepted_clusters {
                 let n = cluster.len();
@@ -1363,21 +1433,25 @@ impl DreamCoordinator {
                     insights_with_scope_labels
                 );
 
-                if let Ok(resp_str) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &user_prompt).await {
-                    #[derive(serde::Deserialize)]
-                    struct GeneralizationResponse {
-                        target_pattern: String,
-                        action_to_avoid: String,
-                        causal_explanation: String,
-                        prescribed_remedy: String,
-                        confidence: f32,
-                    }
-                    let clean_resp = crate::llm::strip_code_fences(&resp_str);
-                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
-                        if res.confidence >= 0.80 {
-                            let tier = "dynamic";
+                match self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &user_prompt).await {
+                    Ok(resp_str) => {
+                        println!("DEBUG - routed_completion succeeded: {:?}", resp_str);
+                        #[derive(serde::Deserialize)]
+                        struct GeneralizationResponse {
+                            target_pattern: String,
+                            action_to_avoid: String,
+                            causal_explanation: String,
+                            prescribed_remedy: String,
+                            confidence: f32,
+                        }
+                        let clean_resp = crate::llm::strip_code_fences(&resp_str);
+                        match serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
+                            Ok(res) => {
+                                println!("DEBUG - JSON parsing succeeded: confidence={}", res.confidence);
+                                if res.confidence >= 0.80 {
+                                    let tier = "dynamic";
 
-                            let rule_path = format!("global/wisdom/dynamic/{}.md", slugify_title(&res.action_to_avoid));
+                            let rule_path = resolve_rule_path("general", &res.action_to_avoid);
 
                             let mut rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\nsource_nodes:\n{}\ngenerator_name: \"ScopeGraduator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
@@ -1413,12 +1487,26 @@ impl DreamCoordinator {
                                 ..Default::default()
                             };
 
-                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
-                                for member in &cluster {
-                                    let _ = db.relate_nodes(&member.id, &wisdom_id, None, None, None).await;
+                            match save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
+                                Ok(wisdom_id) => {
+                                    println!("DEBUG - save_wisdom_rule_with_deduplication succeeded: {}", wisdom_id);
+                                    for member in &cluster {
+                                        let _ = db.relate_nodes(&member.id, &wisdom_id, None, None, None).await;
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("DEBUG - save_wisdom_rule_with_deduplication failed: {:?}", e);
                                 }
                             }
+                            }
                         }
+                        Err(e) => {
+                            println!("DEBUG - JSON parsing failed: error={:?}, clean_resp={:?}", e, clean_resp);
+                        }
+                    }
+                    }
+                    Err(e) => {
+                        println!("DEBUG - routed_completion failed: {:?}", e);
                     }
                 }
             }
@@ -1601,7 +1689,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                         } else if let Some(ref path) = matched.vault_path {
                             path.clone()
                         } else {
-                            format!("wisdom/dynamic/{}.md", slugify_title(&fields.action_to_avoid))
+                            resolve_rule_path(&rule.scope, &fields.action_to_avoid)
                         };
 
                         let rule_md = format!(
@@ -1626,7 +1714,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             vault_path: Some(final_path),
                             embedding: None,
                             source_episodes: merged_eps,
-                            generator_name: "DreamCoordinator".to_string(),
+                            generator_name: rule.generator_name.clone(),
                             similarity: None,
                             utility: None,
                             status: None,
@@ -1639,37 +1727,39 @@ pub async fn save_wisdom_rule_with_deduplication(
 
                         match db.save_wisdom_rule(&merged_contract).await {
                             Ok(saved_id) => {
-                                // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
-                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-                                    let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
-                                    let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
-                                    
-                                    let sql = "
-                                        LET $old_rec = type::record('wisdom', $old_uuid);
-                                        LET $new_rec = type::record('wisdom', $new_uuid);
-                                        UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
-                                        RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
-                                    ";
-                                    if let Err(e) = surreal_backend.db.query(sql)
-                                        .bind(("old_uuid", old_uuid))
-                                        .bind(("new_uuid", new_uuid))
-                                        .await {
-                                        tracing::error!("Failed to update superseded status or relate nodes: {}", e);
-                                    }
-                                }
+                                let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
+                                let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
 
-                                // 2. Move physical old rule file to superseded_archive
-                                if let Some(ref old_vp) = matched.vault_path {
-                                    let src_path = store.vault_root.join(old_vp);
-                                    if src_path.exists() {
-                                        let archive_dir = store.vault_root.join("wisdom/superseded_archive");
-                                        let _ = std::fs::create_dir_all(&archive_dir);
-                                        if let Some(filename) = src_path.file_name() {
-                                            let dest_path = archive_dir.join(filename);
-                                            if std::fs::rename(&src_path, &dest_path).is_ok() {
-                                                if let Ok(content) = std::fs::read_to_string(&dest_path) {
-                                                    let updated_content = update_archived_rule_content(&content, &saved_id);
-                                                    let _ = std::fs::write(&dest_path, updated_content);
+                                if old_uuid != new_uuid {
+                                    // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
+                                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                                        let sql = "
+                                            LET $old_rec = type::record('wisdom', $old_uuid);
+                                            LET $new_rec = type::record('wisdom', $new_uuid);
+                                            UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
+                                            RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
+                                        ";
+                                        if let Err(e) = surreal_backend.db.query(sql)
+                                            .bind(("old_uuid", old_uuid))
+                                            .bind(("new_uuid", new_uuid))
+                                            .await {
+                                            tracing::error!("Failed to update superseded status or relate nodes: {}", e);
+                                        }
+                                    }
+
+                                    // 2. Move physical old rule file to superseded_archive
+                                    if let Some(ref old_vp) = matched.vault_path {
+                                        let src_path = store.vault_root.join(old_vp);
+                                        if src_path.exists() {
+                                            let archive_dir = store.vault_root.join("wisdom/superseded_archive");
+                                            let _ = std::fs::create_dir_all(&archive_dir);
+                                            if let Some(filename) = src_path.file_name() {
+                                                let dest_path = archive_dir.join(filename);
+                                                if std::fs::rename(&src_path, &dest_path).is_ok() {
+                                                    if let Ok(content) = std::fs::read_to_string(&dest_path) {
+                                                        let updated_content = update_archived_rule_content(&content, &saved_id);
+                                                        let _ = std::fs::write(&dest_path, updated_content);
+                                                    }
                                                 }
                                             }
                                         }

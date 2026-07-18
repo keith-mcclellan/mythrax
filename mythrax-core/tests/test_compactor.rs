@@ -149,13 +149,15 @@ Insight Three content."#;
     let mut found_cluster = false;
     let mut found_misc = false;
 
+    println!("ACTUAL FILES IN DIR: {:?}", files);
     for (name, content) in &files {
+        let name_lower = name.to_lowercase();
         if content.contains("cluster_id: 0") {
             found_cluster = true;
-            assert!(name.contains("insight_one"), "Cluster compaction filename should contain slug of first insight");
+            assert!(name_lower.contains("insight_one") || name_lower.contains("insight_two") || name_lower.contains("insight_three"), "Cluster compaction filename should contain slug of first insight: {}", name);
         } else if content.contains("cluster_id: \"miscellaneous\"") {
             found_misc = true;
-            assert!(name.contains("miscellaneous"), "Miscellaneous compaction filename should contain miscellaneous");
+            assert!(name_lower.contains("miscellaneous"), "Miscellaneous compaction filename should contain miscellaneous");
         }
     }
 

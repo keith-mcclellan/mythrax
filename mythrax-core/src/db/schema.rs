@@ -37,6 +37,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS metrics ON episode TYPE option<record<episode_metrics>>;
     DEFINE FIELD IF NOT EXISTS node_type ON episode TYPE string DEFAULT 'agent_thought';
     DEFINE FIELD IF NOT EXISTS confidence ON episode TYPE option<float> DEFAULT 0.90;
+    DEFINE FIELD IF NOT EXISTS temporal_range_start ON episode TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS temporal_range_end ON episode TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS graduated_to ON episode TYPE option<record<wisdom>>;
+    DEFINE FIELD IF NOT EXISTS metacognitive_confidence ON episode TYPE option<float>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -61,6 +65,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wiki_node TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON wiki_node TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS utility ON wiki_node TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS temporal_range_start ON wiki_node TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS temporal_range_end ON wiki_node TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS graduated_to ON wiki_node TYPE option<record<wisdom>>;
+    DEFINE FIELD IF NOT EXISTS metacognitive_confidence ON wiki_node TYPE option<float>;
     DEFINE INDEX IF NOT EXISTS wiki_node_name ON wiki_node FIELDS name UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
     DEFINE INDEX OVERWRITE wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -135,7 +143,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON episode_metrics TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS word_count ON episode_metrics TYPE option<int>;
 
-    DEFINE TABLE IF NOT EXISTS relates_to SCHEMAFULL TYPE RELATION IN episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state OUT episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state;
+    DEFINE TABLE IF NOT EXISTS relates_to SCHEMAFULL TYPE RELATION IN episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node OUT episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node;
     DEFINE FIELD IF NOT EXISTS relation ON relates_to TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS strength ON relates_to TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS created_at ON relates_to TYPE datetime DEFAULT time::now();
@@ -155,7 +163,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS expires_at ON short_term_memory TYPE option<datetime>;
     DEFINE INDEX IF NOT EXISTS stm_session_key ON short_term_memory FIELDS session_id, key UNIQUE;
 
-    DEFINE TABLE IF NOT EXISTS followed_by SCHEMAFULL TYPE RELATION IN episode OUT episode;
+    DEFINE TABLE IF NOT EXISTS followed_by SCHEMAFULL TYPE RELATION IN episode | wiki_node OUT episode | wiki_node;
     DEFINE FIELD IF NOT EXISTS duration ON followed_by TYPE option<duration>;
     DEFINE FIELD IF NOT EXISTS created_at ON followed_by TYPE datetime DEFAULT time::now();
 

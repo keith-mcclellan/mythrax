@@ -1182,6 +1182,16 @@ impl SurrealBackend {
         Ok(())
     }
 
+    pub async fn delete_wiki_node_db(&self, name: &str, scope: &str) -> Result<()> {
+        let sql = "DELETE FROM wiki_node WHERE name = $name AND scope = $scope;";
+        self.db.query(sql)
+            .bind(("name", name))
+            .bind(("scope", scope))
+            .await?
+            .check()?;
+        Ok(())
+    }
+
         pub async fn save_stm_db(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
         if std::env::var("MYTHRAX_BENCH").is_ok() {
             let sql = "
@@ -1934,7 +1944,7 @@ impl SurrealBackend {
             };
             if let Ok(q_vec) = self.embed(embed_text).await {
                 let sql = "
-                    SELECT causal_explanation, prescribed_remedy, embedding FROM wisdom
+                    SELECT causal_explanation, prescribed_remedy, vector::similarity::cosine(embedding, $query_embedding) AS similarity FROM wisdom
                     WHERE status != 'superseded' AND (embedding <|1, 10|> $query_embedding);
                 ";
                 let res = self.db.query(sql).bind(("query_embedding", q_vec.clone())).await?;
@@ -1943,19 +1953,17 @@ impl SurrealBackend {
                 struct WisdomVectorRaw {
                     causal_explanation: String,
                     prescribed_remedy: String,
-                    embedding: Option<Vec<f32>>,
+                    similarity: Option<f32>,
                 }
                 let rules: Vec<WisdomVectorRaw> = res.take(0)?;
                 let mut best_match = None;
                 let mut best_similarity = 0.0_f32;
 
                 for r in rules {
-                    if let Some(ref e_vec) = r.embedding {
-                        let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                        if dot > best_similarity {
-                            best_similarity = dot;
-                            best_match = Some(r);
-                        }
+                    let sim = r.similarity.unwrap_or(0.0);
+                    if sim > best_similarity {
+                        best_similarity = sim;
+                        best_match = Some(r);
                     }
                 }
 

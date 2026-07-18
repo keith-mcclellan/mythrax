@@ -36,6 +36,7 @@ pdf-extract = "0.10.0"
 chrono = { version = "0.4", features = ["serde"] }
 rlimit = "0.10"
 libc = "0.2"
+socket2 = "0.5"
 sha2 = "0.10"
 hex = "0.4"
 mlx-rs = { version = "0.25.3", features = ["metal"], optional = true }
@@ -66,6 +67,10 @@ path = "src/bin/tune_arbor.rs"
 [[bin]]
 name = "generate_seeds"
 path = "scratch/generate_seeds.rs"
+
+[[bin]]
+name = "simulate"
+path = "scratch/simulate.rs"
 
 [profile.release]
 opt-level = 3
