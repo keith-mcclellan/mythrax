@@ -7281,3 +7281,8 @@ query: "How many days had passed since I started taking ukulele lessons when I d
 query: "What did I do with Rachel on the Wednesday two months ago?", profile: 14922us, embed: 760us, terms: 16us, db: 32953us, rerank_start: 96405us, total: 149608us
 query: "How many months ago did I attend the photography workshop?", profile: 24488us, embed: 1201us, terms: 15us, db: 63101us, rerank_start: 25690us, total: 123353us
 query: "How long did I wait for the decision on my asylum application?", profile: 21220us, embed: 1650us, terms: 208us, db: 39624us, rerank_start: 6322us, total: 74775us
+query: "What is the name of my cat?", profile: 17025us, embed: 511us, terms: 13us, db: 36605us, rerank_start: 6792us, total: 66064us
+query: "What is the name of my hamster?", profile: 18033us, embed: 579us, terms: 16us, db: 37133us, rerank_start: 5796us, total: 66293us
+query: "How long have I been using my Fitbit Charge 3?", profile: 17154us, embed: 622us, terms: 20us, db: 34581us, rerank_start: 8011us, total: 65261us
+query: "How many days had passed between the Sunday mass at St. Mary's Church and the Ash Wednesday service at the cathedral?", profile: 16659us, embed: 605us, terms: 18us, db: 33335us, rerank_start: 7125us, total: 62652us
+query: "What new kitchen gadget did I invest in before getting the Air Fryer?", profile: 15889us, embed: 634us, terms: 16us, db: 34604us, rerank_start: 21831us, total: 77849us
