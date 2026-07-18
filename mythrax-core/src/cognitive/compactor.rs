@@ -560,6 +560,7 @@ impl Compactor {
                 scope: scope.to_string(),
                 vault_path: Some(relative_path.clone()),
                 embedding: None,
+                ..Default::default()
             };
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in member_insights {
@@ -634,6 +635,7 @@ impl Compactor {
                 scope: scope.to_string(),
                 vault_path: Some(relative_path.clone()),
                 embedding: None,
+                ..Default::default()
             };
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in &outlier_insights {
@@ -766,6 +768,7 @@ impl Compactor {
             scope: "general".to_string(),
             vault_path: Some(relative_path.clone()),
             embedding: None,
+            ..Default::default()
         };
         if let Ok(global_compaction_id) = db.save_wiki_node(&node_contract).await {
             for comp_path in compaction_paths {
@@ -920,6 +923,7 @@ impl Compactor {
                                 scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
                                 vault_path: Some(wiki_rel),
                                 embedding: None,
+                                ..Default::default()
                             };
                             let _ = db.save_wiki_node(&node_contract).await;
                         }

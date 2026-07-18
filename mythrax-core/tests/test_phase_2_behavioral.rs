@@ -238,6 +238,7 @@ This is standard content.
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/anchor_insight.md".to_string()),
         embedding: Some(vec![0.1; 768]),
+        ..Default::default()
     };
     backend.save_wiki_node(&node).await?;
 

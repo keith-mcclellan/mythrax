@@ -613,6 +613,7 @@ async fn test_history_pruning_lifecycle() -> Result<()> {
         scope: "general".to_string(),
         vault_path: Some("wiki/node1.md".to_string()),
         embedding: None,
+        ..Default::default()
     };
     let node_id1 = backend.save_wiki_node(&node1).await?;
 
@@ -630,6 +631,7 @@ async fn test_history_pruning_lifecycle() -> Result<()> {
         scope: "general".to_string(),
         vault_path: Some("wiki/node2.md".to_string()),
         embedding: None,
+        ..Default::default()
     };
     let node_id2 = backend.save_wiki_node(&node2).await?;
     let mut updated_node2 = node2.clone();

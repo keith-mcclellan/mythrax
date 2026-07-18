@@ -425,11 +425,13 @@ pub struct FrontmatterEdge {
     pub strength: Option<f32>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Default)]
 struct WikiFrontmatter {
     name: Option<String>,
     scope: Option<String>,
     edges: Option<Vec<FrontmatterEdge>>,
+    metacognitive_confidence: Option<i32>,
+    node_type: Option<String>,
 }
 
 pub struct TargetResolveCache {
@@ -771,7 +773,7 @@ pub async fn sync_file_to_db_with_cache(
         let frontmatter: WikiFrontmatter = yaml_opt
             .and_then(|y| serde_json::to_value(y).ok())
             .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or(WikiFrontmatter { name: None, scope: None, edges: None });
+            .unwrap_or_default();
 
         let name = frontmatter.name.unwrap_or_else(|| {
             path.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string()
@@ -784,6 +786,8 @@ pub async fn sync_file_to_db_with_cache(
             scope: frontmatter.scope.unwrap_or_else(|| "general".to_string()),
             vault_path: Some(rel_path),
             embedding: None,
+            metacognitive_confidence: frontmatter.metacognitive_confidence,
+            node_type: frontmatter.node_type,
         };
 
         let db_id = backend.save_wiki_node(&node).await?;

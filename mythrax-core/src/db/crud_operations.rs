@@ -627,7 +627,7 @@ impl SurrealBackend {
             .bind(("superseded_by", rule.superseded_by.as_deref()))
             .bind(("severity", rule.severity.as_deref()))
             .bind(("blocking", rule.blocking.unwrap_or(false)))
-            .bind(("rule_type", rule.rule_type.as_deref()))
+            .bind(("rule_type", rule.rule_type.as_deref().unwrap_or("aesthetic")))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
@@ -1012,7 +1012,9 @@ impl SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    metacognitive_confidence: $metacognitive_confidence,
+                    node_type: $node_type
                 };
                 COMMIT TRANSACTION;
             "
@@ -1025,7 +1027,9 @@ impl SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    metacognitive_confidence: $metacognitive_confidence,
+                    node_type: $node_type
                 };
                 COMMIT TRANSACTION;
             "
@@ -1054,6 +1058,8 @@ impl SurrealBackend {
             .bind(("target_scope", node.scope.as_str()))
             .bind(("vault_path", vp_val.as_str()))
             .bind(("embedding", embedding_val.clone()))
+            .bind(("metacognitive_confidence", node.metacognitive_confidence))
+            .bind(("node_type", node.node_type.as_deref().unwrap_or("insight")))
             .await?;
 
         response.check().context("SurrealDB save_wiki_node transaction failed")?;
@@ -1493,15 +1499,7 @@ impl SurrealBackend {
                 "wiki_node" => {
                     let node_opt: Option<WikiNodeRaw> = self.db.select(thing_id.clone()).await?;
                     if let Some(raw) = node_opt {
-                        let node = WikiNode {
-                            id: Some(format_record_id(&raw.id)),
-                            name: raw.name,
-                            content: raw.content,
-                            scope: raw.scope,
-                            vault_path: raw.vault_path,
-                            embedding: raw.embedding,
-                        };
-                        wiki_nodes.push(node);
+                        wiki_nodes.push(raw.into_wiki_node());
                     }
                 }
                 _ => {

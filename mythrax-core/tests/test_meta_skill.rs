@@ -57,6 +57,7 @@ async fn test_meta_skill_synthesis() -> Result<()> {
         scope: "test-scope".to_string(),
         vault_path: None,
         embedding: Some(vec![0.1; 768]),
+        ..Default::default()
     };
     backend.save_wiki_node(&node).await?;
 

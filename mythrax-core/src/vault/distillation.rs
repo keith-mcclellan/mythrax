@@ -482,6 +482,7 @@ pub async fn ingest_artifacts_in_dir(
                         scope: scope.to_string(),
                         vault_path: Some(rel_path_str),
                         embedding: None,
+                        ..Default::default()
                     };
                     db.save_wiki_node(&node).await?;
                 }

@@ -3154,6 +3154,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "dashmap",
  "futures-util",
  "half",
  "hex",

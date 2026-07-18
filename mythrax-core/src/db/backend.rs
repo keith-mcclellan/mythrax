@@ -1030,6 +1030,10 @@ pub(crate) struct WikiNodeRaw {
     pub(crate) scope: String,
     pub(crate) vault_path: Option<String>,
     pub(crate) embedding: Option<Vec<f32>>,
+    #[serde(default)]
+    pub(crate) metacognitive_confidence: Option<i32>,
+    #[serde(default)]
+    pub(crate) node_type: Option<String>,
 }
 
 impl WikiNodeRaw {
@@ -1042,6 +1046,8 @@ impl WikiNodeRaw {
             scope: self.scope,
             vault_path: self.vault_path,
             embedding: self.embedding,
+            metacognitive_confidence: self.metacognitive_confidence,
+            node_type: self.node_type,
         }
     }
 }
@@ -2202,6 +2208,7 @@ mod tests {
             scope: "hydration-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         let wiki_id = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2276,6 +2283,7 @@ mod tests {
             scope: "ranking-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2387,6 +2395,7 @@ mod tests {
             scope: "directional-test".to_string(),
             vault_path: Some("wiki/insights/parent_insight.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2524,6 +2533,7 @@ mod tests {
             scope: "test-scope".to_string(),
             vault_path: Some("wiki/test.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
 
         let node_id = backend.save_wiki_node(&node).await.unwrap();
@@ -2622,6 +2632,7 @@ mod tests {
             scope: "compaction-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&node1).await.unwrap();
 
@@ -2678,6 +2689,7 @@ mod tests {
             scope: "compaction-test-single-para".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&node2).await.unwrap();
 
@@ -2800,6 +2812,7 @@ mod tests {
             scope: "graph-exclusion-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2858,6 +2871,7 @@ mod tests {
             scope: "artifact-exclusion-test".to_string(),
             vault_path: Some("wiki/artifacts/test_artifact.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&artifact_node).await.unwrap();
 
@@ -2869,6 +2883,7 @@ mod tests {
             scope: "artifact-exclusion-test".to_string(),
             vault_path: Some("wiki/scope/insights/my_insight.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&normal_node).await.unwrap();
 

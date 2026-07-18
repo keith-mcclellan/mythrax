@@ -421,7 +421,7 @@ pub struct HandoffSave {
 }
 
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct WikiNode {
     pub id: Option<String>,
     pub name: String,
@@ -429,6 +429,10 @@ pub struct WikiNode {
     pub scope: String,
     pub vault_path: Option<String>,
     pub embedding: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metacognitive_confidence: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

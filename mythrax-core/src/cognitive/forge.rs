@@ -124,6 +124,7 @@ impl Forge {
             scope: normalized_scope.clone(),
             vault_path: Some(parent_path.clone()),
             embedding: Some(embeddings[0].clone()),
+            ..Default::default()
         };
         let parent_id_str = self.backend.save_wiki_node(&parent_node).await?;
 
@@ -175,6 +176,7 @@ impl Forge {
                 scope: normalized_scope.clone(),
                 vault_path: Some(chunk_path),
                 embedding: Some(chunk_embedding),
+                ..Default::default()
             };
             let chunk_id_str = self.backend.save_wiki_node(&chunk_node).await?;
             chunk_ids.push(chunk_id_str.clone());
@@ -203,6 +205,7 @@ impl Forge {
                     scope: normalized_scope.clone(),
                     vault_path: Some(concept_path),
                     embedding: Some(concept_embedding),
+                    ..Default::default()
                 };
                 let concept_id_str = self.backend.save_wiki_node(&concept_node).await?;
                 concept_ids.push(concept_id_str.clone());

@@ -44,6 +44,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
         scope: "scope_A".to_string(),
         vault_path: Some("wiki/scope_A/insights/strategy_a.md".to_string()),
         embedding: Some(vec![1.0; 768]),
+        ..Default::default()
     };
     let id_a = backend.save_wiki_node(&node_a).await?;
 
@@ -55,6 +56,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
         scope: "scope_B".to_string(),
         vault_path: Some("wiki/scope_B/insights/strategy_b.md".to_string()),
         embedding: Some(vec![1.0; 768]),
+        ..Default::default()
     };
     let id_b = backend.save_wiki_node(&node_b).await?;
 
