@@ -11,6 +11,43 @@ pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
     1.0 - crate::math::cosine_similarity(u, v)
 }
 
+pub struct CachedDistances<'a> {
+    embeddings: &'a [&'a [f32]],
+    norms: Vec<f32>,
+}
+
+impl<'a> CachedDistances<'a> {
+    pub fn new(embeddings: &'a [&'a [f32]]) -> Self {
+        let norms = embeddings.iter().map(|&emb| {
+            let mut sum_sq = 0.0;
+            for &val in emb {
+                sum_sq += val * val;
+            }
+            sum_sq.sqrt()
+        }).collect();
+        Self { embeddings, norms }
+    }
+
+    pub fn distance(&self, i: usize, j: usize) -> f32 {
+        let a = self.embeddings[i];
+        let b = self.embeddings[j];
+        if a.len() != b.len() || a.is_empty() {
+            return 1.0;
+        }
+        let norm_a = self.norms[i];
+        let norm_b = self.norms[j];
+        if norm_a == 0.0 || norm_b == 0.0 {
+            1.0
+        } else {
+            let mut dot = 0.0;
+            for k in 0..a.len() {
+                dot += a[k] * b[k];
+            }
+            1.0 - (dot / (norm_a * norm_b))
+        }
+    }
+}
+
 pub fn slugify_title(text: &str) -> String {
     let mut slug = String::new();
     for c in text.chars() {
@@ -43,13 +80,14 @@ pub fn dbscan(
     let n = embeddings.len();
     let mut labels = vec![None; n];
     let mut cluster_id = 0;
+    let cache = CachedDistances::new(embeddings);
 
     for i in 0..n {
         if labels[i].is_some() {
             continue;
         }
 
-        let mut neighbors = find_neighbors(i, embeddings, eps);
+        let mut neighbors = find_neighbors(i, &cache, eps);
         if neighbors.len() < min_samples {
             continue;
         }
@@ -60,7 +98,7 @@ pub fn dbscan(
             let neighbor_idx = neighbors[j];
             if labels[neighbor_idx].is_none() {
                 labels[neighbor_idx] = Some(cluster_id);
-                let neighbor_neighbors = find_neighbors(neighbor_idx, embeddings, eps);
+                let neighbor_neighbors = find_neighbors(neighbor_idx, &cache, eps);
                 if neighbor_neighbors.len() >= min_samples {
                     for &nn in &neighbor_neighbors {
                         if !neighbors.contains(&nn) {
@@ -106,11 +144,10 @@ pub fn find_elbow_point(k_distances: &[f32]) -> f32 {
 }
 
 
-fn find_neighbors(i: usize, embeddings: &[&[f32]], eps: f32) -> Vec<usize> {
+fn find_neighbors(i: usize, cache: &CachedDistances, eps: f32) -> Vec<usize> {
     let mut neighbors = Vec::new();
-    let target = embeddings[i];
-    for (idx, &emb) in embeddings.iter().enumerate() {
-        if cosine_distance(target, emb) <= eps {
+    for idx in 0..cache.embeddings.len() {
+        if cache.distance(i, idx) <= eps {
             neighbors.push(idx);
         }
     }
@@ -487,11 +524,13 @@ impl DreamCoordinator {
 
             if embeddings.len() >= 100 {
                 let sample = &embeddings[0..100];
+                let emb_refs: Vec<&[f32]> = sample.iter().map(|e| e.as_slice()).collect();
+                let cache = CachedDistances::new(&emb_refs);
                 let mut k_distances = Vec::new();
                 for i in 0..sample.len() {
                     let mut dists = Vec::new();
                     for j in 0..sample.len() {
-                        let d = cosine_distance(&sample[i], &sample[j]);
+                        let d = cache.distance(i, j);
                         dists.push(d);
                     }
                     dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -947,12 +986,16 @@ impl DreamCoordinator {
                         continue;
                     }
 
+                    // Prepare references and cache distances
+                    let emb_refs: Vec<&[f32]> = episode_embeddings.iter().map(|e| e.as_slice()).collect();
+                    let cache = CachedDistances::new(&emb_refs);
+
                     // 4. Compute max pairwise cosine distance
                     let mut max_dist = 0.0;
                     let mut max_pair = (0, 1);
                     for i in 0..episode_embeddings.len() {
                         for j in (i + 1)..episode_embeddings.len() {
-                            let dist = cosine_distance(&episode_embeddings[i], &episode_embeddings[j]);
+                            let dist = cache.distance(i, j);
                             if dist > max_dist {
                                 max_dist = dist;
                                 max_pair = (i, j);
@@ -965,7 +1008,6 @@ impl DreamCoordinator {
                     if max_dist > 0.30 {
                         tracing::debug!("Drift > 0.30 detected! Triggering split for: {}", ins.title);
                         // Prepare references for DBSCAN
-                        let emb_refs: Vec<&[f32]> = episode_embeddings.iter().map(|e| e.as_slice()).collect();
                         let labels = dbscan(&emb_refs, 0.08, 2);
 
                         // Group episodes by DBSCAN labels
@@ -986,15 +1028,12 @@ impl DreamCoordinator {
                         // 6. Handle DBSCAN results
                         if clusters.len() <= 1 {
                             // Manual Bisection Split
-                            let seed1_emb = &episode_embeddings[max_pair.0];
-                            let seed2_emb = &episode_embeddings[max_pair.1];
-                            
                             let mut group1 = Vec::new();
                             let mut group2 = Vec::new();
 
                             for (k, ep) in valid_episodes.iter().enumerate() {
-                                let dist1 = cosine_distance(&episode_embeddings[k], seed1_emb);
-                                let dist2 = cosine_distance(&episode_embeddings[k], seed2_emb);
+                                let dist1 = cache.distance(k, max_pair.0);
+                                let dist2 = cache.distance(k, max_pair.1);
                                 
                                 // Assign to closer seed. Ensure seeds themselves are in their respective groups.
                                 if k == max_pair.0 {
