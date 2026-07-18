@@ -1276,7 +1276,6 @@ impl DreamCoordinator {
                 }
             }
             // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
-            }
         }
 
         // --- Tasks C.6 & C.6a: Cross-Scope Graduation Pass ---

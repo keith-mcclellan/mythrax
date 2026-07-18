@@ -47,6 +47,7 @@ struct RelatedNodeRaw {
     prescribed_remedy: Option<String>,
     vault_path: Option<String>,
     source_episode: Option<surrealdb::types::RecordId>,
+    status: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
@@ -199,8 +200,10 @@ fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]
                 pattern, avoid, explanation, remedy
             ));
         } else if table == "hypothesis_node" {
-            if let Some(c) = &node.content {
-                content.push_str(&format!("[Related Hypothesis]\n{}\n\n", c));
+            if node.status.as_deref() == Some("done") {
+                if let Some(c) = &node.content {
+                    content.push_str(&format!("[Related Hypothesis]\n{}\n\n", c));
+                }
             }
         } else if table == "handoff" {
             if let Some(s) = &node.summary {
@@ -1039,6 +1042,9 @@ impl SurrealBackend {
                     if let Some(related) = ep.related_nodes.as_ref() {
                         append_related_context(&mut content, related);
                         for r_node in related {
+                            if r_node.id.table.as_str() == "hypothesis_node" && r_node.status.as_deref() != Some("done") {
+                                continue;
+                            }
                             rel_list.push(SearchResult {
                                 id: format_record_id(&r_node.id),
                                 title: r_node.title.clone().unwrap_or_default(),
@@ -1196,6 +1202,9 @@ impl SurrealBackend {
                     if let Some(related) = node.related_nodes.as_ref() {
                         append_related_context(&mut content, related);
                         for r_node in related {
+                            if r_node.id.table.as_str() == "hypothesis_node" && r_node.status.as_deref() != Some("done") {
+                                continue;
+                            }
                             rel_list.push(SearchResult {
                                 id: format_record_id(&r_node.id),
                                 title: r_node.title.clone().unwrap_or_default(),
@@ -1334,6 +1343,9 @@ impl SurrealBackend {
                     let mut rel_list = Vec::new();
                     if let Some(related) = rule.related_nodes.as_ref() {
                         for r_node in related {
+                            if r_node.id.table.as_str() == "hypothesis_node" && r_node.status.as_deref() != Some("done") {
+                                continue;
+                            }
                             rel_list.push(SearchResult {
                                 id: format_record_id(&r_node.id),
                                 title: r_node.title.clone().unwrap_or_default(),

@@ -182,6 +182,8 @@ fn test_episode_raw_conversion() {
         node_type: Some("episode".to_string()),
         confidence: Some(0.95),
         importance: Some(5.0),
+        temporal_range_start: None,
+        temporal_range_end: None,
     };
 
     let episode = Episode::from(raw);
