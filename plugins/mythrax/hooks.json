@@ -1,0 +1,10 @@
+{
+    "mythrax-pre-invocation": {
+        "PreInvocation": [
+            {
+                "type": "command",
+                "command": "python3 ${PLUGIN_ROOT}/pre_invocation.py"
+            }
+        ]
+    }
+}
