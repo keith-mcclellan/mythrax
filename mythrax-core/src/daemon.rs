@@ -262,7 +262,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                 for scope in scopes {
                                     let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope, backend_daily.embedder.clone()).await;
                                 }
-                                let _ = cmp.compact_global(&*backend_daily, &store_daily).await;
+
                             }
                             
                             tracing::info!("Daily scheduled auditor calibration starting...");
@@ -296,7 +296,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                     for scope in scopes {
                                                         let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope, backend_dream.embedder.clone()).await;
                                                     }
-                                                    let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
+
                                                 }
                                                 pending_debounce = false;
                                                 continue;
@@ -325,7 +325,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                 for scope in scopes {
                                                     let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope, backend_dream.embedder.clone()).await;
                                                 }
-                                                let _ = compactor.compact_global(&*backend_dream, &store_dream).await;
+
                                             }
                                         }
                                 }

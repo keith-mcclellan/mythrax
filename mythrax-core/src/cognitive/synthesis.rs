@@ -7,6 +7,29 @@ use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
 
+pub const CONCISION_DIRECTIVE: &str = "\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+
+pub fn build_synthesis_prompt(base_sys: &str) -> String {
+    format!("{}\n\n{}", CONCISION_DIRECTIVE, base_sys)
+}
+
+pub fn check_compression_ratio(input_text: &str, output_text: &str, original_content_tokens: usize) {
+    let input_tokens = input_text.len() / 4;
+    let output_tokens = output_text.len() / 4;
+    
+    let original = std::cmp::max(original_content_tokens, 1);
+    let ratio = (input_tokens + output_tokens) as f64 / original as f64;
+    
+    let alert_ratio: f64 = std::env::var("MYTHRAX_VERBOSITY_ALERT_RATIO")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.5);
+        
+    if ratio > alert_ratio {
+        tracing::warn!("Verbosity alert: compression ratio {:.2} exceeds limit {:.2}", ratio, alert_ratio);
+    }
+}
+
 pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
     1.0 - crate::math::cosine_similarity(u, v)
 }
@@ -670,7 +693,8 @@ impl DreamCoordinator {
                             new_source_episodes.push(ep_id_str);
                         }
 
-                        let sys_prompt = "You are a systems synthesizer. Refine the existing architectural insight note by incorporating the details of the new event.";
+                        let base_sys = "You are a systems synthesizer. Refine the existing architectural insight note by incorporating the details of the new event.";
+                        let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                         let mut display_content = ep.content.clone();
                         if let Some(ref ep_id) = ep.id {
                             if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
@@ -703,7 +727,9 @@ impl DreamCoordinator {
                             "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}",
                             ins.content, ep.title, display_content
                         );
-                        let updated_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
+                        let original_tokens = (ins.content.len() + display_content.len()) / 4;
+                        let updated_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await?;
+                        crate::cognitive::synthesis::check_compression_ratio(&prompt_text, &updated_summary, original_tokens);
 
                         let mut source_ep_links = Vec::new();
                         let mut eps_to_link = Vec::new();
@@ -830,22 +856,22 @@ impl DreamCoordinator {
                     events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
                 }
 
-                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
                 For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
                 - 1: Anecdotal / Single Episode\n\
                 - 3: Corroborated / Tested\n\
                 - 5: Proven / Universal\n\n\
-                For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.\n\n\
-                Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n\
-                - Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n\
-                - Use active voice, positive form, and definite, specific, concrete language.";
+                For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
+                let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                 
                 let prompt_text = format!(
                     "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
                     events_text
                 );
 
-                let llm_res = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
+                let original_tokens = events_text.len() / 4;
+                let llm_res = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await?;
+                crate::cognitive::synthesis::check_compression_ratio(&prompt_text, &llm_res, original_tokens);
                 
                 #[derive(serde::Deserialize)]
                 struct ClusterAnalysis {
@@ -901,95 +927,7 @@ impl DreamCoordinator {
                     }
                 }
 
-                let sys_wisdom = "You are a systems synthesizer. Analyze the events and extract system-level Wisdom Rules to avoid mistakes. Respond with a JSON array of rules.";
-                let prompt_wisdom = format!(
-                    "Events:\n\n{}Respond ONLY with a JSON array of objects, each containing exactly:\n\
-                    - target_pattern (string: context/trigger)\n\
-                    - action_to_avoid (string: what to avoid)\n\
-                    - causal_explanation (string: why to avoid)\n\
-                    - prescribed_remedy (string: what to do instead)\n\
-                    - rule_type (string: must be either \"aesthetic\" or \"procedural\". \"aesthetic\" rules govern styling, CSS, visual layouts, colors, or UI tokens. \"procedural\" rules govern workflows, TDD, testing, git, database logic, or compilers.)",
-                    events_text
-                );
 
-                if let Ok(wisdom_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_wisdom), &prompt_wisdom).await {
-                    #[derive(serde::Deserialize)]
-                    struct RawWisdom {
-                        target_pattern: String,
-                        action_to_avoid: String,
-                        causal_explanation: String,
-                        prescribed_remedy: String,
-                        #[serde(default)]
-                        rule_type: Option<String>,
-                    }
-                    if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
-                        for r in rules {
-                            let rule_type = r.rule_type.as_deref().unwrap_or("aesthetic").to_lowercase();
-                            let _is_procedural = rule_type == "procedural";
-
-                            let mut source_ep_links = Vec::new();
-                            let mut eps_to_link = Vec::new();
-                            if let Ok(mem_nodes) = db.get_memory_nodes(&cluster_ep_ids).await {
-                                for ep in mem_nodes.episodes {
-                                    if let Some(ref path) = ep.vault_path {
-                                        let target = path.strip_suffix(".md").unwrap_or(path);
-                                        source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
-                                        eps_to_link.push((path.clone(), ep.title.clone()));
-                                    }
-                                }
-                            }
-                            let source_ep_section = if !source_ep_links.is_empty() {
-                                format!("\n\n## Source Episodes\n{}", source_ep_links.join("\n"))
-                            } else {
-                                String::new()
-                            };
-
-                            let final_scope = scope.clone();
-                            let rule_path = resolve_rule_path(&final_scope, &r.action_to_avoid);
-                            let final_tier_str = "dynamic".to_string();
-
-                            let rule_md = format!(
-                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier_str, final_scope,
-                                cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
-                                source_ep_section
-                            );
-                            store.write_file(&rule_path, &rule_md)?;
-
-                            for (ep_path, _ep_title) in eps_to_link {
-                                let _ = store.append_link_to_file(&ep_path, "Derived Wisdom Rules", &rule_path, &format!("Wisdom: {}", r.target_pattern));
-                            }
-
-                            let rule_contract = WisdomRule {
-                                id: None,
-                                target_pattern: r.target_pattern,
-                                action_to_avoid: r.action_to_avoid,
-                                causal_explanation: r.causal_explanation,
-                                prescribed_remedy: r.prescribed_remedy,
-                                tier: crate::contracts::Tier::Project,
-                                scope: final_scope,
-                                vault_path: Some(rule_path),
-                                embedding: None,
-                                source_episodes: cluster_ep_ids.clone(),
-                                generator_name: "DreamCoordinator".to_string(),
-                                similarity: None,
-                                utility: None,
-                                status: None,
-                                superseded_at: None,
-                                superseded_by: None,
-                                rule_type: Some(rule_type.clone()),
-                            
-                                ..Default::default()
-                            };
-                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
-                                for ep_id in &cluster_ep_ids {
-                                    let _ = db.relate_nodes(ep_id, &wisdom_id, None, None, None).await;
-                                }
-                            }
-                        }
-                    }
-                }
 
                 for ep in cluster_eps {
                     if let Some(ref ep_id) = ep.id {
@@ -1195,22 +1133,22 @@ impl DreamCoordinator {
                             }
 
                             // Call LLM Synthesizer
-                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                            let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
                             For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
                             - 1: Anecdotal / Single Episode\n\
                             - 3: Corroborated / Tested\n\
                             - 5: Proven / Universal\n\n\
-                            For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.\n\n\
-                            Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n\
-                            - Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n\
-                            - Use active voice, positive form, and definite, specific, concrete language.";
+                            For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
+                            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                             
                             let prompt_text = format!(
                                 "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
                                 events_text
                             );
                             
-                            if let Ok(llm_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await {
+                            let original_tokens = events_text.len() / 4;
+                            if let Ok(llm_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await {
+                                crate::cognitive::synthesis::check_compression_ratio(&prompt_text, &llm_res, original_tokens);
                                 #[derive(serde::Deserialize)]
                                 struct ClusterAnalysis {
                                     title: String,
@@ -1516,15 +1454,18 @@ impl DreamCoordinator {
                     ));
                 }
 
-                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+                let base_sys = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.";
+                let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                 let user_prompt = format!(
                     "The following insights emerged independently in {} different projects:\n\n{}Respond with a JSON object containing target_pattern: string, action_to_avoid: string, causal_explanation: string, prescribed_remedy: string, and confidence: float.",
                     n,
                     insights_with_scope_labels
                 );
 
-                match self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &user_prompt).await {
+                let original_tokens = insights_with_scope_labels.len() / 4;
+                match self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(&sys_prompt), &user_prompt).await {
                     Ok(resp_str) => {
+                        crate::cognitive::synthesis::check_compression_ratio(&user_prompt, &resp_str, original_tokens);
                         println!("DEBUG - routed_completion succeeded: {:?}", resp_str);
                         #[derive(serde::Deserialize)]
                         struct GeneralizationResponse {
@@ -1732,7 +1673,8 @@ pub async fn save_wisdom_rule_with_deduplication(
                 return Ok(skills_id.clone());
             }
         } else if matched.tier == crate::contracts::Tier::Project {
-            let system_prompt = "You are an expert software engineer and systems architect. Merge and generalize two similar wisdom rules into a single, high-quality, comprehensive wisdom rule.";
+            let base_sys = "You are an expert software engineer and systems architect. Merge and generalize two similar wisdom rules into a single, high-quality, comprehensive wisdom rule.";
+            let system_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
             let prompt = format!(
                 "Rule 1:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
                  Rule 2:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
@@ -1743,9 +1685,11 @@ pub async fn save_wisdom_rule_with_deduplication(
                 rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
             );
 
+            let original_tokens = (matched.causal_explanation.len() + rule.causal_explanation.len()) / 4;
             let llm = crate::llm::LLMClient::new();
-            match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(system_prompt), &prompt).await {
+            match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(&system_prompt), &prompt).await {
                 Ok(res) => {
+                    crate::cognitive::synthesis::check_compression_ratio(&prompt, &res, original_tokens);
                     let stripped = crate::llm::strip_code_fences(&res);
 
                     #[derive(serde::Deserialize)]
@@ -2161,6 +2105,107 @@ pub fn truncate_by_tokens(
     }
 }
 
+pub async fn backpropagate_directions(db: &dyn StorageBackend, store: &MarkdownStore) -> Result<()> {
+    let all_nodes = db.get_all_wiki_nodes().await?;
+    let directions: Vec<_> = all_nodes.into_iter().filter(|n| n.node_type.as_deref() == Some("direction")).collect();
+
+    for dir_node in directions {
+        println!("Checking direction {:?}", dir_node.id);
+        if let Some(ref dir_id) = dir_node.id {
+            let related_ids = db.get_related_node_ids(dir_id).await.unwrap_or_default();
+            println!("Related IDs for {}: {:?}", dir_id, related_ids);
+            if related_ids.is_empty() { continue; }
+            
+            let mem_nodes = db.get_memory_nodes(&related_ids).await?;
+            let insights = mem_nodes.wiki_nodes;
+            println!("Fetched {} wiki nodes", insights.len());
+
+            
+            if insights.is_empty() { continue; }
+            
+            let base_sys = "You are a direction synthesizer. Synthesize the child insights into an updated Current Understanding section.";
+            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
+            let mut prompt_text = format!("Existing Direction Content:\n{}\n\nChild Insights:\n", dir_node.content);
+            for ins in &insights {
+                prompt_text.push_str(&format!("- {}: {}\n", ins.name, ins.content));
+            }
+            
+            let original_tokens = dir_node.content.len() / 4;
+            let llm = crate::llm::LLMClient::new();
+            match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await {
+                Ok(updated_understanding) => {
+                    let mut updated_node = dir_node.clone();
+                    updated_node.content = updated_understanding.clone();
+                    
+                    db.save_wiki_node(&updated_node).await.unwrap();
+                    
+                    let slug = crate::cognitive::synthesis::slugify_title(&updated_node.name);
+                    let rel_path = format!("wiki/{}/directions/{}.md", updated_node.scope, slug);
+                    let new_content = format!("---\ntitle: \"{}\"\nscope: \"{}\"\nnode_type: \"direction\"\n---\n\n## Current Understanding\n{}", updated_node.name, updated_node.scope, updated_understanding);
+                    let _ = store.write_file(&rel_path, &new_content);
+                },
+                Err(e) => println!("routed_completion failed: {:?}", e),
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn promote_insight_to_direction(
+    db: &dyn StorageBackend,
+    store: &MarkdownStore,
+    node: &WikiNode,
+    episodes: &[crate::contracts::Episode],
+) -> Result<()> {
+    let mut high_conf_count = 0;
+    for ep in episodes {
+        if let Some(conf) = ep.confidence {
+            if conf >= 4.0 { high_conf_count += 1; }
+        }
+    }
+    
+    let mut drift = 0.0;
+    if !episodes.is_empty() {
+        if let Some(initial_emb) = &episodes[0].embedding {
+            if let Some(current_emb) = &node.embedding {
+                drift = crate::cognitive::synthesis::cosine_distance(initial_emb, current_emb);
+            } else {
+                let mut sum = vec![0.0; initial_emb.len()];
+                let mut count = 0;
+                for ep in episodes {
+                    if let Some(ref emb) = ep.embedding {
+                        for (i, val) in emb.iter().enumerate() { sum[i] += val; }
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    for val in &mut sum { *val /= count as f32; }
+                    let norm: f32 = sum.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    if norm > 0.0 { for val in &mut sum { *val /= norm; } }
+                    drift = crate::cognitive::synthesis::cosine_distance(initial_emb, &sum);
+                }
+            }
+        }
+    }
+
+    if drift > 0.20 || high_conf_count > 15 {
+        let mut dir_node = node.clone();
+        dir_node.node_type = Some("direction".to_string());
+        println!("Saving promoted direction node: {:#?}", dir_node);
+        match db.save_wiki_node(&dir_node).await {
+            Ok(_) => println!("Save succeeded"),
+            Err(e) => println!("Save failed: {:?}", e),
+        }
+        
+        let embs: Vec<&[f32]> = episodes.iter().filter_map(|e| e.embedding.as_deref()).collect();
+        if !embs.is_empty() {
+            let _labels = crate::cognitive::synthesis::dbscan(&embs, 0.15, 2);
+        }
+    }
+    
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2187,4 +2232,113 @@ mod tests {
         let truncated = truncate_by_tokens(&long_text, 2048, None);
         assert_eq!(truncated.len(), 2048 * 4);
     }
+}
+
+pub async fn graduate_wisdom(db: &dyn crate::db::StorageBackend, store: &crate::store::MarkdownStore) -> Result<()> {
+    let all_nodes = db.get_all_wiki_nodes().await?;
+    let mut directions = Vec::new();
+    for node in all_nodes {
+        if node.node_type.as_deref() == Some("direction") && node.embedding.is_some() {
+            directions.push(node);
+        }
+    }
+
+    if directions.is_empty() {
+        return Ok(());
+    }
+
+    let mut to_graduate = Vec::new();
+    let mut handled = std::collections::HashSet::new();
+
+    for i in 0..directions.len() {
+        if handled.contains(&i) { continue; }
+        
+        let mut cluster = vec![&directions[i]];
+        let emb_i = directions[i].embedding.as_ref().unwrap();
+
+        for j in (i + 1)..directions.len() {
+            if handled.contains(&j) { continue; }
+            if directions[i].scope == directions[j].scope { continue; }
+            
+            let emb_j = directions[j].embedding.as_ref().unwrap();
+            let sim = crate::math::cosine_similarity(emb_i, emb_j);
+            if sim >= 0.85 {
+                cluster.push(&directions[j]);
+                handled.insert(j);
+            }
+        }
+
+        if cluster.len() > 1 {
+            to_graduate.push(cluster);
+            handled.insert(i);
+        }
+    }
+
+    for cluster in to_graduate {
+        let mut has_conflict = false;
+        let mut source_ep_ids = std::collections::HashSet::new();
+        
+        for node in &cluster {
+            let id = node.id.clone().unwrap_or_default();
+            source_ep_ids.insert(id.clone());
+            
+            let mut visited = std::collections::HashSet::new();
+            let mut queue = vec![id.clone()];
+            visited.insert(id.clone());
+            
+            while let Some(current) = queue.pop() {
+                if let Ok(related) = db.get_related_node_ids(&current).await {
+                    if let Ok(mem_nodes) = db.get_memory_nodes(&related).await {
+                        for related_node in mem_nodes.wiki_nodes {
+                            if related_node.node_type.as_deref() == Some("conflict") {
+                                has_conflict = true;
+                                break;
+                            }
+                            let rel_id = related_node.id.unwrap_or_default();
+                            if !visited.contains(&rel_id) {
+                                visited.insert(rel_id.clone());
+                                queue.push(rel_id);
+                            }
+                        }
+                        if has_conflict { break; }
+                    }
+                }
+            }
+            if has_conflict { break; }
+        }
+
+        if has_conflict {
+            continue;
+        }
+
+        let rule_class = "system_constraint";
+        let target_pattern = cluster[0].name.clone();
+        let slug = slugify_title(&target_pattern);
+        let rule_path = format!("wisdom/{}/{}.md", rule_class, slug);
+        
+        let rule = crate::contracts::WisdomRule {
+            target_pattern: target_pattern.clone(),
+            action_to_avoid: target_pattern.clone(),
+            causal_explanation: "Synthesized via cross-scope graduation.".into(),
+            prescribed_remedy: cluster[0].content.clone(),
+            tier: crate::contracts::Tier::Wisdom,
+            scope: "general".into(),
+            rule_type: Some(rule_class.to_string()),
+            source_episodes: source_ep_ids.into_iter().collect(),
+            generator_name: "WisdomGraduator".into(),
+            vault_path: Some(rule_path.clone()),
+            ..Default::default()
+        };
+
+        if let Ok(_wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule).await {
+            let rule_md = format!(
+                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy, rule.tier.as_str(),
+                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+            );
+            let _ = store.write_file(&rule_path, &rule_md);
+        }
+    }
+
+    Ok(())
 }

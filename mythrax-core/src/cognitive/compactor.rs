@@ -25,6 +25,29 @@ impl Compactor {
             llm: LLMClient::new(),
         }
     }
+    pub async fn compact_global(&self, db: &dyn crate::db::StorageBackend, store: &crate::store::MarkdownStore) -> anyhow::Result<()> {
+        let _ = db.prune_stale_memories(&store.vault_root).await;
+
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let mut pruning_days: i64 = 30;
+            let query_res = surreal_backend.db.query("SELECT VALUE value FROM profile WHERE key = 'compaction.history_pruning_days' LIMIT 1;").await;
+            if let Ok(mut resp) = query_res {
+                if let Ok(values) = resp.take::<Vec<String>>(0) {
+                    if let Some(val_str) = values.first() {
+                        if let Ok(days) = val_str.parse::<i64>() {
+                            pruning_days = days;
+                        }
+                    }
+                }
+            }
+            let threshold = chrono::Utc::now() - chrono::Duration::days(pruning_days);
+            let _ = surreal_backend.db.query("DELETE wiki_node_history WHERE changed_at < type::datetime($threshold);")
+                .bind(("threshold", threshold.to_rfc3339()))
+                .await;
+        }
+
+        crate::cognitive::synthesis::graduate_wisdom(db, store).await
+    }
 
     pub async fn delta_compact_checkpoints(&self, db: &dyn StorageBackend) -> Result<String> {
         let checkpoints = db.get_checkpoints().await?;
@@ -797,132 +820,6 @@ impl Compactor {
         Ok(())
     }
 
-    pub async fn compact_global(
-        &self,
-        db: &dyn StorageBackend,
-        store: &MarkdownStore,
-    ) -> Result<()> {
-        let _ = db.prune_stale_memories(&store.vault_root).await;
-        let _ = self.archive_decayed_episodes(db, store).await;
-
-        // Perform history pruning using SurrealDB backend if available
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let mut pruning_days: i64 = 30; // default 30 days
-            let query_res = surreal_backend.db.query("SELECT VALUE value FROM profile WHERE key = 'compaction.history_pruning_days' LIMIT 1;").await;
-            if let Ok(mut resp) = query_res {
-                if let Ok(values) = resp.take::<Vec<String>>(0) {
-                    if let Some(val_str) = values.first() {
-                        if let Ok(days) = val_str.parse::<i64>() {
-                            pruning_days = days;
-                        }
-                    }
-                }
-            }
-            
-            let threshold = chrono::Utc::now() - chrono::Duration::days(pruning_days);
-            let _ = surreal_backend.db.query("DELETE wiki_node_history WHERE changed_at < type::datetime($threshold);")
-                .bind(("threshold", threshold.to_rfc3339()))
-                .await;
-        }
-        // Clean up previous global compactions to prevent duplication and circular aggregation
-        let compaction_dir = store.vault_root.join("wiki/general/compactions");
-        if compaction_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&compaction_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let filename = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                    if filename.starts_with("global_compaction_") && path.extension().map(|s| s == "md").unwrap_or(false) {
-                        let _ = std::fs::remove_file(path);
-                    }
-                }
-            }
-        }
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let delete_query = "DELETE wiki_node WHERE scope = 'general' AND (vault_path CONTAINS 'global_compaction_' OR name = 'Global Systems Synthesis');";
-            let _ = surreal_backend.db.query(delete_query).await;
-        }
-
-        if !compaction_dir.exists() {
-            return Ok(());
-        }
-
-        let mut combined_compaction = String::new();
-        let mut compaction_paths = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&compaction_dir) {
-            for entry in entries.flatten() {
-                if entry.path().extension().map(|s| s == "md").unwrap_or(false) {
-                    let path = entry.path();
-                    let rel_path = path.strip_prefix(&store.vault_root)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .to_string();
-                    compaction_paths.push(rel_path);
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        combined_compaction.push_str(&content);
-                        combined_compaction.push_str("\n\n---\n\n");
-                    }
-                }
-            }
-        }
-
-        if combined_compaction.is_empty() {
-            return Ok(());
-        }
-
-        let (cleaned_compaction, extracted_anchors) = extract_attention_anchors(&combined_compaction);
-
-        let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
-        let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
-        let global_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
-        let global_summary = page_markdown_code_blocks(db, &global_summary).await?;
-
-        let stm_anchors = get_active_stm_anchors(&store.vault_root);
-        let mut all_anchors = extracted_anchors;
-        for sa in stm_anchors {
-            if !all_anchors.contains(&sa) {
-                all_anchors.push(sa);
-            }
-        }
-
-        let relative_path = "wiki/general/compactions/global_compaction.md".to_string();
-        let mut file_content = format!(
-            "---\ntype: \"global_compaction\"\n---\n\n# Global Systems Synthesis\n\n{}",
-            global_summary
-        );
-
-        file_content.push_str("\n\n## Component Compactions\n");
-        for comp_path in &compaction_paths {
-            let name_target = comp_path.strip_suffix(".md").unwrap_or(comp_path);
-            file_content.push_str(&format!("- [[{}]]\n", name_target));
-        }
-
-        if !all_anchors.is_empty() {
-            file_content.push_str("\n\n## Attention Anchors\n");
-            for anchor in &all_anchors {
-                file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
-            }
-        }
-        store.write_file(&relative_path, &file_content)?;
-
-        let node_contract = WikiNode {
-            id: None,
-            name: "Global Systems Synthesis".to_string(),
-            content: global_summary.clone(),
-            scope: "general".to_string(),
-            vault_path: Some(relative_path.clone()),
-            embedding: None,
-            ..Default::default()
-        };
-        if let Ok(global_compaction_id) = db.save_wiki_node(&node_contract).await {
-            for comp_path in compaction_paths {
-                if let Ok(Some(comp_id)) = db.get_wiki_node_id_by_vault_path(&comp_path).await {
-                    let _ = db.relate_nodes(&comp_id, &global_compaction_id, None, None, None).await;
-                }
-            }
-        }
-
-        Ok(())
-    }
 
     async fn archive_decayed_episodes(
         &self,
