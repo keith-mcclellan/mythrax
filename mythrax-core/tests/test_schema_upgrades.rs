@@ -89,6 +89,7 @@ async fn test_schema_upgrades_exist() -> Result<()> {
         scope: "general".to_string(),
         vault_path: Some("wiki/target.md".to_string()),
         embedding: None,
+        ..Default::default()
     };
     let wiki_id = backend.save_wiki_node(&wiki_save).await?;
 

@@ -457,6 +457,10 @@ pub struct WikiNode {
     pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metacognitive_confidence: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

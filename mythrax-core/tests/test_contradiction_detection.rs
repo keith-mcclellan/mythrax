@@ -44,6 +44,7 @@ async fn test_contradiction_detection_resolution() -> Result<()> {
         scope: "test_scope".to_string(),
         vault_path: Some("wiki/test_scope/insights/db_choice.md".to_string()),
         embedding: Some(vec![1.0; 768]),
+        ..Default::default()
     };
     let existing_id = backend.save_wiki_node(&existing_node).await?;
     store.write_file("wiki/test_scope/insights/db_choice.md", "---\ntitle: \"Existing DB Choice\"\nscope: \"test_scope\"\n---\n\nWe should use Postgres for the database.")?;
@@ -56,6 +57,7 @@ async fn test_contradiction_detection_resolution() -> Result<()> {
         scope: "test_scope".to_string(),
         vault_path: Some("wiki/test_scope/insights/new_db_choice.md".to_string()),
         embedding: Some(vec![1.0; 768]),
+        ..Default::default()
     };
 
     // Run contradiction resolution save

@@ -329,7 +329,9 @@ impl DreamCoordinator {
         let mut node = node.clone();
         if node.embedding.is_none() {
             if let Some(ref emb) = embedder {
-                if let Ok(e) = emb.embed(&node.content) {
+                let max_tokens = 2048;
+                let truncated_content = truncate_by_tokens(&node.content, max_tokens, Some(emb));
+                if let Ok(e) = emb.embed(&truncated_content) {
                     node.embedding = Some(e);
                 }
             }
@@ -390,7 +392,9 @@ impl DreamCoordinator {
                             
                             // Re-embed resolved content
                             if let Some(ref emb) = embedder {
-                                if let Ok(e) = emb.embed(&updated_node.content) {
+                                let max_tokens = 2048;
+                                let truncated_content = truncate_by_tokens(&updated_node.content, max_tokens, Some(emb));
+                                if let Ok(e) = emb.embed(&truncated_content) {
                                     updated_node.embedding = Some(e);
                                 }
                             }
@@ -797,9 +801,18 @@ impl DreamCoordinator {
                     events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
                 }
 
-                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
+                - 1: Anecdotal / Single Episode\n\
+                - 3: Corroborated / Tested\n\
+                - 5: Proven / Universal\n\n\
+                For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.\n\n\
+                Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n\
+                - Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n\
+                - Use active voice, positive form, and definite, specific, concrete language.";
+                
                 let prompt_text = format!(
-                    "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
+                    "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
                     events_text
                 );
 
@@ -809,6 +822,10 @@ impl DreamCoordinator {
                 struct ClusterAnalysis {
                     title: String,
                     summary: String,
+                    #[serde(default)]
+                    metacognitive_confidence: Option<i32>,
+                    #[serde(default)]
+                    node_type: Option<String>,
                 }
                 
                 let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
@@ -817,6 +834,8 @@ impl DreamCoordinator {
                         ClusterAnalysis {
                             title: format!("Cluster Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
                             summary: llm_res,
+                            metacognitive_confidence: None,
+                            node_type: None,
                         }
                     }
                 };
@@ -826,10 +845,12 @@ impl DreamCoordinator {
                 let clean_title = slugify_title(&analysis.title);
                 let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
                 let insight_content = format!(
-                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
+                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}",
                     analysis.title,
                     scope,
                     cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
+                    analysis.metacognitive_confidence.unwrap_or(3),
+                    analysis.node_type.as_deref().unwrap_or("insight"),
                     analysis.summary
                 );
                 store.write_file(&relative_path, &insight_content)?;
@@ -841,6 +862,8 @@ impl DreamCoordinator {
                     scope: scope.clone(),
                     vault_path: Some(relative_path.clone()),
                     embedding: None,
+                    metacognitive_confidence: analysis.metacognitive_confidence,
+                    node_type: analysis.node_type.clone().or(Some("insight".to_string())),
                     ..Default::default()
                 };
                 if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
@@ -954,6 +977,7 @@ impl DreamCoordinator {
                     total_clusters
                 );
             }
+            }
 
             // --- DRIFT & SPLIT MANAGEMENT LOGIC START ---
             
@@ -989,7 +1013,9 @@ impl DreamCoordinator {
                     
                     for mut ep in episodes {
                         if ep.embedding.is_none() {
-                            episodes_needing_embedding.push(ep.content.clone());
+                            let max_tokens = 2048;
+                            let truncated_content = truncate_by_tokens(&ep.content, max_tokens, embedder.as_deref());
+                            episodes_needing_embedding.push(truncated_content);
                             ep.embedding = None;
                             episodes_with_embedding.push(ep);
                         } else {
@@ -1140,9 +1166,18 @@ impl DreamCoordinator {
                             }
 
                             // Call LLM Synthesizer
-                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                            For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
+                            - 1: Anecdotal / Single Episode\n\
+                            - 3: Corroborated / Tested\n\
+                            - 5: Proven / Universal\n\n\
+                            For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.\n\n\
+                            Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n\
+                            - Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n\
+                            - Use active voice, positive form, and definite, specific, concrete language.";
+                            
                             let prompt_text = format!(
-                                "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
+                                "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
                                 events_text
                             );
                             
@@ -1151,6 +1186,10 @@ impl DreamCoordinator {
                                 struct ClusterAnalysis {
                                     title: String,
                                     summary: String,
+                                    #[serde(default)]
+                                    metacognitive_confidence: Option<i32>,
+                                    #[serde(default)]
+                                    node_type: Option<String>,
                                 }
 
                                 let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
@@ -1159,6 +1198,8 @@ impl DreamCoordinator {
                                         ClusterAnalysis {
                                             title: format!("Split Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
                                             summary: llm_res,
+                                            metacognitive_confidence: None,
+                                            node_type: None,
                                         }
                                     }
                                 };
@@ -1181,10 +1222,12 @@ impl DreamCoordinator {
                                 };
 
                                 let insight_content = format!(
-                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
+                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}{}",
                                     analysis.title,
                                     scope,
                                     group.iter().map(|ep| format!("  - \"{}\"", ep.id.as_ref().unwrap_or(&String::new()))).collect::<Vec<_>>().join("\n"),
+                                    analysis.metacognitive_confidence.unwrap_or(3),
+                                    analysis.node_type.as_deref().unwrap_or("insight"),
                                     analysis.summary,
                                     source_ep_section
                                 );
@@ -1203,6 +1246,8 @@ impl DreamCoordinator {
                                         scope: scope.to_string(),
                                         vault_path: Some(relative_path.clone()),
                                         embedding: None,
+                                        metacognitive_confidence: analysis.metacognitive_confidence,
+                                        node_type: analysis.node_type.clone().or(Some("insight".to_string())),
                                         ..Default::default()
                                     };
                                     
@@ -2048,6 +2093,45 @@ pub async fn traverse_adjacent_logs(
     Ok(results)
 }
 
+pub fn truncate_by_tokens(
+    text: &str,
+    max_tokens: usize,
+    embedder: Option<&crate::embeddings::LocalEmbedder>,
+) -> String {
+    if let Some(emb) = embedder {
+        let count = emb.count_tokens(text).unwrap_or(text.len() / 4);
+        if count <= max_tokens {
+            return text.to_string();
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let mut low = 0;
+        let mut high = chars.len();
+        let mut best_fit = 0;
+        while low <= high {
+            let mid = (low + high) / 2;
+            let candidate: String = chars[..mid].iter().collect();
+            let tokens = emb.count_tokens(&candidate).unwrap_or(mid / 4);
+            if tokens <= max_tokens {
+                best_fit = mid;
+                low = mid + 1;
+            } else {
+                if mid == 0 {
+                    break;
+                }
+                high = mid - 1;
+            }
+        }
+        chars[..best_fit].iter().collect()
+    } else {
+        let max_chars = max_tokens * 4;
+        let char_count = text.chars().count();
+        if char_count <= max_chars {
+            return text.to_string();
+        }
+        text.chars().take(max_chars).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2066,5 +2150,12 @@ mod tests {
         assert_eq!(labels[0], labels[1]);
         assert!(labels[0].is_some());
         assert_eq!(labels[2], None);
+    }
+
+    #[test]
+    fn test_truncate_by_tokens_heuristic() {
+        let long_text = "a".repeat(10000);
+        let truncated = truncate_by_tokens(&long_text, 2048, None);
+        assert_eq!(truncated.len(), 2048 * 4);
     }
 }

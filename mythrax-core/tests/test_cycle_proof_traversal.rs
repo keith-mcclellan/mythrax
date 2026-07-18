@@ -33,6 +33,7 @@ async fn test_query_symbolic_scored_confidences() -> Result<()> {
         scope: "general".to_string(),
         vault_path: None,
         embedding: None,
+        ..Default::default()
     };
     backend.save_wiki_node(&node_contract).await?;
     let node_contract = mythrax_core::contracts::WikiNode {
@@ -42,6 +43,7 @@ async fn test_query_symbolic_scored_confidences() -> Result<()> {
         scope: "general".to_string(),
         vault_path: None,
         embedding: None,
+        ..Default::default()
     };
     backend.save_wiki_node(&node_contract).await?;
     let node_contract = mythrax_core::contracts::WikiNode {
@@ -51,6 +53,7 @@ async fn test_query_symbolic_scored_confidences() -> Result<()> {
         scope: "general".to_string(),
         vault_path: None,
         embedding: None,
+        ..Default::default()
     };
     backend.save_wiki_node(&node_contract).await?;
 
@@ -84,6 +87,7 @@ async fn test_query_symbolic_scored_temporal_filtering() -> Result<()> {
             scope: "general".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&node_contract).await?;
     }

@@ -633,7 +633,7 @@ impl SurrealBackend {
             .bind(("superseded_by", rule.superseded_by.as_deref()))
             .bind(("severity", rule.severity.as_deref()))
             .bind(("blocking", rule.blocking.unwrap_or(false)))
-            .bind(("rule_type", rule.rule_type.as_deref()))
+            .bind(("rule_type", rule.rule_type.as_deref().unwrap_or("aesthetic")))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
@@ -1020,7 +1020,9 @@ impl SurrealBackend {
                     vault_path: $vault_path,
                     embedding: $embedding,
                     temporal_range_start: $temporal_range_start,
-                    temporal_range_end: $temporal_range_end
+                    temporal_range_end: $temporal_range_end,
+                    metacognitive_confidence: $metacognitive_confidence,
+                    node_type: $node_type
                 };
                 COMMIT TRANSACTION;
             "
@@ -1035,7 +1037,9 @@ impl SurrealBackend {
                     vault_path: $vault_path,
                     embedding: $embedding,
                     temporal_range_start: $temporal_range_start,
-                    temporal_range_end: $temporal_range_end
+                    temporal_range_end: $temporal_range_end,
+                    metacognitive_confidence: $metacognitive_confidence,
+                    node_type: $node_type
                 };
                 COMMIT TRANSACTION;
             "
@@ -1066,6 +1070,8 @@ impl SurrealBackend {
             .bind(("embedding", embedding_val.clone()))
             .bind(("temporal_range_start", node.temporal_range_start))
             .bind(("temporal_range_end", node.temporal_range_end))
+            .bind(("metacognitive_confidence", node.metacognitive_confidence))
+            .bind(("node_type", node.node_type.as_deref().unwrap_or("insight")))
             .await?;
 
         response.check().context("SurrealDB save_wiki_node transaction failed")?;
@@ -1505,17 +1511,7 @@ impl SurrealBackend {
                 "wiki_node" => {
                     let node_opt: Option<WikiNodeRaw> = self.db.select(thing_id.clone()).await?;
                     if let Some(raw) = node_opt {
-                        let node = WikiNode {
-                            id: Some(format_record_id(&raw.id)),
-                            name: raw.name,
-                            content: raw.content,
-                            scope: raw.scope,
-                            vault_path: raw.vault_path,
-                            embedding: raw.embedding,
-                            temporal_range_start: raw.temporal_range_start,
-                            temporal_range_end: raw.temporal_range_end,
-                        };
-                        wiki_nodes.push(node);
+                        wiki_nodes.push(raw.into_wiki_node());
                     }
                 }
                 _ => {

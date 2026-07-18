@@ -78,6 +78,7 @@ mod tests {
             scope: "scope1".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         let (r1, _) = oneshot::channel();
         tx.try_send(EventMessage {
@@ -123,6 +124,7 @@ mod tests {
                     scope: "test_scope".to_string(),
                     vault_path: None,
                     embedding: None,
+                    ..Default::default()
                 };
                 let (respond_to, rx_resp) = oneshot::channel();
                 tx_clone.send(EventMessage {
@@ -140,6 +142,7 @@ mod tests {
                     scope: "test_scope".to_string(),
                     vault_path: None,
                     embedding: None,
+                    ..Default::default()
                 };
                 let (respond_to2, rx_resp2) = oneshot::channel();
                 tx_clone.send(EventMessage {

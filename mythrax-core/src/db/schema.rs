@@ -69,6 +69,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS temporal_range_end ON wiki_node TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS graduated_to ON wiki_node TYPE option<record<wisdom>>;
     DEFINE FIELD IF NOT EXISTS metacognitive_confidence ON wiki_node TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS node_type ON wiki_node TYPE option<string> DEFAULT 'insight';
     DEFINE INDEX IF NOT EXISTS wiki_node_name ON wiki_node FIELDS name UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
     DEFINE INDEX OVERWRITE wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;

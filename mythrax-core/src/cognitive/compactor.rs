@@ -878,8 +878,8 @@ impl Compactor {
             scope: "general".to_string(),
             vault_path: Some(relative_path.clone()),
             embedding: None,
-    ..Default::default()
-};
+            ..Default::default()
+        };
         if let Ok(global_compaction_id) = db.save_wiki_node(&node_contract).await {
             for comp_path in compaction_paths {
                 if let Ok(Some(comp_id)) = db.get_wiki_node_id_by_vault_path(&comp_path).await {

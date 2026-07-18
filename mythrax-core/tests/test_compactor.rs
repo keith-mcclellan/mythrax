@@ -73,8 +73,8 @@ Insight Three content."#;
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/insight_one.md".to_string()),
         embedding: None,
-    ..Default::default()
-};
+        ..Default::default()
+    };
     let node2 = WikiNode {
         id: None,
         name: "Insight Two".to_string(),
@@ -82,8 +82,8 @@ Insight Three content."#;
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/insight_two.md".to_string()),
         embedding: None,
-    ..Default::default()
-};
+        ..Default::default()
+    };
     let node3 = WikiNode {
         id: None,
         name: "Insight Three".to_string(),
@@ -91,8 +91,8 @@ Insight Three content."#;
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/insight_three.md".to_string()),
         embedding: None,
-    ..Default::default()
-};
+        ..Default::default()
+    };
 
     let id1 = backend.save_wiki_node(&node1).await?;
     let id2 = backend.save_wiki_node(&node2).await?;
@@ -349,8 +349,8 @@ Insight content
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/drifting_insight.md".to_string()),
         embedding: None,
-    ..Default::default()
-};
+        ..Default::default()
+    };
     let _old_node_id = backend.save_wiki_node(&old_node).await?;
 
     let mut initial_nodes_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';").await?;
