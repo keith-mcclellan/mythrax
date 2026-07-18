@@ -784,6 +784,7 @@ pub async fn sync_file_to_db_with_cache(
             scope: frontmatter.scope.unwrap_or_else(|| "general".to_string()),
             vault_path: Some(rel_path),
             embedding: None,
+            ..Default::default()
         };
 
         let db_id = backend.save_wiki_node(&node).await?;

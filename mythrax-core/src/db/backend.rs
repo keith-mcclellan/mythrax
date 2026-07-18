@@ -972,6 +972,8 @@ pub struct EpisodeRaw {
     pub node_type: Option<String>,
     pub confidence: Option<f32>,
     pub importance: Option<f32>,
+    pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<EpisodeRaw> for Episode {
@@ -1000,6 +1002,8 @@ impl From<EpisodeRaw> for Episode {
             node_type: raw.node_type,
             confidence: raw.confidence,
             importance: raw.importance,
+            temporal_range_start: raw.temporal_range_start,
+            temporal_range_end: raw.temporal_range_end,
             ..Default::default()
         }
     }
@@ -1030,6 +1034,8 @@ pub(crate) struct WikiNodeRaw {
     pub(crate) scope: String,
     pub(crate) vault_path: Option<String>,
     pub(crate) embedding: Option<Vec<f32>>,
+    pub(crate) temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl WikiNodeRaw {
@@ -1042,6 +1048,8 @@ impl WikiNodeRaw {
             scope: self.scope,
             vault_path: self.vault_path,
             embedding: self.embedding,
+            temporal_range_start: self.temporal_range_start,
+            temporal_range_end: self.temporal_range_end,
         }
     }
 }
@@ -2202,7 +2210,8 @@ mod tests {
             scope: "hydration-test".to_string(),
             vault_path: None,
             embedding: None,
-        };
+    ..Default::default()
+};
         let wiki_id = backend.save_wiki_node(&node).await.unwrap();
 
         // Query get_memory_nodes
@@ -2276,7 +2285,8 @@ mod tests {
             scope: "ranking-test".to_string(),
             vault_path: None,
             embedding: None,
-        };
+    ..Default::default()
+};
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
         // Execute text search (query_emb will be None, similarity defaults to 1.0)
@@ -2387,7 +2397,8 @@ mod tests {
             scope: "directional-test".to_string(),
             vault_path: Some("wiki/insights/parent_insight.md".to_string()),
             embedding: None,
-        };
+    ..Default::default()
+};
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
         // Relate Episode -> relates_to -> WikiNode (Upward)
@@ -2524,7 +2535,8 @@ mod tests {
             scope: "test-scope".to_string(),
             vault_path: Some("wiki/test.md".to_string()),
             embedding: None,
-        };
+    ..Default::default()
+};
 
         let node_id = backend.save_wiki_node(&node).await.unwrap();
         assert!(node_id.starts_with("wiki_node:"));
@@ -2622,7 +2634,8 @@ mod tests {
             scope: "compaction-test".to_string(),
             vault_path: None,
             embedding: None,
-        };
+    ..Default::default()
+};
         backend.save_wiki_node(&node1).await.unwrap();
 
         // Search with large budget - full content
@@ -2678,7 +2691,8 @@ mod tests {
             scope: "compaction-test-single-para".to_string(),
             vault_path: None,
             embedding: None,
-        };
+    ..Default::default()
+};
         backend.save_wiki_node(&node2).await.unwrap();
 
         // Dynamically compute the budget for a truncated version (e.g. half the content length)
@@ -2800,7 +2814,8 @@ mod tests {
             scope: "graph-exclusion-test".to_string(),
             vault_path: None,
             embedding: None,
-        };
+    ..Default::default()
+};
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
         // Relate Episode -> relates_to -> WikiNode (Upward)
@@ -2858,7 +2873,8 @@ mod tests {
             scope: "artifact-exclusion-test".to_string(),
             vault_path: Some("wiki/artifacts/test_artifact.md".to_string()),
             embedding: None,
-        };
+    ..Default::default()
+};
         backend.save_wiki_node(&artifact_node).await.unwrap();
 
         // 2. Create a normal WikiNode
@@ -2869,7 +2885,8 @@ mod tests {
             scope: "artifact-exclusion-test".to_string(),
             vault_path: Some("wiki/scope/insights/my_insight.md".to_string()),
             embedding: None,
-        };
+    ..Default::default()
+};
         backend.save_wiki_node(&normal_node).await.unwrap();
 
         // 3. Search with include_artifacts = false -> should find only Normal Node

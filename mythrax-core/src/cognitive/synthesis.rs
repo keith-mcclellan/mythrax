@@ -298,6 +298,7 @@ fn calculate_centroid(
 
 pub struct DreamCoordinator {
     llm: LLMClient,
+    scope_locks: dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
 }
 
 impl Default for DreamCoordinator {
@@ -310,6 +311,7 @@ impl DreamCoordinator {
     pub fn new() -> Self {
         Self {
             llm: LLMClient::new(),
+            scope_locks: dashmap::DashMap::new(),
         }
     }
 
@@ -427,7 +429,6 @@ impl DreamCoordinator {
         store: &MarkdownStore,
         mode_override: Option<&str>,
         embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
-        scope_locks: &dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
     ) -> Result<()> {
         if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
             tracing::info!("Ingestion in progress, skipping background dream synthesis.");
@@ -590,7 +591,7 @@ impl DreamCoordinator {
 
         let total_scopes = scope_groups.len();
         for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
-            let scope_lock = scope_locks.entry(scope.clone()).or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))).clone();
+            let scope_lock = self.scope_locks.entry(scope.clone()).or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))).clone();
             let _guard = scope_lock.lock().await;
             
             for chunk in new_episodes.chunks(500) {
@@ -714,6 +715,7 @@ impl DreamCoordinator {
                             scope: scope.clone(),
                             vault_path: Some(relative_path.clone()),
                             embedding: None,
+                            ..Default::default()
                         };
                         if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await
                             && let Some(ref ep_id) = ep.id {
@@ -839,6 +841,7 @@ impl DreamCoordinator {
                     scope: scope.clone(),
                     vault_path: Some(relative_path.clone()),
                     embedding: None,
+                    ..Default::default()
                 };
                 if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
                     for ep_id in &cluster_ep_ids {
@@ -1200,6 +1203,7 @@ impl DreamCoordinator {
                                         scope: scope.to_string(),
                                         vault_path: Some(relative_path.clone()),
                                         embedding: None,
+                                        ..Default::default()
                                     };
                                     
                                     if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
@@ -1227,6 +1231,7 @@ impl DreamCoordinator {
                 }
             }
             // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
+            }
         }
 
         // --- Tasks C.6 & C.6a: Cross-Scope Graduation Pass ---
@@ -1784,7 +1789,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             }
                         }
                     } else {
-                        tracing::info!("Dreaming scope {}/{} complete", scope_idx + 1, total_scopes);
+                        tracing::warn!("Failed to parse LLM response as merged fields: {}", stripped);
                     }
                 }
                 Err(e) => {

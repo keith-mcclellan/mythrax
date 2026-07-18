@@ -870,6 +870,7 @@ pub async fn bulk_ingest_vault(
                         scope: resolved_scope.clone(),
                         vault_path: Some(wiki_rel),
                         embedding: None,
+                        ..Default::default()
                     };
 
                     if let Ok(wiki_node_id) = db.save_wiki_node(&node).await {

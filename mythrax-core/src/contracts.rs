@@ -123,6 +123,10 @@ pub struct Episode {
     pub importance: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -146,6 +150,10 @@ pub struct EpisodeSave {
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub importance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +175,8 @@ pub struct EpisodeSaveBuilder {
     pub confidence: Option<f32>,
     pub created_at: Option<String>,
     pub importance: Option<f32>,
+    pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl EpisodeSaveBuilder {
@@ -189,6 +199,8 @@ impl EpisodeSaveBuilder {
             confidence: None,
             created_at: None,
             importance: None,
+            temporal_range_start: None,
+            temporal_range_end: None,
         }
     }
 
@@ -267,6 +279,16 @@ impl EpisodeSaveBuilder {
         self
     }
 
+    pub fn temporal_range_start(mut self, start: Option<chrono::DateTime<chrono::Utc>>) -> Self {
+        self.temporal_range_start = start;
+        self
+    }
+
+    pub fn temporal_range_end(mut self, end: Option<chrono::DateTime<chrono::Utc>>) -> Self {
+        self.temporal_range_end = end;
+        self
+    }
+
     pub fn build(self) -> EpisodeSave {
         EpisodeSave {
             title: self.title,
@@ -286,6 +308,8 @@ impl EpisodeSaveBuilder {
             confidence: self.confidence,
             created_at: self.created_at,
             importance: self.importance,
+            temporal_range_start: self.temporal_range_start,
+            temporal_range_end: self.temporal_range_end,
         }
     }
 }
@@ -421,7 +445,7 @@ pub struct HandoffSave {
 }
 
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct WikiNode {
     pub id: Option<String>,
     pub name: String,
@@ -429,6 +453,10 @@ pub struct WikiNode {
     pub scope: String,
     pub vault_path: Option<String>,
     pub embedding: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -128,7 +128,9 @@ impl SurrealBackend {
                     word_count: $word_count,
                     node_type: $node_type,
                     created_at: type::datetime($created_at),
-                    importance: $importance
+                    importance: $importance,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -158,7 +160,9 @@ impl SurrealBackend {
                     word_count: $word_count,
                     node_type: $node_type,
                     created_at: type::datetime($created_at),
-                    importance: $importance
+                    importance: $importance,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end
                 };
                 
                 CREATE $met CONTENT {
@@ -214,6 +218,8 @@ impl SurrealBackend {
             .bind(("node_type", node_type_val))
             .bind(("created_at", created_at_val))
             .bind(("importance", episode.importance.unwrap_or(5.0)))
+            .bind(("temporal_range_start", episode.temporal_range_start))
+            .bind(("temporal_range_end", episode.temporal_range_end))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -1012,7 +1018,9 @@ impl SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end
                 };
                 COMMIT TRANSACTION;
             "
@@ -1025,7 +1033,9 @@ impl SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end
                 };
                 COMMIT TRANSACTION;
             "
@@ -1054,6 +1064,8 @@ impl SurrealBackend {
             .bind(("target_scope", node.scope.as_str()))
             .bind(("vault_path", vp_val.as_str()))
             .bind(("embedding", embedding_val.clone()))
+            .bind(("temporal_range_start", node.temporal_range_start))
+            .bind(("temporal_range_end", node.temporal_range_end))
             .await?;
 
         response.check().context("SurrealDB save_wiki_node transaction failed")?;
@@ -1500,6 +1512,8 @@ impl SurrealBackend {
                             scope: raw.scope,
                             vault_path: raw.vault_path,
                             embedding: raw.embedding,
+                            temporal_range_start: raw.temporal_range_start,
+                            temporal_range_end: raw.temporal_range_end,
                         };
                         wiki_nodes.push(node);
                     }

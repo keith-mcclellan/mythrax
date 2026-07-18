@@ -610,6 +610,7 @@ async fn main() -> Result<()> {
                 scope: "mythrax".to_string(),
                 vault_path: Some(arch_rel.to_string()),
                 embedding: None,
+                ..Default::default()
             };
             backend.save_wiki_node(&arch_node).await?;
 
@@ -626,6 +627,7 @@ async fn main() -> Result<()> {
                 scope: "mythrax".to_string(),
                 vault_path: Some(user_guide_rel.to_string()),
                 embedding: None,
+                ..Default::default()
             };
             backend.save_wiki_node(&user_guide_node).await?;
 
@@ -639,6 +641,7 @@ async fn main() -> Result<()> {
                 scope: "mythrax".to_string(),
                 vault_path: Some(skill_rel.to_string()),
                 embedding: None,
+                ..Default::default()
             };
             backend.save_wiki_node(&skill_node).await?;
 

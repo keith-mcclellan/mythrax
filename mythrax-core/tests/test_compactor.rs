@@ -73,7 +73,8 @@ Insight Three content."#;
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/insight_one.md".to_string()),
         embedding: None,
-    };
+    ..Default::default()
+};
     let node2 = WikiNode {
         id: None,
         name: "Insight Two".to_string(),
@@ -81,7 +82,8 @@ Insight Three content."#;
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/insight_two.md".to_string()),
         embedding: None,
-    };
+    ..Default::default()
+};
     let node3 = WikiNode {
         id: None,
         name: "Insight Three".to_string(),
@@ -89,7 +91,8 @@ Insight Three content."#;
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/insight_three.md".to_string()),
         embedding: None,
-    };
+    ..Default::default()
+};
 
     let id1 = backend.save_wiki_node(&node1).await?;
     let id2 = backend.save_wiki_node(&node2).await?;
@@ -346,7 +349,8 @@ Insight content
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/insights/drifting_insight.md".to_string()),
         embedding: None,
-    };
+    ..Default::default()
+};
     let _old_node_id = backend.save_wiki_node(&old_node).await?;
 
     let mut initial_nodes_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';").await?;
@@ -647,4 +651,185 @@ fn test_dot_product_orthogonal_vectors() {
     let v = vec![0.0, 1.0, 0.0];
     let dp: f32 = u.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
     assert_eq!(dp, 0.0);
+}
+
+#[tokio::test]
+async fn test_compactor_range_merging_and_derived_from_edges() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("wiki"))?;
+    fs::create_dir_all(vault_root.join("wisdom"))?;
+    fs::create_dir_all(vault_root.join("episodes"))?;
+
+    let workspace_root = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace_root)?;
+    unsafe {
+        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+    let store = MarkdownStore::new(&vault_root)?;
+    let compactor = Compactor::new();
+
+    // 1. Create two episodes with specific created_at/temporal_range values
+    let ep_save1 = mythrax_core::contracts::EpisodeSave {
+        title: "Episode 1".to_string(),
+        content: "First episode content".to_string(),
+        scope: Some("scope2".to_string()),
+        created_at: Some("2026-07-09T12:00:00Z".to_string()),
+        ..Default::default()
+    };
+    let ep_id1 = backend.save_episode(&ep_save1).await?;
+
+    let ep_save2 = mythrax_core::contracts::EpisodeSave {
+        title: "Episode 2".to_string(),
+        content: "Second episode content".to_string(),
+        scope: Some("scope2".to_string()),
+        created_at: Some("2026-07-15T12:00:00Z".to_string()),
+        ..Default::default()
+    };
+    let ep_id2 = backend.save_episode(&ep_save2).await?;
+
+    // Set temporal ranges on the episodes
+    let start1 = chrono::DateTime::parse_from_rfc3339("2026-07-08T00:00:00Z")?.with_timezone(&chrono::Utc);
+    let end1 = chrono::DateTime::parse_from_rfc3339("2026-07-10T00:00:00Z")?.with_timezone(&chrono::Utc);
+    let start2 = chrono::DateTime::parse_from_rfc3339("2026-07-14T00:00:00Z")?.with_timezone(&chrono::Utc);
+    let end2 = chrono::DateTime::parse_from_rfc3339("2026-07-16T00:00:00Z")?.with_timezone(&chrono::Utc);
+
+    backend.db.query("UPDATE $id SET temporal_range_start = $start, temporal_range_end = $end;")
+        .bind(("id", parse_record_id(&ep_id1)?))
+        .bind(("start", start1))
+        .bind(("end", end1))
+        .await?.check()?;
+
+    backend.db.query("UPDATE $id SET temporal_range_start = $start, temporal_range_end = $end;")
+        .bind(("id", parse_record_id(&ep_id2)?))
+        .bind(("start", start2))
+        .bind(("end", end2))
+        .await?.check()?;
+
+    // 2. Create the insights directory structure in the vault
+    let insights_dir = vault_root.join("wiki/scope2/insights");
+    fs::create_dir_all(&insights_dir)?;
+
+    let ins1_md = format!(
+        r#"---
+title: "Insight One"
+source_episodes:
+  - "{}"
+---
+Insight One content."#,
+        ep_id1
+    );
+
+    let ins2_md = format!(
+        r#"---
+title: "Insight Two"
+source_episodes:
+  - "{}"
+---
+Insight Two content."#,
+        ep_id2
+    );
+
+    fs::write(insights_dir.join("insight_one.md"), ins1_md)?;
+    fs::write(insights_dir.join("insight_two.md"), ins2_md)?;
+
+    // 3. Save matching WikiNodes in SurrealDB
+    let node1 = WikiNode {
+        id: None,
+        name: "Insight One".to_string(),
+        content: "Insight One content.".to_string(),
+        scope: "scope2".to_string(),
+        vault_path: Some("wiki/scope2/insights/insight_one.md".to_string()),
+        embedding: None,
+        ..Default::default()
+    };
+    let node2 = WikiNode {
+        id: None,
+        name: "Insight Two".to_string(),
+        content: "Insight Two content.".to_string(),
+        scope: "scope2".to_string(),
+        vault_path: Some("wiki/scope2/insights/insight_two.md".to_string()),
+        embedding: None,
+        ..Default::default()
+    };
+
+    let id1 = backend.save_wiki_node(&node1).await?;
+    let id2 = backend.save_wiki_node(&node2).await?;
+
+    let rid1 = parse_record_id(&id1)?;
+    let rid2 = parse_record_id(&id2)?;
+
+    let mut emb1 = vec![0.0; 768];
+    emb1[0] = 1.0;
+
+    let mut emb2 = vec![0.0; 768];
+    emb2[0] = 0.95;
+    emb2[1] = 0.3122;
+
+    backend.db.query("UPDATE $id SET embedding = $emb;")
+        .bind(("id", rid1))
+        .bind(("emb", emb1))
+        .await?.check()?;
+
+    backend.db.query("UPDATE $id SET embedding = $emb;")
+        .bind(("id", rid2))
+        .bind(("emb", emb2))
+        .await?.check()?;
+
+    backend.db.query("UPDATE $id SET temporal_range_start = $start, temporal_range_end = $end;")
+        .bind(("id", parse_record_id(&id1)?))
+        .bind(("start", start1))
+        .bind(("end", end1))
+        .await?.check()?;
+
+    backend.db.query("UPDATE $id SET temporal_range_start = $start, temporal_range_end = $end;")
+        .bind(("id", parse_record_id(&id2)?))
+        .bind(("start", start2))
+        .bind(("end", end2))
+        .await?.check()?;
+
+    // Execute compaction
+    compactor.compact_scope(&backend, &store, "scope2", backend.embedder.clone()).await?;
+    
+
+    let compaction_dir = vault_root.join("wiki/scope2/compactions");
+    assert!(compaction_dir.exists());
+
+    let all_nodes = backend.get_all_wiki_nodes().await?;
+    let compacted_nodes: Vec<WikiNode> = all_nodes.into_iter()
+        .filter(|n| n.scope == "scope2" && n.name.contains("Cluster"))
+        .collect();
+    assert_eq!(compacted_nodes.len(), 1, "Expected exactly one cluster compaction node");
+    let comp_node = &compacted_nodes[0];
+    let comp_id = comp_node.id.as_ref().unwrap();
+
+    assert_eq!(comp_node.temporal_range_start, Some(start1));
+    assert_eq!(comp_node.temporal_range_end, Some(end2));
+
+    let mut rel_resp1 = backend.db.query("SELECT * FROM relates_to WHERE in = $comp_id AND out = $ep_id AND relation = 'derived_from';")
+        .bind(("comp_id", parse_record_id(comp_id)?))
+        .bind(("ep_id", parse_record_id(&ep_id1)?))
+        .await?;
+    let rels1: Vec<serde_json::Value> = rel_resp1.take(0)?;
+    assert_eq!(rels1.len(), 1, "Edge from compaction to Episode 1 with derived_from relation is missing");
+
+    let mut rel_resp2 = backend.db.query("SELECT * FROM relates_to WHERE in = $comp_id AND out = $ep_id AND relation = 'derived_from';")
+        .bind(("comp_id", parse_record_id(comp_id)?))
+        .bind(("ep_id", parse_record_id(&ep_id2)?))
+        .await?;
+    let rels2: Vec<serde_json::Value> = rel_resp2.take(0)?;
+    assert_eq!(rels2.len(), 1, "Edge from compaction to Episode 2 with derived_from relation is missing");
+
+    Ok(())
 }

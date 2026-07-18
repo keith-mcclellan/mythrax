@@ -1,4 +1,5 @@
 use crate::db::StorageBackend;
+use crate::db::parse_record_id;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
 use crate::cognitive::synthesis::load_insights;
@@ -439,10 +440,13 @@ impl Compactor {
         }
 
         let mut valid_insights = Vec::new();
+        let mut wiki_nodes_map = std::collections::HashMap::new();
         if !node_ids.is_empty() {
             if let Ok(nodes_resp) = db.get_memory_nodes(&node_ids).await {
                 for node in nodes_resp.wiki_nodes {
+
                     if let Some(ref id) = node.id {
+                        wiki_nodes_map.insert(id.clone(), node.clone());
                         if let Some(ins) = ins_by_id.get(id) {
                             valid_insights.push((ins.clone(), id.clone(), node.embedding));
                         }
@@ -553,6 +557,42 @@ impl Compactor {
             }
             store.write_file(&relative_path, &file_content)?;
 
+            let mut starts = Vec::new();
+            let mut ends = Vec::new();
+            let mut ep_ids = Vec::new();
+            for (ins, insight_id) in member_insights {
+                if let Some(node) = wiki_nodes_map.get(insight_id) {
+                    starts.push(node.temporal_range_start);
+                    ends.push(node.temporal_range_end);
+                }
+                for ep_id in &ins.source_episodes {
+                    if !ep_ids.contains(ep_id) {
+                        ep_ids.push(ep_id.clone());
+                    }
+                }
+            }
+            if let Ok(ep_nodes_resp) = db.get_memory_nodes(&ep_ids).await {
+                for ep in ep_nodes_resp.episodes {
+
+                    if let Some(ref created_at_str) = ep.created_at {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
+                            let utc_dt = dt.with_timezone(&chrono::Utc);
+                            starts.push(Some(utc_dt));
+                            ends.push(Some(utc_dt));
+                        }
+                    }
+                    if ep.temporal_range_start.is_some() {
+                        starts.push(ep.temporal_range_start);
+                    }
+                    if ep.temporal_range_end.is_some() {
+                        ends.push(ep.temporal_range_end);
+                    }
+                }
+            }
+            let merged_start = starts.iter().filter_map(|&opt| opt).min();
+            let merged_end = ends.iter().filter_map(|&opt| opt).max();
+
+
             let node_contract = WikiNode {
                 id: None,
                 name: format!("Compaction: {} - Cluster {}", scope, cluster_id),
@@ -560,11 +600,28 @@ impl Compactor {
                 scope: scope.to_string(),
                 vault_path: Some(relative_path.clone()),
                 embedding: None,
+                temporal_range_start: merged_start,
+                temporal_range_end: merged_end,
+                ..Default::default()
             };
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in member_insights {
                     if !insight_id.is_empty() {
                         let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                    }
+                }
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    for ep_id in &ep_ids {
+                        let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                            relation: 'derived_from',
+                            created_at: time::now()
+                        };";
+                        if let (Ok(from_thing), Ok(to_thing)) = (parse_record_id(&compaction_id), parse_record_id(ep_id)) {
+                            let _ = surreal_backend.db.query(rel_sql)
+                                .bind(("from", from_thing))
+                                .bind(("to", to_thing))
+                                .await;
+                        }
                     }
                 }
             }
@@ -627,6 +684,44 @@ impl Compactor {
             }
             store.write_file(&relative_path, &file_content)?;
 
+            let mut starts = Vec::new();
+            let mut ends = Vec::new();
+            let mut ep_ids = Vec::new();
+            for (ins, insight_id) in &outlier_insights {
+                if !insight_id.is_empty() {
+                    if let Some(node) = wiki_nodes_map.get(insight_id) {
+                        starts.push(node.temporal_range_start);
+                        ends.push(node.temporal_range_end);
+                    }
+                }
+                for ep_id in &ins.source_episodes {
+                    if !ep_ids.contains(ep_id) {
+                        ep_ids.push(ep_id.clone());
+                    }
+                }
+            }
+            if let Ok(ep_nodes_resp) = db.get_memory_nodes(&ep_ids).await {
+                for ep in ep_nodes_resp.episodes {
+
+                    if let Some(ref created_at_str) = ep.created_at {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
+                            let utc_dt = dt.with_timezone(&chrono::Utc);
+                            starts.push(Some(utc_dt));
+                            ends.push(Some(utc_dt));
+                        }
+                    }
+                    if ep.temporal_range_start.is_some() {
+                        starts.push(ep.temporal_range_start);
+                    }
+                    if ep.temporal_range_end.is_some() {
+                        ends.push(ep.temporal_range_end);
+                    }
+                }
+            }
+            let merged_start = starts.iter().filter_map(|&opt| opt).min();
+            let merged_end = ends.iter().filter_map(|&opt| opt).max();
+
+
             let node_contract = WikiNode {
                 id: None,
                 name: format!("Compaction: {} - Miscellaneous", scope),
@@ -634,11 +729,28 @@ impl Compactor {
                 scope: scope.to_string(),
                 vault_path: Some(relative_path.clone()),
                 embedding: None,
+                temporal_range_start: merged_start,
+                temporal_range_end: merged_end,
+                ..Default::default()
             };
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in &outlier_insights {
                     if !insight_id.is_empty() {
                         let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                    }
+                }
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    for ep_id in &ep_ids {
+                        let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                            relation: 'derived_from',
+                            created_at: time::now()
+                        };";
+                        if let (Ok(from_thing), Ok(to_thing)) = (parse_record_id(&compaction_id), parse_record_id(ep_id)) {
+                            let _ = surreal_backend.db.query(rel_sql)
+                                .bind(("from", from_thing))
+                                .bind(("to", to_thing))
+                                .await;
+                        }
                     }
                 }
             }
@@ -766,7 +878,8 @@ impl Compactor {
             scope: "general".to_string(),
             vault_path: Some(relative_path.clone()),
             embedding: None,
-        };
+    ..Default::default()
+};
         if let Ok(global_compaction_id) = db.save_wiki_node(&node_contract).await {
             for comp_path in compaction_paths {
                 if let Ok(Some(comp_id)) = db.get_wiki_node_id_by_vault_path(&comp_path).await {
@@ -920,6 +1033,7 @@ impl Compactor {
                                 scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
                                 vault_path: Some(wiki_rel),
                                 embedding: None,
+                                ..Default::default()
                             };
                             let _ = db.save_wiki_node(&node_contract).await;
                         }
