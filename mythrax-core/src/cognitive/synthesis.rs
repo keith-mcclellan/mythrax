@@ -534,83 +534,96 @@ impl DreamCoordinator {
             }
         }
 
-        let all_episodes = db.get_all_episodes().await?;
-        let unprocessed = db.get_unprocessed_episodes().await?;
+        let mut attempted_ids = std::collections::HashSet::new();
+        loop {
+            let unprocessed = db.get_unprocessed_episodes().await?;
+            let filtered_unprocessed: Vec<Episode> = unprocessed.into_iter()
+                .filter(|ep| ep.id.as_ref().map_or(true, |id| !attempted_ids.contains(id)))
+                .collect();
 
-        if unprocessed.is_empty() {
-            return Ok(());
-        }
-
-        let (_default_eps, default_min_samples) = match active_mode.as_str() {
-            "deep" => (0.15, 2),
-            "bulk" => (0.12, 4),
-            _ => (0.25, 2), // default/incremental
-        };
-
-        // Query database profile for DBSCAN settings
-        let db_min_samples = match db.get_profile_key("embeddings.dbscan_min_samples").await {
-            Ok(Some(val_str)) => val_str.parse::<usize>().ok(),
-            _ => None,
-        };
-        let db_eps = match db.get_profile_key("embeddings.dbscan_epsilon").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
-            _ => None,
-        };
-
-        let min_samples = db_min_samples
-            .or(file_min_samples)
-            .unwrap_or(default_min_samples);
-
-        let final_eps = if let Some(eps) = db_eps.or(file_eps) {
-            eps
-        } else {
-            // Dynamic epsilon calibration using k-distance elbow method
-            let all_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
-            let mut embeddings = Vec::new();
-            for ep in &all_episodes {
-                if let Some(ref emb) = ep.embedding {
-                    embeddings.push(emb.clone());
-                }
+            if filtered_unprocessed.is_empty() {
+                break;
             }
-            for node in &all_nodes {
-                if let Some(ref emb) = node.embedding {
-                    embeddings.push(emb.clone());
+
+            let chunk_unprocessed: Vec<Episode> = filtered_unprocessed.into_iter().take(500).collect();
+            for ep in &chunk_unprocessed {
+                if let Some(ref id) = ep.id {
+                    attempted_ids.insert(id.clone());
                 }
             }
 
-            if embeddings.len() >= 100 {
-                let sample = &embeddings[0..100];
-                let mut k_distances = Vec::new();
-                for i in 0..sample.len() {
-                    let mut dists = Vec::new();
-                    for j in 0..sample.len() {
-                        let d = cosine_distance(&sample[i], &sample[j]);
-                        dists.push(d);
-                    }
-                    dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    if dists.len() > 4 {
-                        k_distances.push(dists[4]);
-                    }
-                }
-                k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                find_elbow_point(&k_distances)
+            let all_episodes = db.get_all_episodes().await?;
+
+            let (_default_eps, default_min_samples) = match active_mode.as_str() {
+                "deep" => (0.15, 2),
+                "bulk" => (0.12, 4),
+                _ => (0.25, 2), // default/incremental
+            };
+
+            // Query database profile for DBSCAN settings
+            let db_min_samples = match db.get_profile_key("embeddings.dbscan_min_samples").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().ok(),
+                _ => None,
+            };
+            let db_eps = match db.get_profile_key("embeddings.dbscan_epsilon").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
+                _ => None,
+            };
+
+            let min_samples = db_min_samples
+                .or(file_min_samples)
+                .unwrap_or(default_min_samples);
+
+            let final_eps = if let Some(eps) = db_eps.or(file_eps) {
+                eps
             } else {
-                let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
-                    _ => None,
-                };
-                user_override_val.unwrap_or(0.12)
+                // Dynamic epsilon calibration using k-distance elbow method
+                let all_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
+                let mut embeddings = Vec::new();
+                for ep in &all_episodes {
+                    if let Some(ref emb) = ep.embedding {
+                        embeddings.push(emb.clone());
+                    }
+                }
+                for node in &all_nodes {
+                    if let Some(ref emb) = node.embedding {
+                        embeddings.push(emb.clone());
+                    }
+                }
+
+                if embeddings.len() >= 100 {
+                    let sample = &embeddings[0..100];
+                    let mut k_distances = Vec::new();
+                    for i in 0..sample.len() {
+                        let mut dists = Vec::new();
+                        for j in 0..sample.len() {
+                            let d = cosine_distance(&sample[i], &sample[j]);
+                            dists.push(d);
+                        }
+                        dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        if dists.len() > 4 {
+                            k_distances.push(dists[4]);
+                        }
+                    }
+                    k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    find_elbow_point(&k_distances)
+                } else {
+                    let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
+                        Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
+                        _ => None,
+                    };
+                    user_override_val.unwrap_or(0.12)
+                }
+            };
+
+            let mut scope_groups: HashMap<String, Vec<Episode>> = HashMap::new();
+            for ep in chunk_unprocessed {
+                let scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                scope_groups.entry(scope).or_default().push(ep);
             }
-        };
 
-        let mut scope_groups: HashMap<String, Vec<Episode>> = HashMap::new();
-        for ep in unprocessed {
-            let scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
-            scope_groups.entry(scope).or_default().push(ep);
-        }
-
-        let total_scopes = scope_groups.len();
-        for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
+            let total_scopes = scope_groups.len();
+            for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
             let scope_lock = self.scope_locks.entry(scope.clone()).or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))).clone();
             let _guard = scope_lock.lock().await;
             
@@ -1292,6 +1305,7 @@ impl DreamCoordinator {
                 }
             }
             // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
+        }
         }
 
         // --- Tasks C.6 & C.6a: Cross-Scope Graduation Pass ---
