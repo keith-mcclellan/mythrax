@@ -1,0 +1,40 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 7
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+
+    - name: Run Sanitation Scanner
+      run: |
+        python3 scripts/sanitation_scanner.py
+        cat scorecard.md
+
+    - name: Comment on PR
+      if: github.event_name == 'push'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        PR_NUMBER=$(gh pr list --head $(git branch --show-current) --json number -q '.[0].number')
+        if [ -n "$PR_NUMBER" ]; then
+          gh pr comment $PR_NUMBER --body-file scorecard.md
+        else
+          echo "No open PR found for this branch."
+        fi

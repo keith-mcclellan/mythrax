@@ -73,3 +73,7 @@ embedding_cache.bin
 
 
 
+
+# CI Artifacts
+scorecard.md
+clippy_out.json
