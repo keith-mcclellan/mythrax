@@ -15,4 +15,6 @@ pub use backend::record_key_to_string;
 pub use cognitive_tasks::{CognitiveTask, CognitiveTaskType, ExpectedFormat, Priority, TaskStatus};
 pub use graduation_pipeline::run_graduation_pipeline;
 
+pub use crate::cognitive::governor;
+
 
