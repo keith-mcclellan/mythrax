@@ -726,6 +726,7 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
 }
 
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
+    let mut stm_str = String::new();
     let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
     let caller = args.get("caller").and_then(|v| v.as_str());
 
@@ -1097,7 +1098,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
         }
         if !stm_parts.is_empty() {
-            parts.push(format!("### 🔑 Stashed Session Variables\n{}\n", stm_parts.join("\n")));
+            stm_str = format!("### 🔑 Stashed Session Variables\n{}\n", stm_parts.join("\n"));
         }
 
         let mut node_ids = Vec::new();
@@ -1274,19 +1275,108 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     };
 
+    let budget_env = std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "3000".to_string());
+    let token_budget: usize = budget_env.parse().unwrap_or(3000);
+    
+    // P0: Pruned hypotheses & conflict nodes
+    let mut p0_pruned_part = String::new();
+    let current_scope = std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string());
+    let path = std::path::Path::new(&current_scope);
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let folder_name = canonical.file_name().and_then(|n| n.to_str()).unwrap_or("general").to_string();
+    
+    let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
+    if let Ok(mut resp) = surreal_backend.db.query(sql_pruned).bind(("scope", folder_name)).await {
+        if let Ok(raw_vals) = resp.take::<Vec<serde_json::Value>>(0) {
+            if !raw_vals.is_empty() {
+                p0_pruned_part.push_str("### ⛔ Known Failed Approaches\n");
+                for val in raw_vals {
+                    if let (Some(pat), Some(avoid), Some(remedy)) = (
+                        val.get("target_pattern").and_then(|v| v.as_str()),
+                        val.get("action_to_avoid").and_then(|v| v.as_str()),
+                        val.get("prescribed_remedy").and_then(|v| v.as_str()),
+                    ) {
+                        p0_pruned_part.push_str(&format!("- **Pattern**: {}\n  **Avoid**: {}\n  **Remedy**: {}\n", pat, avoid, remedy));
+                    }
+                }
+                p0_pruned_part.push('\n');
+            }
+        }
+    }
+
+    let mut p0_conflict_part = String::new();
+    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'conflict';").await {
+        if let Ok(raw_vals) = resp.take::<Vec<serde_json::Value>>(0) {
+            if !raw_vals.is_empty() {
+                p0_conflict_part.push_str("### ⚠️ Known Knowledge Boundaries / Conflicts\n");
+                for val in raw_vals {
+                    if let (Some(title), Some(content)) = (
+                        val.get("title").and_then(|v| v.as_str()),
+                        val.get("content").and_then(|v| v.as_str()),
+                    ) {
+                        p0_conflict_part.push_str(&format!("- **{}**: {}\n", title, content));
+                    }
+                }
+                p0_conflict_part.push('\n');
+            }
+        }
+    }
+    
+    let p0_combined = format!("{}{}", p0_pruned_part, p0_conflict_part);
+    
+    // Start truncating based on priority: P3 -> P2 -> P1, preserve P0
+    // Distiller payload is excluded from budget
+    let mut p3_belief = belief_part.clone();
+    let mut p2_stm = stm_str.clone(); // From earlier refactor
+    let mut p1_wisdom = capabilities_wisdom_part.clone();
+    
+    let joined_context = parts.join("\n");
+    
+    let base_playbook = "### 💡 Mythrax Skill Playbook Reminder\n> [!IMPORTANT]\n> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.\n\n";
+
+    if caller != Some("distiller") {
+        loop {
+            let mut current_total = count_tokens(base_playbook)
+                + count_tokens(&p0_combined)
+                + count_tokens(&p1_wisdom)
+                + count_tokens(&p2_stm)
+                + count_tokens(&p3_belief)
+                + count_tokens(&joined_context);
+
+            if current_total <= token_budget {
+                break;
+            }
+
+            if !p3_belief.is_empty() {
+                p3_belief.clear();
+            } else if !p2_stm.is_empty() {
+                p2_stm.clear();
+            } else if !p1_wisdom.is_empty() {
+                p1_wisdom.clear();
+            } else {
+                break; // Can't truncate P0 or other parts
+            }
+        }
+    }
+    
     let initial_context = {
         let mut base = String::new();
-        base.push_str("### 💡 Mythrax Skill Playbook Reminder\n> [!IMPORTANT]\n> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.\n\n");
-        if !belief_part.is_empty() {
-            base.push_str(&belief_part);
+        base.push_str(base_playbook);
+        base.push_str(&p0_combined);
+        if !p3_belief.is_empty() {
+            base.push_str(&p3_belief);
         }
-        if !capabilities_wisdom_part.is_empty() {
-            base.push_str(&capabilities_wisdom_part);
+        if !p2_stm.is_empty() {
+            base.push_str(&p2_stm);
+        }
+        if !p1_wisdom.is_empty() {
+            base.push_str(&p1_wisdom);
         }
         base.push_str(&joined_context);
         base
     };
     let context_tokens = count_tokens(&initial_context);
+
 
     let mut allowed_history = Vec::new();
     let mut history_tokens = 0;

@@ -602,7 +602,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                 let uuid = uuid::Uuid::new_v4().to_string();
                 let rule = WisdomRule {
                     id: Some(format!("wisdom:{}", uuid)),
-                    target_pattern: format!("Failed path: {}", node.hypothesis),
+                    target_pattern: format!("PRUNED: Failed path: {}", node.hypothesis),
                     action_to_avoid: format!("Avoid implementing hypothesis: {}", node.hypothesis),
                     causal_explanation: format!("This approach failed tests. Logs/Insight: {}", insight_str),
                     prescribed_remedy: "Try an alternative refactoring approach or adjust target files.".to_string(),

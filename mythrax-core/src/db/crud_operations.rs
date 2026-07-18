@@ -519,7 +519,8 @@ impl SurrealBackend {
                         superseded_at: $superseded_at,
                         superseded_by: $superseded_by,
                         severity: $severity,
-                        blocking: $blocking
+                        blocking: $blocking,
+                        rule_type: $rule_type
                     };
                     UPDATE metrics SET utility_score = $utility_score WHERE target_id = $rule;
                     COMMIT TRANSACTION;
@@ -543,7 +544,8 @@ impl SurrealBackend {
                         superseded_at: $superseded_at,
                         superseded_by: $superseded_by,
                         severity: $severity,
-                        blocking: $blocking
+                        blocking: $blocking,
+                        rule_type: $rule_type
                     };
                     COMMIT TRANSACTION;
                 ".to_string()
@@ -569,7 +571,8 @@ impl SurrealBackend {
                     superseded_at: $superseded_at,
                     superseded_by: $superseded_by,
                     severity: $severity,
-                    blocking: $blocking
+                    blocking: $blocking,
+                    rule_type: $rule_type
                 };
                 
                 CREATE $met CONTENT {
@@ -624,6 +627,7 @@ impl SurrealBackend {
             .bind(("superseded_by", rule.superseded_by.as_deref()))
             .bind(("severity", rule.severity.as_deref()))
             .bind(("blocking", rule.blocking.unwrap_or(false)))
+            .bind(("rule_type", rule.rule_type.as_deref()))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
