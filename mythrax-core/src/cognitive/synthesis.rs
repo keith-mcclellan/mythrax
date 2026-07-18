@@ -494,12 +494,12 @@ impl DreamCoordinator {
                         let d = cosine_distance(&sample[i], &sample[j]);
                         dists.push(d);
                     }
-                    dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     if dists.len() > 4 {
                         k_distances.push(dists[4]);
                     }
                 }
-                k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 find_elbow_point(&k_distances)
             } else {
                 let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
@@ -1641,7 +1641,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             Ok(saved_id) => {
                                 // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
                                 if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-                                    let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
+                                    let old_uuid = matched.id.as_ref().map(|s| s.strip_prefix("wisdom:").unwrap_or(s)).unwrap_or("");
                                     let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
                                     
                                     let sql = "

@@ -333,11 +333,11 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 
                 #[cfg(unix)]
                 let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to register SIGTERM handler");
+                    ?;
 
                 #[cfg(unix)]
                 let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                    .expect("Failed to register SIGINT handler");
+                    ?;
 
                 tokio::select! {
                     res = axum::serve(listener, app) => {
