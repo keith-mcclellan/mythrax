@@ -1022,7 +1022,8 @@ impl SurrealBackend {
                     temporal_range_start: $temporal_range_start,
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
-                    node_type: $node_type
+                    node_type: $node_type,
+                    updated_at: time::now()
                 };
                 COMMIT TRANSACTION;
             "
@@ -1039,7 +1040,9 @@ impl SurrealBackend {
                     temporal_range_start: $temporal_range_start,
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
-                    node_type: $node_type
+                    node_type: $node_type,
+                    created_at: time::now(),
+                    updated_at: time::now()
                 };
                 COMMIT TRANSACTION;
             "

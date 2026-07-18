@@ -833,3 +833,168 @@ Insight Two content."#,
 
     Ok(())
 }
+
+
+#[tokio::test]
+async fn test_garbage_collect_low_confidence_nodes() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("wiki/scope1"))?;
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+    let store = MarkdownStore::new(&vault_root)?;
+    let compactor = Compactor::new();
+
+    // Create a physical wiki markdown file
+    let wiki_dir = vault_root.join("wiki/scope1");
+    let md_path = wiki_dir.join("low_confidence_node.md");
+    fs::write(&md_path, "Some old content")?;
+
+    // Create the WikiNode record in SurrealDB with metacognitive_confidence = Some(2)
+    let node = WikiNode {
+        id: None,
+        name: "Low Confidence Node".to_string(),
+        content: "Some old content".to_string(),
+        scope: "scope1".to_string(),
+        vault_path: Some("wiki/scope1/low_confidence_node.md".to_string()),
+        metacognitive_confidence: Some(2),
+        ..Default::default()
+    };
+    let node_id = backend.save_wiki_node(&node).await?;
+    let rid = parse_record_id(&node_id)?;
+
+    // Mock updated_at in SurrealDB to 31 days ago
+    let past_time = chrono::Utc::now() - chrono::Duration::days(31);
+    backend.db.query("UPDATE $id SET updated_at = $past;")
+        .bind(("id", rid.clone()))
+        .bind(("past", past_time))
+        .await?.check()?;
+
+    // Execute compaction
+    compactor.compact_scope(&backend, &store, "scope1", None).await?;
+
+    // Verify:
+    // 1. The physical file was moved to {vault_root}/archive/low_confidence_node.md
+    let expected_archive_path = vault_root.join("archive/low_confidence_node.md");
+    assert!(expected_archive_path.exists(), "File should be moved to archive directory");
+    assert!(!md_path.exists(), "Original file should be deleted");
+
+    // 2. The record was deleted from SurrealDB
+    let mut response = backend.db.query("SELECT * FROM wiki_node WHERE id = $id;")
+        .bind(("id", rid))
+        .await?;
+    let nodes: Vec<serde_json::Value> = response.take(0)?;
+    assert!(nodes.is_empty(), "WikiNode record should be deleted from the database");
+
+    Ok(())
+}
+
+
+#[tokio::test]
+async fn test_hebbian_synaptic_pruning() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
+
+    let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
+    fs::create_dir_all(&vault_root)?;
+    fs::create_dir_all(vault_root.join("wiki/scope1"))?;
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
+
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+    let store = MarkdownStore::new(&vault_root)?;
+    let compactor = Compactor::new();
+
+    // Create two wiki nodes
+    let node_a = WikiNode {
+        id: None,
+        name: "Node A".to_string(),
+        content: "Content A".to_string(),
+        scope: "scope1".to_string(),
+        vault_path: Some("wiki/scope1/node_a.md".to_string()),
+        ..Default::default()
+    };
+    let node_b = WikiNode {
+        id: None,
+        name: "Node B".to_string(),
+        content: "Content B".to_string(),
+        scope: "scope1".to_string(),
+        vault_path: Some("wiki/scope1/node_b.md".to_string()),
+        ..Default::default()
+    };
+    let node_c = WikiNode {
+        id: None,
+        name: "Node C".to_string(),
+        content: "Content C".to_string(),
+        scope: "scope1".to_string(),
+        vault_path: Some("wiki/scope1/node_c.md".to_string()),
+        ..Default::default()
+    };
+
+    let id_a = backend.save_wiki_node(&node_a).await?;
+    let id_b = backend.save_wiki_node(&node_b).await?;
+    let id_c = backend.save_wiki_node(&node_c).await?;
+
+    let rid_a = parse_record_id(&id_a)?;
+    let rid_b = parse_record_id(&id_b)?;
+    let rid_c = parse_record_id(&id_c)?;
+
+    // Create relates_to relations (edges)
+    backend.relate_nodes(&id_a, &id_b, None, None, None).await?;
+    backend.relate_nodes(&id_a, &id_c, None, None, None).await?;
+
+    // Update weight fields on relates_to edges
+    backend.db.query("UPDATE relates_to SET weight = 0.105 WHERE in = $in AND out = $out;")
+        .bind(("in", rid_a.clone()))
+        .bind(("out", rid_b.clone()))
+        .await?.check()?;
+
+    backend.db.query("UPDATE relates_to SET weight = 0.5 WHERE in = $in AND out = $out;")
+        .bind(("in", rid_a.clone()))
+        .bind(("out", rid_c.clone()))
+        .await?.check()?;
+
+    // Execute compaction
+    compactor.compact_scope(&backend, &store, "scope1", None).await?;
+
+    // Verify:
+    // 1. Edge 1 (Node A -> Node B) is deleted because weight 0.0945 < 0.1
+    let mut check_ab = backend.db.query("SELECT weight FROM relates_to WHERE in = $in AND out = $out;")
+        .bind(("in", rid_a.clone()))
+        .bind(("out", rid_b.clone()))
+        .await?;
+    let ab_edges: Vec<serde_json::Value> = check_ab.take(0)?;
+    assert!(ab_edges.is_empty(), "Edge A->B should be pruned");
+
+    // 2. Edge 2 (Node A -> Node C) still exists with decayed weight 0.45
+    let mut check_ac = backend.db.query("SELECT weight FROM relates_to WHERE in = $in AND out = $out;")
+        .bind(("in", rid_a.clone()))
+        .bind(("out", rid_c.clone()))
+        .await?;
+    let ac_edges: Vec<serde_json::Value> = check_ac.take(0)?;
+    assert_eq!(ac_edges.len(), 1, "Edge A->C should not be pruned");
+    let weight: f64 = ac_edges[0]["weight"].as_f64().unwrap();
+    assert!((weight - 0.45).abs() < 1e-5, "Edge A->C weight should decay to 0.45, got {}", weight);
+
+    Ok(())
+}
+

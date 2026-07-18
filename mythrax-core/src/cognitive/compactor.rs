@@ -81,6 +81,39 @@ impl Compactor {
         scope: &str,
         _embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
     ) -> Result<()> {
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            // Garbage collect low-confidence nodes updated more than 30 days ago
+            #[derive(serde::Deserialize, SurrealValue)]
+            struct GcNode {
+                id: surrealdb::types::RecordId,
+                vault_path: Option<String>,
+            }
+            let gc_sql = "SELECT id, vault_path FROM wiki_node WHERE scope = $scope AND metacognitive_confidence < 3 AND updated_at < time::now() - 30d;";
+            if let Ok(mut resp) = surreal_backend.db.query(gc_sql).bind(("scope", scope)).await {
+                if let Ok(nodes) = resp.take::<Vec<GcNode>>(0) {
+                    for node in nodes {
+                        let _ = surreal_backend.db.query("DELETE $id;").bind(("id", node.id)).await;
+                        if let Some(ref vp) = node.vault_path {
+                            let src_file = store.vault_root.join(vp);
+                            if src_file.exists() {
+                                let archive_dir = store.vault_root.join("archive");
+                                let _ = std::fs::create_dir_all(&archive_dir);
+                                let filename = std::path::Path::new(vp)
+                                    .file_name()
+                                    .unwrap_or_else(|| std::ffi::OsStr::new("node.md"));
+                                let dest_file = archive_dir.join(filename);
+                                let _ = std::fs::rename(&src_file, &dest_file);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Hebbian synaptic pruning
+            let _ = surreal_backend.db.query("UPDATE relates_to SET weight = (weight OR 1.0) * 0.9;").await;
+            let _ = surreal_backend.db.query("DELETE relates_to WHERE weight < 0.1;").await;
+        }
+
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
 

@@ -64,6 +64,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS importance ON wiki_node TYPE float DEFAULT 5.0;
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wiki_node TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON wiki_node TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS updated_at ON wiki_node TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS utility ON wiki_node TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS temporal_range_start ON wiki_node TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS temporal_range_end ON wiki_node TYPE option<datetime>;
@@ -147,6 +148,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE TABLE IF NOT EXISTS relates_to SCHEMAFULL TYPE RELATION IN episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node OUT episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node;
     DEFINE FIELD IF NOT EXISTS relation ON relates_to TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS strength ON relates_to TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS weight ON relates_to TYPE float DEFAULT 1.0;
     DEFINE FIELD IF NOT EXISTS created_at ON relates_to TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS valid_from ON relates_to TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS valid_to   ON relates_to TYPE option<datetime>;
