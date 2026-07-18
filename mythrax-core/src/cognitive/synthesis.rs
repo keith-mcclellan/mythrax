@@ -466,6 +466,7 @@ impl DreamCoordinator {
         }
 
         // Background Transcript Sweep & Idle Session Recovery
+        let mut mined_any = false;
         if let Ok(transcripts) = db.get_all_registered_transcripts().await {
             let idle_threshold = chrono::Duration::minutes(10);
             let now = chrono::Utc::now();
@@ -505,7 +506,10 @@ impl DreamCoordinator {
                             // Check file exists before mining
                             if std::path::Path::new(&path).exists() {
                                 let ignore_list = crate::vault::watcher::WatchIgnoreList::default();
-                                if let Ok(_) = crate::hooks::precompact::mine_transcript(&session_id, &path, db, store, &ignore_list).await {
+                                if let Ok(count) = crate::hooks::precompact::mine_transcript(&session_id, &path, db, store, &ignore_list).await {
+                                    if count > 0 {
+                                        mined_any = true;
+                                    }
                                     let _ = db.save_stm(&session_id, "_last_swept_at", &now.to_rfc3339()).await;
                                 }
                             } else {
@@ -515,6 +519,18 @@ impl DreamCoordinator {
                         }
                     }
                 }
+            }
+        }
+
+        if mined_any {
+            let default_cooldown = if std::env::var("MYTHRAX_TEST_MOCK").is_ok() { 0 } else { 300 };
+            let cooldown_secs = std::env::var("MYTHRAX_PHASE_COOLDOWN_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(default_cooldown);
+            if cooldown_secs > 0 {
+                tracing::info!("Phase A (Ingestion) finished. Cooldown sleep for {} seconds before Phase B (Synthesis).", cooldown_secs);
+                tokio::time::sleep(tokio::time::Duration::from_secs(cooldown_secs)).await;
             }
         }
 

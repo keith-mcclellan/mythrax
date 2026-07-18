@@ -34,6 +34,12 @@ pub struct Tokenizer;
 pub struct MxbaiReranker;
 
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
+pub static IS_HIBERNATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn is_hibernating() -> bool {
+    IS_HIBERNATING.load(std::sync::atomic::Ordering::SeqCst)
+}
 static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 static METAL_EMBEDDING_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
@@ -94,91 +100,200 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
+        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+            return self.completion_explicit(db, "mock", "", "", system_instruction, prompt, false).await;
+        }
+
+        if IS_HIBERNATING.load(Ordering::SeqCst) {
+            let retry_secs = std::env::var("MYTHRAX_QUOTA_RETRY_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(3600);
+            tracing::info!(
+                phase = "hibernation",
+                progress = "waiting",
+                "Cloud completion called while hibernating. Waiting for {} seconds.",
+                retry_secs
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
+            IS_HIBERNATING.store(false, Ordering::SeqCst);
+            CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
+        }
+
         let config = db.get_llm_config().await?;
         let mut tier = crate::llm::router::route_task(db, profile).await;
 
         if tier == crate::contracts::ModelTier::Cloud {
-            // Try cognitive callback first if not bootstrapping in CLI mode
-            if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
-                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-                    let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
-                    let task = crate::db::CognitiveTask {
-                        id: task_id.clone(),
-                        task_type: format!("{:?}", profile.archetype),
-                        prompt: prompt.to_string(),
-                        system_instruction: system_instruction.unwrap_or_default().to_string(),
-                        expected_format: "Any".to_string(),
-                        priority: "Normal".to_string(),
-                        created_at: chrono::Utc::now(),
-                        status: "Pending".to_string(),
-                        result: None,
-                        ttl_minutes: 10,
-                        injected_at: None,
+            // Apply rate limit around cloud calls
+            let rpm = std::env::var("MYTHRAX_CLOUD_RPM")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(30);
+            if rpm > 0 {
+                let min_interval = std::time::Duration::from_secs_f64(60.0 / rpm as f64);
+                static LAST_CALL: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+                let mutex = LAST_CALL.get_or_init(|| Mutex::new(None));
+                let sleep_dur = {
+                    let mut guard = mutex.lock().unwrap();
+                    let now = std::time::Instant::now();
+                    let sleep_dur = if let Some(last_time) = *guard {
+                        if last_time > now {
+                            Some((last_time - now) + min_interval)
+                        } else {
+                            let elapsed = now.duration_since(last_time);
+                            if elapsed < min_interval {
+                                Some(min_interval - elapsed)
+                            } else {
+                                None
+                            }
+                        }
+                    } else {
+                        None
                     };
-                    
-                    if surreal_backend.create_cognitive_task(&task).await.is_ok() {
-                        let start = std::time::Instant::now();
-                        let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
-                            .ok()
-                            .and_then(|v| v.parse::<u64>().ok())
-                            .unwrap_or(60);
-                        let timeout = std::time::Duration::from_secs(timeout_secs);
-                        while start.elapsed() < timeout {
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                            if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
-                                if updated.status == "Completed" {
-                                    if let Some(res) = updated.result {
-                                        return Ok(res);
+                    if let Some(dur) = sleep_dur {
+                        *guard = Some(now + dur);
+                    } else {
+                        *guard = Some(now);
+                    }
+                    sleep_dur
+                };
+                if let Some(dur) = sleep_dur {
+                    tokio::time::sleep(dur).await;
+                }
+            }
+
+            let cloud_res = async {
+                // Try cognitive callback first if not bootstrapping in CLI mode
+                if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                        let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                        let task = crate::db::CognitiveTask {
+                            id: task_id.clone(),
+                            task_type: format!("{:?}", profile.archetype),
+                            prompt: prompt.to_string(),
+                            system_instruction: system_instruction.unwrap_or_default().to_string(),
+                            expected_format: "Any".to_string(),
+                            priority: "Normal".to_string(),
+                            created_at: chrono::Utc::now(),
+                            status: "Pending".to_string(),
+                            result: None,
+                            ttl_minutes: 10,
+                            injected_at: None,
+                        };
+                        
+                        if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                            let start = std::time::Instant::now();
+                            let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
+                                .ok()
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .unwrap_or(60);
+                            let timeout = std::time::Duration::from_secs(timeout_secs);
+                            while start.elapsed() < timeout {
+                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                                    if updated.status == "Completed" {
+                                        if let Some(res) = updated.result {
+                                            return Ok(res);
+                                        }
                                     }
                                 }
                             }
+                            tracing::warn!("Cognitive callback for cloud model timed out, falling back to direct API / local model");
+                            let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                                || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                            if disable_fallback {
+                                anyhow::bail!("Cognitive callback for cloud model timed out and fallbacks are disabled");
+                            }
+                        } else {
+                            let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                                || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                            if disable_fallback {
+                                anyhow::bail!("Failed to create cognitive task and fallbacks are disabled");
+                            }
                         }
-                        tracing::warn!("Cognitive callback for cloud model timed out, falling back to direct API / local model");
-                        let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
-                            || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
-                        if disable_fallback {
-                            anyhow::bail!("Cognitive callback for cloud model timed out and fallbacks are disabled");
-                        }
+                    }
+                }
+
+                let api_key = config.api_key.clone().unwrap_or_else(|| {
+                    if config.cloud_provider == "gemini" {
+                        std::env::var("GEMINI_API_KEY").unwrap_or_default()
                     } else {
-                        let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
-                            || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
-                        if disable_fallback {
-                            anyhow::bail!("Failed to create cognitive task and fallbacks are disabled");
-                        }
+                        std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+                    }
+                });
+                if api_key.is_empty() {
+                    tracing::warn!("Cloud tier selected but no API key is configured. Degrading to local Large model.");
+                    anyhow::bail!("No API key configured for Cloud model");
+                }
+
+                let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                    "gemini-1.5-flash"
+                } else {
+                    &config.model
+                };
+
+                self.completion_explicit(
+                    db,
+                    "cloud",
+                    &config.cloud_provider,
+                    cloud_model,
+                    system_instruction,
+                    prompt,
+                    false,
+                ).await
+            }.await;
+
+            match &cloud_res {
+                Ok(_) => {
+                    CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    let failures = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                    if failures >= 3 {
+                        IS_HIBERNATING.store(true, Ordering::SeqCst);
+                        let retry_secs = std::env::var("MYTHRAX_QUOTA_RETRY_SECS")
+                            .ok()
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(3600);
+                        
+                        tracing::warn!(
+                            phase = "hibernation",
+                            progress = "sleeping",
+                            "Cloud completion failed 3 consecutive times ({:?}). Entering hibernation state for {} seconds.",
+                            e,
+                            retry_secs
+                        );
+                        
+                        tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
+                        IS_HIBERNATING.store(false, Ordering::SeqCst);
+                        CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
                     }
                 }
             }
 
-            let api_key = config.api_key.clone().unwrap_or_else(|| {
-                if config.cloud_provider == "gemini" {
-                    std::env::var("GEMINI_API_KEY").unwrap_or_default()
-                } else {
-                    std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+            if cloud_res.is_ok() {
+                return cloud_res;
+            } else {
+                let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                    || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                if disable_fallback {
+                    return cloud_res;
                 }
-            });
-            if api_key.is_empty() {
-                tracing::warn!("Cloud tier selected but no API key is configured. Degrading to local Large model.");
-                tier = crate::contracts::ModelTier::Large;
+
+                let api_key = config.api_key.clone().unwrap_or_else(|| {
+                    if config.cloud_provider == "gemini" {
+                        std::env::var("GEMINI_API_KEY").unwrap_or_default()
+                    } else {
+                        std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+                    }
+                });
+                if api_key.is_empty() {
+                    tier = crate::contracts::ModelTier::Large;
+                } else {
+                    return cloud_res;
+                }
             }
         }
-
-        if tier == crate::contracts::ModelTier::Cloud {
-            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
-                "gemini-1.5-flash"
-            } else {
-                &config.model
-            };
-            return self.completion_explicit(
-                db,
-                "cloud",
-                &config.cloud_provider,
-                cloud_model,
-                system_instruction,
-                prompt,
-                false,
-            ).await;
-        }
-
         let _gpu_permit = crate::llm::router::gpu_reservation_lock().lock().await;
 
         let local_model = match tier {
