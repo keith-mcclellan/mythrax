@@ -427,7 +427,13 @@ impl DreamCoordinator {
         store: &MarkdownStore,
         mode_override: Option<&str>,
         embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        scope_locks: &dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
     ) -> Result<()> {
+        if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::info!("Ingestion in progress, skipping background dream synthesis.");
+            return Ok(());
+        }
+
         let settings_path = store.vault_root.join("wiki/dream_settings.md");
         let mut active_mode = "incremental".to_string();
         let mut file_eps = None;
@@ -584,7 +590,12 @@ impl DreamCoordinator {
 
         let total_scopes = scope_groups.len();
         for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
-            let mut candidates = Vec::new();
+            let scope_lock = scope_locks.entry(scope.clone()).or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))).clone();
+            let _guard = scope_lock.lock().await;
+            
+            for chunk in new_episodes.chunks(500) {
+                let new_episodes = chunk.to_vec();
+                let mut candidates = Vec::new();
 
             if active_mode == "incremental" {
                 let existing_insights = load_insights(&store.vault_root);
@@ -1773,7 +1784,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             }
                         }
                     } else {
-                        tracing::warn!("Failed to parse LLM response as merged fields: {}", stripped);
+                        tracing::info!("Dreaming scope {}/{} complete", scope_idx + 1, total_scopes);
                     }
                 }
                 Err(e) => {

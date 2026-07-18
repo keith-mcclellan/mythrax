@@ -4,6 +4,20 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+pub static IS_INGESTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub struct IngestionGuard;
+impl IngestionGuard {
+    pub fn new() -> Self {
+        IS_INGESTING.store(true, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+impl Drop for IngestionGuard {
+    fn drop(&mut self) {
+        IS_INGESTING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn ingest_cursor(path: &Path) -> Result<String> {
     let conn = rusqlite::Connection::open(path)?;
     let mut stmt = conn.prepare("SELECT key, value FROM ItemTable WHERE key LIKE 'composer:%' OR key LIKE 'chat:%';")?;
@@ -534,16 +548,38 @@ pub async fn bulk_ingest_vault(
 
             let dirs: Vec<std::path::PathBuf> = dirs_with_time[start..end].iter().map(|d| d.0.clone()).collect();
 
+            let _ingestion_guard = IngestionGuard::new();
+            let llm = crate::llm::LLMClient::new();
             let mut last_episode_id: Option<String> = None;
-            for (index, path) in dirs.into_iter().enumerate() {
-                let current_index = start + index;
-                let dir_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                let title = format!("antigravity_{}", dir_name);
-                let part1_title = format!("{}_part1", title);
-                if existing_titles.contains(&title) || existing_titles.contains(&part1_title) {
-                    tracing::info!("processing episode {} of {} complete (skipped - already exists)", current_index + 1, total_dirs);
-                    continue;
+
+            for (chunk_idx, dir_chunk) in dirs.chunks(50).enumerate() {
+                let mut prompt = String::new();
+                for (i, path) in dir_chunk.iter().enumerate() {
+                    let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                    prompt.push_str(&format!("{}(:|-|:){}\n", i + 1, dir_name));
                 }
+                
+                let sys_prompt = "You are a title generator. For each provided directory name, generate a concise, human-readable title. Format your response strictly as index(:|-|:)title, one per line.";
+                let llm_resp = llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_prompt), &prompt).await.unwrap_or_default();
+                let batched_titles = parse_batched_titles(&llm_resp, dir_chunk.len());
+
+                for (local_idx, path) in dir_chunk.iter().enumerate() {
+                    let current_index = start + chunk_idx * 50 + local_idx;
+                    let dir_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                    
+                    let title = if local_idx < batched_titles.len() {
+                        batched_titles[local_idx].clone()
+                    } else {
+                        tracing::warn!("Title for {} missing from batch, falling back", dir_name);
+                        let fb_prompt = format!("Generate a concise title for directory name: {}", dir_name);
+                        llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_prompt), &fb_prompt).await.unwrap_or_else(|_| format!("antigravity_{}", dir_name))
+                    };
+                    
+                    let part1_title = format!("{}_part1", title);
+                    if existing_titles.contains(&title) || existing_titles.contains(&part1_title) {
+                        tracing::info!("processing episode {} of {} complete (skipped - already exists)", current_index + 1, total_dirs);
+                        continue;
+                    }
 
                 // Dynamically resolve scope for each conversation folder
                 let relative_path = path.strip_prefix(source_dir).unwrap_or(&path);
@@ -846,7 +882,8 @@ pub async fn bulk_ingest_vault(
 
                 // Log a clean progress message at INFO level
                 tracing::info!("processing episode {} of {} complete", current_index + 1, total_dirs);
-            }
+                } // End inner loop
+            } // End outer loop
         }
         "claude" => {
             let files = find_files(&["jsonl"]);
@@ -1454,5 +1491,38 @@ mod tests {
         assert_eq!(chunks[1], "ngleLineTe");
         assert_eq!(chunks[2], "xtExceedin");
         assert_eq!(chunks[3], "gLimit");
+    }
+
+    #[test]
+    fn test_parse_batched_titles() {
+        let resp = "1(:|-|:)Title A\n2(:|-|:)Title B\n3(:|-|:)Title C";
+        let parsed = parse_batched_titles(resp, 3);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0], "Title A");
+        assert_eq!(parsed[1], "Title B");
+        assert_eq!(parsed[2], "Title C");
+    }
+
+    #[test]
+    fn test_parse_batched_titles_fallback() {
+        let resp = "1(:|-|:)Title A";
+        let parsed = parse_batched_titles(resp, 3);
+        assert!(parsed.is_empty());
+    }
+}
+
+pub fn parse_batched_titles(resp: &str, expected_count: usize) -> Vec<String> {
+    let mut titles = Vec::new();
+    for line in resp.lines() {
+        let parts: Vec<&str> = line.split("(:|-|:)").collect();
+        if parts.len() >= 2 {
+            titles.push(parts[1..].join("(:|-|:)").trim().to_string());
+        }
+    }
+    if titles.len() == expected_count {
+        titles
+    } else {
+        tracing::warn!("Parsed titles count ({}) does not match expected chunk size ({}). Falling back.", titles.len(), expected_count);
+        Vec::new()
     }
 }
