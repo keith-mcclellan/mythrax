@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::db::StorageBackend;
 use crate::db::SurrealBackend;
 use crate::db::CognitiveTask;
-use crate::contracts::{EpisodeSave, WisdomRule};
+use crate::contracts::{EpisodeSave, WisdomRule, Tier};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ToolCall {
@@ -135,7 +135,8 @@ Return JSON format matching:
 pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<()> {
     let sql = "SELECT * FROM cognitive_task WHERE task_type = 'reflection_distillation' AND status = 'Completed';";
     let mut res = backend.db.query(sql).await?;
-    let tasks: Vec<CognitiveTask> = res.take(0)?;
+    let tasks_raw: Vec<crate::db::cognitive_tasks::CognitiveTaskRaw> = res.take(0)?;
+    let tasks: Vec<CognitiveTask> = tasks_raw.into_iter().map(CognitiveTask::from).collect();
     
     for task in tasks {
         if let Some(ref result_str) = task.result {
@@ -169,12 +170,13 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                         let text_to_embed = format!("{} {:?}", causal.unwrap_or_default(), parsed["lessons"]);
                         if let Ok(vec) = embedder.embed(&text_to_embed) {
                             let rule_sql = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active';";
-                            if let Ok(mut rule_res) = backend.db.query(rule_sql).await {
-                                if let Ok(rules) = rule_res.take::<Vec<WisdomRule>>(0) {
+                             if let Ok(mut rule_res) = backend.db.query(rule_sql).await {
+                                if let Ok(rules_raw) = rule_res.take::<Vec<crate::db::backend::WisdomRaw>>(0) {
+                                    let rules: Vec<WisdomRule> = rules_raw.into_iter().map(|r| r.into_wisdom_rule()).collect();
                                     let mut matched = false;
                                     for mut rule in rules {
                                         if let Some(ref rule_emb) = rule.embedding {
-                                            let sim = crate::embeddings::cosine_similarity(&vec, rule_emb);
+                                            let sim = crate::math::cosine_similarity(&vec, rule_emb);
                                             if sim > 0.85 {
                                                 rule.utility = Some(rule.utility.unwrap_or(50.0) + 10.0);
                                                 let _ = backend.save_wisdom_rule_db(&rule).await;
@@ -190,7 +192,7 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                             action_to_avoid: "Repeat failed approach".to_string(),
                                             causal_explanation: format!("{:?}", parsed["causal_explanation"]),
                                             prescribed_remedy: format!("Lessons: {:?}", parsed["lessons"]),
-                                            tier: "working".to_string(),
+                                            tier: Tier::Working,
                                             scope: "general".to_string(),
                                             vault_path: None,
                                             source_episodes: vec![ep_id],
@@ -203,6 +205,7 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                             severity: Some("low".to_string()),
                                             blocking: Some(false),
                                             rule_type: Some("pruned_hypothesis".to_string()),
+                                            ..Default::default()
                                         };
                                         let _ = backend.save_wisdom_rule_db(&new_rule).await;
                                     }
@@ -212,7 +215,7 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                     }
                 }
                 
-                let del_sql = "DELETE type::thing('cognitive_task', $id);";
+                let del_sql = "DELETE type::record('cognitive_task', $id);";
                 if let Some(id_part) = task.id.strip_prefix("cognitive_task:") {
                     let _ = backend.db.query(del_sql).bind(("id", id_part)).await;
                 }
