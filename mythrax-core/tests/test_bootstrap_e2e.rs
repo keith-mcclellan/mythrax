@@ -2,7 +2,7 @@ use std::fs;
 use anyhow::Result;
 use tempfile::tempdir;
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{WikiNode, EpisodeSave, Tier};
+use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::cognitive::synthesis::DreamCoordinator;
 use mythrax_core::store::MarkdownStore;
 use std::sync::Mutex;
@@ -207,13 +207,6 @@ async fn test_bootstrap_e2e() -> Result<()> {
     let sql_edges = "SELECT * FROM relates_to;";
     let mut response_edges = backend.db.query(sql_edges).await?.check()?;
     
-    #[derive(serde::Deserialize, Debug)]
-    struct RelatesToEdge {
-        in_id: String, // Wait, surrealdb converts "in" and "out" to keys
-        out_id: String,
-        valid_from: Option<chrono::DateTime<chrono::Utc>>,
-        valid_to: Option<chrono::DateTime<chrono::Utc>>,
-    }
     // We check raw values since surreal deserialization of record ID in "in" is custom
     let edges: Vec<serde_json::Value> = response_edges.take(0)?;
     assert!(!edges.is_empty());

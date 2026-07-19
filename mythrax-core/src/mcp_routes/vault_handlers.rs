@@ -346,6 +346,7 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
             let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
             let offset = args.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let skip_llm = args.get("skip_llm").and_then(|v| v.as_bool()).unwrap_or(false);
             
             if async_mode {
                 let state_clone = state.clone();
@@ -361,7 +362,7 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                         &*state_clone.backend,
                         offset,
                         limit,
-                        false,
+                        skip_llm,
                     ).await {
                         tracing::error!("Background bulk ingestion failed: {:?}", e);
                     }
@@ -384,7 +385,7 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                     &*state.backend,
                     offset,
                     limit,
-                    false,
+                    skip_llm,
                 ).await?;
 
                 Ok(json!({

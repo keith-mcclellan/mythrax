@@ -95,6 +95,9 @@ pub enum Commands {
         /// Batch size for chunked ingestion
         #[arg(long, default_value_t = 50)]
         batch_size: usize,
+        /// Skip LLM title generation
+        #[arg(long)]
+        skip_llm: bool,
     },
     /// Run the pre-invocation hook (reads stdin, queries daemon, prints stdout)
     PreInvocation,

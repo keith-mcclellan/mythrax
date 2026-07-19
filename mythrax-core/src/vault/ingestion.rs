@@ -461,6 +461,7 @@ pub async fn bulk_ingest_vault(
     limit: Option<usize>,
     skip_llm: bool,
 ) -> Result<(usize, Vec<String>, bool)> {
+    let _ = skip_llm;
     let mut success_count = 0;
     let mut errors = Vec::new();
     let mut has_more = false;
@@ -554,25 +555,32 @@ pub async fn bulk_ingest_vault(
             let mut last_episode_id: Option<String> = None;
 
             for (chunk_idx, dir_chunk) in dirs.chunks(50).enumerate() {
-                let mut prompt = String::new();
-                for (i, path) in dir_chunk.iter().enumerate() {
-                    let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    prompt.push_str(&format!("{}(:|-|:){}\n", i + 1, dir_name));
-                }
-                
-                let sys_prompt = "You are a title generator. For each provided directory name, generate a concise, human-readable title. Format your response strictly as index(:|-|:)title, one per line.";
-                let llm_resp = llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_prompt), &prompt).await.unwrap_or_default();
-                let batched_titles = parse_batched_titles(&llm_resp, dir_chunk.len());
+                let batched_titles = if skip_llm {
+                    Vec::new()
+                } else {
+                    let mut prompt = String::new();
+                    for (i, path) in dir_chunk.iter().enumerate() {
+                        let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+                        prompt.push_str(&format!("{}(:|-|:){}\n", i + 1, dir_name));
+                    }
+                    
+                    let sys_prompt = "You are a title generator. For each provided directory name, generate a concise, human-readable title. Format your response strictly as index(:|-|:)title, one per line.";
+                    let llm_resp = llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_prompt), &prompt).await.unwrap_or_default();
+                    parse_batched_titles(&llm_resp, dir_chunk.len())
+                };
 
                 for (local_idx, path) in dir_chunk.iter().enumerate() {
                     let current_index = start + chunk_idx * 50 + local_idx;
                     let dir_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                     
-                    let title = if local_idx < batched_titles.len() {
+                    let title = if skip_llm {
+                        format!("antigravity_{}", dir_name)
+                    } else if local_idx < batched_titles.len() {
                         batched_titles[local_idx].clone()
                     } else {
                         tracing::warn!("Title for {} missing from batch, falling back", dir_name);
                         let fb_prompt = format!("Generate a concise title for directory name: {}", dir_name);
+                        let sys_prompt = "You are a title generator. For each provided directory name, generate a concise, human-readable title. Format your response strictly as index(:|-|:)title, one per line.";
                         llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_prompt), &fb_prompt).await.unwrap_or_else(|_| format!("antigravity_{}", dir_name))
                     };
                     

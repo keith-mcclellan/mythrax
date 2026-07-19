@@ -999,7 +999,7 @@ async fn main() -> Result<()> {
 
             println!("{}", serde_json::to_string_pretty(&out_json)?);
         }
-        Commands::Ingest { source, harness, scope, batch_size } => {
+        Commands::Ingest { source, harness, scope, batch_size, skip_llm } => {
             let home = std::env::var("HOME").context("HOME env var not set")?;
             let mythrax_dir = std::path::PathBuf::from(&home).join(".mythrax");
             let token_path = mythrax_dir.join("token");
@@ -1028,7 +1028,8 @@ async fn main() -> Result<()> {
                         "scope": scope,
                         "offset": offset,
                         "limit": batch_size,
-                        "async_mode": false
+                        "async_mode": false,
+                        "skip_llm": skip_llm
                     }
                 });
                 
