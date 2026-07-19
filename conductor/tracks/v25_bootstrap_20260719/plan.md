@@ -10,7 +10,7 @@
 - [x] Task: Wire HTR Pipeline Integration - Fix contradiction resolution to preserve evidence and create conflict nodes. (5f37275)
 - [x] Task: Wire HTR Pipeline Integration - Fix compactor to create `superseded_by` edges and expand temporal ranges. (bd0b205)
 - [x] Task: Wire HTR Pipeline Integration - Fix graduation to create graph edges from insights to wisdom. (60fe3ae)
-- [ ] Task: Wire HTR Pipeline Integration - Fix ingestion to create DB edges for linked artifacts.
+- [x] Task: Wire HTR Pipeline Integration - Fix ingestion to create DB edges for linked artifacts. (f60d3a5)
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
 
 ## Phase 2: Feedback Loop Hardening & Configuration
