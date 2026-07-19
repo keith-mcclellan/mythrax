@@ -102,6 +102,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
         &backend,
         None,
         None,
+        false,
     ).await?;
 
     assert_eq!(count, 1);
@@ -293,6 +294,7 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
         &backend,
         None,
         None,
+        false,
     ).await?;
 
     // We ingested 8 episode parts + 1 parent index + 2 artifacts = 11 success counts
@@ -381,6 +383,7 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
         &backend,
         None,
         None,
+        false,
     ).await?;
 
     // We ingested 1 episode part + 3 artifact parts = 4 success counts

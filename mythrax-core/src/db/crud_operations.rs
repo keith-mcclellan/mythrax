@@ -1009,8 +1009,11 @@ impl SurrealBackend {
         let mut node_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
 
-        let check_query = "SELECT VALUE id FROM wiki_node WHERE name = $name LIMIT 1;";
-        let mut response = self.db.query(check_query).bind(("name", node.name.as_str())).await?;
+        let check_query = "SELECT VALUE id FROM wiki_node WHERE name = $name AND scope = $scope LIMIT 1;";
+        let mut response = self.db.query(check_query)
+            .bind(("name", node.name.as_str()))
+            .bind(("scope", node.scope.as_str()))
+            .await?;
         let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
         if let Some(thing) = ids {
             node_uuid = match &thing.key {

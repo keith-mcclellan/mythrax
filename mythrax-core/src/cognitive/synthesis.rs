@@ -344,6 +344,104 @@ impl DreamCoordinator {
         }
     }
 
+    pub async fn distill_episode_metadata(
+        &self,
+        db: &dyn StorageBackend,
+        store: &MarkdownStore,
+        episode: &Episode,
+    ) -> Result<()> {
+        let sys_prompt = "You are a technical documentation summarizer. Given a raw conversation transcript, produce a concise title and summary.";
+        let user_prompt = format!(
+            "Please analyze these events: Produce a JSON object with 'title' (max 80 chars, descriptive) and 'summary' (2-4 sentences capturing key decisions, changes, and outcomes) for this transcript:\n\n{}",
+            truncate_to_boundary(&episode.content, 50_000)
+        );
+
+        let resp = self.llm.routed_completion(
+            db,
+            &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization),
+            Some(sys_prompt),
+            &user_prompt,
+        ).await?;
+
+        #[derive(serde::Deserialize)]
+        struct EpisodeMeta { title: String, summary: String }
+
+        let clean = crate::llm::strip_code_fences(&resp);
+        if let Ok(meta) = serde_json::from_str::<EpisodeMeta>(&clean) {
+            // 1. Update episode record in DB
+            if let Some(ref id) = episode.id {
+                db.update_episode_metadata(id, &meta.title, &meta.summary).await?;
+            }
+
+            // 2. Update vault markdown file with frontmatter + summary section
+            if let Some(ref vault_path) = episode.vault_path {
+                let updated_md = format!(
+                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\ncreated_at: \"{}\"\n---\n\n## Summary\n{}\n\n## Raw Transcript\n{}",
+                    meta.title,
+                    episode.scope.as_deref().unwrap_or("general"),
+                    episode.created_at.as_deref().unwrap_or(""),
+                    meta.summary,
+                    episode.content
+                );
+                let _ = store.write_file(vault_path, &updated_md);
+            }
+
+            // 3. Write a standalone summary WikiNode to wiki/ and create graph edges
+            let ep_short_id = episode.id.as_deref()
+                .map(|id| id.split(':').last().unwrap_or(id))
+                .unwrap_or("");
+            let unique_title = if ep_short_id.is_empty() {
+                meta.title.clone()
+            } else {
+                let clean_id = ep_short_id.replace(|c: char| !c.is_alphanumeric(), "");
+                let len = std::cmp::min(8, clean_id.len());
+                format!("{} ({})", meta.title, &clean_id[..len])
+            };
+            let slug = slugify_title(&unique_title);
+            let scope = episode.scope.as_deref().unwrap_or("general");
+            let wiki_path = format!("wiki/{}/episodes/{}.md", scope, slug);
+
+            // Derive temporal range from the ORIGINAL episode timestamps
+            let episode_start = episode.temporal_range_start
+                .or_else(|| episode.created_at.as_ref()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc)));
+            let episode_end = episode.temporal_range_end.or(episode_start);
+
+            let wiki_md = format!(
+                "---\ntitle: \"{}\"\nscope: \"{}\"\nepisode_id: \"{}\"\ncreated_at: \"{}\"\n---\n\n## Summary\n{}\n",
+                unique_title, scope,
+                episode.id.as_deref().unwrap_or(""),
+                episode.created_at.as_deref().unwrap_or(""),
+                meta.summary
+            );
+            let _ = store.write_file(&wiki_path, &wiki_md);
+
+            // Create WikiNode in DB with temporal range from source episode
+            let node = WikiNode {
+                name: unique_title,
+                content: meta.summary.clone(),
+                scope: scope.to_string(),
+                vault_path: Some(wiki_path),
+                node_type: Some("episode_summary".to_string()),
+                temporal_range_start: episode_start,
+                temporal_range_end: episode_end,
+                ..Default::default()
+            };
+            if let Ok(summary_node_id) = db.save_wiki_node(&node).await {
+                // Edge: episode → episode_summary ("summarized_by")
+                if let Some(ref ep_id) = episode.id {
+                    let _ = db.relate_nodes(
+                        ep_id, &summary_node_id,
+                        episode_start, episode_end,
+                        Some(1.0)
+                    ).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn save_wiki_node_with_contradiction_resolution(
         &self,
         db: &dyn StorageBackend,
@@ -769,6 +867,9 @@ impl DreamCoordinator {
                             let _ = store.append_link_to_file(&ep_path, "Insights & Summaries", &relative_path, &ins.title);
                         }
 
+                        if let Err(e) = self.distill_episode_metadata(db, store, &ep).await {
+                            tracing::error!("distill_episode_metadata error: {:?}", e);
+                        }
                         if let Some(ref ep_id) = ep.id {
                             db.mark_episode_processed(ep_id).await?;
                         }
@@ -953,6 +1054,9 @@ impl DreamCoordinator {
 
 
                 for ep in cluster_eps {
+                    if let Err(e) = self.distill_episode_metadata(db, store, ep).await {
+                        tracing::error!("distill_episode_metadata error: {:?}", e);
+                    }
                     if let Some(ref ep_id) = ep.id {
                         db.mark_episode_processed(ep_id).await?;
                     }

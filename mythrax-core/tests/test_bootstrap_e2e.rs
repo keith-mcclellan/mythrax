@@ -15,6 +15,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
         Ok(guard) => guard,
         Err(p) => p.into_inner(),
     };
+    let _ = tracing_subscriber::fmt::try_init();
 
     let tmp = tempdir()?;
     let vault_root = tmp.path().join("vault");
@@ -53,7 +54,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
         
         // Force mock embeddings in the DB
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
-        let mock_embedding = vec![0.1 * (i as f32); 768];
+        let mock_embedding = vec![0.1 * (i as f32 + 1.0); 768];
         let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, created_at = <datetime>$created_at;")
             .bind(("id", thing_id))
             .bind(("emb", mock_embedding))
@@ -72,7 +73,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
         let ep_id = backend.save_episode(&ep).await?;
         
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
-        let mock_embedding = vec![0.1 * (i as f32); 768];
+        let mock_embedding = vec![0.1 * (i as f32 + 1.0); 768];
         let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, created_at = <datetime>$created_at;")
             .bind(("id", thing_id))
             .bind(("emb", mock_embedding))

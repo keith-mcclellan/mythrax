@@ -44,6 +44,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS outcome ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS causal_explanation ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS parent_task_id ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS summary ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS distilled_at ON episode TYPE option<datetime>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;

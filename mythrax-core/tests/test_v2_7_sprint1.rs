@@ -161,6 +161,7 @@ fn test_episode_raw_conversion() {
         },
         title: "Test Title".to_string(),
         content: "Test Content".to_string(),
+        summary: Some("Test Summary".to_string()),
         source: Some("test_source".to_string()),
         scope: Some("test_scope".to_string()),
         vault_path: Some("test_vault_path".to_string()),
@@ -192,6 +193,7 @@ fn test_episode_raw_conversion() {
     assert_eq!(episode.id, Some("episode:foo_id".to_string()));
     assert_eq!(episode.title, "Test Title");
     assert_eq!(episode.content, "Test Content");
+    assert_eq!(episode.summary, Some("Test Summary".to_string()));
     assert_eq!(episode.source, Some("test_source".to_string()));
     assert_eq!(episode.scope, Some("test_scope".to_string()));
     assert_eq!(episode.vault_path, Some("test_vault_path".to_string()));
