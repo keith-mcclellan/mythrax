@@ -36,6 +36,89 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
     };
 
     match mapped_action {
+        "complete_handoff" => {
+            let task_id = args.get("task_id").and_then(|v| v.as_str()).context("Missing task_id")?;
+            let vault_root = state.store.vault_root.clone();
+            let abs_handoff_path = vault_root.join(format!(".handoffs/handoff_{}.md", task_id));
+
+            if !abs_handoff_path.exists() {
+                anyhow::bail!("Handoff contract not found: {}", task_id);
+            }
+
+            let mut content = std::fs::read_to_string(&abs_handoff_path)?;
+            
+            let status = args.get("status").and_then(|v| v.as_str());
+            let fail_reason = args.get("fail_reason").and_then(|v| v.as_str());
+            let mut failed = status == Some("failed");
+            let mut computed_fail_reason = fail_reason.map(|s| s.to_string());
+            
+            if !failed {
+                // validate outputs
+                if content.starts_with("---\n") {
+                    if let Some(end_idx) = content[4..].find("\n---") {
+                        let yaml_str = &content[4..4+end_idx];
+                        if let Ok(contract) = serde_yaml::from_str::<HandoffContract>(yaml_str) {
+                            let outputs_map = args.get("outputs").and_then(|v| v.as_object());
+                            for output in &contract.outputs {
+                                let has_val = outputs_map.map(|m| m.contains_key(&output.name)).unwrap_or(false);
+                                if output.required && !has_val {
+                                    failed = true;
+                                    computed_fail_reason = Some(format!("missing_output: {}", output.name));
+                                    break;
+                                }
+                                if has_val {
+                                    let val = outputs_map.unwrap().get(&output.name).unwrap();
+                                    
+                                    // Enum validation
+                                    if let Some(enums) = &output.enum_values {
+                                        if let Some(val_str) = val.as_str() {
+                                            if !enums.contains(&val_str.to_string()) {
+                                                failed = true;
+                                                computed_fail_reason = Some(format!("enum validation failed for: {}", output.name));
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    let mut val_str = serde_json::to_string(val).unwrap_or_default();
+                                    if val_str.len() > 1000 {
+                                        val_str.truncate(1000);
+                                        val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                    }
+                                    let key = format!("stm_{}_output_{}", task_id, output.name);
+                                    let _ = state.backend.save_stm(&contract.parent_conversation_id, &key, &val_str).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let final_status = if failed { "failed" } else { "completed" };
+            
+            let re = regex::Regex::new(r"(?m)^status:\s*.*$").unwrap();
+            content = re.replace(&content, format!("status: \"{}\"", final_status)).to_string();
+            
+            if failed {
+                if let Some(reason) = &computed_fail_reason {
+                    let re_fail = regex::Regex::new(r"(?m)^fail_reason:\s*.*$").unwrap();
+                    if re_fail.is_match(&content) {
+                        content = re_fail.replace(&content, format!("fail_reason: \"{}\"", reason)).to_string();
+                    } else {
+                        // Insert after status if not present
+                        content = content.replace(&format!("status: \"{}\"", final_status), &format!("status: \"{}\"\nfail_reason: \"{}\"", final_status, reason));
+                    }
+                }
+            }
+
+            std::fs::write(&abs_handoff_path, content)?;
+
+            if failed {
+                anyhow::bail!("Handoff completed with failure: {}", computed_fail_reason.unwrap_or_default());
+            }
+
+            return Ok(json!({ "status": "success" }));
+        }
         "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk" | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
             match mapped_action {
                 "ingest_bulk" => {
@@ -368,6 +451,45 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             let handoff_file_path = args.get("handoff_file_path").and_then(|v| v.as_str()).context("Missing handoff_file_path")?.to_string();
             let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
             let include_tool_execution = args.get("include_tool_execution").and_then(|v| v.as_bool());
+
+            // Task 16: Typed I/O Contracts - Pre-launch validation
+            let vault_root = state.store.vault_root.clone();
+            let abs_handoff_path = if std::path::Path::new(&handoff_file_path).is_absolute() {
+                std::path::PathBuf::from(&handoff_file_path)
+            } else {
+                vault_root.join(&handoff_file_path)
+            };
+
+            if abs_handoff_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&abs_handoff_path) {
+                    if content.starts_with("---\n") {
+                        if let Some(end_idx) = content[4..].find("\n---") {
+                            let yaml_str = &content[4..4+end_idx];
+                            match serde_yaml::from_str::<HandoffContract>(yaml_str) {
+                                Ok(contract) => {
+                                    for input in &contract.inputs {
+                                        if input.required && input.value.is_none() {
+                                            anyhow::bail!("Missing required input: {}", input.name);
+                                        }
+                                        if let Some(val) = &input.value {
+                                            let mut val_str = serde_json::to_string(val).unwrap_or_default();
+                                            if val_str.len() > 1000 {
+                                                val_str.truncate(1000);
+                                                val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                            }
+                                            let key = format!("stm_{}_input_{}", contract.task_id, input.name);
+                                            let _ = state.backend.save_stm(&subagent_conversation_id, &key, &val_str).await;
+                                        }
+                                    }
+                                }
+                                Err(e) => anyhow::bail!("Malformed contract frontmatter: {}", e),
+                            }
+                        }
+                    } else {
+                        tracing::info!("No contract frontmatter found, skipping validation");
+                    }
+                }
+            }
 
             let handoff = HandoffSave {
                 parent_conversation_id: parent_conversation_id.clone(),

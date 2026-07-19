@@ -444,6 +444,31 @@ pub struct HandoffSave {
     pub include_tool_execution: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HandoffContract {
+    pub task_id: String,
+    pub title: String,
+    pub status: String,
+    pub fail_reason: Option<String>,
+    pub parent_conversation_id: String,
+    #[serde(default)]
+    pub inputs: Vec<ContractField>,
+    #[serde(default)]
+    pub outputs: Vec<ContractField>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContractField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub required: bool,
+    pub value: Option<serde_json::Value>,
+    #[serde(rename = "enum")]
+    pub enum_values: Option<Vec<String>>,
+}
+
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct WikiNode {
