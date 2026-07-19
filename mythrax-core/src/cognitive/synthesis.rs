@@ -514,37 +514,73 @@ impl DreamCoordinator {
                 if let Ok(res) = serde_json::from_str::<ContradictionResponse>(&clean_resp) {
                     if res.contradicts && res.confidence >= 0.80 {
                         if let Some(resolution) = res.resolution {
-                            let mut updated_node = existing_node.clone();
-                            updated_node.content = resolution.clone();
-                            
-                            // Re-embed resolved content
-                            if let Some(ref emb) = embedder {
-                                let max_tokens = 2048;
-                                let truncated_content = truncate_by_tokens(&updated_node.content, max_tokens, Some(emb.as_ref()));
-                                if let Ok(e) = emb.embed(&truncated_content) {
-                                    updated_node.embedding = Some(e);
-                                }
-                            }
+                            // 1. Create conflict node preserving BOTH positions
+                            let conflict_content = format!(
+                                "## Conflicting Positions\n\n### Position A (existing)\n{}\n\n### Position B (new)\n{}\n\n## Resolution\n{}",
+                                existing_node.content, node.content, resolution
+                            );
+                            let conflict_name = format!("Conflict: {} vs {}", existing_node.name, node.name);
+                            let slug = slugify_title(&conflict_name);
+                            let rel_path = format!("wiki/{}/conflicts/{}.md", node.scope, slug);
+                            let conflict_node = WikiNode {
+                                name: conflict_name,
+                                content: conflict_content,
+                                scope: node.scope.clone(),
+                                vault_path: Some(rel_path.clone()),
+                                node_type: Some("conflict".to_string()),
+                                temporal_range_start: node.temporal_range_start.or(existing_node.temporal_range_start),
+                                temporal_range_end: node.temporal_range_end.or(existing_node.temporal_range_end),
+                                ..Default::default()
+                            };
+                            let conflict_id = db.save_wiki_node(&conflict_node).await?;
 
-                            // Save updated existing node to DB
-                            db.save_wiki_node(&updated_node).await?;
-
-                            // Update its physical file, preserving frontmatter
-                            if let Some(ref vp) = updated_node.vault_path {
-                                if let Ok(existing_file_content) = std::fs::read_to_string(store.vault_root.join(vp)) {
-                                    let parts: Vec<&str> = existing_file_content.splitn(3, "---").collect();
-                                    if parts.len() == 3 {
-                                        let updated_file_content = format!("---{}---\n\n{}", parts[1], resolution);
-                                        let _ = store.write_file(vp, &updated_file_content);
-                                    } else {
-                                        let _ = store.write_file(vp, &resolution);
+                            // 2. Create relates_to edges from conflicting nodes to conflict node
+                            if let Some(ref existing_id) = existing_node.id {
+                                let _ = db.relate_nodes(existing_id, &conflict_id, None, None, Some(res.confidence)).await;
+                                
+                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                                    if let Ok(existing_record_id) = crate::db::backend::parse_record_id(existing_id) {
+                                        let sql = "SELECT VALUE in FROM relates_to WHERE out = $existing;";
+                                        match surreal_backend.db.query(sql).bind(("existing", existing_record_id)).await {
+                                            Ok(mut resp) => {
+                                                match resp.take::<Vec<surrealdb::types::RecordId>>(0) {
+                                                    Ok(ep_ids) => {
+                                                        tracing::debug!("Contradiction found ep_ids: {:?}", ep_ids);
+                                                        for ep_rec in ep_ids {
+                                                            let ep_id = crate::db::backend::format_record_id(&ep_rec);
+                                                            let _ = db.relate_nodes(&ep_id, &conflict_id, None, None, Some(res.confidence)).await;
+                                                        }
+                                                    }
+                                                    Err(e) => tracing::error!("Failed to take record IDs from relates_to response: {:?}", e),
+                                                }
+                                            }
+                                            Err(e) => tracing::error!("Failed to query relates_to table: {:?}", e),
+                                        }
                                     }
-                                } else {
-                                    let _ = store.write_file(vp, &resolution);
                                 }
                             }
+                            
+                            // Re-embed and save new node
+                            let mut new_node = node.clone();
+                            if new_node.embedding.is_none() {
+                                if let Some(ref emb) = embedder {
+                                    let max_tokens = 2048;
+                                    let truncated_content = truncate_by_tokens(&new_node.content, max_tokens, Some(emb.as_ref()));
+                                    if let Ok(e) = emb.embed(&truncated_content) {
+                                        new_node.embedding = Some(e);
+                                    }
+                                }
+                            }
+                            let new_id = db.save_wiki_node(&new_node).await?;
+                            let _ = db.relate_nodes(&new_id, &conflict_id, None, None, Some(res.confidence)).await;
 
-                            return Ok(updated_node.id.unwrap_or_default());
+                            // 3. Write conflict to vault
+                            let _ = store.write_file(&rel_path, &format!(
+                                "---\ntitle: \"{}\"\nscope: \"{}\"\nnode_type: \"conflict\"\n---\n\n{}",
+                                conflict_node.name, node.scope, conflict_node.content
+                            ));
+
+                            return Ok(conflict_id);
                         }
                     }
                 }
@@ -1060,13 +1096,14 @@ impl DreamCoordinator {
                 );
                 store.write_file(&relative_path, &insight_content)?;
 
+                let centroid = calculate_centroid(&cluster_ep_ids, &all_episodes);
                 let node_contract = WikiNode {
                     id: None,
                     name: analysis.title.clone(),
                     content: analysis.summary.clone(),
                     scope: scope.clone(),
                     vault_path: Some(relative_path.clone()),
-                    embedding: None,
+                    embedding: centroid,
                     metacognitive_confidence: analysis.metacognitive_confidence,
                     node_type: analysis.node_type.clone().or(Some("insight".to_string())),
                     temporal_range_start: temporal_start,

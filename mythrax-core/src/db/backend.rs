@@ -986,6 +986,7 @@ pub struct EpisodeRaw {
     pub importance: Option<f32>,
     pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
     pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<EpisodeRaw> for Episode {
@@ -1015,6 +1016,7 @@ impl From<EpisodeRaw> for Episode {
             node_type: raw.node_type,
             confidence: raw.confidence,
             importance: raw.importance,
+            created_at: raw.created_at.map(|t| t.to_rfc3339()),
             temporal_range_start: raw.temporal_range_start,
             temporal_range_end: raw.temporal_range_end,
             ..Default::default()

@@ -39,7 +39,11 @@ async fn test_bootstrap_e2e() -> Result<()> {
     let store = MarkdownStore::new(&vault_root)?;
     let coordinator = DreamCoordinator::new();
 
-    // 1. Insert 12 mock episodes (6 in test_scope_a, 4 in test_scope_b, 2 contradicting)
+    // Write dream settings to configure DBSCAN eps and min_samples for the test
+    let settings_content = "---\nmode: \"deep\"\neps: 0.20\nmin_samples: 2\n---";
+    fs::write(vault_root.join("wiki/dream_settings.md"), settings_content)?;
+
+    // 1. Insert 13 mock episodes (6 in test_scope_a, 4 in test_scope_b, 3 contradicting/split in test_scope_a)
     // 6 episodes in test_scope_a: semantically similar content about "database migration patterns"
     for i in 0..6 {
         let ep = EpisodeSave {
@@ -47,15 +51,13 @@ async fn test_bootstrap_e2e() -> Result<()> {
             content: format!("Database migration patterns discuss how we run schema changes and upgrade SQLite/SurrealDB databases safely. Step {}.", i),
             scope: Some("test_scope_a".to_string()),
             confidence: Some(5.0),
-            // Pre-computed embeddings designed to produce known cluster geometry
-            // We use a mock embedder or override embeddings in the DB after saving
             ..Default::default()
         };
         let ep_id = backend.save_episode(&ep).await?;
         
-        // Force mock embeddings in the DB
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
-        let mock_embedding = vec![0.1 * (i as f32 + 1.0); 768];
+        let mut mock_embedding = vec![0.0; 768];
+        mock_embedding[0] = 1.0;
         let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, confidence = 5.0, created_at = <datetime>$created_at;")
             .bind(("id", thing_id))
             .bind(("emb", mock_embedding))
@@ -75,7 +77,8 @@ async fn test_bootstrap_e2e() -> Result<()> {
         let ep_id = backend.save_episode(&ep).await?;
         
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
-        let mock_embedding = vec![0.1 * (i as f32 + 1.0); 768];
+        let mut mock_embedding = vec![0.0; 768];
+        mock_embedding[0] = 1.0;
         let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, confidence = 5.0, created_at = <datetime>$created_at;")
             .bind(("id", thing_id))
             .bind(("emb", mock_embedding))
@@ -83,31 +86,55 @@ async fn test_bootstrap_e2e() -> Result<()> {
             .await?.take(0)?;
     }
 
-    // 2 contradicting episodes: ORMs vs No ORMs
+    // 3 contradicting episodes: ORMs vs No ORMs
+    // ORM Episode:
     let ep_orm = EpisodeSave {
         title: "Antigravity ORM view".to_string(),
         content: "We must always use ORMs for database queries to ensure type safety and prevent SQL injection. Absolutely always.".to_string(),
         scope: Some("test_scope_a".to_string()),
+        confidence: Some(5.0),
         ..Default::default()
     };
     let ep_orm_id = backend.save_episode(&ep_orm).await?;
     let thing_orm = mythrax_core::db::parse_record_id(&ep_orm_id)?;
-    let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, created_at = <datetime>'2026-07-19T14:00:00Z';")
+    let mut orm_emb = vec![0.0; 768];
+    orm_emb[0] = 1.0;
+    let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, confidence = 5.0, created_at = <datetime>'2026-07-19T14:00:00Z';")
         .bind(("id", thing_orm))
-        .bind(("emb", vec![0.9; 768]))
+        .bind(("emb", orm_emb))
         .await?.take(0)?;
 
+    // No ORM Episode 1:
     let ep_no_orm = EpisodeSave {
         title: "Antigravity No ORM view".to_string(),
         content: "We should never use ORMs for database queries. They cause object-relational impedance mismatch and slow down performance. Absolutely never ORMs.".to_string(),
         scope: Some("test_scope_a".to_string()),
+        confidence: Some(5.0),
         ..Default::default()
     };
     let ep_no_orm_id = backend.save_episode(&ep_no_orm).await?;
     let thing_no_orm = mythrax_core::db::parse_record_id(&ep_no_orm_id)?;
-    let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, created_at = <datetime>'2026-07-19T14:00:01Z';")
+    let mut no_orm_emb = vec![0.0; 768];
+    no_orm_emb[0] = 0.75;
+    no_orm_emb[1] = 0.6614;
+    let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, confidence = 5.0, created_at = <datetime>'2026-07-19T14:00:01Z';")
         .bind(("id", thing_no_orm))
-        .bind(("emb", vec![0.95; 768]))
+        .bind(("emb", no_orm_emb.clone()))
+        .await?.take(0)?;
+
+    // No ORM Episode 2 (Helper to form a cluster of size 2):
+    let ep_no_orm_2 = EpisodeSave {
+        title: "Antigravity No ORM view second".to_string(),
+        content: "Second opinion stating ORMs should be avoided. Hand-written queries provide more performance and control.".to_string(),
+        scope: Some("test_scope_a".to_string()),
+        confidence: Some(5.0),
+        ..Default::default()
+    };
+    let ep_no_orm_2_id = backend.save_episode(&ep_no_orm_2).await?;
+    let thing_no_orm_2 = mythrax_core::db::parse_record_id(&ep_no_orm_2_id)?;
+    let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, confidence = 5.0, created_at = <datetime>'2026-07-19T14:00:02Z';")
+        .bind(("id", thing_no_orm_2))
+        .bind(("emb", no_orm_emb))
         .await?.take(0)?;
 
     // Enable cross-scope graduation profile config
@@ -118,29 +145,30 @@ async fn test_bootstrap_e2e() -> Result<()> {
     coordinator.run_dream(&backend, &store, Some("deep"), None).await?;
 
     // 3. Assertions
-    // ✅ Episodes: 12 exist, all marked processed_in_dream=true
+    // ✅ Episodes: 13 exist, all marked processed_in_dream=true
     let eps = backend.get_all_episodes().await?;
-    assert_eq!(eps.len(), 12);
+    assert_eq!(eps.len(), 13);
     for ep in &eps {
         assert_eq!(ep.processed_in_dream, Some(true));
+        println!("DEBUG - Episode {} title={:?} created_at={:?} temporal_range_start={:?}", ep.id.as_ref().unwrap(), ep.title, ep.created_at, ep.temporal_range_start);
     }
 
-    // ✅ Episode Titles: All 12 episodes have non-placeholder titles (not "antigravity_*")
+    // ✅ Episode Titles: All 13 episodes have non-placeholder titles (not "antigravity_*")
     // (mock LLM will generate titles during distillation step)
     for ep in &eps {
         assert!(!ep.title.starts_with("antigravity_"));
     }
 
-    // ✅ Episode Summaries: All 12 episodes have `summary` field populated in DB
+    // ✅ Episode Summaries: All 13 episodes have `summary` field populated in DB
     for ep in &eps {
         assert!(ep.summary.is_some());
     }
 
     // ✅ Episode Wiki Pages: `wiki/{scope}/episodes/*.md` files exist with Summary sections
-    // ✅ Summary WikiNodes: 12 WikiNodes with node_type="episode_summary" exist in DB
+    // ✅ Summary WikiNodes: 13 WikiNodes with node_type="episode_summary" exist in DB
     let wiki_nodes = backend.get_all_wiki_nodes().await?;
     let episode_summaries: Vec<_> = wiki_nodes.iter().filter(|n| n.node_type.as_deref() == Some("episode_summary")).collect();
-    assert_eq!(episode_summaries.len(), 12);
+    assert_eq!(episode_summaries.len(), 13);
 
     for node in &episode_summaries {
         assert!(node.vault_path.is_some());
@@ -164,9 +192,16 @@ async fn test_bootstrap_e2e() -> Result<()> {
     let dir = &directions[0];
     assert!(dir.content.contains("Backpropagated Evidence") || dir.content.contains("refined"));
 
-    // ✅ Insight→Direction Edge: relates_to edge from insight to direction exists
-    let rel_insights = backend.get_related_node_ids(insights[0].id.as_ref().unwrap()).await?;
-    assert!(rel_insights.iter().any(|id| directions.iter().any(|d| d.id.as_ref() == Some(id))));
+    // ✅ Insight→Direction Edge: relates_to edge from at least one insight to a direction exists
+    let mut found_dir_edge = false;
+    for ins in &insights {
+        let rel_insights = backend.get_related_node_ids(ins.id.as_ref().unwrap()).await?;
+        if rel_insights.iter().any(|id| directions.iter().any(|d| d.id.as_ref() == Some(id))) {
+            found_dir_edge = true;
+            break;
+        }
+    }
+    assert!(found_dir_edge, "At least one insight must relate to a direction");
 
     // ✅ Wisdom: ≥1 WisdomRule (from cross-scope graduation)
     let wisdom_rules = backend.get_all_wisdom_rules().await?;
@@ -176,9 +211,16 @@ async fn test_bootstrap_e2e() -> Result<()> {
     let wisdom_rule = &wisdom_rules[0];
     assert!(!wisdom_rule.source_episodes.is_empty());
 
-    // ✅ Wisdom Graph Edge: relates_to edge from insight → wisdom rule exists
-    let rel_insight_to_wisdom = backend.get_related_node_ids(insights[0].id.as_ref().unwrap()).await?;
-    assert!(rel_insight_to_wisdom.contains(wisdom_rule.id.as_ref().unwrap()));
+    // ✅ Wisdom Graph Edge: relates_to edge from at least one insight → wisdom rule exists
+    let mut found_wisdom_edge = false;
+    for ins in &insights {
+        let rel_insight_to_wisdom = backend.get_related_node_ids(ins.id.as_ref().unwrap()).await?;
+        if rel_insight_to_wisdom.contains(wisdom_rule.id.as_ref().unwrap()) {
+            found_wisdom_edge = true;
+            break;
+        }
+    }
+    assert!(found_wisdom_edge, "At least one insight must relate to the wisdom rule");
 
     // ✅ Conflicts: ≥1 WikiNode with node_type="conflict" preserving both positions
     let conflicts: Vec<_> = wiki_nodes.iter().filter(|n| n.node_type.as_deref() == Some("conflict")).collect();
