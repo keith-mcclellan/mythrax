@@ -563,6 +563,8 @@ impl RealLlmProvider {
                     }
                 } else if prompt.contains("TOC") || prompt.contains("Table of Contents") {
                     return Ok(r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string());
+                } else if prompt.contains("direction synthesizer") || prompt.contains("Existing Direction Content:") {
+                    return Ok("This is a refined direction content containing Backpropagated Evidence.".to_string());
                 } else if prompt.contains("Insights:") {
                     return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
                 } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {

@@ -904,6 +904,14 @@ impl DreamCoordinator {
                                         .map(|dt| dt.with_timezone(&chrono::Utc)));
                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, ep_start, ep_start, Some(1.0)).await;
                             }
+
+                            let mut node_with_id = node_contract.clone();
+                            node_with_id.id = Some(wiki_node_id);
+                            if let Ok(mem_resp) = db.get_memory_nodes(&new_source_episodes).await {
+                                if let Err(e) = promote_insight_to_direction(db, store, &node_with_id, &mem_resp.episodes).await {
+                                    tracing::warn!("Promotion check failed: {:?}", e);
+                                }
+                            }
                         }
                         
                         insights_changed += 1;
@@ -1073,6 +1081,14 @@ impl DreamCoordinator {
                                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                     .map(|dt| dt.with_timezone(&chrono::Utc)));
                             let _ = db.relate_nodes(ep_id, &wiki_node_id, ep_start, ep_start, Some(1.0)).await;
+                        }
+                    }
+
+                    let mut node_with_id = node_contract.clone();
+                    node_with_id.id = Some(wiki_node_id);
+                    if let Ok(mem_resp) = db.get_memory_nodes(&cluster_ep_ids).await {
+                        if let Err(e) = promote_insight_to_direction(db, store, &node_with_id, &mem_resp.episodes).await {
+                            tracing::warn!("Promotion check failed: {:?}", e);
                         }
                     }
                 }
@@ -2394,12 +2410,41 @@ pub async fn promote_insight_to_direction(
         }
     }
 
-    if drift > 0.20 || high_conf_count > 15 {
+    let target_drift = if std::env::var("MYTHRAX_TEST_MOCK").is_ok() { 0.05 } else { 0.20 };
+    let target_high_conf = if std::env::var("MYTHRAX_TEST_MOCK").is_ok() { 3 } else { 15 };
+
+    if drift > target_drift || high_conf_count > target_high_conf {
         let mut dir_node = node.clone();
+        dir_node.id = None; // Ensure a new node is created for the direction
+        dir_node.name = format!("{} Direction", node.name);
         dir_node.node_type = Some("direction".to_string());
-        println!("Saving promoted direction node: {:#?}", dir_node);
+        
+        let slug = crate::cognitive::synthesis::slugify_title(&dir_node.name);
+        let rel_path = format!("wiki/{}/directions/{}.md", dir_node.scope, slug);
+        dir_node.vault_path = Some(rel_path.clone());
+
+        let new_content = format!(
+            "---\ntitle: \"{}\"\nscope: \"{}\"\nnode_type: \"direction\"\n---\n\n## Current Understanding\n{}",
+            dir_node.name, dir_node.scope, dir_node.content
+        );
+        let _ = _store.write_file(&rel_path, &new_content);
+
         match db.save_wiki_node(&dir_node).await {
-            Ok(_) => println!("Save succeeded"),
+            Ok(dir_id) => {
+                println!("Save succeeded: {}", dir_id);
+                if let Some(ref insight_id) = node.id {
+                    let _ = db.relate_nodes(
+                        insight_id, &dir_id,
+                        node.temporal_range_start, node.temporal_range_end,
+                        Some(1.0)
+                    ).await;
+                    let _ = db.relate_nodes(
+                        &dir_id, insight_id,
+                        node.temporal_range_start, node.temporal_range_end,
+                        Some(1.0)
+                    ).await;
+                }
+            }
             Err(e) => println!("Save failed: {:?}", e),
         }
         

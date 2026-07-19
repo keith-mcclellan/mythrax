@@ -46,6 +46,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
             title: format!("Antigravity Episode A{}", i),
             content: format!("Database migration patterns discuss how we run schema changes and upgrade SQLite/SurrealDB databases safely. Step {}.", i),
             scope: Some("test_scope_a".to_string()),
+            confidence: Some(5.0),
             // Pre-computed embeddings designed to produce known cluster geometry
             // We use a mock embedder or override embeddings in the DB after saving
             ..Default::default()
@@ -55,7 +56,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
         // Force mock embeddings in the DB
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
         let mock_embedding = vec![0.1 * (i as f32 + 1.0); 768];
-        let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, created_at = <datetime>$created_at;")
+        let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, confidence = 5.0, created_at = <datetime>$created_at;")
             .bind(("id", thing_id))
             .bind(("emb", mock_embedding))
             .bind(("created_at", format!("2026-07-19T12:00:0{}Z", i)))
@@ -68,13 +69,14 @@ async fn test_bootstrap_e2e() -> Result<()> {
             title: format!("Antigravity Episode B{}", i),
             content: format!("Database migration patterns discuss how we run schema changes and upgrade SQLite/SurrealDB databases safely. Cross scope step {}.", i),
             scope: Some("test_scope_b".to_string()),
+            confidence: Some(5.0),
             ..Default::default()
         };
         let ep_id = backend.save_episode(&ep).await?;
         
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
         let mock_embedding = vec![0.1 * (i as f32 + 1.0); 768];
-        let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, created_at = <datetime>$created_at;")
+        let _: Vec<serde_json::Value> = backend.db.query("UPDATE $id SET embedding = $emb, processed_in_dream = false, confidence = 5.0, created_at = <datetime>$created_at;")
             .bind(("id", thing_id))
             .bind(("emb", mock_embedding))
             .bind(("created_at", format!("2026-07-19T13:00:0{}Z", i)))
