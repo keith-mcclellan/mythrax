@@ -22,32 +22,10 @@ impl Default for Compactor {
 impl Compactor {
     pub fn new() -> Self {
         Self {
-            llm: LLMClient::new(),
+            llm: LLMClient::default(),
         }
     }
-    pub async fn compact_global(&self, db: &dyn crate::db::StorageBackend, store: &crate::store::MarkdownStore) -> anyhow::Result<()> {
-        let _ = db.prune_stale_memories(&store.vault_root).await;
 
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let mut pruning_days: i64 = 30;
-            let query_res = surreal_backend.db.query("SELECT VALUE value FROM profile WHERE key = 'compaction.history_pruning_days' LIMIT 1;").await;
-            if let Ok(mut resp) = query_res {
-                if let Ok(values) = resp.take::<Vec<String>>(0) {
-                    if let Some(val_str) = values.first() {
-                        if let Ok(days) = val_str.parse::<i64>() {
-                            pruning_days = days;
-                        }
-                    }
-                }
-            }
-            let threshold = chrono::Utc::now() - chrono::Duration::days(pruning_days);
-            let _ = surreal_backend.db.query("DELETE wiki_node_history WHERE changed_at < type::datetime($threshold);")
-                .bind(("threshold", threshold.to_rfc3339()))
-                .await;
-        }
-
-        crate::cognitive::synthesis::graduate_wisdom(db, store).await
-    }
 
     pub async fn delta_compact_checkpoints(&self, db: &dyn StorageBackend) -> Result<String> {
         let checkpoints = db.get_checkpoints().await?;
@@ -102,7 +80,7 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         scope: &str,
-        _embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        _embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
         if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
             // Garbage collect low-confidence nodes updated more than 30 days ago
@@ -890,6 +868,8 @@ impl Compactor {
             let decay_factor = (-lambda_eff * t_days).exp();
             let utility = ep.utility.unwrap_or(50.0);
             let decayed_utility = utility * decay_factor;
+
+
 
             if decayed_utility < decay_threshold * 50.0 {
                 let mut is_referenced = false;

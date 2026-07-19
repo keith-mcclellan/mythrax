@@ -3150,6 +3150,7 @@ name = "mythrax-core"
 version = "3.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.7.9",
  "bytes",
  "chrono",

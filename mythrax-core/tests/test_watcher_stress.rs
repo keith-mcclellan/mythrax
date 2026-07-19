@@ -16,7 +16,7 @@ async fn test_watcher_upstream_filtering_coalescing_and_bounded_pool() {
     
     // Initialize Database Backend
     let db_path = temp_dir.path().join("db");
-    let backend = Arc::new(SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await.unwrap());
+    let backend = Arc::new(SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap());
     backend.init().await.unwrap();
 
     // Initialize Markdown Store

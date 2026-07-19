@@ -170,7 +170,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             let tier_opt = args.get("tier").and_then(|v| v.as_str());
             let use_cloud = model_opt == Some("cloud") || tier_opt == Some("cloud");
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let audit_res = if use_cloud && std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
                 let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
                 let task = crate::db::CognitiveTask {
@@ -1265,8 +1265,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     }
 
-    let joined_context = parts.join("\n");
-    
+
     let count_tokens = |text: &str| -> usize {
         if let Some(ref embedder) = surreal_backend.embedder {
             embedder.count_tokens(text).unwrap_or_else(|_| text.split_whitespace().count())
@@ -1336,7 +1335,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
     if caller != Some("distiller") {
         loop {
-            let mut current_total = count_tokens(base_playbook)
+            let current_total = count_tokens(base_playbook)
                 + count_tokens(&p0_combined)
                 + count_tokens(&p1_wisdom)
                 + count_tokens(&p2_stm)
@@ -1530,7 +1529,7 @@ pub async fn handle_complete_code_task(state: &ApiState, args: Value) -> Result<
     let config = state.backend.get_llm_config().await?;
     let model = model_override.unwrap_or(&config.model);
 
-    let client = crate::llm::LLMClient::new();
+    let client = crate::llm::LLMClient::default();
     let response = client.completion_explicit(
         state.backend.as_ref(),
         "local",

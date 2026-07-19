@@ -571,7 +571,7 @@ pub async fn seed_wisdom_from_rules(
     if direct_agents.exists() { candidate_files.push(direct_agents); }
     
     let mut saved_count = 0;
-    let client = LLMClient::new();
+    let client = LLMClient::default();
     
     // Get existing rules to check for duplicates
     let existing_rules = db.get_all_wisdom_rules().await.unwrap_or_default();

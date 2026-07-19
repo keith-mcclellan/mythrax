@@ -166,7 +166,7 @@ pub struct CacheEntry {
 #[derive(Clone)]
 pub struct SurrealBackend {
     pub db: Surreal<Db>,
-    pub embedder: Option<Arc<crate::embeddings::LocalEmbedder>>,
+    pub embedder: Option<Arc<dyn crate::embeddings::TextEmbedder>>,
     pub client_port: Option<u16>,
     pub write_lock: Arc<tokio::sync::Mutex<()>>,
     pub db_path: Option<std::path::PathBuf>,
@@ -181,6 +181,22 @@ pub struct SurrealBackend {
     pub reranker: Arc<tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>>>,
     pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
     pub(crate) blackboard_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
+}
+
+pub struct BackendConfig {
+    pub check_daemon: bool,
+    pub embedder: Option<Arc<dyn crate::embeddings::TextEmbedder>>,
+    pub llm: Option<crate::llm::LLMClient>,
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self {
+            check_daemon: true,
+            embedder: None,
+            llm: None,
+        }
+    }
 }
 
 impl SurrealBackend {
@@ -399,18 +415,7 @@ impl SurrealBackend {
         }
     }
 
-    pub async fn new(url: &str) -> Result<Self> {
-        // Helper to detect if we are running inside cargo test
-        let is_running_in_test = {
-            let in_test_exe = if let Ok(exe) = std::env::current_exe() {
-                let name = exe.to_string_lossy();
-                name.contains("/deps/") || name.contains("test")
-            } else {
-                false
-            };
-            in_test_exe || std::env::args().any(|arg| arg.contains("test"))
-        };
-
+    pub async fn new(url: &str, config: BackendConfig) -> Result<Self> {
         // 1. Determine daemon port from env or default
         let env_port = std::env::var("MYTHRAX_DAEMON_PORT").ok();
         let daemon_port = env_port
@@ -418,9 +423,8 @@ impl SurrealBackend {
             .and_then(|p| p.parse::<u16>().ok())
             .unwrap_or(8090);
 
-        // 2. Only check the daemon port if we are not running inside a unit test,
-        // OR if MYTHRAX_DAEMON_PORT was explicitly set in the environment.
-        let is_daemon_available = if env_port.is_some() || !is_running_in_test {
+        // 2. Only check the daemon port if check_daemon is true
+        let is_daemon_available = if config.check_daemon {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(50),
                 tokio::net::TcpStream::connect(format!("127.0.0.1:{}", daemon_port))
@@ -482,14 +486,15 @@ impl SurrealBackend {
             (db, None)
         };
 
-        // 3. Initialize embedder using cached global LocalEmbedder
-        let embedder = match crate::embeddings::LocalEmbedder::get_global() {
-            Ok(emb) => Some(emb),
-            Err(e) => {
-                tracing::warn!("Failed to initialize LocalEmbedder: {}. Falling back to non-embedded mode.", e);
-                None
+        let embedder = config.embedder.or_else(|| {
+            match crate::embeddings::LocalEmbedder::get_global() {
+                Ok(emb) => Some(emb as Arc<dyn crate::embeddings::TextEmbedder>),
+                Err(e) => {
+                    tracing::warn!("Failed to initialize LocalEmbedder: {}. Falling back to non-embedded mode.", e);
+                    None
+                }
             }
-        };
+        });
 
         // 4. Initialize write lock
         let write_lock = Arc::new(tokio::sync::Mutex::new(()));
@@ -563,7 +568,7 @@ impl SurrealBackend {
     }
 
     pub async fn new_client_connection() -> Result<Self> {
-        Self::new("mem://").await
+        Self::new("mem://", BackendConfig::default()).await
     }
 
     pub async fn record_indexing_write(&self, vault_path: &str) {
@@ -773,7 +778,12 @@ impl SurrealBackend {
 
     #[allow(dead_code)]
     pub async fn new_in_memory() -> Result<Self> {
-        let backend = Self::new("mem://").await?;
+        let config = BackendConfig {
+            check_daemon: false,
+            embedder: Some(Arc::new(crate::embeddings::MockEmbedder)),
+            llm: Some(crate::llm::LLMClient::new_mock()),
+        };
+        let backend = Self::new("mem://", config).await?;
         let random_db = format!("db_{}", Uuid::new_v4().to_string().replace("-", "_"));
         backend.db.use_ns("mythrax").use_db(&random_db).await?;
         Ok(backend)
@@ -1037,7 +1047,7 @@ pub(crate) struct WikiNodeRaw {
     pub(crate) temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
-    pub(crate) metacognitive_confidence: Option<i32>,
+    pub(crate) metacognitive_confidence: Option<f64>,
     #[serde(default)]
     pub(crate) node_type: Option<String>,
 }
@@ -1054,7 +1064,7 @@ impl WikiNodeRaw {
             embedding: self.embedding,
             temporal_range_start: self.temporal_range_start,
             temporal_range_end: self.temporal_range_end,
-            metacognitive_confidence: self.metacognitive_confidence,
+            metacognitive_confidence: self.metacognitive_confidence.map(|v| v as i32),
             node_type: self.node_type,
         }
     }
@@ -1241,13 +1251,18 @@ impl StorageBackend for SurrealBackend {
     async fn get_wisdom(&self, query: &str, tier: Option<Tier>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
         let active_scope = self.resolve_active_scope();
 
+        let is_mock_embedder = self.embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
         let query_emb = if let Some(ref _embedder) = self.embedder {
-            let formatted_query = format!("search_query: {}", query);
-            match self.embed(&formatted_query).await {
-                Ok(vec) => Some(vec),
-                Err(e) => {
-                    tracing::warn!("Embedding generation failed in get_wisdom: {}", e);
-                    None
+            if is_mock_embedder {
+                None
+            } else {
+                let formatted_query = format!("search_query: {}", query);
+                match self.embed(&formatted_query).await {
+                    Ok(vec) => Some(vec),
+                    Err(e) => {
+                        tracing::warn!("Embedding generation failed in get_wisdom: {}", e);
+                        None
+                    }
                 }
             }
         } else {
@@ -1566,21 +1581,7 @@ impl StorageBackend for SurrealBackend {
             if let Some(ref emp) = embedder {
                 emp.embed(&text_str)
             } else {
-                if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = DefaultHasher::new();
-                    text_str.hash(&mut hasher);
-                    let seed = hasher.finish();
-                    let mut vec = vec![0.0; 768];
-                    for i in 0..768 {
-                        let val = (((seed ^ (i as u64)) % 1000) as f32 / 5000.0) - 0.1;
-                        vec[i] = val;
-                    }
-                    Ok(vec)
-                } else {
                     anyhow::bail!("No embedder configured")
-                }
             }
         }).await?;
 
@@ -1628,26 +1629,7 @@ impl StorageBackend for SurrealBackend {
                 if let Some(ref emp) = embedder {
                     emp.embed_batch(&missing_texts_clone)
                 } else {
-                    let is_mock = std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok();
-                    if is_mock {
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-                        let mut batch_res = Vec::new();
-                        for text in &missing_texts_clone {
-                            let mut hasher = DefaultHasher::new();
-                            text.hash(&mut hasher);
-                            let seed = hasher.finish();
-                            let mut vec = vec![0.0; 768];
-                            for i in 0..768 {
-                                let val = (((seed ^ (i as u64)) % 1000) as f32 / 5000.0) - 0.1;
-                                vec[i] = val;
-                            }
-                            batch_res.push(vec);
-                        }
-                        Ok(batch_res)
-                    } else {
-                        Err(anyhow::anyhow!("No embedding model loaded"))
-                    }
+                    Err(anyhow::anyhow!("No embedding model loaded"))
                 }
             }).await?;
 

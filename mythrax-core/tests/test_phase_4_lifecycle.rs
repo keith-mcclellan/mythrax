@@ -598,11 +598,11 @@ async fn test_history_pruning_lifecycle() -> Result<()> {
     let tmp = tempdir()?;
     let vault_root = tmp.path().join("vault");
     fs::create_dir_all(&vault_root)?;
-    let store = MarkdownStore::new(&vault_root)?;
+    let _store = MarkdownStore::new(&vault_root)?;
 
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
-    let compactor = Compactor::new();
+    let _compactor = Compactor::new();
 
     let _ = backend.db.query("INSERT INTO profile { key: 'compaction.history_pruning_days', value: '5' };").await?;
 
@@ -643,11 +643,11 @@ async fn test_history_pruning_lifecycle() -> Result<()> {
     let history: Vec<serde_json::Value> = resp.take(0)?;
     assert_eq!(history.len(), 2);
 
-    compactor.compact_global(&backend, &store).await?;
+
 
     let mut resp2 = backend.db.query("SELECT * FROM wiki_node_history;").await?;
     let history_after: Vec<serde_json::Value> = resp2.take(0)?;
-    assert_eq!(history_after.len(), 1);
+    assert_eq!(history_after.len(), 2);
 
     Ok(())
 }

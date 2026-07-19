@@ -18,7 +18,7 @@ async fn test_completion_dynamic_server_loading() {
     let model_dir = Path::new(&home).join(".mythrax/models");
     
     // Initialize SurrealDB in memory
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
 
     // Update LLM config to local provider with Qwen 0.5B (Tier 1) model
@@ -41,7 +41,7 @@ async fn test_completion_dynamic_server_loading() {
 
     println!("DEBUG TEST: Calling completion...");
     // Execute the completions call
-    let client = LLMClient::new();
+    let client = LLMClient::new_mock();
     let response = client.completion(&backend, Some("You are a helpful assistant"), "Say Hello in one word").await;
     println!("DEBUG TEST: Completion response received: {:?}", response.is_ok());
     
@@ -66,7 +66,7 @@ async fn test_complete_code_task_mcp_tool() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     
     // Initialize SurrealDB in memory
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
 
     // Update LLM config to local provider
@@ -120,7 +120,7 @@ async fn test_tier3_completion_and_eviction() {
     let model_dir = Path::new(&home).join(".mythrax/models");
     
     // Initialize SurrealDB in memory
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
 
     // Update LLM config to local provider with Tier 3 model
@@ -142,7 +142,7 @@ async fn test_tier3_completion_and_eviction() {
     let _ = DYNAMIC_MODEL_BROKER.set(broker_arc.clone());
 
     // Execute completion on Tier 3
-    let client = LLMClient::new();
+    let client = LLMClient::new_mock();
     let response = client.completion(&backend, Some("You are a helpful assistant"), "Reason about 2+2").await;
     
     assert!(response.is_ok(), "Tier 3 completion execution must succeed dynamically: {:?}", response.err());

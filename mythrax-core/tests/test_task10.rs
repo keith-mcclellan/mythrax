@@ -18,7 +18,7 @@ fn setup_env_vars() {
 
 async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiState> {
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await?;
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);

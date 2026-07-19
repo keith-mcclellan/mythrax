@@ -19,7 +19,7 @@ use mythrax_core::mcp_routes::vault_handlers::handle_manage_vault;
 async fn test_post_turn_observer_and_guardrails() -> anyhow::Result<()> {
     let temp_dir = tempdir()?;
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await?;
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -95,7 +95,7 @@ async fn test_post_turn_observer_and_guardrails() -> anyhow::Result<()> {
 async fn test_auto_task_persistence() -> anyhow::Result<()> {
     let temp_dir = tempdir()?;
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await?;
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -149,7 +149,7 @@ async fn test_auto_task_persistence() -> anyhow::Result<()> {
 async fn test_memory_query_frequency_tracker() -> anyhow::Result<()> {
     let temp_dir = tempdir()?;
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await?;
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -198,7 +198,7 @@ async fn test_memory_query_frequency_tracker() -> anyhow::Result<()> {
 async fn test_citation_tracker_and_reinforcement() -> anyhow::Result<()> {
     let temp_dir = tempdir()?;
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await?;
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -268,7 +268,7 @@ async fn test_citation_tracker_and_reinforcement() -> anyhow::Result<()> {
 async fn test_cross_agent_broadcast_channel() -> anyhow::Result<()> {
     let temp_dir = tempdir()?;
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await?;
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -373,7 +373,7 @@ async fn test_vault_clean() -> anyhow::Result<()> {
     run("git", &["checkout", "main"]);
 
     // Initialize backend
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await?;
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let vault_root = repo_dir.join("vault");

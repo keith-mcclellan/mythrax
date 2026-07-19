@@ -1953,13 +1953,15 @@ impl SurrealBackend {
             }
         }
 
+        let is_mock_embedder = self.embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
         if let Some(ref _embedder) = self.embedder {
-            let embed_text = if combined.len() > 500 {
-                &combined[..500]
-            } else {
-                &combined
-            };
-            if let Ok(q_vec) = self.embed(embed_text).await {
+            if !is_mock_embedder {
+                let embed_text = if combined.len() > 500 {
+                    &combined[..500]
+                } else {
+                    &combined
+                };
+                if let Ok(q_vec) = self.embed(embed_text).await {
                 let sql = "
                     SELECT causal_explanation, prescribed_remedy, vector::similarity::cosine(embedding, $query_embedding) AS similarity FROM wisdom
                     WHERE status != 'superseded' AND (embedding <|1, 10|> $query_embedding);
@@ -1990,6 +1992,7 @@ impl SurrealBackend {
                     }
                 }
             }
+        }
         }
 
         Ok(None)

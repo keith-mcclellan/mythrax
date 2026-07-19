@@ -367,7 +367,7 @@ fn set_exclude_from_backup<P: AsRef<Path>>(path: P) -> Result<()> {
 
 fn set_db_backup_exclusion() -> Result<()> {
     // Bypass in test environment to avoid modifying the live ~/.mythrax directory
-    if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("CARGO_MANIFEST_DIR").is_ok() {
+    if std::env::var("CARGO_MANIFEST_DIR").is_ok() {
         return Ok(());
     }
 

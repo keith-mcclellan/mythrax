@@ -232,6 +232,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
 
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
+    backend.save_profile_key("compactor.enable_contradiction_detection", "false").await?;
     let store = MarkdownStore::new(&vault_root)?;
 
     // Save 4 episodes to SurrealDB
@@ -352,6 +353,11 @@ Insight content
         ..Default::default()
     };
     let _old_node_id = backend.save_wiki_node(&old_node).await?;
+
+    // Mark episodes 2, 3, 4 as processed so they are not clustered in the unprocessed loop
+    backend.mark_episode_processed(&id2).await?;
+    backend.mark_episode_processed(&id3).await?;
+    backend.mark_episode_processed(&id4).await?;
 
     let mut initial_nodes_resp = backend.db.query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';").await?;
     let initial_nodes: Vec<serde_json::Value> = initial_nodes_resp.take(0)?;

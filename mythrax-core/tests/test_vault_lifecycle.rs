@@ -12,7 +12,7 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
 
     // 1. Initialize persistent backend
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // 2. Save an episode
@@ -41,7 +41,7 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
             let _ = std::fs::remove_file(&lock_file);
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        match SurrealBackend::new(&surreal_url).await {
+        match SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await {
             Ok(b) => {
                 backend2 = Some(b);
                 break;
@@ -81,7 +81,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // Create a mock Antigravity transcript structure
@@ -261,7 +261,7 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // Create a mock Antigravity folder
@@ -350,7 +350,7 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // Create a mock Antigravity folder

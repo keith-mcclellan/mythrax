@@ -18,7 +18,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             let files_val = args.get("files").and_then(|v| v.as_array()).context("Missing files")?;
             let files: Vec<String> = files_val.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
             let coordinator = ArborCoordinator::new(
                 surreal_backend.db.clone(),
@@ -43,7 +43,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
         "ideate" => {
             let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
             let coordinator = ArborCoordinator::new(
                 surreal_backend.db.clone(),
@@ -69,7 +69,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
             let test_command = args.get("test_command").and_then(|v| v.as_str()).context("Missing test_command")?.to_string();
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
             let coordinator = ArborCoordinator::new(
                 surreal_backend.db.clone(),
@@ -94,7 +94,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
         "backprop" => {
             let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
             let coordinator = ArborCoordinator::new(
                 surreal_backend.db.clone(),
@@ -119,7 +119,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
         "merge" => {
             let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
             let coordinator = ArborCoordinator::new(
                 surreal_backend.db.clone(),
@@ -149,7 +149,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             let max_steps = args.get("max_steps").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
             let max_time_secs = args.get("max_time_secs").and_then(|v| v.as_u64()).unwrap_or(14400);
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
             let coordinator = ArborCoordinator::new(
                 surreal_backend.db.clone(),
@@ -212,7 +212,7 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "prune" => {
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
             let coordinator = ArborCoordinator::new(
                 surreal_backend.db.clone(),

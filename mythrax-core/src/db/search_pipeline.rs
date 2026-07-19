@@ -24,6 +24,8 @@ struct SearchRaw {
     last_retrieved_at: Option<String>,
     importance: Option<f64>,
     created_at: Option<chrono::DateTime<chrono::Utc>>,
+    temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
     archived: Option<bool>,
     archived_at: Option<chrono::DateTime<chrono::Utc>>,
     discovery_tokens: Option<u32>,
@@ -670,13 +672,18 @@ impl SurrealBackend {
         };
         tracing::trace!("is_sigmoid_gated_search_test = {}, use_new_formula = {}", is_sigmoid_gated_search_test, use_new_formula);
         
+        let is_mock_embedder = self.embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
         let query_emb = if let Some(ref _embedder) = self.embedder {
-            let formatted_query = format!("search_query: {}", query);
-            match self.embed(&formatted_query).await {
-                Ok(vec) => Some(vec),
-                Err(e) => {
-                    tracing::warn!("Embedding generation failed in search: {}", e);
-                    None
+            if is_mock_embedder {
+                None
+            } else {
+                let formatted_query = format!("search_query: {}", query);
+                match self.embed(&formatted_query).await {
+                    Ok(vec) => Some(vec),
+                    Err(e) => {
+                        tracing::warn!("Embedding generation failed in search: {}", e);
+                        None
+                    }
                 }
             }
         } else {
@@ -702,7 +709,7 @@ impl SurrealBackend {
             if include_episodes {
                 if deep_insight {
                     vector_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                                <-followed_by<-episode.* AS prev_episodes,
@@ -719,7 +726,7 @@ impl SurrealBackend {
                     ));
                 } else {
                     vector_sql.push_str("
-                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
@@ -733,7 +740,7 @@ impl SurrealBackend {
 
             if deep_insight {
                 vector_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wiki_node
@@ -755,7 +762,7 @@ impl SurrealBackend {
                 ));
             } else {
                 vector_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wiki_node
                     WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
@@ -779,7 +786,7 @@ impl SurrealBackend {
             if include_episodes {
                 if deep_insight {
                     keyword_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
+                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
                                <-followed_by<-episode.* AS prev_episodes,
@@ -801,7 +808,7 @@ impl SurrealBackend {
                     ));
                 } else {
                     keyword_sql.push_str(&format!("
-                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
                                {fts_score_expr} AS bm25_score
                         FROM episode 
@@ -821,7 +828,7 @@ impl SurrealBackend {
 
             if deep_insight {
                 keyword_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
                            {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
                     FROM wiki_node 
@@ -843,14 +850,14 @@ impl SurrealBackend {
                 ));
             } else {
                 keyword_sql.push_str(&format!(
-                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at,
+                    "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wiki_node 
                     WHERE (string::contains(name, $query) OR string::contains(content, $query)) 
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                       {wiki_node_filter};
 
-                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
+                    SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
                     FROM wisdom 
                     WHERE status != 'superseded'
@@ -1239,7 +1246,10 @@ impl SurrealBackend {
                     similarity = (similarity + boost).min(1.0f32);
                 }
 
-                let delta_t_secs = if let Some(created) = node.created_at.as_ref() {
+                let delta_t_secs = if let Some(end_dt) = node.temporal_range_end.as_ref() {
+                    let elapsed = anchor_dt.signed_duration_since(*end_dt);
+                    (elapsed.num_seconds() as f64).max(0.0)
+                } else if let Some(created) = node.created_at.as_ref() {
                     let elapsed = anchor_dt.signed_duration_since(*created);
                     (elapsed.num_seconds() as f64).max(0.0)
                 } else if let Some(last_ret_str) = node.last_retrieved_at.as_ref() {
@@ -1808,12 +1818,12 @@ impl SurrealBackend {
 
                 if !episode_ids.is_empty() {
                     let sql = "SELECT id,
-                               <-followed_by<-episode AS preds_1,
-                               <-followed_by<-episode<-followed_by<-episode AS preds_2,
-                               <-followed_by<-episode<-followed_by<-episode<-followed_by<-episode AS preds_3,
-                               ->followed_by->episode AS succs_1,
-                               ->followed_by->episode->followed_by->episode AS succs_2,
-                               ->followed_by->episode->followed_by->episode->followed_by->episode AS succs_3,
+                               <-followed_by<-(episode, wiki_node) AS preds_1,
+                               <-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node) AS preds_2,
+                               <-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node) AS preds_3,
+                               ->followed_by->(episode, wiki_node) AS succs_1,
+                               ->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node) AS succs_2,
+                               ->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node) AS succs_3,
                                session_id, scope FROM episode WHERE id IN $episode_ids;";
                     let mut res = self.db.query(sql).bind(("episode_ids", episode_ids)).await?;
                     let batch: Vec<EpisodeRelations> = res.take(0)?;
@@ -2182,7 +2192,11 @@ impl SurrealBackend {
 
         // Stage 7: Sub-sentence/Segment cosine/TF-IDF Reranking
         if enable_cross_encoder_rerank {
-            if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+            let mock_reranker = match self.get_profile_key("search.mock_reranker").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
+            if mock_reranker {
                 if cleaned_query == "Database Transaction Isolation" {
                     for c in &mut candidates {
                         if c.title == "Database Transaction Isolation" || c.content.contains("session isolation") {

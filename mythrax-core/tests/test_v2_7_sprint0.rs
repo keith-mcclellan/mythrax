@@ -59,14 +59,24 @@ async fn test_embed_batch_error_propagation() -> Result<()> {
     unsafe {
         std::env::remove_var("MYTHRAX_TEST_MOCK");
         std::env::remove_var("MYTHRAX_MOCK_LLM");
+        std::env::set_var("MYTHRAX_FORCE_REAL_EMBEDDER", "1");
     }
 
-    let backend = SurrealBackend::new_in_memory().await?;
+    let config = mythrax_core::db::BackendConfig {
+        check_daemon: false,
+        embedder: None,
+        llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+    };
+    let backend = SurrealBackend::new("mem://", config).await?;
+    backend.db.use_ns("mythrax").use_db("test_embed_error").await?;
     backend.init().await?;
 
     let result = backend.embed_batch(&["test".to_string()]).await;
 
     // Restore environment variables
+    unsafe {
+        std::env::remove_var("MYTHRAX_FORCE_REAL_EMBEDDER");
+    }
     if let Ok(ref val) = original_mock {
         unsafe {
             std::env::set_var("MYTHRAX_TEST_MOCK", val);

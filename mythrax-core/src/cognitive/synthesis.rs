@@ -23,7 +23,7 @@ pub fn check_compression_ratio(input_text: &str, output_text: &str, original_con
     let alert_ratio: f64 = std::env::var("MYTHRAX_VERBOSITY_ALERT_RATIO")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1.5);
+        .unwrap_or(0.5);
         
     if ratio > alert_ratio {
         tracing::warn!("Verbosity alert: compression ratio {:.2} exceeds limit {:.2}", ratio, alert_ratio);
@@ -333,7 +333,7 @@ impl Default for DreamCoordinator {
 impl DreamCoordinator {
     pub fn new() -> Self {
         Self {
-            llm: LLMClient::new(),
+            llm: LLMClient::default(),
             scope_locks: dashmap::DashMap::new(),
         }
     }
@@ -343,7 +343,7 @@ impl DreamCoordinator {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         node: &WikiNode,
-        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<String> {
         if !db.is_feature_enabled("compactor.enable_contradiction_detection", true).await {
             return db.save_wiki_node(node).await;
@@ -353,7 +353,7 @@ impl DreamCoordinator {
         if node.embedding.is_none() {
             if let Some(ref emb) = embedder {
                 let max_tokens = 2048;
-                let truncated_content = truncate_by_tokens(&node.content, max_tokens, Some(emb));
+                let truncated_content = truncate_by_tokens(&node.content, max_tokens, Some(emb.as_ref()));
                 if let Ok(e) = emb.embed(&truncated_content) {
                     node.embedding = Some(e);
                 }
@@ -416,7 +416,7 @@ impl DreamCoordinator {
                             // Re-embed resolved content
                             if let Some(ref emb) = embedder {
                                 let max_tokens = 2048;
-                                let truncated_content = truncate_by_tokens(&updated_node.content, max_tokens, Some(emb));
+                                let truncated_content = truncate_by_tokens(&updated_node.content, max_tokens, Some(emb.as_ref()));
                                 if let Ok(e) = emb.embed(&truncated_content) {
                                     updated_node.embedding = Some(e);
                                 }
@@ -455,7 +455,7 @@ impl DreamCoordinator {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         mode_override: Option<&str>,
-        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
         if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
             tracing::info!("Ingestion in progress, skipping background dream synthesis.");
@@ -546,11 +546,10 @@ impl DreamCoordinator {
         }
 
         if mined_any {
-            let default_cooldown = if std::env::var("MYTHRAX_TEST_MOCK").is_ok() { 0 } else { 300 };
             let cooldown_secs = std::env::var("MYTHRAX_PHASE_COOLDOWN_SECS")
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(default_cooldown);
+                .unwrap_or(300);
             if cooldown_secs > 0 {
                 tracing::info!("Phase A (Ingestion) finished. Cooldown sleep for {} seconds before Phase B (Synthesis).", cooldown_secs);
                 tokio::time::sleep(tokio::time::Duration::from_secs(cooldown_secs)).await;
@@ -647,6 +646,7 @@ impl DreamCoordinator {
 
             let total_scopes = scope_groups.len();
             for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
+            let mut insights_changed = 0;
             let scope_lock = self.scope_locks.entry(scope.clone()).or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))).clone();
             let _guard = scope_lock.lock().await;
             
@@ -776,10 +776,19 @@ impl DreamCoordinator {
                             embedding: None,
                             ..Default::default()
                         };
-                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await
-                            && let Some(ref ep_id) = ep.id {
-                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
+                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
+                            if let Some(ref ep_id) = ep.id {
+                                let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                             }
+                        }
+                        
+                        insights_changed += 1;
+                        if insights_changed > 5 {
+                            tracing::info!("Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.", scope);
+                            let compactor = crate::cognitive::compactor::Compactor::new();
+                            let _ = compactor.compact_scope(db, store, &scope, embedder.clone()).await;
+                            insights_changed = 0;
+                        }
 
                         tracing::info!(
                             "Dreaming scope {}/{} ('{}'): incremental episode {} of {} complete (merged into '{}')",
@@ -926,6 +935,14 @@ impl DreamCoordinator {
                         let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                     }
                 }
+                
+                insights_changed += 1;
+                if insights_changed > 5 {
+                    tracing::info!("Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.", scope);
+                    let compactor = crate::cognitive::compactor::Compactor::new();
+                    let _ = compactor.compact_scope(db, store, &scope, embedder.clone()).await;
+                    insights_changed = 0;
+                }
 
 
 
@@ -1036,7 +1053,7 @@ impl DreamCoordinator {
                     tracing::debug!("Max pairwise distance: {}", max_dist);
                     // 5. If drift is high (> 0.30), trigger split
                     if max_dist > 0.30 {
-                        tracing::debug!("Drift > 0.30 detected! Triggering split for: {}", ins.title);
+
                         // Prepare references for DBSCAN
                         let emb_refs: Vec<&[f32]> = episode_embeddings.iter().map(|e| e.as_slice()).collect();
                         let labels = dbscan(&emb_refs, 0.08, 2);
@@ -1045,7 +1062,7 @@ impl DreamCoordinator {
                         let mut clusters: std::collections::HashMap<usize, Vec<Episode>> = std::collections::HashMap::new();
                         let mut outliers = Vec::new();
 
-                        for (idx, label) in labels.into_iter().enumerate() {
+                        for (idx, label) in labels.clone().into_iter().enumerate() {
                             let ep = valid_episodes[idx].clone();
                             if let Some(cid) = label {
                                 clusters.entry(cid).or_default().push(ep);
@@ -1055,6 +1072,7 @@ impl DreamCoordinator {
                         }
 
                         let mut groups: Vec<Vec<Episode>> = Vec::new();
+
 
                         // 6. Handle DBSCAN results
                         if clusters.len() <= 1 {
@@ -1198,7 +1216,9 @@ impl DreamCoordinator {
                                     analysis.summary,
                                     source_ep_section
                                 );
-                                if store.write_file(&relative_path, &insight_content).is_ok() {
+                                let write_res = store.write_file(&relative_path, &insight_content);
+
+                                if write_res.is_ok() {
                                     for ep in &group {
                                         if let Some(ref path) = ep.vault_path {
                                             let _ = store.append_link_to_file(path, "Insights & Summaries", &relative_path, &analysis.title);
@@ -1218,7 +1238,9 @@ impl DreamCoordinator {
                                         ..Default::default()
                                     };
                                     
-                                    if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
+                                    let save_res = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await;
+
+                                    if let Ok(wiki_node_id) = save_res {
                                         for ep in &group {
                                             if let Some(ref ep_id) = ep.id {
                                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
@@ -1239,6 +1261,7 @@ impl DreamCoordinator {
                             .to_string();
                         tracing::debug!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
                         let _ = db.delete_by_vault_path(&rel_path).await;
+
                     }
                 }
             }
@@ -1686,7 +1709,7 @@ pub async fn save_wisdom_rule_with_deduplication(
             );
 
             let original_tokens = (matched.causal_explanation.len() + rule.causal_explanation.len()) / 4;
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(&system_prompt), &prompt).await {
                 Ok(res) => {
                     crate::cognitive::synthesis::check_compression_ratio(&prompt, &res, original_tokens);
@@ -2069,7 +2092,7 @@ pub async fn traverse_adjacent_logs(
 pub fn truncate_by_tokens(
     text: &str,
     max_tokens: usize,
-    embedder: Option<&crate::embeddings::LocalEmbedder>,
+    embedder: Option<&dyn crate::embeddings::TextEmbedder>,
 ) -> String {
     if let Some(emb) = embedder {
         let count = emb.count_tokens(text).unwrap_or(text.len() / 4);
@@ -2130,8 +2153,8 @@ pub async fn backpropagate_directions(db: &dyn StorageBackend, store: &MarkdownS
                 prompt_text.push_str(&format!("- {}: {}\n", ins.name, ins.content));
             }
             
-            let original_tokens = dir_node.content.len() / 4;
-            let llm = crate::llm::LLMClient::new();
+            let _original_tokens = dir_node.content.len() / 4;
+            let llm = crate::llm::LLMClient::default();
             match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await {
                 Ok(updated_understanding) => {
                     let mut updated_node = dir_node.clone();
@@ -2153,7 +2176,7 @@ pub async fn backpropagate_directions(db: &dyn StorageBackend, store: &MarkdownS
 
 pub async fn promote_insight_to_direction(
     db: &dyn StorageBackend,
-    store: &MarkdownStore,
+    _store: &MarkdownStore,
     node: &WikiNode,
     episodes: &[crate::contracts::Episode],
 ) -> Result<()> {

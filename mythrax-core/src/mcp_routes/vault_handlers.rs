@@ -109,9 +109,6 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                     if let Err(e) = compactor.compact_scope(&*state_clone.backend, &state_clone.store, scope_name, embedder).await {
                         tracing::error!("Background compact_scope failed: {:?}", e);
                     }
-                    if let Err(e) = compactor.compact_global(&*state_clone.backend, &state_clone.store).await {
-                        tracing::error!("Background compact_global failed: {:?}", e);
-                    }
                 });
 
                 Ok(json!({
@@ -135,7 +132,6 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
 
                 let scope_name = scope.as_deref().unwrap_or("general");
                 compactor.compact_scope(&*state.backend, &state.store, scope_name, embedder).await?;
-                compactor.compact_global(&*state.backend, &state.store).await?;
 
                 Ok(json!({
                     "content": [
@@ -531,7 +527,7 @@ pub async fn run_bootstrap_internal(
                     }
                     
                     if !dry_run {
-                        let client = crate::llm::LLMClient::new();
+                        let client = crate::llm::LLMClient::default();
                         if let Ok(distilled_list) = crate::vault::distillation::distill_transcript_file(
                             state.backend.as_ref(),
                             &client,

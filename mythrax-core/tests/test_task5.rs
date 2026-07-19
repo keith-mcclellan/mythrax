@@ -2,7 +2,7 @@ use std::fs;
 use anyhow::Result;
 use tempfile::tempdir;
 use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{WikiNode, Episode, EpisodeSave};
+use mythrax_core::contracts::{WikiNode, Episode};
 use mythrax_core::store::MarkdownStore;
 use mythrax_core::cognitive::synthesis::{backpropagate_directions, promote_insight_to_direction};
 
@@ -19,7 +19,7 @@ async fn test_backpropagation() -> Result<()> {
     fs::create_dir_all(vault_root.join("wiki/scope_A/directions"))?;
     let store = MarkdownStore::new(&vault_root)?;
 
-    let mut dir_node = WikiNode {
+    let dir_node = WikiNode {
         name: "Test Direction".to_string(),
         content: "Old Understanding".to_string(),
         scope: "scope_A".to_string(),

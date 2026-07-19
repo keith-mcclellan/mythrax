@@ -21,7 +21,7 @@ impl Forge {
         Self {
             backend,
             store,
-            llm: LLMClient::new(),
+            llm: LLMClient::default(),
         }
     }
 

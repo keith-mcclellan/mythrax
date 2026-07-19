@@ -549,7 +549,7 @@ pub async fn bulk_ingest_vault(
             let dirs: Vec<std::path::PathBuf> = dirs_with_time[start..end].iter().map(|d| d.0.clone()).collect();
 
             let _ingestion_guard = IngestionGuard::new();
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let mut last_episode_id: Option<String> = None;
 
             for (chunk_idx, dir_chunk) in dirs.chunks(50).enumerate() {

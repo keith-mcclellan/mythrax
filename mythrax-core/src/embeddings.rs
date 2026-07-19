@@ -8,6 +8,13 @@ use std::sync::Mutex;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+pub trait TextEmbedder: Send + Sync {
+    fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    fn count_tokens(&self, text: &str) -> Result<usize>;
+    fn is_mock(&self) -> bool;
+}
+
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
 pub struct EmbeddingLruCache {
@@ -33,11 +40,7 @@ pub fn get_default_capacity() -> usize {
         }
     }
     
-    // In test mock mode, default to 10000 and do not read tuned_params.json
-    if std::env::var("MYTHRAX_TEST_MOCK").map(|v| v == "1" || v == "true").unwrap_or(false) {
-        return 10000;
-    }
-    
+
     // Check tuned params json robustly
     let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
     if !tuned_path.exists() {
@@ -347,16 +350,13 @@ pub fn flush_dirty(path: &Path) -> Result<()> {
 
 #[cfg(not(feature = "mlx"))]
 pub struct LocalEmbedder {
-    session: Mutex<ort::session::Session>,
-    tokenizer: Tokenizer,
+    pub session: Option<Mutex<ort::session::Session>>,
+    pub tokenizer: Option<Tokenizer>,
 }
 
 #[cfg(not(feature = "mlx"))]
 impl LocalEmbedder {
     pub fn get_global() -> Result<Arc<Self>> {
-        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
-            anyhow::bail!("Embedder mocked in test mode");
-        }
         let res = GLOBAL_EMBEDDER.get_or_init(|| {
             Self::new().map(Arc::new).map_err(|e| e.to_string())
         });
@@ -391,13 +391,14 @@ impl LocalEmbedder {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        Ok(Self { session: Mutex::new(session), tokenizer })
+        Ok(Self { session: Some(Mutex::new(session)), tokenizer: Some(tokenizer) })
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
         if let Some(cached) = get_cached_embedding(text) {
             return Ok(cached);
         }
+
         // Nomic Embed Text requires a prefix for search queries vs document indices:
         // "search_query: " or "search_document: "
         let formatted_text = if text.contains(':') {
@@ -406,7 +407,7 @@ impl LocalEmbedder {
             format!("search_document: {}", text)
         };
 
-        let encoding = self.tokenizer.encode(formatted_text, true)
+        let encoding = self.tokenizer.as_ref().unwrap().encode(formatted_text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
         let ids = encoding.get_ids();
@@ -433,7 +434,7 @@ impl LocalEmbedder {
         let token_type_ids = ort::value::Tensor::from_array((vec![1, seq_len], token_type_ids_data))?;
 
         // Run inference
-        let mut session_lock = self.session.lock().map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
+        let mut session_lock = self.session.as_ref().unwrap().lock().map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
         let outputs = session_lock.run(ort::inputs![
             "input_ids" => input_ids,
             "attention_mask" => attention_mask,
@@ -491,7 +492,7 @@ impl LocalEmbedder {
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
-        let encoding = self.tokenizer.encode(text, true)
+        let encoding = self.tokenizer.as_ref().unwrap().encode(text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
         Ok(encoding.get_ids().len())
     }
@@ -546,7 +547,7 @@ impl LocalEmbedder {
             }
         }).collect();
 
-        let encodings = self.tokenizer.encode_batch(formatted_texts, true)
+        let encodings = self.tokenizer.as_ref().unwrap().encode_batch(formatted_texts, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
         let max_len = encodings.iter()
@@ -584,7 +585,7 @@ impl LocalEmbedder {
         let attention_mask = ort::value::Tensor::from_array((vec![batch_size as i64, max_len as i64], attention_mask_data))?;
         let token_type_ids = ort::value::Tensor::from_array((vec![batch_size as i64, max_len as i64], token_type_ids_data))?;
 
-        let mut session_lock = self.session.lock().map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
+        let mut session_lock = self.session.as_ref().unwrap().lock().map_err(|e| anyhow::anyhow!("Failed to lock session: {}", e))?;
         let outputs = session_lock.run(ort::inputs![
             "input_ids" => input_ids,
             "attention_mask" => attention_mask,
@@ -646,13 +647,29 @@ impl LocalEmbedder {
     }
 }
 
+#[cfg(not(feature = "mlx"))]
+impl TextEmbedder for LocalEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text)
+    }
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch(texts)
+    }
+    fn count_tokens(&self, text: &str) -> Result<usize> {
+        self.count_tokens(text)
+    }
+    fn is_mock(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(feature = "mlx")]
 use mlx_rs::Array;
 
 #[cfg(feature = "mlx")]
 pub struct LocalEmbedder {
     model: std::sync::Mutex<Option<crate::llm::nomic_mlx::NomicBertModel>>,
-    tokenizer: Tokenizer,
+    pub tokenizer: Option<Tokenizer>,
 }
 
 #[cfg(feature = "mlx")]
@@ -663,9 +680,6 @@ unsafe impl Sync for LocalEmbedder {}
 #[cfg(feature = "mlx")]
 impl LocalEmbedder {
     pub fn get_global() -> Result<Arc<Self>> {
-        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
-            anyhow::bail!("Embedder mocked in test mode");
-        }
         let res = GLOBAL_EMBEDDER.get_or_init(|| {
             Self::new().map(Arc::new).map_err(|e| e.to_string())
         });
@@ -698,20 +712,21 @@ impl LocalEmbedder {
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
 
-        Ok(Self { model: std::sync::Mutex::new(None), tokenizer })
+        Ok(Self { model: std::sync::Mutex::new(None), tokenizer: Some(tokenizer) })
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
         if let Some(cached) = get_cached_embedding(text) {
             return Ok(cached);
         }
+
         let formatted_text = if text.contains(':') {
             text.to_string()
         } else {
             format!("search_document: {}", text)
         };
 
-        let encoding = self.tokenizer.encode(formatted_text, true)
+        let encoding = self.tokenizer.as_ref().unwrap().encode(formatted_text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
         let ids = encoding.get_ids();
@@ -778,7 +793,7 @@ impl LocalEmbedder {
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
-        let encoding = self.tokenizer.encode(text, true)
+        let encoding = self.tokenizer.as_ref().unwrap().encode(text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
         Ok(encoding.get_ids().len())
     }
@@ -833,7 +848,7 @@ impl LocalEmbedder {
             }
         }).collect();
 
-        let encodings = self.tokenizer.encode_batch(formatted_texts, true)
+        let encodings = self.tokenizer.as_ref().unwrap().encode_batch(formatted_texts, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
         let max_len = encodings.iter()
@@ -915,6 +930,22 @@ impl LocalEmbedder {
     }
 }
 
+#[cfg(feature = "mlx")]
+impl TextEmbedder for LocalEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text)
+    }
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch(texts)
+    }
+    fn count_tokens(&self, text: &str) -> Result<usize> {
+        self.count_tokens(text)
+    }
+    fn is_mock(&self) -> bool {
+        false
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct NormalizedEmbedding(Vec<f32>);
@@ -969,5 +1000,48 @@ mod tests {
         } else {
             println!("Skipping embeddings test: model files not present in ~/.mythrax/models/");
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct MockEmbedder;
+
+impl TextEmbedder for MockEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        let seed = hasher.finish();
+        let mut vec = vec![0.0; 768];
+        let mut sum_sq = 0.0;
+        for i in 0..768 {
+            let val = (((seed ^ (i as u64)) % 1000) as f32 / 5000.0) - 0.1;
+            vec[i] = val;
+            sum_sq += val * val;
+        }
+        let norm = sum_sq.sqrt();
+        if norm > 0.0 {
+            for v in &mut vec {
+                *v /= norm;
+            }
+        }
+        Ok(vec)
+    }
+
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let mut res = Vec::new();
+        for t in texts {
+            res.push(self.embed(t)?);
+        }
+        Ok(res)
+    }
+
+    fn count_tokens(&self, text: &str) -> Result<usize> {
+        Ok(text.split_whitespace().count())
+    }
+
+    fn is_mock(&self) -> bool {
+        true
     }
 }

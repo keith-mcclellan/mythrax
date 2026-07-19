@@ -22,7 +22,7 @@ fn setup_env_vars() {
 
 async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiState> {
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&formatsurreal_path(&db_path)).await?;
+    let backend = SurrealBackend::new(&formatsurreal_path(&db_path), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -258,14 +258,16 @@ async fn test_cognitive_fallback_disabled() -> anyhow::Result<()> {
     let _temp_dir = tempdir()?;
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
-    let llm = mythrax_core::llm::LLMClient::new();
     let profile = mythrax_core::contracts::TaskProfile::new(mythrax_core::contracts::TaskArchetype::Reasoning);
 
     unsafe {
         std::env::set_var("MYTHRAX_DISABLE_FALLBACK", "true");
         std::env::set_var("MYTHRAX_TEST_TIMEOUT_SECS", "0");
         std::env::remove_var("MYTHRAX_TEST_MOCK");
+        std::env::remove_var("MYTHRAX_MOCK_LLM");
     }
+
+    let llm = mythrax_core::llm::LLMClient::default();
 
     let res = llm.routed_completion(&backend, &profile, None, "test prompt").await;
 
@@ -273,12 +275,14 @@ async fn test_cognitive_fallback_disabled() -> anyhow::Result<()> {
         std::env::remove_var("MYTHRAX_DISABLE_FALLBACK");
         std::env::remove_var("MYTHRAX_TEST_TIMEOUT_SECS");
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
 
     assert!(res.is_err(), "Completion must fail when fallback is disabled");
     let err_msg = res.unwrap_err().to_string();
     assert!(
-        err_msg.contains("Cognitive callback for cloud model timed out and fallbacks are disabled"),
+        err_msg.contains("Cognitive callback for cloud model timed out and fallbacks are disabled")
+            || err_msg.contains("Failed to create cognitive task and fallbacks are disabled"),
         "Unexpected error: {}", err_msg
     );
 

@@ -64,6 +64,8 @@ async fn test_routing_heuristics() {
 
 #[test]
 fn test_embedding_cache_lru_eviction() {
+    // Set explicit capacity so tuned_params.json doesn't override
+    unsafe { std::env::set_var("MYTHRAX_EMBEDDING_CACHE_CAPACITY", "10000"); }
     // Clear the cache first to ensure a clean state
     mythrax_core::embeddings::clear_embedding_cache();
 

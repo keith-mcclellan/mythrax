@@ -580,7 +580,7 @@ async fn main() -> Result<()> {
             }
 
             // Always initialize the database in-process for pre-ingestion
-            let backend = SurrealBackend::new(&format!("rocksdb://{}", db_dir.to_string_lossy())).await?;
+            let backend = SurrealBackend::new(&format!("rocksdb://{}", db_dir.to_string_lossy()), crate::db::BackendConfig::default()).await?;
             backend.init().await?;
 
             // Persist LLM config if provided in onboarding

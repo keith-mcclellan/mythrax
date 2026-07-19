@@ -1,7 +1,5 @@
 use mythrax_core::cognitive::synthesis::{CONCISION_DIRECTIVE, build_synthesis_prompt, check_compression_ratio};
-use tracing_subscriber::{EnvFilter, fmt::Subscriber};
 use std::sync::{Arc, Mutex};
-use tracing::Subscriber as TracingSubscriber;
 
 #[test]
 fn test_concision_prompt_prepending() {

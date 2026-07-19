@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use serde::{Deserialize, Serialize};
 
 // Typestate pattern states
 #[derive(Debug, Clone, Default)]

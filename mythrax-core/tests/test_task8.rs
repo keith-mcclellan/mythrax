@@ -68,16 +68,19 @@ async fn test_quota_exhaustion_hibernation() -> anyhow::Result<()> {
     let backend = Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
 
-    let client = LLMClient::new();
     let profile = mythrax_core::contracts::TaskProfile::new(mythrax_core::contracts::TaskArchetype::Reasoning);
 
     unsafe {
         std::env::set_var("GEMINI_API_KEY", "dummy_key");
         std::env::remove_var("MYTHRAX_FORCE_LOCAL");
         std::env::remove_var("MYTHRAX_TEST_MOCK");
+        std::env::remove_var("MYTHRAX_MOCK_LLM");
         std::env::set_var("MYTHRAX_MOCK_FAIL", "true");
         std::env::set_var("MYTHRAX_QUOTA_RETRY_SECS", "1");
+        std::env::set_var("MYTHRAX_BOOTSTRAPPING", "true");
     }
+
+    let client = LLMClient::default();
 
     let res1 = client.routed_completion(backend.as_ref(), &profile, None, "test").await;
     assert!(res1.is_err());
@@ -96,7 +99,9 @@ async fn test_quota_exhaustion_hibernation() -> anyhow::Result<()> {
         std::env::remove_var("MYTHRAX_MOCK_FAIL");
         std::env::remove_var("MYTHRAX_QUOTA_RETRY_SECS");
         std::env::remove_var("GEMINI_API_KEY");
+        std::env::remove_var("MYTHRAX_BOOTSTRAPPING");
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
     Ok(())
 }

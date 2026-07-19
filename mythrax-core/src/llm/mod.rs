@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use async_trait::async_trait;
 
 #[cfg(feature = "mlx")]
 use tokenizers::Tokenizer;
@@ -51,22 +52,96 @@ pub fn metal_embedding_semaphore() -> &'static Semaphore {
     METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
+#[async_trait]
+pub trait LlmProvider: Send + Sync {
+    async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String>;
+
+    async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String>;
+
+    async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String>;
+
+    fn is_mock(&self) -> bool;
+}
+
 #[derive(Clone)]
-pub struct LLMClient {
+pub struct RealLlmProvider {
     client: reqwest::Client,
 }
 
-impl Default for LLMClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LLMClient {
+impl RealLlmProvider {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
         }
+    }
+}
+
+pub struct MockLlmProvider {
+    real: RealLlmProvider,
+}
+
+impl MockLlmProvider {
+    pub fn new() -> Self {
+        Self {
+            real: RealLlmProvider::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LLMClient {
+    pub provider: Arc<dyn LlmProvider>,
+}
+
+impl Default for LLMClient {
+    fn default() -> Self {
+        // Composition root: env vars determine which provider to inject
+        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
+            Self::new_mock()
+        } else {
+            Self::new_real()
+        }
+    }
+}
+
+impl LLMClient {
+    pub fn new_real() -> Self {
+        Self {
+            provider: Arc::new(RealLlmProvider::new()),
+        }
+    }
+
+    pub fn new_mock() -> Self {
+        Self {
+            provider: Arc::new(MockLlmProvider::new()),
+        }
+    }
+    pub fn new(provider: Arc<dyn LlmProvider>) -> Self {
+        Self { provider }
+    }
+
+    pub fn is_mock(&self) -> bool {
+        self.provider.is_mock()
     }
 
     #[allow(dead_code)]
@@ -74,6 +149,48 @@ impl LLMClient {
         self.completion(db, None, prompt).await
     }
 
+    pub async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.provider.completion(db, system_instruction, prompt).await
+    }
+
+    pub async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.provider.routed_completion(db, profile, system_instruction, prompt).await
+    }
+
+    pub async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String> {
+        self.provider.completion_explicit(
+            db,
+            active_provider,
+            cloud_provider,
+            model,
+            system_instruction,
+            prompt,
+            enable_thinking,
+        ).await
+    }
+}
+
+impl RealLlmProvider {
     pub async fn completion(
         &self,
         db: &dyn StorageBackend,
@@ -89,8 +206,8 @@ impl LLMClient {
             system_instruction,
             prompt,
             false,
-        )
-        .await
+            false,
+        ).await
     }
 
     pub async fn routed_completion(
@@ -100,8 +217,21 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
-            return self.completion_explicit(db, "mock", "", "", system_instruction, prompt, false).await;
+        let mock_llm = match db.get_profile_key("llm.mock").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+        if mock_llm {
+            return self.completion_explicit(
+                db,
+                "mock",
+                "",
+                "",
+                system_instruction,
+                prompt,
+                false,
+                true,
+            ).await;
         }
 
         if IS_HIBERNATING.load(Ordering::SeqCst) {
@@ -164,7 +294,7 @@ impl LLMClient {
 
             let cloud_res = async {
                 // Try cognitive callback first if not bootstrapping in CLI mode
-                if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+                if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
                     if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
                         let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
                         let task = crate::db::CognitiveTask {
@@ -240,6 +370,7 @@ impl LLMClient {
                     system_instruction,
                     prompt,
                     false,
+                    false,
                 ).await
             }.await;
 
@@ -311,8 +442,126 @@ impl LLMClient {
             system_instruction,
             prompt,
             false,
+            false,
         ).await
     }
+}
+
+#[async_trait]
+impl LlmProvider for RealLlmProvider {
+    async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.completion(db, system_instruction, prompt).await
+    }
+
+    async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.routed_completion(db, profile, system_instruction, prompt).await
+    }
+
+    async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String> {
+        self.completion_explicit(
+            db,
+            active_provider,
+            cloud_provider,
+            model,
+            system_instruction,
+            prompt,
+            enable_thinking,
+            false,
+        ).await
+    }
+
+    fn is_mock(&self) -> bool {
+        false
+    }
+}
+
+#[async_trait]
+impl LlmProvider for MockLlmProvider {
+    async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.real.completion_explicit(
+            db,
+            "mock",
+            "",
+            "",
+            system_instruction,
+            prompt,
+            false,
+            true,
+        ).await
+    }
+
+    async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        _profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.real.completion_explicit(
+            db,
+            "mock",
+            "",
+            "",
+            system_instruction,
+            prompt,
+            false,
+            true,
+        ).await
+    }
+
+    async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String> {
+        self.real.completion_explicit(
+            db,
+            active_provider,
+            cloud_provider,
+            model,
+            system_instruction,
+            prompt,
+            enable_thinking,
+            true,
+        ).await
+    }
+
+    fn is_mock(&self) -> bool {
+        true
+    }
+}
+
+impl RealLlmProvider {
 
     pub async fn completion_explicit(
         &self,
@@ -323,9 +572,9 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
         enable_thinking: bool,
+        is_mock: bool,
     ) -> Result<String> {
-        if let Ok(mock) = std::env::var("MYTHRAX_MOCK_LLM") {
-            if mock == "true" {
+        if active_provider == "mock" || is_mock {
                 if prompt.contains("Analyze the following dialog") {
                     return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
                 } else if prompt.contains("Validate if these should merge") {
@@ -353,11 +602,18 @@ impl LLMClient {
                     return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test"}"#.to_string());
                 } else if prompt.contains("knowledge generalizer") || prompt.contains("emerged independently") {
                     return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test", "confidence": 0.95}"#.to_string());
+                } else if prompt.contains("Please analyze these events:") {
+                    if prompt.contains("Episode 1") || prompt.contains("Episode 2") {
+                        return Ok(r#"{"title": "Split Analysis One", "summary": "Summary of cluster 1", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    } else if prompt.contains("Episode 3") || prompt.contains("Episode 4") {
+                        return Ok(r#"{"title": "Split Analysis Two", "summary": "Summary of cluster 2", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    } else {
+                        return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    }
                 } else {
                     return Ok(r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string());
                 }
             }
-        }
 
         let config = db.get_llm_config().await?;
         
@@ -458,6 +714,9 @@ impl LLMClient {
                 result
             }
             "cloud" => {
+                if std::env::var("MYTHRAX_MOCK_FAIL").is_ok() {
+                    anyhow::bail!("Injected cloud failure");
+                }
                 match cloud_provider {
                     "gemini" => {
                         let api_key = config.api_key.clone().unwrap_or_else(|| std::env::var("GEMINI_API_KEY").unwrap_or_default());
@@ -1108,7 +1367,7 @@ impl DynamicModelBroker {
 
         #[cfg(feature = "mlx")]
         {
-            if std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+
                 // 1. Download config.json if missing
                 let config_path = model_subdir.join("config.json");
                 if !config_path.exists() {
@@ -1156,7 +1415,6 @@ impl DynamicModelBroker {
                     let safetensors_url = format!("https://huggingface.co/{}/resolve/main/model.safetensors", model_name);
                     download_file_if_missing(&safetensors_url, &safetensors_path).await?;
                 }
-            }
         }
 
         // 4. Now load the new model safely under lock
@@ -1167,19 +1425,6 @@ impl DynamicModelBroker {
         } else {
             #[cfg(feature = "mlx")]
             let (model_opt, tok_opt) = {
-                let is_mock = {
-                    #[cfg(any(test, debug_assertions))]
-                    {
-                        std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
-                    }
-                    #[cfg(not(any(test, debug_assertions)))]
-                    {
-                        false
-                    }
-                };
-                if is_mock {
-                    (None, None)
-                } else {
                     tracing::info!("Loading Qwen2 model from {} onto Metal", model_subdir.display());
                     let config_content = std::fs::read_to_string(&model_subdir.join("config.json"))?;
                     let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
@@ -1230,7 +1475,6 @@ impl DynamicModelBroker {
                         .map_err(|e| anyhow::anyhow!("Tokenizer load error: {}", e))?;
                     
                     (Some(std::sync::Arc::new(tokio::sync::Mutex::new(weights_model))), Some(std::sync::Arc::new(tokenizer)))
-                }
             };
 
             #[cfg(not(feature = "mlx"))]
@@ -1353,23 +1597,6 @@ mod tests {
 
 #[cfg(feature = "mlx")]
 async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<()> {
-    let is_mock = {
-        #[cfg(any(test, debug_assertions))]
-        {
-            std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
-        }
-        #[cfg(not(any(test, debug_assertions)))]
-        {
-            false
-        }
-    };
-    if is_mock {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, b"dummy")?;
-        return Ok(());
-    }
     if path.exists() {
         if let Ok(metadata) = std::fs::metadata(path) {
             if metadata.len() > 0 {

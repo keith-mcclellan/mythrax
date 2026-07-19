@@ -73,8 +73,18 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
             std::fs::write(&pid_path, pid.to_string())?;
 
             let run_res = async {
+                // Composition root: inject mock dependencies when test env vars are set
+                let backend_config = if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
+                    crate::db::BackendConfig {
+                        check_daemon: false,
+                        embedder: Some(Arc::new(crate::embeddings::MockEmbedder)),
+                        llm: Some(crate::llm::LLMClient::new_mock()),
+                    }
+                } else {
+                    crate::db::BackendConfig::default()
+                };
                 // Initialize storage backend
-                let backend = Arc::new(SurrealBackend::new(&surreal_url).await?);
+                let backend = Arc::new(SurrealBackend::new(&surreal_url, backend_config).await?);
                 backend.init().await?;
 
                 // Initialize Bounded MPSC Blackboard channel

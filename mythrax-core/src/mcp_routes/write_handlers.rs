@@ -252,7 +252,7 @@ pub async fn run_llm_critic(
         content
     );
 
-    let llm = crate::llm::LLMClient::new();
+    let llm = crate::llm::LLMClient::default();
     let response_text = match llm.completion_explicit(
         &*backend,
         "local",
@@ -421,7 +421,7 @@ pub async fn sweep_expired_tasks(state: &ApiState) -> Result<()> {
             Some(task.system_instruction.as_str())
         };
         
-        let response_text = crate::llm::LLMClient::new().completion_explicit(
+        let response_text = crate::llm::LLMClient::default().completion_explicit(
             surreal_backend,
             "local",
             &config.cloud_provider,

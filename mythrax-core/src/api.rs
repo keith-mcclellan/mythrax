@@ -266,10 +266,8 @@ async fn dream_handler(
     };
     
     let res_scope = compactor.compact_scope(&*state.backend, &state.store, scope, embedder).await;
-    let res_global = compactor.compact_global(&*state.backend, &state.store).await;
-
-    match (res_scope, res_global) {
-        (Ok(_), Ok(_)) => Ok(Json(json!({ "status": "success" }))),
+    match res_scope {
+        Ok(_) => Ok(Json(json!({ "status": "success" }))),
         _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
@@ -529,7 +527,7 @@ async fn completions_proxy_handler(
                 }
             }
 
-            let client_llm = crate::llm::LLMClient::new();
+            let client_llm = crate::llm::LLMClient::default();
             match client_llm.completion_explicit(
                 state.backend.as_ref(),
                 "local",

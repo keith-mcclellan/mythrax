@@ -110,7 +110,7 @@ impl Default for MetaSkillSynthesizer {
 impl MetaSkillSynthesizer {
     pub fn new() -> Self {
         Self {
-            llm: crate::llm::LLMClient::new(),
+            llm: crate::llm::LLMClient::default(),
         }
     }
 

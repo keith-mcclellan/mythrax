@@ -97,7 +97,7 @@ async fn test_wisdom_seeding_cosine_similarity() {
     unsafe {
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
     }
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
     
     // Use 768 dimensions for index compliance
@@ -145,7 +145,7 @@ async fn test_forge_pipeline_deduplication() {
     unsafe {
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
     }
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
     
     let batch = ForgedSectionBatch {
