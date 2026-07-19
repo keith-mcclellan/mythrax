@@ -86,6 +86,8 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
     println!("GRADUATED RULE: {:?}", graduated_rule);
     assert_eq!(graduated_rule.target_pattern, "test_graduated_pattern");
     assert_eq!(graduated_rule.tier, mythrax_core::contracts::Tier::Project); // Because wiki nodes are dynamic, not all procedural
+    assert!(graduated_rule.source_episodes.contains(&id_a));
+    assert!(graduated_rule.source_episodes.contains(&id_b));
 
     // Verify relates_to edges link source nodes to the graduated rule
     let related_a = backend.get_related_node_ids(&id_a).await?;

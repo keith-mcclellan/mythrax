@@ -47,7 +47,10 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
                     scope: "global".to_string(),
                     vault_path: None,
                     embedding: local.embedding.clone(),
-                    source_episodes: vec![],
+                    source_episodes: vec![
+                        local.id.clone().unwrap_or_default(),
+                        other.id.clone().unwrap_or_default(),
+                    ],
                     generator_name: "GraduationPipeline".to_string(),
                     similarity: Some(sim),
                     utility: Some(1.0),
@@ -60,7 +63,14 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
                     importance: Some(6.0),
                 };
 
-                db.save_wisdom_rule(&global_rule).await?;
+                let wisdom_id = db.save_wisdom_rule(&global_rule).await?;
+
+                if let Some(ref local_id) = local.id {
+                    let _ = db.relate_nodes(local_id, &wisdom_id, local.temporal_range_start, local.temporal_range_end, Some(sim as f32)).await;
+                }
+                if let Some(ref other_id) = other.id {
+                    let _ = db.relate_nodes(other_id, &wisdom_id, other.temporal_range_start, other.temporal_range_end, Some(sim as f32)).await;
+                }
                 break;
             }
         }
