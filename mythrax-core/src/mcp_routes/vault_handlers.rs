@@ -361,6 +361,7 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                         &*state_clone.backend,
                         offset,
                         limit,
+                        false,
                     ).await {
                         tracing::error!("Background bulk ingestion failed: {:?}", e);
                     }
@@ -383,6 +384,7 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                     &*state.backend,
                     offset,
                     limit,
+                    false,
                 ).await?;
 
                 Ok(json!({

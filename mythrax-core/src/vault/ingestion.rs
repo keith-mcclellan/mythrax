@@ -459,6 +459,7 @@ pub async fn bulk_ingest_vault(
     db: &dyn StorageBackend,
     offset: Option<usize>,
     limit: Option<usize>,
+    skip_llm: bool,
 ) -> Result<(usize, Vec<String>, bool)> {
     let mut success_count = 0;
     let mut errors = Vec::new();

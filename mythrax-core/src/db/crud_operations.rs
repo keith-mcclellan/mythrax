@@ -826,6 +826,17 @@ impl SurrealBackend {
         Ok(())
     }
 
+    pub async fn update_episode_metadata_db(&self, id: &str, title: &str, summary: &str) -> Result<()> {
+        let thing_id = parse_record_id(id)?;
+        let sql = "UPDATE $id SET title = $title, summary = $summary, distilled_at = time::now();";
+        self.db.query(sql)
+            .bind(("id", thing_id))
+            .bind(("title", title))
+            .bind(("summary", summary))
+            .await?.check().context("Update episode metadata failed")?;
+        Ok(())
+    }
+
     pub async fn get_all_episodes_db(&self) -> Result<Vec<Episode>> {
         let sql = "SELECT * FROM episode;";
         let mut response = self.db.query(sql).await?.check().context("Query all episodes failed")?;

@@ -101,6 +101,8 @@ pub struct Episode {
     pub title: String,
     pub content: String,
     #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
     pub source: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,

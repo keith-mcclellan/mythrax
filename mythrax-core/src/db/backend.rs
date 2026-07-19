@@ -89,6 +89,7 @@ pub trait StorageBackend: Send + Sync {
     async fn update_llm_config(&self, req: &LlmConfigRequest) -> Result<()>;
     async fn get_unprocessed_episodes(&self) -> Result<Vec<Episode>>;
     async fn mark_episode_processed(&self, id: &str) -> Result<()>;
+    async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()>;
     async fn get_all_episodes(&self) -> Result<Vec<Episode>>;
     async fn get_episodes_by_node_type(&self, node_type: &str) -> Result<Vec<Episode>>;
     async fn is_feature_enabled(&self, feature_key: &str, default: bool) -> bool;
@@ -1400,6 +1401,10 @@ impl StorageBackend for SurrealBackend {
 
     async fn mark_episode_processed(&self, id: &str) -> Result<()> {
         self.mark_episode_processed_db(id).await
+    }
+    
+    async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()> {
+        self.update_episode_metadata_db(id, title, summary).await
     }
 
     async fn get_all_episodes(&self) -> Result<Vec<Episode>> {
