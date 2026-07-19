@@ -1,0 +1,36 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run Sanitation Scanner
+        run: |
+          python3 scripts/sanitation_scanner.py
+      - name: Comment PR
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get PR number dynamically based on the current commit SHA if branch is detached
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          PR_NUM=$(gh pr list --head "$BRANCH_NAME" --json number -q '.[0].number')
+          if [ ! -z "$PR_NUM" ]; then
+            gh pr comment $PR_NUM -F sanitation_scorecard.md
+          fi
