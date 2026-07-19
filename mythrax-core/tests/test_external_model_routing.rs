@@ -30,7 +30,7 @@ async fn test_external_and_in_process_hybrid_routing() {
     }
 
     // Initialize SurrealDB in memory
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
 
     // Initialize the dynamic model broker
@@ -39,7 +39,7 @@ async fn test_external_and_in_process_hybrid_routing() {
     let _ = DYNAMIC_MODEL_BROKER.set(broker_arc.clone());
 
     // 1. Direct Model Request: 0.5B Model (must run in-process)
-    let client = LLMClient::new();
+    let client = LLMClient::new_mock();
     let response_0_5b = client.completion_explicit(
         &backend,
         "local",
@@ -93,7 +93,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
     let _ = DYNAMIC_MODEL_BROKER.set(broker_arc.clone());
 
     // Initialize SurrealDB in memory
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
 
     let vault_dir = tempdir()?;

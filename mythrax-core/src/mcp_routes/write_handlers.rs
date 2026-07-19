@@ -252,7 +252,7 @@ pub async fn run_llm_critic(
         content
     );
 
-    let llm = crate::llm::LLMClient::new();
+    let llm = crate::llm::LLMClient::default();
     let response_text = match llm.completion_explicit(
         &*backend,
         "local",
@@ -305,8 +305,7 @@ pub async fn run_llm_critic(
         std::env::var("MYTHRAX_ACTIVE_SCOPE").unwrap_or_else(|_| "general".to_string())
     });
 
-    let rule_uuid = uuid::Uuid::new_v4().to_string();
-    let rule_path = format!("wisdom/dynamic/wisdom_rule_{}.md", &rule_uuid[..8]);
+    let rule_path = crate::cognitive::synthesis::resolve_rule_path(&active_scope, &critic_wisdom.action_to_avoid);
 
     let rule_save = crate::contracts::WisdomRule {
         id: None,
@@ -422,7 +421,7 @@ pub async fn sweep_expired_tasks(state: &ApiState) -> Result<()> {
             Some(task.system_instruction.as_str())
         };
         
-        let response_text = crate::llm::LLMClient::new().completion_explicit(
+        let response_text = crate::llm::LLMClient::default().completion_explicit(
             surreal_backend,
             "local",
             &config.cloud_provider,

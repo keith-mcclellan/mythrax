@@ -23,7 +23,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
     assert!(broker_arc.is_embedding_model_loaded());
 
     // Initialize SurrealDB in memory AFTER the embedder is present
-    let backend = SurrealBackend::new("mem://").await.unwrap();
+    let backend = SurrealBackend::new("mem://", mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
 
     // 1. Episode Ingestion and Retrieval

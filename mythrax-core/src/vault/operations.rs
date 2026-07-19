@@ -190,7 +190,7 @@ pub async fn run_auditor(backend: &crate::db::SurrealBackend) -> Result<()> {
         return Ok(());
     }
 
-    let client = llm::LLMClient::new();
+    let client = llm::LLMClient::default();
 
     for raw in episodes {
         let ep_id = stringify_record_id(raw.get("id").unwrap_or(&serde_json::Value::Null));

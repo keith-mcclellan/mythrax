@@ -109,9 +109,6 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                     if let Err(e) = compactor.compact_scope(&*state_clone.backend, &state_clone.store, scope_name, embedder).await {
                         tracing::error!("Background compact_scope failed: {:?}", e);
                     }
-                    if let Err(e) = compactor.compact_global(&*state_clone.backend, &state_clone.store).await {
-                        tracing::error!("Background compact_global failed: {:?}", e);
-                    }
                 });
 
                 Ok(json!({
@@ -135,7 +132,6 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
 
                 let scope_name = scope.as_deref().unwrap_or("general");
                 compactor.compact_scope(&*state.backend, &state.store, scope_name, embedder).await?;
-                compactor.compact_global(&*state.backend, &state.store).await?;
 
                 Ok(json!({
                     "content": [
@@ -348,6 +344,8 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
             let source = args.get("source").and_then(|v| v.as_str()).context("Missing source")?;
             let harness = args.get("harness").and_then(|v| v.as_str()).context("Missing harness")?;
             let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
             
             if async_mode {
                 let state_clone = state.clone();
@@ -360,7 +358,9 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                         std::path::Path::new(&source_clone),
                         &harness_clone,
                         &scope_clone,
-                        &*state_clone.backend
+                        &*state_clone.backend,
+                        offset,
+                        limit,
                     ).await {
                         tracing::error!("Background bulk ingestion failed: {:?}", e);
                     }
@@ -375,12 +375,14 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                     ]
                 }))
             } else {
-                let (count, errors) = bulk_ingest_vault(
+                let (count, errors, has_more) = bulk_ingest_vault(
                     &state.store.vault_root,
                     std::path::Path::new(source),
                     harness,
                     scope,
-                    &*state.backend
+                    &*state.backend,
+                    offset,
+                    limit,
                 ).await?;
 
                 Ok(json!({
@@ -389,7 +391,8 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                             "type": "text",
                             "text": format!("Ingested {} logs successfully. Errors: {:?}", count, errors)
                         }
-                    ]
+                    ],
+                    "has_more": has_more
                 }))
             }
         }
@@ -524,7 +527,7 @@ pub async fn run_bootstrap_internal(
                     }
                     
                     if !dry_run {
-                        let client = crate::llm::LLMClient::new();
+                        let client = crate::llm::LLMClient::default();
                         if let Ok(distilled_list) = crate::vault::distillation::distill_transcript_file(
                             state.backend.as_ref(),
                             &client,

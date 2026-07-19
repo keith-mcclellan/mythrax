@@ -94,10 +94,13 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
     assert!(!proc_archived, "Procedural episode should NOT be archived after 100 days");
 
     // 2. Verify 500-node LRU cap per scope:
+    // Disable near-duplicate merging to prevent mock embedder collisions in this test
+    backend.save_profile_key("compactor.enable_near_duplicate_merging", "false").await?;
+
     // Insert 505 procedural episodes in a new scope
     for k in 0..505 {
         let ep = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: format!("Proc Cap {}", k),
             content: format!("Content {}", k),
             scope: Some("cap_scope".to_string()),

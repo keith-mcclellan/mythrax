@@ -37,6 +37,35 @@ pub fn strip_nulls(value: &mut Value) {
     }
 }
 
+pub fn strip_diffs(content: &str) -> String {
+    let mut cleaned_lines = Vec::new();
+    let mut in_diff_block = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```diff") {
+            in_diff_block = true;
+            cleaned_lines.push("[Diff Truncated]");
+            continue;
+        }
+        if in_diff_block && trimmed.starts_with("```") {
+            in_diff_block = false;
+            continue;
+        }
+        if in_diff_block {
+            continue;
+        }
+        if trimmed.starts_with("diff --git ") 
+            || trimmed.starts_with("--- ") 
+            || trimmed.starts_with("+++ ") 
+            || trimmed.starts_with("@@ ")
+        {
+            continue;
+        }
+        cleaned_lines.push(line);
+    }
+    cleaned_lines.join("\n")
+}
+
 pub fn truncate_summary(ep_content: &str) -> String {
     if let Some((idx, _)) = ep_content.char_indices().nth(200) {
         format!("{}...", &ep_content[..idx])
@@ -53,6 +82,7 @@ pub async fn format_episode_or_parent(
     ep_content: &str,
     ep_scope: Option<&str>,
 ) -> Result<String> {
+    let ep_content = strip_diffs(ep_content);
     if let Ok(rec_id) = parse_record_id(ep_id) {
         let mut parent_resp = db.query("SELECT VALUE out FROM relates_to WHERE in = $ep_id;").bind(("ep_id", rec_id)).await?;
         let parent_ids: Vec<surrealdb::types::RecordId> = parent_resp.take(0)?;
@@ -81,7 +111,7 @@ pub async fn format_episode_or_parent(
         }
     }
 
-    let summary = truncate_summary(ep_content);
+    let summary = truncate_summary(&ep_content);
     Ok(format!(
         "#### 📑 Memory Card: {}\n- **ID**: `{}`\n- **Scope**: `{}`\n- **Summary**: {}\n*For follow-up queries on this memory, use:* `get_memory_nodes [\"{}\"]`\n",
         ep_title, ep_id, ep_scope.unwrap_or("general"), summary, ep_id

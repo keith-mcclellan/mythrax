@@ -11,7 +11,7 @@ async fn test_soft_thresholding_and_hook_injection() {
     let db_path = temp_dir.path().join("db");
     
     // Initialize SurrealDB with KV store
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy())).await.unwrap();
+    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await.unwrap();
     backend.init().await.unwrap();
 
     // Create a "borderline" episode (low confidence/score)

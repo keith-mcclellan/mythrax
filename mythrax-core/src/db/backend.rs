@@ -97,6 +97,7 @@ pub trait StorageBackend: Send + Sync {
     async fn get_profile_key(&self, key: &str) -> Result<Option<String>>;
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
+    async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()>;
     async fn relate_nodes(
         &self,
         from_id: &str,
@@ -165,7 +166,7 @@ pub struct CacheEntry {
 #[derive(Clone)]
 pub struct SurrealBackend {
     pub db: Surreal<Db>,
-    pub embedder: Option<Arc<crate::embeddings::LocalEmbedder>>,
+    pub embedder: Option<Arc<dyn crate::embeddings::TextEmbedder>>,
     pub client_port: Option<u16>,
     pub write_lock: Arc<tokio::sync::Mutex<()>>,
     pub db_path: Option<std::path::PathBuf>,
@@ -179,6 +180,23 @@ pub struct SurrealBackend {
     pub search_mode: Arc<tokio::sync::Mutex<String>>,
     pub reranker: Arc<tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>>>,
     pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
+    pub(crate) blackboard_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
+}
+
+pub struct BackendConfig {
+    pub check_daemon: bool,
+    pub embedder: Option<Arc<dyn crate::embeddings::TextEmbedder>>,
+    pub llm: Option<crate::llm::LLMClient>,
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self {
+            check_daemon: true,
+            embedder: None,
+            llm: None,
+        }
+    }
 }
 
 impl SurrealBackend {
@@ -397,18 +415,7 @@ impl SurrealBackend {
         }
     }
 
-    pub async fn new(url: &str) -> Result<Self> {
-        // Helper to detect if we are running inside cargo test
-        let is_running_in_test = {
-            let in_test_exe = if let Ok(exe) = std::env::current_exe() {
-                let name = exe.to_string_lossy();
-                name.contains("/deps/") || name.contains("test")
-            } else {
-                false
-            };
-            in_test_exe || std::env::args().any(|arg| arg.contains("test"))
-        };
-
+    pub async fn new(url: &str, config: BackendConfig) -> Result<Self> {
         // 1. Determine daemon port from env or default
         let env_port = std::env::var("MYTHRAX_DAEMON_PORT").ok();
         let daemon_port = env_port
@@ -416,9 +423,8 @@ impl SurrealBackend {
             .and_then(|p| p.parse::<u16>().ok())
             .unwrap_or(8090);
 
-        // 2. Only check the daemon port if we are not running inside a unit test,
-        // OR if MYTHRAX_DAEMON_PORT was explicitly set in the environment.
-        let is_daemon_available = if env_port.is_some() || !is_running_in_test {
+        // 2. Only check the daemon port if check_daemon is true
+        let is_daemon_available = if config.check_daemon {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(50),
                 tokio::net::TcpStream::connect(format!("127.0.0.1:{}", daemon_port))
@@ -480,14 +486,15 @@ impl SurrealBackend {
             (db, None)
         };
 
-        // 3. Initialize embedder using cached global LocalEmbedder
-        let embedder = match crate::embeddings::LocalEmbedder::get_global() {
-            Ok(emb) => Some(emb),
-            Err(e) => {
-                tracing::warn!("Failed to initialize LocalEmbedder: {}. Falling back to non-embedded mode.", e);
-                None
+        let embedder = config.embedder.or_else(|| {
+            match crate::embeddings::LocalEmbedder::get_global() {
+                Ok(emb) => Some(emb as Arc<dyn crate::embeddings::TextEmbedder>),
+                Err(e) => {
+                    tracing::warn!("Failed to initialize LocalEmbedder: {}. Falling back to non-embedded mode.", e);
+                    None
+                }
             }
-        };
+        });
 
         // 4. Initialize write lock
         let write_lock = Arc::new(tokio::sync::Mutex::new(()));
@@ -513,6 +520,7 @@ impl SurrealBackend {
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
             reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            blackboard_tx: std::sync::OnceLock::new(),
         };
         let _ = GLOBAL_BACKEND.set(Arc::new(backend.clone()));
         Ok(backend)
@@ -535,11 +543,18 @@ impl SurrealBackend {
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
             reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            blackboard_tx: std::sync::OnceLock::new(),
         }
     }
 
     pub fn is_client_mode(&self) -> bool {
         self.client_port.is_some()
+    }
+
+    pub fn set_blackboard_sender(&self, tx: tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>) {
+        if let Err(_) = self.blackboard_tx.set(tx) {
+            tracing::warn!("blackboard_tx already initialized");
+        }
     }
 
     pub async fn set_search_mode(&self, mode: &str) {
@@ -553,7 +568,7 @@ impl SurrealBackend {
     }
 
     pub async fn new_client_connection() -> Result<Self> {
-        Self::new("mem://").await
+        Self::new("mem://", BackendConfig::default()).await
     }
 
     pub async fn record_indexing_write(&self, vault_path: &str) {
@@ -763,7 +778,12 @@ impl SurrealBackend {
 
     #[allow(dead_code)]
     pub async fn new_in_memory() -> Result<Self> {
-        let backend = Self::new("mem://").await?;
+        let config = BackendConfig {
+            check_daemon: false,
+            embedder: Some(Arc::new(crate::embeddings::MockEmbedder)),
+            llm: Some(crate::llm::LLMClient::new_mock()),
+        };
+        let backend = Self::new("mem://", config).await?;
         let random_db = format!("db_{}", Uuid::new_v4().to_string().replace("-", "_"));
         backend.db.use_ns("mythrax").use_db(&random_db).await?;
         Ok(backend)
@@ -896,6 +916,7 @@ pub(crate) struct WisdomRaw {
     pub(crate) embedding: Option<Vec<f32>>,
     pub(crate) source_episodes: Option<Vec<String>>,
     pub(crate) generator_name: String,
+    pub(crate) similarity: Option<f32>,
     pub(crate) utility: Option<f32>,
     pub(crate) status: Option<String>,
     pub(crate) superseded_at: Option<String>,
@@ -921,7 +942,7 @@ impl WisdomRaw {
             embedding: self.embedding,
             source_episodes: self.source_episodes.unwrap_or_default(),
             generator_name: self.generator_name,
-            similarity: None,
+            similarity: self.similarity,
             utility: self.utility,
             status: self.status,
             superseded_at: self.superseded_at,
@@ -961,6 +982,8 @@ pub struct EpisodeRaw {
     pub node_type: Option<String>,
     pub confidence: Option<f32>,
     pub importance: Option<f32>,
+    pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<EpisodeRaw> for Episode {
@@ -989,6 +1012,8 @@ impl From<EpisodeRaw> for Episode {
             node_type: raw.node_type,
             confidence: raw.confidence,
             importance: raw.importance,
+            temporal_range_start: raw.temporal_range_start,
+            temporal_range_end: raw.temporal_range_end,
             ..Default::default()
         }
     }
@@ -1019,6 +1044,12 @@ pub(crate) struct WikiNodeRaw {
     pub(crate) scope: String,
     pub(crate) vault_path: Option<String>,
     pub(crate) embedding: Option<Vec<f32>>,
+    pub(crate) temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub(crate) metacognitive_confidence: Option<f64>,
+    #[serde(default)]
+    pub(crate) node_type: Option<String>,
 }
 
 impl WikiNodeRaw {
@@ -1031,6 +1062,10 @@ impl WikiNodeRaw {
             scope: self.scope,
             vault_path: self.vault_path,
             embedding: self.embedding,
+            temporal_range_start: self.temporal_range_start,
+            temporal_range_end: self.temporal_range_end,
+            metacognitive_confidence: self.metacognitive_confidence.map(|v| v as i32),
+            node_type: self.node_type,
         }
     }
 }
@@ -1216,13 +1251,18 @@ impl StorageBackend for SurrealBackend {
     async fn get_wisdom(&self, query: &str, tier: Option<Tier>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
         let active_scope = self.resolve_active_scope();
 
+        let is_mock_embedder = self.embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
         let query_emb = if let Some(ref _embedder) = self.embedder {
-            let formatted_query = format!("search_query: {}", query);
-            match self.embed(&formatted_query).await {
-                Ok(vec) => Some(vec),
-                Err(e) => {
-                    tracing::warn!("Embedding generation failed in get_wisdom: {}", e);
-                    None
+            if is_mock_embedder {
+                None
+            } else {
+                let formatted_query = format!("search_query: {}", query);
+                match self.embed(&formatted_query).await {
+                    Ok(vec) => Some(vec),
+                    Err(e) => {
+                        tracing::warn!("Embedding generation failed in get_wisdom: {}", e);
+                        None
+                    }
                 }
             }
         } else {
@@ -1387,7 +1427,32 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String> {
-        self.save_wiki_node_db(node).await
+        if let Some(tx) = self.blackboard_tx.get() {
+            let (respond_to, rx) = tokio::sync::oneshot::channel();
+            tx.send(crate::db::blackboard::EventMessage {
+                event: crate::db::blackboard::WikiNodeEvent::Insert(node.clone()),
+                respond_to,
+            }).await.map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
+            rx.await?
+        } else {
+            self.save_wiki_node_db(node).await
+        }
+    }
+
+    async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()> {
+        if let Some(tx) = self.blackboard_tx.get() {
+            let (respond_to, rx) = tokio::sync::oneshot::channel();
+            tx.send(crate::db::blackboard::EventMessage {
+                event: crate::db::blackboard::WikiNodeEvent::Delete {
+                    name: name.to_string(),
+                    scope: scope.to_string(),
+                },
+                respond_to,
+            }).await.map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
+            rx.await?.map(|_| ())
+        } else {
+            self.delete_wiki_node_db(name, scope).await
+        }
     }
 
     async fn relate_nodes(
@@ -1516,7 +1581,7 @@ impl StorageBackend for SurrealBackend {
             if let Some(ref emp) = embedder {
                 emp.embed(&text_str)
             } else {
-                anyhow::bail!("No embedder configured")
+                    anyhow::bail!("No embedder configured")
             }
         }).await?;
 
@@ -1564,21 +1629,7 @@ impl StorageBackend for SurrealBackend {
                 if let Some(ref emp) = embedder {
                     emp.embed_batch(&missing_texts_clone)
                 } else {
-                    let is_mock = {
-                        #[cfg(any(test, debug_assertions))]
-                        {
-                            std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
-                        }
-                        #[cfg(not(any(test, debug_assertions)))]
-                        {
-                            false
-                        }
-                    };
-                    if is_mock {
-                        Ok(vec![vec![0.0f32; 768]; missing_texts_clone.len()])
-                    } else {
-                        Err(anyhow::anyhow!("No embedding model loaded"))
-                    }
+                    Err(anyhow::anyhow!("No embedding model loaded"))
                 }
             }).await?;
 
@@ -2147,6 +2198,7 @@ mod tests {
             scope: "hydration-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         let wiki_id = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2221,6 +2273,7 @@ mod tests {
             scope: "ranking-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2332,6 +2385,7 @@ mod tests {
             scope: "directional-test".to_string(),
             vault_path: Some("wiki/insights/parent_insight.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2469,6 +2523,7 @@ mod tests {
             scope: "test-scope".to_string(),
             vault_path: Some("wiki/test.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
 
         let node_id = backend.save_wiki_node(&node).await.unwrap();
@@ -2567,6 +2622,7 @@ mod tests {
             scope: "compaction-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&node1).await.unwrap();
 
@@ -2623,6 +2679,7 @@ mod tests {
             scope: "compaction-test-single-para".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&node2).await.unwrap();
 
@@ -2745,6 +2802,7 @@ mod tests {
             scope: "graph-exclusion-test".to_string(),
             vault_path: None,
             embedding: None,
+            ..Default::default()
         };
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
@@ -2803,6 +2861,7 @@ mod tests {
             scope: "artifact-exclusion-test".to_string(),
             vault_path: Some("wiki/artifacts/test_artifact.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&artifact_node).await.unwrap();
 
@@ -2814,6 +2873,7 @@ mod tests {
             scope: "artifact-exclusion-test".to_string(),
             vault_path: Some("wiki/scope/insights/my_insight.md".to_string()),
             embedding: None,
+            ..Default::default()
         };
         backend.save_wiki_node(&normal_node).await.unwrap();
 
@@ -3039,6 +3099,26 @@ mod tests {
 
         let ep3_found = results.iter().any(|ep| ep.id == ep3_id);
         assert!(!ep3_found, "Episode 3 from different session must not be returned");
+    }
+
+    #[tokio::test]
+    async fn test_schema_migration() {
+        let backend = SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let check_sql = "INFO FOR TABLE wisdom;";
+        let mut response = backend.db.query(check_sql).await.unwrap();
+        let info_opt: Option<serde_json::Value> = response.take(0).unwrap();
+        let info_str = info_opt.unwrap().to_string();
+        
+        assert!(info_str.contains("HNSW DIMENSION 768"));
+        
+        let check_sql = "INFO FOR TABLE episode;";
+        let mut response = backend.db.query(check_sql).await.unwrap();
+        let info_opt: Option<serde_json::Value> = response.take(0).unwrap();
+        let info_str = info_opt.unwrap().to_string();
+        
+        assert!(info_str.contains("HNSW DIMENSION 768"));
     }
 }
 

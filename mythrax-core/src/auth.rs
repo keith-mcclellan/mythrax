@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn test_get_or_create_token_generates_valid_uuid() {
         let temp_dir = std::env::temp_dir();
-        let token_path = temp_dir.join("test_token_v4.txt");
+        let token_path = temp_dir.join(format!("test_token_v4_{}.txt", uuid::Uuid::new_v4()));
         
         // Ensure clean state
         let _ = fs::remove_file(&token_path);
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn test_token_file_permissions() {
         let temp_dir = std::env::temp_dir();
-        let token_path = temp_dir.join("test_token_perms.txt");
+        let token_path = temp_dir.join(format!("test_token_perms_{}.txt", uuid::Uuid::new_v4()));
         
         // Ensure clean state
         let _ = fs::remove_file(&token_path);
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn test_successive_calls_load_existing_token() {
         let temp_dir = std::env::temp_dir();
-        let token_path = temp_dir.join("test_token_persist.txt");
+        let token_path = temp_dir.join(format!("test_token_persist_{}.txt", uuid::Uuid::new_v4()));
         
         // Ensure clean state
         let _ = fs::remove_file(&token_path);

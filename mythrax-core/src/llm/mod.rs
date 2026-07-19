@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use async_trait::async_trait;
 
 #[cfg(feature = "mlx")]
 use tokenizers::Tokenizer;
@@ -34,6 +35,12 @@ pub struct Tokenizer;
 pub struct MxbaiReranker;
 
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
+pub static IS_HIBERNATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn is_hibernating() -> bool {
+    IS_HIBERNATING.load(std::sync::atomic::Ordering::SeqCst)
+}
 static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 static METAL_EMBEDDING_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
 
@@ -42,25 +49,99 @@ pub fn metal_inference_semaphore() -> &'static Semaphore {
 }
 
 pub fn metal_embedding_semaphore() -> &'static Semaphore {
-    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(50))
+    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+}
+
+#[async_trait]
+pub trait LlmProvider: Send + Sync {
+    async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String>;
+
+    async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String>;
+
+    async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String>;
+
+    fn is_mock(&self) -> bool;
 }
 
 #[derive(Clone)]
-pub struct LLMClient {
+pub struct RealLlmProvider {
     client: reqwest::Client,
 }
 
-impl Default for LLMClient {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LLMClient {
+impl RealLlmProvider {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
         }
+    }
+}
+
+pub struct MockLlmProvider {
+    real: RealLlmProvider,
+}
+
+impl MockLlmProvider {
+    pub fn new() -> Self {
+        Self {
+            real: RealLlmProvider::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LLMClient {
+    pub provider: Arc<dyn LlmProvider>,
+}
+
+impl Default for LLMClient {
+    fn default() -> Self {
+        // Composition root: env vars determine which provider to inject
+        if crate::is_test_mock() {
+            Self::new_mock()
+        } else {
+            Self::new_real()
+        }
+    }
+}
+
+impl LLMClient {
+    pub fn new_real() -> Self {
+        Self {
+            provider: Arc::new(RealLlmProvider::new()),
+        }
+    }
+
+    pub fn new_mock() -> Self {
+        Self {
+            provider: Arc::new(MockLlmProvider::new()),
+        }
+    }
+    pub fn new(provider: Arc<dyn LlmProvider>) -> Self {
+        Self { provider }
+    }
+
+    pub fn is_mock(&self) -> bool {
+        self.provider.is_mock()
     }
 
     #[allow(dead_code)]
@@ -68,6 +149,48 @@ impl LLMClient {
         self.completion(db, None, prompt).await
     }
 
+    pub async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.provider.completion(db, system_instruction, prompt).await
+    }
+
+    pub async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.provider.routed_completion(db, profile, system_instruction, prompt).await
+    }
+
+    pub async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String> {
+        self.provider.completion_explicit(
+            db,
+            active_provider,
+            cloud_provider,
+            model,
+            system_instruction,
+            prompt,
+            enable_thinking,
+        ).await
+    }
+}
+
+impl RealLlmProvider {
     pub async fn completion(
         &self,
         db: &dyn StorageBackend,
@@ -83,8 +206,8 @@ impl LLMClient {
             system_instruction,
             prompt,
             false,
-        )
-        .await
+            false,
+        ).await
     }
 
     pub async fn routed_completion(
@@ -94,76 +217,215 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
+        let mock_llm = match db.get_profile_key("llm.mock").await {
+            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+            _ => false,
+        };
+        if mock_llm {
+            return self.completion_explicit(
+                db,
+                "mock",
+                "",
+                "",
+                system_instruction,
+                prompt,
+                false,
+                true,
+            ).await;
+        }
+
+        if IS_HIBERNATING.load(Ordering::SeqCst) {
+            let retry_secs = std::env::var("MYTHRAX_QUOTA_RETRY_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(3600);
+            tracing::info!(
+                phase = "hibernation",
+                progress = "waiting",
+                "Cloud completion called while hibernating. Waiting for {} seconds.",
+                retry_secs
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
+            IS_HIBERNATING.store(false, Ordering::SeqCst);
+            CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
+        }
+
         let config = db.get_llm_config().await?;
         let mut tier = crate::llm::router::route_task(db, profile).await;
 
         if tier == crate::contracts::ModelTier::Cloud {
-            // Try cognitive callback first if not bootstrapping in CLI mode
-            if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
-                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-                    let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
-                    let task = crate::db::CognitiveTask {
-                        id: task_id.clone(),
-                        task_type: format!("{:?}", profile.archetype),
-                        prompt: prompt.to_string(),
-                        system_instruction: system_instruction.unwrap_or_default().to_string(),
-                        expected_format: "Any".to_string(),
-                        priority: "Normal".to_string(),
-                        created_at: chrono::Utc::now(),
-                        status: "Pending".to_string(),
-                        result: None,
-                        ttl_minutes: 10,
-                        injected_at: None,
+            // Apply rate limit around cloud calls
+            let rpm = std::env::var("MYTHRAX_CLOUD_RPM")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(30);
+            if rpm > 0 {
+                let min_interval = std::time::Duration::from_secs_f64(60.0 / rpm as f64);
+                static LAST_CALL: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+                let mutex = LAST_CALL.get_or_init(|| Mutex::new(None));
+                let sleep_dur = {
+                    let mut guard = mutex.lock().unwrap();
+                    let now = std::time::Instant::now();
+                    let sleep_dur = if let Some(last_time) = *guard {
+                        if last_time > now {
+                            Some((last_time - now) + min_interval)
+                        } else {
+                            let elapsed = now.duration_since(last_time);
+                            if elapsed < min_interval {
+                                Some(min_interval - elapsed)
+                            } else {
+                                None
+                            }
+                        }
+                    } else {
+                        None
                     };
-                    
-                    if surreal_backend.create_cognitive_task(&task).await.is_ok() {
-                        let start = std::time::Instant::now();
-                        let timeout = std::time::Duration::from_secs(60);
-                        while start.elapsed() < timeout {
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                            if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
-                                if updated.status == "Completed" {
-                                    if let Some(res) = updated.result {
-                                        return Ok(res);
+                    if let Some(dur) = sleep_dur {
+                        *guard = Some(now + dur);
+                    } else {
+                        *guard = Some(now);
+                    }
+                    sleep_dur
+                };
+                if let Some(dur) = sleep_dur {
+                    tokio::time::sleep(dur).await;
+                }
+            }
+
+            let cloud_res = async {
+                // Try cognitive callback first if not bootstrapping in CLI mode
+                if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
+                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                        let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                        let task = crate::db::CognitiveTask {
+                            id: task_id.clone(),
+                            task_type: format!("{:?}", profile.archetype),
+                            prompt: prompt.to_string(),
+                            system_instruction: system_instruction.unwrap_or_default().to_string(),
+                            expected_format: "Any".to_string(),
+                            priority: "Normal".to_string(),
+                            created_at: chrono::Utc::now(),
+                            status: "Pending".to_string(),
+                            result: None,
+                            ttl_minutes: 10,
+                            injected_at: None,
+                            session_id: None,
+                        };
+                        
+                        if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                            let start = std::time::Instant::now();
+                            let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
+                                .ok()
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .unwrap_or(60);
+                            let timeout = std::time::Duration::from_secs(timeout_secs);
+                            while start.elapsed() < timeout {
+                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                                    if updated.status == "Completed" {
+                                        if let Some(res) = updated.result {
+                                            return Ok(res);
+                                        }
                                     }
                                 }
                             }
+                            tracing::warn!("Cognitive callback for cloud model timed out, falling back to direct API / local model");
+                            let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                                || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                            if disable_fallback {
+                                anyhow::bail!("Cognitive callback for cloud model timed out and fallbacks are disabled");
+                            }
+                        } else {
+                            let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                                || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                            if disable_fallback {
+                                anyhow::bail!("Failed to create cognitive task and fallbacks are disabled");
+                            }
                         }
-                        tracing::warn!("Cognitive callback for cloud model timed out, falling back to direct API / local model");
+                    }
+                }
+
+                let api_key = config.api_key.clone().unwrap_or_else(|| {
+                    if config.cloud_provider == "gemini" {
+                        std::env::var("GEMINI_API_KEY").unwrap_or_default()
+                    } else {
+                        std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+                    }
+                });
+                if api_key.is_empty() {
+                    tracing::warn!("Cloud tier selected but no API key is configured. Degrading to local Large model.");
+                    anyhow::bail!("No API key configured for Cloud model");
+                }
+
+                let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                    "gemini-1.5-flash"
+                } else {
+                    &config.model
+                };
+
+                self.completion_explicit(
+                    db,
+                    "cloud",
+                    &config.cloud_provider,
+                    cloud_model,
+                    system_instruction,
+                    prompt,
+                    false,
+                    false,
+                ).await
+            }.await;
+
+            match &cloud_res {
+                Ok(_) => {
+                    CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    let failures = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                    if failures >= 3 {
+                        IS_HIBERNATING.store(true, Ordering::SeqCst);
+                        let retry_secs = std::env::var("MYTHRAX_QUOTA_RETRY_SECS")
+                            .ok()
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(3600);
+                        
+                        tracing::warn!(
+                            phase = "hibernation",
+                            progress = "sleeping",
+                            "Cloud completion failed 3 consecutive times ({:?}). Entering hibernation state for {} seconds.",
+                            e,
+                            retry_secs
+                        );
+                        
+                        tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
+                        IS_HIBERNATING.store(false, Ordering::SeqCst);
+                        CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
                     }
                 }
             }
 
-            let api_key = config.api_key.clone().unwrap_or_else(|| {
-                if config.cloud_provider == "gemini" {
-                    std::env::var("GEMINI_API_KEY").unwrap_or_default()
-                } else {
-                    std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+            if cloud_res.is_ok() {
+                return cloud_res;
+            } else {
+                let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
+                    || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
+                if disable_fallback {
+                    return cloud_res;
                 }
-            });
-            if api_key.is_empty() {
-                tracing::warn!("Cloud tier selected but no API key is configured. Degrading to local Large model.");
-                tier = crate::contracts::ModelTier::Large;
+
+                let api_key = config.api_key.clone().unwrap_or_else(|| {
+                    if config.cloud_provider == "gemini" {
+                        std::env::var("GEMINI_API_KEY").unwrap_or_default()
+                    } else {
+                        std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+                    }
+                });
+                if api_key.is_empty() {
+                    tier = crate::contracts::ModelTier::Large;
+                } else {
+                    return cloud_res;
+                }
             }
         }
-
-        if tier == crate::contracts::ModelTier::Cloud {
-            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
-                "gemini-1.5-flash"
-            } else {
-                &config.model
-            };
-            return self.completion_explicit(
-                db,
-                "cloud",
-                &config.cloud_provider,
-                cloud_model,
-                system_instruction,
-                prompt,
-                false,
-            ).await;
-        }
-
         let _gpu_permit = crate::llm::router::gpu_reservation_lock().lock().await;
 
         let local_model = match tier {
@@ -181,8 +443,126 @@ impl LLMClient {
             system_instruction,
             prompt,
             false,
+            false,
         ).await
     }
+}
+
+#[async_trait]
+impl LlmProvider for RealLlmProvider {
+    async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.completion(db, system_instruction, prompt).await
+    }
+
+    async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.routed_completion(db, profile, system_instruction, prompt).await
+    }
+
+    async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String> {
+        self.completion_explicit(
+            db,
+            active_provider,
+            cloud_provider,
+            model,
+            system_instruction,
+            prompt,
+            enable_thinking,
+            false,
+        ).await
+    }
+
+    fn is_mock(&self) -> bool {
+        false
+    }
+}
+
+#[async_trait]
+impl LlmProvider for MockLlmProvider {
+    async fn completion(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.real.completion_explicit(
+            db,
+            "mock",
+            "",
+            "",
+            system_instruction,
+            prompt,
+            false,
+            true,
+        ).await
+    }
+
+    async fn routed_completion(
+        &self,
+        db: &dyn StorageBackend,
+        _profile: &crate::contracts::TaskProfile,
+        system_instruction: Option<&str>,
+        prompt: &str,
+    ) -> Result<String> {
+        self.real.completion_explicit(
+            db,
+            "mock",
+            "",
+            "",
+            system_instruction,
+            prompt,
+            false,
+            true,
+        ).await
+    }
+
+    async fn completion_explicit(
+        &self,
+        db: &dyn StorageBackend,
+        active_provider: &str,
+        cloud_provider: &str,
+        model: &str,
+        system_instruction: Option<&str>,
+        prompt: &str,
+        enable_thinking: bool,
+    ) -> Result<String> {
+        self.real.completion_explicit(
+            db,
+            active_provider,
+            cloud_provider,
+            model,
+            system_instruction,
+            prompt,
+            enable_thinking,
+            true,
+        ).await
+    }
+
+    fn is_mock(&self) -> bool {
+        true
+    }
+}
+
+impl RealLlmProvider {
 
     pub async fn completion_explicit(
         &self,
@@ -193,9 +573,9 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
         enable_thinking: bool,
+        is_mock: bool,
     ) -> Result<String> {
-        if let Ok(mock) = std::env::var("MYTHRAX_MOCK_LLM") {
-            if mock == "true" {
+        if active_provider == "mock" || is_mock {
                 if prompt.contains("Analyze the following dialog") {
                     return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
                 } else if prompt.contains("Validate if these should merge") {
@@ -219,13 +599,22 @@ impl LLMClient {
                     return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
                 } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {
                     return Ok(r#"{"contradicts": true, "conflicting_field": "database", "resolution": "We should use SurrealDB for the database because Postgres was deprecated.", "confidence": 0.95}"#.to_string());
+                } else if prompt.contains("Please merge and generalize these two similar rules") {
+                    return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test"}"#.to_string());
                 } else if prompt.contains("knowledge generalizer") || prompt.contains("emerged independently") {
                     return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test", "confidence": 0.95}"#.to_string());
+                } else if prompt.contains("Please analyze these events:") {
+                    if prompt.contains("Episode 1") || prompt.contains("Episode 2") {
+                        return Ok(r#"{"title": "Split Analysis One", "summary": "Summary of cluster 1", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    } else if prompt.contains("Episode 3") || prompt.contains("Episode 4") {
+                        return Ok(r#"{"title": "Split Analysis Two", "summary": "Summary of cluster 2", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    } else {
+                        return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    }
                 } else {
                     return Ok(r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string());
                 }
             }
-        }
 
         let config = db.get_llm_config().await?;
         
@@ -326,6 +715,9 @@ impl LLMClient {
                 result
             }
             "cloud" => {
+                if std::env::var("MYTHRAX_MOCK_FAIL").is_ok() {
+                    anyhow::bail!("Injected cloud failure");
+                }
                 match cloud_provider {
                     "gemini" => {
                         let api_key = config.api_key.clone().unwrap_or_else(|| std::env::var("GEMINI_API_KEY").unwrap_or_default());
@@ -416,6 +808,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
         parent_hypothesis: &str,
         target_files: &[(String, String)],
         constraints: &[String],
+        stm_anchors: &[String],
     ) -> Result<String> {
         let mut files_context = String::new();
         for (path, content) in target_files {
@@ -456,10 +849,18 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             }
         }
 
+        let mut stm_injection = String::new();
+        if !stm_anchors.is_empty() {
+            stm_injection.push_str("\n\nActive Short Term Memory (STM) anchors to guide your ideation:\n");
+            for anchor in stm_anchors {
+                stm_injection.push_str(&format!("- {}\n", anchor));
+            }
+        }
+
         let prompt = format!(
             "You are an autonomous codebase researcher. We are modifying the following files:\n\n\
              {}\n\
-             {}\n\
+             {}{}\n\
              Based on the parent hypothesis: \"{}\", propose two alternative refinements.\n\
              For each refinement, suggest sequential node_id (e.g. \"1\", \"2\"), description, expected utility score (0.0 to 100.0), and a 'code_changes' map containing relative file paths to their COMPLETE updated file contents.\n\n\
              Return a JSON array of objects with exactly this structure:\n\
@@ -474,12 +875,12 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                }}\n\
              ]\n\n\
              Output format MUST be a raw JSON array only, without any markdown formatting or code block wrapping.",
-            files_context, constraints_injection, parent_hypothesis
+            files_context, constraints_injection, stm_injection, parent_hypothesis
         );
 
         let system_prompt = format!(
-            "You are an ideation assistant that outputs raw JSON arrays.{}{}",
-            wisdom_injection, constraints_injection
+            "You are an ideation assistant that outputs raw JSON arrays.{}{}{}",
+            wisdom_injection, constraints_injection, stm_injection
         );
 
         self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(&system_prompt), &prompt).await
@@ -967,7 +1368,7 @@ impl DynamicModelBroker {
 
         #[cfg(feature = "mlx")]
         {
-            if std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+
                 // 1. Download config.json if missing
                 let config_path = model_subdir.join("config.json");
                 if !config_path.exists() {
@@ -1015,7 +1416,6 @@ impl DynamicModelBroker {
                     let safetensors_url = format!("https://huggingface.co/{}/resolve/main/model.safetensors", model_name);
                     download_file_if_missing(&safetensors_url, &safetensors_path).await?;
                 }
-            }
         }
 
         // 4. Now load the new model safely under lock
@@ -1026,19 +1426,6 @@ impl DynamicModelBroker {
         } else {
             #[cfg(feature = "mlx")]
             let (model_opt, tok_opt) = {
-                let is_mock = {
-                    #[cfg(any(test, debug_assertions))]
-                    {
-                        std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
-                    }
-                    #[cfg(not(any(test, debug_assertions)))]
-                    {
-                        false
-                    }
-                };
-                if is_mock {
-                    (None, None)
-                } else {
                     tracing::info!("Loading Qwen2 model from {} onto Metal", model_subdir.display());
                     let config_content = std::fs::read_to_string(&model_subdir.join("config.json"))?;
                     let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
@@ -1089,7 +1476,6 @@ impl DynamicModelBroker {
                         .map_err(|e| anyhow::anyhow!("Tokenizer load error: {}", e))?;
                     
                     (Some(std::sync::Arc::new(tokio::sync::Mutex::new(weights_model))), Some(std::sync::Arc::new(tokenizer)))
-                }
             };
 
             #[cfg(not(feature = "mlx"))]
@@ -1212,23 +1598,6 @@ mod tests {
 
 #[cfg(feature = "mlx")]
 async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<()> {
-    let is_mock = {
-        #[cfg(any(test, debug_assertions))]
-        {
-            std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
-        }
-        #[cfg(not(any(test, debug_assertions)))]
-        {
-            false
-        }
-    };
-    if is_mock {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, b"dummy")?;
-        return Ok(());
-    }
     if path.exists() {
         if let Ok(metadata) = std::fs::metadata(path) {
             if metadata.len() > 0 {
@@ -1268,7 +1637,7 @@ fn is_repetition_failure(text: &str) -> bool {
     let mut consecutive = 1;
     let mut prev = ' ';
     for &c in &chars {
-        if c == prev && !c.is_whitespace() {
+        if c == prev && !c.is_whitespace() && c.is_alphanumeric() {
             consecutive += 1;
             if consecutive >= 15 {
                 return true;

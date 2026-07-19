@@ -1,0 +1,17 @@
+{
+    "name": "mythrax",
+    "version": "3.0.0",
+    "description": "Mythrax Native Antigravity Plugin with local memory and cognitive tools",
+    "author": {
+        "name": "Mythrax Team"
+    },
+    "license": "Apache-2.0",
+    "mcpServers": {
+        "mythrax": {
+            "command": "mythrax",
+            "args": [
+                "mcp"
+            ]
+        }
+    }
+}

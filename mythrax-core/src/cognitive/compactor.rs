@@ -1,4 +1,5 @@
 use crate::db::StorageBackend;
+use crate::db::parse_record_id;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
 use crate::cognitive::synthesis::load_insights;
@@ -21,9 +22,10 @@ impl Default for Compactor {
 impl Compactor {
     pub fn new() -> Self {
         Self {
-            llm: LLMClient::new(),
+            llm: LLMClient::default(),
         }
     }
+
 
     pub async fn delta_compact_checkpoints(&self, db: &dyn StorageBackend) -> Result<String> {
         let checkpoints = db.get_checkpoints().await?;
@@ -78,8 +80,41 @@ impl Compactor {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         scope: &str,
-        _embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        _embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            // Garbage collect low-confidence nodes updated more than 30 days ago
+            #[derive(serde::Deserialize, SurrealValue)]
+            struct GcNode {
+                id: surrealdb::types::RecordId,
+                vault_path: Option<String>,
+            }
+            let gc_sql = "SELECT id, vault_path FROM wiki_node WHERE scope = $scope AND metacognitive_confidence < 3 AND updated_at < time::now() - 30d;";
+            if let Ok(mut resp) = surreal_backend.db.query(gc_sql).bind(("scope", scope)).await {
+                if let Ok(nodes) = resp.take::<Vec<GcNode>>(0) {
+                    for node in nodes {
+                        let _ = surreal_backend.db.query("DELETE $id;").bind(("id", node.id)).await;
+                        if let Some(ref vp) = node.vault_path {
+                            let src_file = store.vault_root.join(vp);
+                            if src_file.exists() {
+                                let archive_dir = store.vault_root.join("archive");
+                                let _ = std::fs::create_dir_all(&archive_dir);
+                                let filename = std::path::Path::new(vp)
+                                    .file_name()
+                                    .unwrap_or_else(|| std::ffi::OsStr::new("node.md"));
+                                let dest_file = archive_dir.join(filename);
+                                let _ = std::fs::rename(&src_file, &dest_file);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Hebbian synaptic pruning
+            let _ = surreal_backend.db.query("UPDATE relates_to SET weight = (weight OR 1.0) * 0.9;").await;
+            let _ = surreal_backend.db.query("DELETE relates_to WHERE weight < 0.1;").await;
+        }
+
         let _ = db.prune_stale_memories(&store.vault_root).await;
         let _ = self.archive_decayed_episodes(db, store).await;
 
@@ -395,6 +430,23 @@ impl Compactor {
                 Err(_) => {}
             }
         }
+        // Clean up previous compactions for this scope to prevent duplicates
+        let compactions_dir = store.vault_root.join(format!("wiki/{}/compactions", scope));
+        if compactions_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&compactions_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().map(|s| s == "md").unwrap_or(false) {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
+        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            let delete_query = "DELETE wiki_node WHERE scope = $scope AND (vault_path CONTAINS 'compactions/' OR name CONTAINS 'Compaction:');";
+            let _ = surreal_backend.db.query(delete_query).bind(("scope", scope)).await;
+        }
+
         let insights = load_insights(&store.vault_root);
         let scope_insights: Vec<_> = insights
             .into_iter()
@@ -422,10 +474,13 @@ impl Compactor {
         }
 
         let mut valid_insights = Vec::new();
+        let mut wiki_nodes_map = std::collections::HashMap::new();
         if !node_ids.is_empty() {
             if let Ok(nodes_resp) = db.get_memory_nodes(&node_ids).await {
                 for node in nodes_resp.wiki_nodes {
+
                     if let Some(ref id) = node.id {
+                        wiki_nodes_map.insert(id.clone(), node.clone());
                         if let Some(ins) = ins_by_id.get(id) {
                             valid_insights.push((ins.clone(), id.clone(), node.embedding));
                         }
@@ -503,8 +558,7 @@ impl Compactor {
 
             let first_title = member_insights.first().map(|(c, _)| c.title.as_str()).unwrap_or("compaction");
             let slug = first_title.to_lowercase().replace([' ', '/'], "_");
-            let uuid = uuid::Uuid::new_v4().to_string();
-            let relative_path = format!("wiki/{}/compactions/{}_{}.md", scope, slug, &uuid[..8]);
+            let relative_path = format!("wiki/{}/compactions/{}_cluster_{}.md", scope, slug, cluster_id);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
@@ -516,7 +570,17 @@ impl Compactor {
 
             file_content.push_str("\n\n## Component Insights\n");
             for (ins, _) in member_insights {
-                file_content.push_str(&format!("- [[{}]]\n", ins.title));
+                let link_target = if !ins.vault_path.is_empty() {
+                    let clean_vp = if ins.vault_path.ends_with(".md") {
+                        &ins.vault_path[..ins.vault_path.len() - 3]
+                    } else {
+                        &ins.vault_path
+                    };
+                    format!("{}|{}", clean_vp, ins.title)
+                } else {
+                    ins.title.clone()
+                };
+                file_content.push_str(&format!("- [[{}]]\n", link_target));
             }
 
             if !all_anchors.is_empty() {
@@ -527,6 +591,42 @@ impl Compactor {
             }
             store.write_file(&relative_path, &file_content)?;
 
+            let mut starts = Vec::new();
+            let mut ends = Vec::new();
+            let mut ep_ids = Vec::new();
+            for (ins, insight_id) in member_insights {
+                if let Some(node) = wiki_nodes_map.get(insight_id) {
+                    starts.push(node.temporal_range_start);
+                    ends.push(node.temporal_range_end);
+                }
+                for ep_id in &ins.source_episodes {
+                    if !ep_ids.contains(ep_id) {
+                        ep_ids.push(ep_id.clone());
+                    }
+                }
+            }
+            if let Ok(ep_nodes_resp) = db.get_memory_nodes(&ep_ids).await {
+                for ep in ep_nodes_resp.episodes {
+
+                    if let Some(ref created_at_str) = ep.created_at {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
+                            let utc_dt = dt.with_timezone(&chrono::Utc);
+                            starts.push(Some(utc_dt));
+                            ends.push(Some(utc_dt));
+                        }
+                    }
+                    if ep.temporal_range_start.is_some() {
+                        starts.push(ep.temporal_range_start);
+                    }
+                    if ep.temporal_range_end.is_some() {
+                        ends.push(ep.temporal_range_end);
+                    }
+                }
+            }
+            let merged_start = starts.iter().filter_map(|&opt| opt).min();
+            let merged_end = ends.iter().filter_map(|&opt| opt).max();
+
+
             let node_contract = WikiNode {
                 id: None,
                 name: format!("Compaction: {} - Cluster {}", scope, cluster_id),
@@ -534,11 +634,28 @@ impl Compactor {
                 scope: scope.to_string(),
                 vault_path: Some(relative_path.clone()),
                 embedding: None,
+                temporal_range_start: merged_start,
+                temporal_range_end: merged_end,
+                ..Default::default()
             };
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in member_insights {
                     if !insight_id.is_empty() {
                         let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                    }
+                }
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    for ep_id in &ep_ids {
+                        let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                            relation: 'derived_from',
+                            created_at: time::now()
+                        };";
+                        if let (Ok(from_thing), Ok(to_thing)) = (parse_record_id(&compaction_id), parse_record_id(ep_id)) {
+                            let _ = surreal_backend.db.query(rel_sql)
+                                .bind(("from", from_thing))
+                                .bind(("to", to_thing))
+                                .await;
+                        }
                     }
                 }
             }
@@ -569,8 +686,7 @@ impl Compactor {
                 }
             }
 
-            let uuid = uuid::Uuid::new_v4().to_string();
-            let relative_path = format!("wiki/{}/compactions/miscellaneous_{}.md", scope, &uuid[..8]);
+            let relative_path = format!("wiki/{}/compactions/miscellaneous.md", scope);
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: \"miscellaneous\"\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
@@ -581,7 +697,17 @@ impl Compactor {
 
             file_content.push_str("\n\n## Component Insights\n");
             for (ins, _) in &outlier_insights {
-                file_content.push_str(&format!("- [[{}]]\n", ins.title));
+                let link_target = if !ins.vault_path.is_empty() {
+                    let clean_vp = if ins.vault_path.ends_with(".md") {
+                        &ins.vault_path[..ins.vault_path.len() - 3]
+                    } else {
+                        &ins.vault_path
+                    };
+                    format!("{}|{}", clean_vp, ins.title)
+                } else {
+                    ins.title.clone()
+                };
+                file_content.push_str(&format!("- [[{}]]\n", link_target));
             }
 
             if !all_anchors.is_empty() {
@@ -592,6 +718,44 @@ impl Compactor {
             }
             store.write_file(&relative_path, &file_content)?;
 
+            let mut starts = Vec::new();
+            let mut ends = Vec::new();
+            let mut ep_ids = Vec::new();
+            for (ins, insight_id) in &outlier_insights {
+                if !insight_id.is_empty() {
+                    if let Some(node) = wiki_nodes_map.get(insight_id) {
+                        starts.push(node.temporal_range_start);
+                        ends.push(node.temporal_range_end);
+                    }
+                }
+                for ep_id in &ins.source_episodes {
+                    if !ep_ids.contains(ep_id) {
+                        ep_ids.push(ep_id.clone());
+                    }
+                }
+            }
+            if let Ok(ep_nodes_resp) = db.get_memory_nodes(&ep_ids).await {
+                for ep in ep_nodes_resp.episodes {
+
+                    if let Some(ref created_at_str) = ep.created_at {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
+                            let utc_dt = dt.with_timezone(&chrono::Utc);
+                            starts.push(Some(utc_dt));
+                            ends.push(Some(utc_dt));
+                        }
+                    }
+                    if ep.temporal_range_start.is_some() {
+                        starts.push(ep.temporal_range_start);
+                    }
+                    if ep.temporal_range_end.is_some() {
+                        ends.push(ep.temporal_range_end);
+                    }
+                }
+            }
+            let merged_start = starts.iter().filter_map(|&opt| opt).min();
+            let merged_end = ends.iter().filter_map(|&opt| opt).max();
+
+
             let node_contract = WikiNode {
                 id: None,
                 name: format!("Compaction: {} - Miscellaneous", scope),
@@ -599,11 +763,28 @@ impl Compactor {
                 scope: scope.to_string(),
                 vault_path: Some(relative_path.clone()),
                 embedding: None,
+                temporal_range_start: merged_start,
+                temporal_range_end: merged_end,
+                ..Default::default()
             };
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in &outlier_insights {
                     if !insight_id.is_empty() {
                         let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                    }
+                }
+                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    for ep_id in &ep_ids {
+                        let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                            relation: 'derived_from',
+                            created_at: time::now()
+                        };";
+                        if let (Ok(from_thing), Ok(to_thing)) = (parse_record_id(&compaction_id), parse_record_id(ep_id)) {
+                            let _ = surreal_backend.db.query(rel_sql)
+                                .bind(("from", from_thing))
+                                .bind(("to", to_thing))
+                                .await;
+                        }
                     }
                 }
             }
@@ -617,115 +798,6 @@ impl Compactor {
         Ok(())
     }
 
-    pub async fn compact_global(
-        &self,
-        db: &dyn StorageBackend,
-        store: &MarkdownStore,
-    ) -> Result<()> {
-        let _ = db.prune_stale_memories(&store.vault_root).await;
-        let _ = self.archive_decayed_episodes(db, store).await;
-
-        // Perform history pruning using SurrealDB backend if available
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let mut pruning_days: i64 = 30; // default 30 days
-            let query_res = surreal_backend.db.query("SELECT VALUE value FROM profile WHERE key = 'compaction.history_pruning_days' LIMIT 1;").await;
-            if let Ok(mut resp) = query_res {
-                if let Ok(values) = resp.take::<Vec<String>>(0) {
-                    if let Some(val_str) = values.first() {
-                        if let Ok(days) = val_str.parse::<i64>() {
-                            pruning_days = days;
-                        }
-                    }
-                }
-            }
-            
-            let threshold = chrono::Utc::now() - chrono::Duration::days(pruning_days);
-            let _ = surreal_backend.db.query("DELETE wiki_node_history WHERE changed_at < type::datetime($threshold);")
-                .bind(("threshold", threshold.to_rfc3339()))
-                .await;
-        }
-        let compaction_dir = store.vault_root.join("wiki/general/compactions");
-        if !compaction_dir.exists() {
-            return Ok(());
-        }
-
-        let mut combined_compaction = String::new();
-        let mut compaction_paths = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&compaction_dir) {
-            for entry in entries.flatten() {
-                if entry.path().extension().map(|s| s == "md").unwrap_or(false) {
-                    let path = entry.path();
-                    let rel_path = path.strip_prefix(&store.vault_root)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .to_string();
-                    compaction_paths.push(rel_path);
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        combined_compaction.push_str(&content);
-                        combined_compaction.push_str("\n\n---\n\n");
-                    }
-                }
-            }
-        }
-
-        if combined_compaction.is_empty() {
-            return Ok(());
-        }
-
-        let (cleaned_compaction, extracted_anchors) = extract_attention_anchors(&combined_compaction);
-
-        let sys_prompt = "You are a master systems architect. Synthesize all the provided architectural compactions into a single, cohesive global systems synthesis document outlining overall patterns, critical rules, and systems status.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
-        let prompt_text = format!("Architectural Compactions:\n\n{}", cleaned_compaction);
-        let global_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
-        let global_summary = page_markdown_code_blocks(db, &global_summary).await?;
-
-        let stm_anchors = get_active_stm_anchors(&store.vault_root);
-        let mut all_anchors = extracted_anchors;
-        for sa in stm_anchors {
-            if !all_anchors.contains(&sa) {
-                all_anchors.push(sa);
-            }
-        }
-
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let relative_path = format!("wiki/general/compactions/global_compaction_{}.md", &uuid[..8]);
-        let mut file_content = format!(
-            "---\ntype: \"global_compaction\"\n---\n\n# Global Systems Synthesis\n\n{}",
-            global_summary
-        );
-
-        file_content.push_str("\n\n## Component Compactions\n");
-        for comp_path in &compaction_paths {
-            let name_target = comp_path.strip_suffix(".md").unwrap_or(comp_path);
-            file_content.push_str(&format!("- [[{}]]\n", name_target));
-        }
-
-        if !all_anchors.is_empty() {
-            file_content.push_str("\n\n## Attention Anchors\n");
-            for anchor in &all_anchors {
-                file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
-            }
-        }
-        store.write_file(&relative_path, &file_content)?;
-
-        let node_contract = WikiNode {
-            id: None,
-            name: "Global Systems Synthesis".to_string(),
-            content: global_summary.clone(),
-            scope: "general".to_string(),
-            vault_path: Some(relative_path.clone()),
-            embedding: None,
-        };
-        if let Ok(global_compaction_id) = db.save_wiki_node(&node_contract).await {
-            for comp_path in compaction_paths {
-                if let Ok(Some(comp_id)) = db.get_wiki_node_id_by_vault_path(&comp_path).await {
-                    let _ = db.relate_nodes(&comp_id, &global_compaction_id, None, None, None).await;
-                }
-            }
-        }
-
-        Ok(())
-    }
 
     async fn archive_decayed_episodes(
         &self,
@@ -797,6 +869,8 @@ impl Compactor {
             let utility = ep.utility.unwrap_or(50.0);
             let decayed_utility = utility * decay_factor;
 
+
+
             if decayed_utility < decay_threshold * 50.0 {
                 let mut is_referenced = false;
                 if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
@@ -848,25 +922,34 @@ impl Compactor {
                     // 2. Generate high-level Raptor summary using the LLM
                     let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                     let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
-                    if let Ok(summary) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
-                        // 3. Save as wiki Raptor summary node
-                        let uuid = uuid::Uuid::new_v4().to_string();
-                        let wiki_rel = format!("wiki/general/compactions/raptor_summary_{}.md", &uuid[..8]);
-                        let wiki_content = format!(
-                            "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
-                            ep.title, ep.title, summary
-                        );
-                        let _ = store.write_file(&wiki_rel, &wiki_content);
+                    match self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
+                        Ok(summary) => {
+                            // 3. Save as wiki Raptor summary node
+                            let uuid = uuid::Uuid::new_v4().to_string();
+                            let resolved_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                            let archive_dir = store.vault_root.join(format!("wiki/{}/archive", resolved_scope));
+                            let _ = std::fs::create_dir_all(&archive_dir);
+                            let wiki_rel = format!("wiki/{}/archive/raptor_summary_{}.md", resolved_scope, &uuid[..8]);
+                            let wiki_content = format!(
+                                "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
+                                ep.title, ep.title, summary
+                            );
+                            let _ = store.write_file(&wiki_rel, &wiki_content);
 
-                        let node_contract = WikiNode {
-                            id: None,
-                            name: format!("Raptor Summary: {}", ep.title),
-                            content: summary,
-                            scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
-                            vault_path: Some(wiki_rel),
-                            embedding: None,
-                        };
-                        let _ = db.save_wiki_node(&node_contract).await;
+                            let node_contract = WikiNode {
+                                id: None,
+                                name: format!("Raptor Summary: {}", ep.title),
+                                content: summary,
+                                scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+                                vault_path: Some(wiki_rel),
+                                embedding: None,
+                                ..Default::default()
+                            };
+                            let _ = db.save_wiki_node(&node_contract).await;
+                        }
+                        Err(e) => {
+                            eprintln!("COMPACTOR SUMMARY ERROR: {:?}", e);
+                        }
                     }
 
                     // 4. Demote the record in the database instead of deleting it (Epic 3)
@@ -944,7 +1027,7 @@ pub fn extract_attention_anchors(text: &str) -> (String, Vec<String>) {
     (clean_lines.join("\n"), anchors)
 }
 
-fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
+pub(crate) fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
     let mut anchors = Vec::new();
     let handoffs_dir = vault_root.join(".handoffs");
     if !handoffs_dir.exists() {

@@ -1,3 +1,9 @@
+//! # Mythrax Cognitive Synthesis Pipeline
+//!
+//! Provides the primary cognitive architecture for episodic memory distillation,
+//! hierarchical clustering via DBSCAN, Direction backpropagation, and Wisdom graduation.
+//! Incorporates Strunk & White concision rules and compression warning metrics.
+
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
@@ -6,6 +12,29 @@ use surrealdb_types::SurrealValue;
 use anyhow::Result;
 use std::path::Path;
 use std::collections::HashMap;
+
+pub const CONCISION_DIRECTIVE: &str = "\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+
+pub fn build_synthesis_prompt(base_sys: &str) -> String {
+    format!("{}\n\n{}", CONCISION_DIRECTIVE, base_sys)
+}
+
+pub fn check_compression_ratio(input_text: &str, output_text: &str, original_content_tokens: usize) {
+    let input_tokens = input_text.len() / 4;
+    let output_tokens = output_text.len() / 4;
+    
+    let original = std::cmp::max(original_content_tokens, 1);
+    let ratio = (input_tokens + output_tokens) as f64 / original as f64;
+    
+    let alert_ratio: f64 = std::env::var("MYTHRAX_VERBOSITY_ALERT_RATIO")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.5);
+        
+    if ratio > alert_ratio {
+        tracing::warn!("Verbosity alert: compression ratio {:.2} exceeds limit {:.2}", ratio, alert_ratio);
+    }
+}
 
 pub fn cosine_distance(u: &[f32], v: &[f32]) -> f32 {
     1.0 - crate::math::cosine_similarity(u, v)
@@ -34,6 +63,15 @@ pub fn slugify_title(text: &str) -> String {
         trimmed
     }
 }
+
+pub fn resolve_rule_path(scope: &str, action_to_avoid: &str) -> String {
+    if scope == "general" {
+        format!("global/wisdom/dynamic/{}.md", slugify_title(action_to_avoid))
+    } else {
+        format!("wisdom/dynamic/{}/{}.md", scope, slugify_title(action_to_avoid))
+    }
+}
+
 
 pub fn dbscan(
     embeddings: &[&[f32]],
@@ -167,29 +205,86 @@ pub fn load_insights(vault_root: &Path) -> Vec<InsightNote> {
 }
 
 fn parse_insight_note(content: &str, path: &Path, scope: &str) -> Result<InsightNote> {
-    if !content.starts_with("---") {
-        anyhow::bail!("No frontmatter");
-    }
-    let parts: Vec<&str> = content.split("---").collect();
-    if parts.len() < 3 {
-        anyhow::bail!("Invalid frontmatter");
-    }
-    let yaml_str = parts[1];
-    let body = parts[2..].join("---");
+    if content.starts_with("---") {
+        let parts: Vec<&str> = content.split("---").collect();
+        if parts.len() >= 3 {
+            let yaml_str = parts[1];
+            let body = parts[2..].join("---");
 
-    #[derive(serde::Deserialize)]
-    struct Frontmatter {
-        title: Option<String>,
-        name: Option<String>,
-        source_episodes: Option<Vec<String>>,
+            #[derive(serde::Deserialize)]
+            struct Frontmatter {
+                title: Option<String>,
+                name: Option<String>,
+                source_episodes: Option<Vec<String>>,
+            }
+            if let Ok(fm) = serde_yaml::from_str::<Frontmatter>(yaml_str) {
+                let title = fm.title.or(fm.name).unwrap_or_else(|| "Untitled Note".to_string());
+                let source_episodes = fm.source_episodes.unwrap_or_default();
+
+                return Ok(InsightNote {
+                    title,
+                    content: body.trim().to_string(),
+                    scope: scope.to_string(),
+                    source_episodes,
+                    vault_path: path.to_string_lossy().to_string(),
+                });
+            }
+        }
     }
-    let fm: Frontmatter = serde_yaml::from_str(yaml_str)?;
-    let title = fm.title.or(fm.name).unwrap_or_else(|| "Untitled Note".to_string());
-    let source_episodes = fm.source_episodes.unwrap_or_default();
+
+    // Fallback for raw files or files with invalid frontmatter
+    let mut title = path.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Untitled Note".to_string());
+        
+    // Look for the first # header for a better title
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("# ") {
+            title = trimmed[2..].trim().to_string();
+            break;
+        }
+    }
+
+    let mut source_episodes = Vec::new();
+    // Parse wikilinks to episodes or archive
+    let mut pos = 0;
+    while let Some(start_idx) = content[pos..].find("[[") {
+        let actual_start = pos + start_idx + 2;
+        if let Some(end_idx) = content[actual_start..].find("]]") {
+            let link_content = &content[actual_start..actual_start + end_idx];
+            let link_path = if let Some(pipe_idx) = link_content.find('|') {
+                &link_content[..pipe_idx]
+            } else {
+                link_content
+            };
+            
+            let link_path = link_path.trim();
+            let clean_id = if let Some(stripped) = link_path.strip_prefix("episodes/") {
+                Some(stripped)
+            } else if let Some(stripped) = link_path.strip_prefix("archive/") {
+                Some(stripped)
+            } else {
+                None
+            };
+            
+            if let Some(id) = clean_id {
+                let id_no_ext = Path::new(id).file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| id.to_string());
+                if !source_episodes.contains(&id_no_ext) {
+                    source_episodes.push(id_no_ext);
+                }
+            }
+            pos = actual_start + end_idx + 2;
+        } else {
+            break;
+        }
+    }
 
     Ok(InsightNote {
         title,
-        content: body.trim().to_string(),
+        content: content.trim().to_string(),
         scope: scope.to_string(),
         source_episodes,
         vault_path: path.to_string_lossy().to_string(),
@@ -232,6 +327,7 @@ fn calculate_centroid(
 
 pub struct DreamCoordinator {
     llm: LLMClient,
+    scope_locks: dashmap::DashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>,
 }
 
 impl Default for DreamCoordinator {
@@ -243,7 +339,8 @@ impl Default for DreamCoordinator {
 impl DreamCoordinator {
     pub fn new() -> Self {
         Self {
-            llm: LLMClient::new(),
+            llm: LLMClient::default(),
+            scope_locks: dashmap::DashMap::new(),
         }
     }
 
@@ -252,7 +349,7 @@ impl DreamCoordinator {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         node: &WikiNode,
-        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<String> {
         if !db.is_feature_enabled("compactor.enable_contradiction_detection", true).await {
             return db.save_wiki_node(node).await;
@@ -261,7 +358,9 @@ impl DreamCoordinator {
         let mut node = node.clone();
         if node.embedding.is_none() {
             if let Some(ref emb) = embedder {
-                if let Ok(e) = emb.embed(&node.content) {
+                let max_tokens = 2048;
+                let truncated_content = truncate_by_tokens(&node.content, max_tokens, Some(emb.as_ref()));
+                if let Ok(e) = emb.embed(&truncated_content) {
                     node.embedding = Some(e);
                 }
             }
@@ -322,7 +421,9 @@ impl DreamCoordinator {
                             
                             // Re-embed resolved content
                             if let Some(ref emb) = embedder {
-                                if let Ok(e) = emb.embed(&updated_node.content) {
+                                let max_tokens = 2048;
+                                let truncated_content = truncate_by_tokens(&updated_node.content, max_tokens, Some(emb.as_ref()));
+                                if let Ok(e) = emb.embed(&truncated_content) {
                                     updated_node.embedding = Some(e);
                                 }
                             }
@@ -360,8 +461,13 @@ impl DreamCoordinator {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
         mode_override: Option<&str>,
-        embedder: Option<std::sync::Arc<crate::embeddings::LocalEmbedder>>,
+        embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
+        if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::info!("Ingestion in progress, skipping background dream synthesis.");
+            return Ok(());
+        }
+
         let settings_path = store.vault_root.join("wiki/dream_settings.md");
         let mut active_mode = "incremental".to_string();
         let mut file_eps = None;
@@ -389,6 +495,7 @@ impl DreamCoordinator {
         }
 
         // Background Transcript Sweep & Idle Session Recovery
+        let mut mined_any = false;
         if let Ok(transcripts) = db.get_all_registered_transcripts().await {
             let idle_threshold = chrono::Duration::minutes(10);
             let now = chrono::Utc::now();
@@ -428,7 +535,10 @@ impl DreamCoordinator {
                             // Check file exists before mining
                             if std::path::Path::new(&path).exists() {
                                 let ignore_list = crate::vault::watcher::WatchIgnoreList::default();
-                                if let Ok(_) = crate::hooks::precompact::mine_transcript(&session_id, &path, db, store, &ignore_list).await {
+                                if let Ok(count) = crate::hooks::precompact::mine_transcript(&session_id, &path, db, store, &ignore_list).await {
+                                    if count > 0 {
+                                        mined_any = true;
+                                    }
                                     let _ = db.save_stm(&session_id, "_last_swept_at", &now.to_rfc3339()).await;
                                 }
                             } else {
@@ -441,84 +551,114 @@ impl DreamCoordinator {
             }
         }
 
-        let all_episodes = db.get_all_episodes().await?;
-        let unprocessed = db.get_unprocessed_episodes().await?;
-
-        if unprocessed.is_empty() {
-            return Ok(());
+        if mined_any {
+            let cooldown_secs = std::env::var("MYTHRAX_PHASE_COOLDOWN_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(300);
+            if cooldown_secs > 0 {
+                tracing::info!("Phase A (Ingestion) finished. Cooldown sleep for {} seconds before Phase B (Synthesis).", cooldown_secs);
+                tokio::time::sleep(tokio::time::Duration::from_secs(cooldown_secs)).await;
+            }
         }
 
-        let (_default_eps, default_min_samples) = match active_mode.as_str() {
-            "deep" => (0.15, 2),
-            "bulk" => (0.12, 4),
-            _ => (0.25, 2), // default/incremental
-        };
+        let mut attempted_ids = std::collections::HashSet::new();
+        loop {
+            let unprocessed = db.get_unprocessed_episodes().await?;
+            let filtered_unprocessed: Vec<Episode> = unprocessed.into_iter()
+                .filter(|ep| ep.id.as_ref().map_or(true, |id| !attempted_ids.contains(id)))
+                .collect();
 
-        // Query database profile for DBSCAN settings
-        let db_min_samples = match db.get_profile_key("embeddings.dbscan_min_samples").await {
-            Ok(Some(val_str)) => val_str.parse::<usize>().ok(),
-            _ => None,
-        };
-        let db_eps = match db.get_profile_key("embeddings.dbscan_epsilon").await {
-            Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
-            _ => None,
-        };
-
-        let min_samples = db_min_samples
-            .or(file_min_samples)
-            .unwrap_or(default_min_samples);
-
-        let final_eps = if let Some(eps) = db_eps.or(file_eps) {
-            eps
-        } else {
-            // Dynamic epsilon calibration using k-distance elbow method
-            let all_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
-            let mut embeddings = Vec::new();
-            for ep in &all_episodes {
-                if let Some(ref emb) = ep.embedding {
-                    embeddings.push(emb.clone());
-                }
+            if filtered_unprocessed.is_empty() {
+                break;
             }
-            for node in &all_nodes {
-                if let Some(ref emb) = node.embedding {
-                    embeddings.push(emb.clone());
+
+            let chunk_unprocessed: Vec<Episode> = filtered_unprocessed.into_iter().take(500).collect();
+            for ep in &chunk_unprocessed {
+                if let Some(ref id) = ep.id {
+                    attempted_ids.insert(id.clone());
                 }
             }
 
-            if embeddings.len() >= 100 {
-                let sample = &embeddings[0..100];
-                let mut k_distances = Vec::new();
-                for i in 0..sample.len() {
-                    let mut dists = Vec::new();
-                    for j in 0..sample.len() {
-                        let d = cosine_distance(&sample[i], &sample[j]);
-                        dists.push(d);
-                    }
-                    dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    if dists.len() > 4 {
-                        k_distances.push(dists[4]);
-                    }
-                }
-                k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                find_elbow_point(&k_distances)
+            let all_episodes = db.get_all_episodes().await?;
+
+            let (_default_eps, default_min_samples) = match active_mode.as_str() {
+                "deep" => (0.15, 2),
+                "bulk" => (0.12, 4),
+                _ => (0.25, 2), // default/incremental
+            };
+
+            // Query database profile for DBSCAN settings
+            let db_min_samples = match db.get_profile_key("embeddings.dbscan_min_samples").await {
+                Ok(Some(val_str)) => val_str.parse::<usize>().ok(),
+                _ => None,
+            };
+            let db_eps = match db.get_profile_key("embeddings.dbscan_epsilon").await {
+                Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
+                _ => None,
+            };
+
+            let min_samples = db_min_samples
+                .or(file_min_samples)
+                .unwrap_or(default_min_samples);
+
+            let final_eps = if let Some(eps) = db_eps.or(file_eps) {
+                eps
             } else {
-                let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
-                    Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
-                    _ => None,
-                };
-                user_override_val.unwrap_or(0.55)
+                // Dynamic epsilon calibration using k-distance elbow method
+                let all_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
+                let mut embeddings = Vec::new();
+                for ep in &all_episodes {
+                    if let Some(ref emb) = ep.embedding {
+                        embeddings.push(emb.clone());
+                    }
+                }
+                for node in &all_nodes {
+                    if let Some(ref emb) = node.embedding {
+                        embeddings.push(emb.clone());
+                    }
+                }
+
+                if embeddings.len() >= 100 {
+                    let sample = &embeddings[0..100];
+                    let mut k_distances = Vec::new();
+                    for i in 0..sample.len() {
+                        let mut dists = Vec::new();
+                        for j in 0..sample.len() {
+                            let d = cosine_distance(&sample[i], &sample[j]);
+                            dists.push(d);
+                        }
+                        dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        if dists.len() > 4 {
+                            k_distances.push(dists[4]);
+                        }
+                    }
+                    k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    find_elbow_point(&k_distances)
+                } else {
+                    let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
+                        Ok(Some(val_str)) => val_str.parse::<f32>().ok(),
+                        _ => None,
+                    };
+                    user_override_val.unwrap_or(0.12)
+                }
+            };
+
+            let mut scope_groups: HashMap<String, Vec<Episode>> = HashMap::new();
+            for ep in chunk_unprocessed {
+                let scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                scope_groups.entry(scope).or_default().push(ep);
             }
-        };
 
-        let mut scope_groups: HashMap<String, Vec<Episode>> = HashMap::new();
-        for ep in unprocessed {
-            let scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
-            scope_groups.entry(scope).or_default().push(ep);
-        }
-
-        let total_scopes = scope_groups.len();
-        for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
-            let mut candidates = Vec::new();
+            let total_scopes = scope_groups.len();
+            for (scope_idx, (scope, new_episodes)) in scope_groups.into_iter().enumerate() {
+            let mut insights_changed = 0;
+            let scope_lock = self.scope_locks.entry(scope.clone()).or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))).clone();
+            let _guard = scope_lock.lock().await;
+            
+            for chunk in new_episodes.chunks(500) {
+                let new_episodes = chunk.to_vec();
+                let mut candidates = Vec::new();
 
             if active_mode == "incremental" {
                 let existing_insights = load_insights(&store.vault_root);
@@ -540,7 +680,7 @@ impl DreamCoordinator {
                     if let Some(ref ep_emb) = ep.embedding {
                         for (ins, cent) in &centroids {
                             let dist = cosine_distance(ep_emb, cent);
-                            if dist < 0.25 {
+                            if dist < 0.10 {
                                 if let Some((_, best_dist)) = matched_insight {
                                     if dist < best_dist {
                                         matched_insight = Some((ins, dist));
@@ -559,7 +699,8 @@ impl DreamCoordinator {
                             new_source_episodes.push(ep_id_str);
                         }
 
-                        let sys_prompt = "You are a systems synthesizer. Refine the existing architectural insight note by incorporating the details of the new event.";
+                        let base_sys = "You are a systems synthesizer. Refine the existing architectural insight note by incorporating the details of the new event.";
+                        let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                         let mut display_content = ep.content.clone();
                         if let Some(ref ep_id) = ep.id {
                             if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
@@ -592,7 +733,9 @@ impl DreamCoordinator {
                             "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}",
                             ins.content, ep.title, display_content
                         );
-                        let updated_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
+                        let original_tokens = (ins.content.len() + display_content.len()) / 4;
+                        let updated_summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await?;
+                        crate::cognitive::synthesis::check_compression_ratio(&prompt_text, &updated_summary, original_tokens);
 
                         let mut source_ep_links = Vec::new();
                         let mut eps_to_link = Vec::new();
@@ -611,7 +754,7 @@ impl DreamCoordinator {
                             String::new()
                         };
 
-                        let relative_path = format!("wiki/{}/insights/{}.md", scope, ins.title.replace(' ', "_"));
+                        let relative_path = format!("wiki/{}/insights/{}.md", scope, slugify_title(&ins.title));
                         let new_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
                             ins.title,
@@ -637,11 +780,21 @@ impl DreamCoordinator {
                             scope: scope.clone(),
                             vault_path: Some(relative_path.clone()),
                             embedding: None,
+                            ..Default::default()
                         };
-                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await
-                            && let Some(ref ep_id) = ep.id {
-                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
+                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
+                            if let Some(ref ep_id) = ep.id {
+                                let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                             }
+                        }
+                        
+                        insights_changed += 1;
+                        if insights_changed > 5 {
+                            tracing::info!("Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.", scope);
+                            let compactor = crate::cognitive::compactor::Compactor::new();
+                            let _ = compactor.compact_scope(db, store, &scope, embedder.clone()).await;
+                            insights_changed = 0;
+                        }
 
                         tracing::info!(
                             "Dreaming scope {}/{} ('{}'): incremental episode {} of {} complete (merged into '{}')",
@@ -718,18 +871,31 @@ impl DreamCoordinator {
                     events_text.push_str(&format!("Event: {}\nContent:\n{}\n\n", ep.title, ep_display_content));
                 }
 
-                let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+                let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
+                - 1: Anecdotal / Single Episode\n\
+                - 3: Corroborated / Tested\n\
+                - 5: Proven / Universal\n\n\
+                For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
+                let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
+                
                 let prompt_text = format!(
-                    "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
+                    "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
                     events_text
                 );
 
-                let llm_res = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
+                let original_tokens = events_text.len() / 4;
+                let llm_res = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await?;
+                crate::cognitive::synthesis::check_compression_ratio(&prompt_text, &llm_res, original_tokens);
                 
                 #[derive(serde::Deserialize)]
                 struct ClusterAnalysis {
                     title: String,
                     summary: String,
+                    #[serde(default)]
+                    metacognitive_confidence: Option<i32>,
+                    #[serde(default)]
+                    node_type: Option<String>,
                 }
                 
                 let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
@@ -738,6 +904,8 @@ impl DreamCoordinator {
                         ClusterAnalysis {
                             title: format!("Cluster Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
                             summary: llm_res,
+                            metacognitive_confidence: None,
+                            node_type: None,
                         }
                     }
                 };
@@ -747,10 +915,12 @@ impl DreamCoordinator {
                 let clean_title = slugify_title(&analysis.title);
                 let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
                 let insight_content = format!(
-                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
+                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}",
                     analysis.title,
                     scope,
                     cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
+                    analysis.metacognitive_confidence.unwrap_or(3),
+                    analysis.node_type.as_deref().unwrap_or("insight"),
                     analysis.summary
                 );
                 store.write_file(&relative_path, &insight_content)?;
@@ -762,102 +932,25 @@ impl DreamCoordinator {
                     scope: scope.clone(),
                     vault_path: Some(relative_path.clone()),
                     embedding: None,
+                    metacognitive_confidence: analysis.metacognitive_confidence,
+                    node_type: analysis.node_type.clone().or(Some("insight".to_string())),
+                    ..Default::default()
                 };
                 if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
                     for ep_id in &cluster_ep_ids {
                         let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
                     }
                 }
-
-                let sys_wisdom = "You are a systems synthesizer. Analyze the events and extract system-level Wisdom Rules to avoid mistakes. Respond with a JSON array of rules.";
-                let prompt_wisdom = format!(
-                    "Events:\n\n{}Respond ONLY with a JSON array of objects, each containing exactly:\n\
-                    - target_pattern (string: context/trigger)\n\
-                    - action_to_avoid (string: what to avoid)\n\
-                    - causal_explanation (string: why to avoid)\n\
-                    - prescribed_remedy (string: what to do instead)\n\
-                    - rule_type (string: must be either \"aesthetic\" or \"procedural\". \"aesthetic\" rules govern styling, CSS, visual layouts, colors, or UI tokens. \"procedural\" rules govern workflows, TDD, testing, git, database logic, or compilers.)",
-                    events_text
-                );
-
-                if let Ok(wisdom_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction), Some(sys_wisdom), &prompt_wisdom).await {
-                    #[derive(serde::Deserialize)]
-                    struct RawWisdom {
-                        target_pattern: String,
-                        action_to_avoid: String,
-                        causal_explanation: String,
-                        prescribed_remedy: String,
-                        #[serde(default)]
-                        rule_type: Option<String>,
-                    }
-                    if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&wisdom_res) {
-                        for r in rules {
-                            let rule_type = r.rule_type.as_deref().unwrap_or("aesthetic").to_lowercase();
-                            let _is_procedural = rule_type == "procedural";
-
-                            let mut source_ep_links = Vec::new();
-                            let mut eps_to_link = Vec::new();
-                            if let Ok(mem_nodes) = db.get_memory_nodes(&cluster_ep_ids).await {
-                                for ep in mem_nodes.episodes {
-                                    if let Some(ref path) = ep.vault_path {
-                                        let target = path.strip_suffix(".md").unwrap_or(path);
-                                        source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
-                                        eps_to_link.push((path.clone(), ep.title.clone()));
-                                    }
-                                }
-                            }
-                            let source_ep_section = if !source_ep_links.is_empty() {
-                                format!("\n\n## Source Episodes\n{}", source_ep_links.join("\n"))
-                            } else {
-                                String::new()
-                            };
-
-                            let rule_path = format!("wisdom/dynamic/{}.md", slugify_title(&r.action_to_avoid));
-                            let final_tier_str = "dynamic".to_string();
-                            let final_scope = scope.clone();
-
-                            let rule_md = format!(
-                                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\ngenerator_name: \"DreamCoordinator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}{}",
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy, final_tier_str, final_scope,
-                                cluster_ep_ids.iter().map(|id| format!("  - \"{}\"", id)).collect::<Vec<_>>().join("\n"),
-                                r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy,
-                                source_ep_section
-                            );
-                            store.write_file(&rule_path, &rule_md)?;
-
-                            for (ep_path, _ep_title) in eps_to_link {
-                                let _ = store.append_link_to_file(&ep_path, "Derived Wisdom Rules", &rule_path, &format!("Wisdom: {}", r.target_pattern));
-                            }
-
-                            let rule_contract = WisdomRule {
-                                id: None,
-                                target_pattern: r.target_pattern,
-                                action_to_avoid: r.action_to_avoid,
-                                causal_explanation: r.causal_explanation,
-                                prescribed_remedy: r.prescribed_remedy,
-                                tier: crate::contracts::Tier::Project,
-                                scope: final_scope,
-                                vault_path: Some(rule_path),
-                                embedding: None,
-                                source_episodes: cluster_ep_ids.clone(),
-                                generator_name: "DreamCoordinator".to_string(),
-                                similarity: None,
-                                utility: None,
-                                status: None,
-                                superseded_at: None,
-                                superseded_by: None,
-                                rule_type: Some(rule_type.clone()),
-                            
-                                ..Default::default()
-                            };
-                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
-                                for ep_id in &cluster_ep_ids {
-                                    let _ = db.relate_nodes(ep_id, &wisdom_id, None, None, None).await;
-                                }
-                            }
-                        }
-                    }
+                
+                insights_changed += 1;
+                if insights_changed > 5 {
+                    tracing::info!("Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.", scope);
+                    let compactor = crate::cognitive::compactor::Compactor::new();
+                    let _ = compactor.compact_scope(db, store, &scope, embedder.clone()).await;
+                    insights_changed = 0;
                 }
+
+
 
                 for ep in cluster_eps {
                     if let Some(ref ep_id) = ep.id {
@@ -873,6 +966,7 @@ impl DreamCoordinator {
                     cluster_idx + 1,
                     total_clusters
                 );
+            }
             }
 
             // --- DRIFT & SPLIT MANAGEMENT LOGIC START ---
@@ -909,7 +1003,9 @@ impl DreamCoordinator {
                     
                     for mut ep in episodes {
                         if ep.embedding.is_none() {
-                            episodes_needing_embedding.push(ep.content.clone());
+                            let max_tokens = 2048;
+                            let truncated_content = truncate_by_tokens(&ep.content, max_tokens, embedder.as_deref());
+                            episodes_needing_embedding.push(truncated_content);
                             ep.embedding = None;
                             episodes_with_embedding.push(ep);
                         } else {
@@ -963,7 +1059,7 @@ impl DreamCoordinator {
                     tracing::debug!("Max pairwise distance: {}", max_dist);
                     // 5. If drift is high (> 0.30), trigger split
                     if max_dist > 0.30 {
-                        tracing::debug!("Drift > 0.30 detected! Triggering split for: {}", ins.title);
+
                         // Prepare references for DBSCAN
                         let emb_refs: Vec<&[f32]> = episode_embeddings.iter().map(|e| e.as_slice()).collect();
                         let labels = dbscan(&emb_refs, 0.08, 2);
@@ -972,7 +1068,7 @@ impl DreamCoordinator {
                         let mut clusters: std::collections::HashMap<usize, Vec<Episode>> = std::collections::HashMap::new();
                         let mut outliers = Vec::new();
 
-                        for (idx, label) in labels.into_iter().enumerate() {
+                        for (idx, label) in labels.clone().into_iter().enumerate() {
                             let ep = valid_episodes[idx].clone();
                             if let Some(cid) = label {
                                 clusters.entry(cid).or_default().push(ep);
@@ -982,6 +1078,7 @@ impl DreamCoordinator {
                         }
 
                         let mut groups: Vec<Vec<Episode>> = Vec::new();
+
 
                         // 6. Handle DBSCAN results
                         if clusters.len() <= 1 {
@@ -1060,17 +1157,30 @@ impl DreamCoordinator {
                             }
 
                             // Call LLM Synthesizer
-                            let sys_prompt = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing a 'title' field and a 'summary' field summarizing the architectural decisions, patterns, or habits observed.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+                            let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                            For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
+                            - 1: Anecdotal / Single Episode\n\
+                            - 3: Corroborated / Tested\n\
+                            - 5: Proven / Universal\n\n\
+                            For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
+                            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
+                            
                             let prompt_text = format!(
-                                "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\" }}",
+                                "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
                                 events_text
                             );
                             
-                            if let Ok(llm_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await {
+                            let original_tokens = events_text.len() / 4;
+                            if let Ok(llm_res) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await {
+                                crate::cognitive::synthesis::check_compression_ratio(&prompt_text, &llm_res, original_tokens);
                                 #[derive(serde::Deserialize)]
                                 struct ClusterAnalysis {
                                     title: String,
                                     summary: String,
+                                    #[serde(default)]
+                                    metacognitive_confidence: Option<i32>,
+                                    #[serde(default)]
+                                    node_type: Option<String>,
                                 }
 
                                 let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
@@ -1079,6 +1189,8 @@ impl DreamCoordinator {
                                         ClusterAnalysis {
                                             title: format!("Split Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
                                             summary: llm_res,
+                                            metacognitive_confidence: None,
+                                            node_type: None,
                                         }
                                     }
                                 };
@@ -1101,14 +1213,18 @@ impl DreamCoordinator {
                                 };
 
                                 let insight_content = format!(
-                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
+                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}{}",
                                     analysis.title,
                                     scope,
                                     group.iter().map(|ep| format!("  - \"{}\"", ep.id.as_ref().unwrap_or(&String::new()))).collect::<Vec<_>>().join("\n"),
+                                    analysis.metacognitive_confidence.unwrap_or(3),
+                                    analysis.node_type.as_deref().unwrap_or("insight"),
                                     analysis.summary,
                                     source_ep_section
                                 );
-                                if store.write_file(&relative_path, &insight_content).is_ok() {
+                                let write_res = store.write_file(&relative_path, &insight_content);
+
+                                if write_res.is_ok() {
                                     for ep in &group {
                                         if let Some(ref path) = ep.vault_path {
                                             let _ = store.append_link_to_file(path, "Insights & Summaries", &relative_path, &analysis.title);
@@ -1123,9 +1239,14 @@ impl DreamCoordinator {
                                         scope: scope.to_string(),
                                         vault_path: Some(relative_path.clone()),
                                         embedding: None,
+                                        metacognitive_confidence: analysis.metacognitive_confidence,
+                                        node_type: analysis.node_type.clone().or(Some("insight".to_string())),
+                                        ..Default::default()
                                     };
                                     
-                                    if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
+                                    let save_res = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await;
+
+                                    if let Ok(wiki_node_id) = save_res {
                                         for ep in &group {
                                             if let Some(ref ep_id) = ep.id {
                                                 let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
@@ -1146,10 +1267,12 @@ impl DreamCoordinator {
                             .to_string();
                         tracing::debug!("DEBUG: rel_path: '{}', vault_path: '{}', vault_root: '{}'", rel_path, ins.vault_path, store.vault_root.display());
                         let _ = db.delete_by_vault_path(&rel_path).await;
+
                     }
                 }
             }
             // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
+        }
         }
 
         // --- Tasks C.6 & C.6a: Cross-Scope Graduation Pass ---
@@ -1171,7 +1294,7 @@ impl DreamCoordinator {
                 for node in wiki_nodes {
                     if let Some(ref emb) = node.embedding {
                         candidates.push(GradCandidate {
-                            id: node.id.unwrap_or_default(),
+                            id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
@@ -1188,7 +1311,7 @@ impl DreamCoordinator {
                     if !ep.archived.unwrap_or(false) {
                         if let Some(ref emb) = ep.embedding {
                             candidates.push(GradCandidate {
-                                id: ep.id.unwrap_or_default(),
+                                id: ep.id.unwrap_or_default().replace("`", ""),
                                 scope: ep.scope.unwrap_or_else(|| "general".to_string()),
                                 name: ep.title,
                                 content: ep.content,
@@ -1276,7 +1399,7 @@ impl DreamCoordinator {
                 } else {
                     for node in matches_wiki {
                         cluster.push(GradCandidate {
-                            id: node.id.unwrap_or_default(),
+                            id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
@@ -1310,7 +1433,7 @@ impl DreamCoordinator {
                     for ep in matches_ep {
                         let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
                         cluster.push(GradCandidate {
-                            id: ep.id.unwrap_or_default(),
+                            id: ep.id.unwrap_or_default().replace("`", ""),
                             scope: ep_scope,
                             name: ep.title,
                             content: ep.content,
@@ -1345,6 +1468,10 @@ impl DreamCoordinator {
                 }
                 accepted_clusters.push(cluster);
             }
+            println!("DEBUG - accepted_clusters.len() = {}", accepted_clusters.len());
+            for (idx, c) in accepted_clusters.iter().enumerate() {
+                println!("DEBUG - cluster {} members: {:?}", idx, c.iter().map(|m| &m.id).collect::<Vec<_>>());
+            }
 
             for cluster in accepted_clusters {
                 let n = cluster.len();
@@ -1356,28 +1483,35 @@ impl DreamCoordinator {
                     ));
                 }
 
-                let sys_prompt = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+                let base_sys = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.";
+                let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                 let user_prompt = format!(
                     "The following insights emerged independently in {} different projects:\n\n{}Respond with a JSON object containing target_pattern: string, action_to_avoid: string, causal_explanation: string, prescribed_remedy: string, and confidence: float.",
                     n,
                     insights_with_scope_labels
                 );
 
-                if let Ok(resp_str) = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(sys_prompt), &user_prompt).await {
-                    #[derive(serde::Deserialize)]
-                    struct GeneralizationResponse {
-                        target_pattern: String,
-                        action_to_avoid: String,
-                        causal_explanation: String,
-                        prescribed_remedy: String,
-                        confidence: f32,
-                    }
-                    let clean_resp = crate::llm::strip_code_fences(&resp_str);
-                    if let Ok(res) = serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
-                        if res.confidence >= 0.80 {
-                            let tier = "dynamic";
+                let original_tokens = insights_with_scope_labels.len() / 4;
+                match self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(&sys_prompt), &user_prompt).await {
+                    Ok(resp_str) => {
+                        crate::cognitive::synthesis::check_compression_ratio(&user_prompt, &resp_str, original_tokens);
+                        println!("DEBUG - routed_completion succeeded: {:?}", resp_str);
+                        #[derive(serde::Deserialize)]
+                        struct GeneralizationResponse {
+                            target_pattern: String,
+                            action_to_avoid: String,
+                            causal_explanation: String,
+                            prescribed_remedy: String,
+                            confidence: f32,
+                        }
+                        let clean_resp = crate::llm::strip_code_fences(&resp_str);
+                        match serde_json::from_str::<GeneralizationResponse>(&clean_resp) {
+                            Ok(res) => {
+                                println!("DEBUG - JSON parsing succeeded: confidence={}", res.confidence);
+                                if res.confidence >= 0.80 {
+                                    let tier = "dynamic";
 
-                            let rule_path = format!("global/wisdom/dynamic/{}.md", slugify_title(&res.action_to_avoid));
+                            let rule_path = resolve_rule_path("general", &res.action_to_avoid);
 
                             let mut rule_md = format!(
                                 "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\nsource_nodes:\n{}\ngenerator_name: \"ScopeGraduator\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
@@ -1413,12 +1547,26 @@ impl DreamCoordinator {
                                 ..Default::default()
                             };
 
-                            if let Ok(wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
-                                for member in &cluster {
-                                    let _ = db.relate_nodes(&member.id, &wisdom_id, None, None, None).await;
+                            match save_wisdom_rule_with_deduplication(db, store, &rule_contract).await {
+                                Ok(wisdom_id) => {
+                                    println!("DEBUG - save_wisdom_rule_with_deduplication succeeded: {}", wisdom_id);
+                                    for member in &cluster {
+                                        let _ = db.relate_nodes(&member.id, &wisdom_id, None, None, None).await;
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("DEBUG - save_wisdom_rule_with_deduplication failed: {:?}", e);
                                 }
                             }
+                            }
                         }
+                        Err(e) => {
+                            println!("DEBUG - JSON parsing failed: error={:?}, clean_resp={:?}", e, clean_resp);
+                        }
+                    }
+                    }
+                    Err(e) => {
+                        println!("DEBUG - routed_completion failed: {:?}", e);
                     }
                 }
             }
@@ -1554,7 +1702,8 @@ pub async fn save_wisdom_rule_with_deduplication(
                 return Ok(skills_id.clone());
             }
         } else if matched.tier == crate::contracts::Tier::Project {
-            let system_prompt = "You are an expert software engineer and systems architect. Merge and generalize two similar wisdom rules into a single, high-quality, comprehensive wisdom rule.";
+            let base_sys = "You are an expert software engineer and systems architect. Merge and generalize two similar wisdom rules into a single, high-quality, comprehensive wisdom rule.";
+            let system_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
             let prompt = format!(
                 "Rule 1:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
                  Rule 2:\nPattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}\n\n\
@@ -1565,9 +1714,11 @@ pub async fn save_wisdom_rule_with_deduplication(
                 rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
             );
 
-            let llm = crate::llm::LLMClient::new();
-            match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(system_prompt), &prompt).await {
+            let original_tokens = (matched.causal_explanation.len() + rule.causal_explanation.len()) / 4;
+            let llm = crate::llm::LLMClient::default();
+            match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some(&system_prompt), &prompt).await {
                 Ok(res) => {
+                    crate::cognitive::synthesis::check_compression_ratio(&prompt, &res, original_tokens);
                     let stripped = crate::llm::strip_code_fences(&res);
 
                     #[derive(serde::Deserialize)]
@@ -1601,7 +1752,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                         } else if let Some(ref path) = matched.vault_path {
                             path.clone()
                         } else {
-                            format!("wisdom/dynamic/{}.md", slugify_title(&fields.action_to_avoid))
+                            resolve_rule_path(&rule.scope, &fields.action_to_avoid)
                         };
 
                         let rule_md = format!(
@@ -1626,7 +1777,7 @@ pub async fn save_wisdom_rule_with_deduplication(
                             vault_path: Some(final_path),
                             embedding: None,
                             source_episodes: merged_eps,
-                            generator_name: "DreamCoordinator".to_string(),
+                            generator_name: rule.generator_name.clone(),
                             similarity: None,
                             utility: None,
                             status: None,
@@ -1639,37 +1790,39 @@ pub async fn save_wisdom_rule_with_deduplication(
 
                         match db.save_wisdom_rule(&merged_contract).await {
                             Ok(saved_id) => {
-                                // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
-                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-                                    let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
-                                    let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
-                                    
-                                    let sql = "
-                                        LET $old_rec = type::record('wisdom', $old_uuid);
-                                        LET $new_rec = type::record('wisdom', $new_uuid);
-                                        UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
-                                        RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
-                                    ";
-                                    if let Err(e) = surreal_backend.db.query(sql)
-                                        .bind(("old_uuid", old_uuid))
-                                        .bind(("new_uuid", new_uuid))
-                                        .await {
-                                        tracing::error!("Failed to update superseded status or relate nodes: {}", e);
-                                    }
-                                }
+                                let old_uuid = matched.id.as_ref().unwrap().strip_prefix("wisdom:").unwrap_or(matched.id.as_ref().unwrap());
+                                let new_uuid = saved_id.strip_prefix("wisdom:").unwrap_or(&saved_id);
 
-                                // 2. Move physical old rule file to superseded_archive
-                                if let Some(ref old_vp) = matched.vault_path {
-                                    let src_path = store.vault_root.join(old_vp);
-                                    if src_path.exists() {
-                                        let archive_dir = store.vault_root.join("wisdom/superseded_archive");
-                                        let _ = std::fs::create_dir_all(&archive_dir);
-                                        if let Some(filename) = src_path.file_name() {
-                                            let dest_path = archive_dir.join(filename);
-                                            if std::fs::rename(&src_path, &dest_path).is_ok() {
-                                                if let Ok(content) = std::fs::read_to_string(&dest_path) {
-                                                    let updated_content = update_archived_rule_content(&content, &saved_id);
-                                                    let _ = std::fs::write(&dest_path, updated_content);
+                                if old_uuid != new_uuid {
+                                    // 1. Update old rule status to "superseded" and set superseded_at in SurrealDB
+                                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                                        let sql = "
+                                            LET $old_rec = type::record('wisdom', $old_uuid);
+                                            LET $new_rec = type::record('wisdom', $new_uuid);
+                                            UPDATE $old_rec SET status = 'superseded', superseded_at = time::now();
+                                            RELATE $old_rec -> superseded_by -> $new_rec CONTENT { reason: 'Consolidated during dreaming compaction', created_at: time::now() };
+                                        ";
+                                        if let Err(e) = surreal_backend.db.query(sql)
+                                            .bind(("old_uuid", old_uuid))
+                                            .bind(("new_uuid", new_uuid))
+                                            .await {
+                                            tracing::error!("Failed to update superseded status or relate nodes: {}", e);
+                                        }
+                                    }
+
+                                    // 2. Move physical old rule file to superseded_archive
+                                    if let Some(ref old_vp) = matched.vault_path {
+                                        let src_path = store.vault_root.join(old_vp);
+                                        if src_path.exists() {
+                                            let archive_dir = store.vault_root.join("wisdom/superseded_archive");
+                                            let _ = std::fs::create_dir_all(&archive_dir);
+                                            if let Some(filename) = src_path.file_name() {
+                                                let dest_path = archive_dir.join(filename);
+                                                if std::fs::rename(&src_path, &dest_path).is_ok() {
+                                                    if let Ok(content) = std::fs::read_to_string(&dest_path) {
+                                                        let updated_content = update_archived_rule_content(&content, &saved_id);
+                                                        let _ = std::fs::write(&dest_path, updated_content);
+                                                    }
                                                 }
                                             }
                                         }
@@ -1942,6 +2095,146 @@ pub async fn traverse_adjacent_logs(
     Ok(results)
 }
 
+pub fn truncate_by_tokens(
+    text: &str,
+    max_tokens: usize,
+    embedder: Option<&dyn crate::embeddings::TextEmbedder>,
+) -> String {
+    if let Some(emb) = embedder {
+        let count = emb.count_tokens(text).unwrap_or(text.len() / 4);
+        if count <= max_tokens {
+            return text.to_string();
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let mut low = 0;
+        let mut high = chars.len();
+        let mut best_fit = 0;
+        while low <= high {
+            let mid = (low + high) / 2;
+            let candidate: String = chars[..mid].iter().collect();
+            let tokens = emb.count_tokens(&candidate).unwrap_or(mid / 4);
+            if tokens <= max_tokens {
+                best_fit = mid;
+                low = mid + 1;
+            } else {
+                if mid == 0 {
+                    break;
+                }
+                high = mid - 1;
+            }
+        }
+        chars[..best_fit].iter().collect()
+    } else {
+        let max_chars = max_tokens * 4;
+        let char_count = text.chars().count();
+        if char_count <= max_chars {
+            return text.to_string();
+        }
+        text.chars().take(max_chars).collect()
+    }
+}
+
+pub async fn backpropagate_directions(db: &dyn StorageBackend, store: &MarkdownStore) -> Result<()> {
+    let all_nodes = db.get_all_wiki_nodes().await?;
+    let directions: Vec<_> = all_nodes.into_iter().filter(|n| n.node_type.as_deref() == Some("direction")).collect();
+
+    for dir_node in directions {
+        println!("Checking direction {:?}", dir_node.id);
+        if let Some(ref dir_id) = dir_node.id {
+            let related_ids = db.get_related_node_ids(dir_id).await.unwrap_or_default();
+            println!("Related IDs for {}: {:?}", dir_id, related_ids);
+            if related_ids.is_empty() { continue; }
+            
+            let mem_nodes = db.get_memory_nodes(&related_ids).await?;
+            let insights = mem_nodes.wiki_nodes;
+            println!("Fetched {} wiki nodes", insights.len());
+
+            
+            if insights.is_empty() { continue; }
+            
+            let base_sys = "You are a direction synthesizer. Synthesize the child insights into an updated Current Understanding section.";
+            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
+            let mut prompt_text = format!("Existing Direction Content:\n{}\n\nChild Insights:\n", dir_node.content);
+            for ins in &insights {
+                prompt_text.push_str(&format!("- {}: {}\n", ins.name, ins.content));
+            }
+            
+            let _original_tokens = dir_node.content.len() / 4;
+            let llm = crate::llm::LLMClient::default();
+            match llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(&sys_prompt), &prompt_text).await {
+                Ok(updated_understanding) => {
+                    let mut updated_node = dir_node.clone();
+                    updated_node.content = updated_understanding.clone();
+                    
+                    db.save_wiki_node(&updated_node).await.unwrap();
+                    
+                    let slug = crate::cognitive::synthesis::slugify_title(&updated_node.name);
+                    let rel_path = format!("wiki/{}/directions/{}.md", updated_node.scope, slug);
+                    let new_content = format!("---\ntitle: \"{}\"\nscope: \"{}\"\nnode_type: \"direction\"\n---\n\n## Current Understanding\n{}", updated_node.name, updated_node.scope, updated_understanding);
+                    let _ = store.write_file(&rel_path, &new_content);
+                },
+                Err(e) => println!("routed_completion failed: {:?}", e),
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn promote_insight_to_direction(
+    db: &dyn StorageBackend,
+    _store: &MarkdownStore,
+    node: &WikiNode,
+    episodes: &[crate::contracts::Episode],
+) -> Result<()> {
+    let mut high_conf_count = 0;
+    for ep in episodes {
+        if let Some(conf) = ep.confidence {
+            if conf >= 4.0 { high_conf_count += 1; }
+        }
+    }
+    
+    let mut drift = 0.0;
+    if !episodes.is_empty() {
+        if let Some(initial_emb) = &episodes[0].embedding {
+            if let Some(current_emb) = &node.embedding {
+                drift = crate::cognitive::synthesis::cosine_distance(initial_emb, current_emb);
+            } else {
+                let mut sum = vec![0.0; initial_emb.len()];
+                let mut count = 0;
+                for ep in episodes {
+                    if let Some(ref emb) = ep.embedding {
+                        for (i, val) in emb.iter().enumerate() { sum[i] += val; }
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    for val in &mut sum { *val /= count as f32; }
+                    let norm: f32 = sum.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    if norm > 0.0 { for val in &mut sum { *val /= norm; } }
+                    drift = crate::cognitive::synthesis::cosine_distance(initial_emb, &sum);
+                }
+            }
+        }
+    }
+
+    if drift > 0.20 || high_conf_count > 15 {
+        let mut dir_node = node.clone();
+        dir_node.node_type = Some("direction".to_string());
+        println!("Saving promoted direction node: {:#?}", dir_node);
+        match db.save_wiki_node(&dir_node).await {
+            Ok(_) => println!("Save succeeded"),
+            Err(e) => println!("Save failed: {:?}", e),
+        }
+        
+        let embs: Vec<&[f32]> = episodes.iter().filter_map(|e| e.embedding.as_deref()).collect();
+        if !embs.is_empty() {
+            let _labels = crate::cognitive::synthesis::dbscan(&embs, 0.15, 2);
+        }
+    }
+    
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1961,4 +2254,120 @@ mod tests {
         assert!(labels[0].is_some());
         assert_eq!(labels[2], None);
     }
+
+    #[test]
+    fn test_truncate_by_tokens_heuristic() {
+        let long_text = "a".repeat(10000);
+        let truncated = truncate_by_tokens(&long_text, 2048, None);
+        assert_eq!(truncated.len(), 2048 * 4);
+    }
+}
+
+pub async fn graduate_wisdom(db: &dyn crate::db::StorageBackend, store: &crate::store::MarkdownStore) -> Result<()> {
+    let all_nodes = db.get_all_wiki_nodes().await?;
+    let mut directions = Vec::new();
+    for node in all_nodes {
+        if node.node_type.as_deref() == Some("direction") && node.embedding.is_some() {
+            directions.push(node);
+        }
+    }
+
+    if directions.is_empty() {
+        return Ok(());
+    }
+
+    let mut to_graduate = Vec::new();
+    let mut handled = std::collections::HashSet::new();
+
+    for i in 0..directions.len() {
+        if handled.contains(&i) { continue; }
+        
+        let mut cluster = vec![&directions[i]];
+        let emb_i = directions[i].embedding.as_ref().unwrap();
+
+        for j in (i + 1)..directions.len() {
+            if handled.contains(&j) { continue; }
+            if directions[i].scope == directions[j].scope { continue; }
+            
+            let emb_j = directions[j].embedding.as_ref().unwrap();
+            let sim = crate::math::cosine_similarity(emb_i, emb_j);
+            if sim >= 0.85 {
+                cluster.push(&directions[j]);
+                handled.insert(j);
+            }
+        }
+
+        if cluster.len() > 1 {
+            to_graduate.push(cluster);
+            handled.insert(i);
+        }
+    }
+
+    for cluster in to_graduate {
+        let mut has_conflict = false;
+        let mut source_ep_ids = std::collections::HashSet::new();
+        
+        for node in &cluster {
+            let id = node.id.clone().unwrap_or_default();
+            source_ep_ids.insert(id.clone());
+            
+            let mut visited = std::collections::HashSet::new();
+            let mut queue = vec![id.clone()];
+            visited.insert(id.clone());
+            
+            while let Some(current) = queue.pop() {
+                if let Ok(related) = db.get_related_node_ids(&current).await {
+                    if let Ok(mem_nodes) = db.get_memory_nodes(&related).await {
+                        for related_node in mem_nodes.wiki_nodes {
+                            if related_node.node_type.as_deref() == Some("conflict") {
+                                has_conflict = true;
+                                break;
+                            }
+                            let rel_id = related_node.id.unwrap_or_default();
+                            if !visited.contains(&rel_id) {
+                                visited.insert(rel_id.clone());
+                                queue.push(rel_id);
+                            }
+                        }
+                        if has_conflict { break; }
+                    }
+                }
+            }
+            if has_conflict { break; }
+        }
+
+        if has_conflict {
+            continue;
+        }
+
+        let rule_class = "system_constraint";
+        let target_pattern = cluster[0].name.clone();
+        let slug = slugify_title(&target_pattern);
+        let rule_path = format!("wisdom/{}/{}.md", rule_class, slug);
+        
+        let rule = crate::contracts::WisdomRule {
+            target_pattern: target_pattern.clone(),
+            action_to_avoid: target_pattern.clone(),
+            causal_explanation: "Synthesized via cross-scope graduation.".into(),
+            prescribed_remedy: cluster[0].content.clone(),
+            tier: crate::contracts::Tier::Wisdom,
+            scope: "general".into(),
+            rule_type: Some(rule_class.to_string()),
+            source_episodes: source_ep_ids.into_iter().collect(),
+            generator_name: "WisdomGraduator".into(),
+            vault_path: Some(rule_path.clone()),
+            ..Default::default()
+        };
+
+        if let Ok(_wisdom_id) = save_wisdom_rule_with_deduplication(db, store, &rule).await {
+            let rule_md = format!(
+                "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"{}\"\nscope: \"general\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
+                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy, rule.tier.as_str(),
+                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+            );
+            let _ = store.write_file(&rule_path, &rule_md);
+        }
+    }
+
+    Ok(())
 }

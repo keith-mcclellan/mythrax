@@ -36,6 +36,89 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
     };
 
     match mapped_action {
+        "complete_handoff" => {
+            let task_id = args.get("task_id").and_then(|v| v.as_str()).context("Missing task_id")?;
+            let vault_root = state.store.vault_root.clone();
+            let abs_handoff_path = vault_root.join(format!(".handoffs/handoff_{}.md", task_id));
+
+            if !abs_handoff_path.exists() {
+                anyhow::bail!("Handoff contract not found: {}", task_id);
+            }
+
+            let mut content = std::fs::read_to_string(&abs_handoff_path)?;
+            
+            let status = args.get("status").and_then(|v| v.as_str());
+            let fail_reason = args.get("fail_reason").and_then(|v| v.as_str());
+            let mut failed = status == Some("failed");
+            let mut computed_fail_reason = fail_reason.map(|s| s.to_string());
+            
+            if !failed {
+                // validate outputs
+                if content.starts_with("---\n") {
+                    if let Some(end_idx) = content[4..].find("\n---") {
+                        let yaml_str = &content[4..4+end_idx];
+                        if let Ok(contract) = serde_yaml::from_str::<HandoffContract>(yaml_str) {
+                            let outputs_map = args.get("outputs").and_then(|v| v.as_object());
+                            for output in &contract.outputs {
+                                let has_val = outputs_map.map(|m| m.contains_key(&output.name)).unwrap_or(false);
+                                if output.required && !has_val {
+                                    failed = true;
+                                    computed_fail_reason = Some(format!("missing_output: {}", output.name));
+                                    break;
+                                }
+                                if has_val {
+                                    let val = outputs_map.unwrap().get(&output.name).unwrap();
+                                    
+                                    // Enum validation
+                                    if let Some(enums) = &output.enum_values {
+                                        if let Some(val_str) = val.as_str() {
+                                            if !enums.contains(&val_str.to_string()) {
+                                                failed = true;
+                                                computed_fail_reason = Some(format!("enum validation failed for: {}", output.name));
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    let mut val_str = serde_json::to_string(val).unwrap_or_default();
+                                    if val_str.len() > 1000 {
+                                        val_str.truncate(1000);
+                                        val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                    }
+                                    let key = format!("stm_{}_output_{}", task_id, output.name);
+                                    let _ = state.backend.save_stm(&contract.parent_conversation_id, &key, &val_str).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let final_status = if failed { "failed" } else { "completed" };
+            
+            let re = regex::Regex::new(r"(?m)^status:\s*.*$").unwrap();
+            content = re.replace(&content, format!("status: \"{}\"", final_status)).to_string();
+            
+            if failed {
+                if let Some(reason) = &computed_fail_reason {
+                    let re_fail = regex::Regex::new(r"(?m)^fail_reason:\s*.*$").unwrap();
+                    if re_fail.is_match(&content) {
+                        content = re_fail.replace(&content, format!("fail_reason: \"{}\"", reason)).to_string();
+                    } else {
+                        // Insert after status if not present
+                        content = content.replace(&format!("status: \"{}\"", final_status), &format!("status: \"{}\"\nfail_reason: \"{}\"", final_status, reason));
+                    }
+                }
+            }
+
+            std::fs::write(&abs_handoff_path, content)?;
+
+            if failed {
+                anyhow::bail!("Handoff completed with failure: {}", computed_fail_reason.unwrap_or_default());
+            }
+
+            return Ok(json!({ "status": "success" }));
+        }
         "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk" | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
             match mapped_action {
                 "ingest_bulk" => {
@@ -104,6 +187,16 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             let count = decision.unwrap_or(0);
             Ok(json!({ "status": "success", "block": block, "episodes_saved": count }))
         }
+        "reflect" => {
+            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for reflect")?;
+            let transcript_path_str = args.get("transcript_path").and_then(|v| v.as_str()).context("Missing transcript_path parameter for reflect")?;
+            let status = crate::hooks::reflect::handle_reflect(
+                session_id,
+                transcript_path_str,
+                state.backend.as_ref(),
+            ).await?;
+            Ok(json!({ "status": status }))
+        }
         "audit_response" => {
             let response_text = args.get("response").and_then(|v| v.as_str()).context("Missing response parameter for audit_response")?;
             let rules_path_opt = args.get("rules_path").and_then(|v| v.as_str());
@@ -170,7 +263,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             let tier_opt = args.get("tier").and_then(|v| v.as_str());
             let use_cloud = model_opt == Some("cloud") || tier_opt == Some("cloud");
 
-            let llm = crate::llm::LLMClient::new();
+            let llm = crate::llm::LLMClient::default();
             let audit_res = if use_cloud && std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
                 let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
                 let task = crate::db::CognitiveTask {
@@ -185,6 +278,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     result: None,
                     ttl_minutes: 10,
                     injected_at: None,
+                    session_id: session_id_opt.map(|s| s.to_string()),
                 };
                 
                 let surreal_backend = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>()
@@ -368,6 +462,45 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             let handoff_file_path = args.get("handoff_file_path").and_then(|v| v.as_str()).context("Missing handoff_file_path")?.to_string();
             let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
             let include_tool_execution = args.get("include_tool_execution").and_then(|v| v.as_bool());
+
+            // Task 16: Typed I/O Contracts - Pre-launch validation
+            let vault_root = state.store.vault_root.clone();
+            let abs_handoff_path = if std::path::Path::new(&handoff_file_path).is_absolute() {
+                std::path::PathBuf::from(&handoff_file_path)
+            } else {
+                vault_root.join(&handoff_file_path)
+            };
+
+            if abs_handoff_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&abs_handoff_path) {
+                    if content.starts_with("---\n") {
+                        if let Some(end_idx) = content[4..].find("\n---") {
+                            let yaml_str = &content[4..4+end_idx];
+                            match serde_yaml::from_str::<HandoffContract>(yaml_str) {
+                                Ok(contract) => {
+                                    for input in &contract.inputs {
+                                        if input.required && input.value.is_none() {
+                                            anyhow::bail!("Missing required input: {}", input.name);
+                                        }
+                                        if let Some(val) = &input.value {
+                                            let mut val_str = serde_json::to_string(val).unwrap_or_default();
+                                            if val_str.len() > 1000 {
+                                                val_str.truncate(1000);
+                                                val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                            }
+                                            let key = format!("stm_{}_input_{}", contract.task_id, input.name);
+                                            let _ = state.backend.save_stm(&subagent_conversation_id, &key, &val_str).await;
+                                        }
+                                    }
+                                }
+                                Err(e) => anyhow::bail!("Malformed contract frontmatter: {}", e),
+                            }
+                        }
+                    } else {
+                        tracing::info!("No contract frontmatter found, skipping validation");
+                    }
+                }
+            }
 
             let handoff = HandoffSave {
                 parent_conversation_id: parent_conversation_id.clone(),
@@ -726,12 +859,50 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
 }
 
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
+    let mut stm_str = String::new();
     let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
     let caller = args.get("caller").and_then(|v| v.as_str());
-    
+
+    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+        .context("SurrealBackend required for pre_invocation_hook")?;
+
     if caller == Some("distiller") {
         let now_unix = chrono::Utc::now().timestamp();
         let _ = state.backend.save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string()).await;
+        let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(state).await;
+
+        let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
+        let mut selected_tasks = Vec::new();
+        let immediate_task = pending_tasks.iter().find(|t| t.priority == "Immediate");
+        if let Some(t) = immediate_task {
+            selected_tasks.push(t.clone());
+        } else {
+            for t in pending_tasks.iter().filter(|t| t.priority != "Immediate").take(3) {
+                selected_tasks.push(t.clone());
+            }
+        }
+
+        let mut callback_injection = String::new();
+        if !selected_tasks.is_empty() {
+            callback_injection.push_str("### 🧠 Pending Cognitive Callbacks\n");
+            for task in &selected_tasks {
+                callback_injection.push_str(&format!(
+                    "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
+                    task.id, task.task_type, task.prompt, task.system_instruction, task.expected_format, task.priority
+                ));
+                surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None).await?;
+            }
+            callback_injection.push('\n');
+        }
+
+        return Ok(json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": callback_injection
+                }
+            ]
+        }));
     }
     
     let mut total_discovery = 0u32;
@@ -836,38 +1007,15 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             .await;
     }
 
-    let mut capabilities_wisdom_part = String::new();
-    let capabilities_res = surreal_backend.db.query("SELECT * FROM wisdom WHERE tier = 'permanent';").await;
-    if let Ok(mut resp) = capabilities_res {
-        let rules: Vec<WisdomRule> = resp.take(0).unwrap_or_default();
-        if !rules.is_empty() {
-            let mut rule_strings = Vec::new();
-            for r in rules {
-                rule_strings.push(format!(
-                    "- **Rule on {}**:\n  - **Avoid**: {}\n  - **Remedy**: {}",
-                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
-                ));
-            }
-            capabilities_wisdom_part = format!(
-                "### 🛠️ Mythrax Capabilities & Tool Wisdom\n{}\n\n",
-                rule_strings.join("\n")
-            );
-        }
-    }
 
-    let mut belief_part = String::new();
+
+    let mut loaded_belief_states: Vec<BeliefState> = Vec::new();
     let belief_res = surreal_backend.db.query("SELECT session_id, tasks_todo, hypotheses_tested, confidence_score, uncertainty_areas, updated_at FROM belief_state WHERE session_id = $session_id;")
         .bind(("session_id", session_id))
         .await;
     
     if let Ok(mut resp) = belief_res {
-        let belief_states: Vec<BeliefState> = resp.take(0).unwrap_or_default();
-        if let Some(bs) = belief_states.first() {
-            belief_part = format!(
-                "### 🧠 POMDP Belief State\n- **Session**: `{}`\n- **Confidence**: {:.2}\n- **Tasks Todo**: {:?}\n- **Hypotheses Tested**: {:?}\n- **Uncertainty Areas**: {:?}\n\n",
-                bs.session_id, bs.confidence_score, bs.tasks_todo, bs.hypotheses_tested, bs.uncertainty_areas
-            );
-        }
+        loaded_belief_states = resp.take(0).unwrap_or_default();
     }
 
     let mut handoffs_resp = surreal_backend.db.query("SELECT parent_conversation_id, summary, scope FROM handoff WHERE subagent_conversation_id = $subagent AND status = 'PENDING';")
@@ -1042,6 +1190,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     }
     parts.push(broker_status);
 
+    
+let mut insights_parts = Vec::new();
     if !handoffs.is_empty() {
         let active_handoff = &handoffs[0];
         let parent_conversation_id = active_handoff.get("parent_conversation_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1060,7 +1210,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
         }
         if !stm_parts.is_empty() {
-            parts.push(format!("### 🔑 Stashed Session Variables\n{}\n", stm_parts.join("\n")));
+            stm_str = format!("### 🔑 Stashed Session Variables\n{}\n", stm_parts.join("\n"));
         }
 
         let mut node_ids = Vec::new();
@@ -1086,16 +1236,16 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
         if !node_ids.is_empty() {
             let hydrated = state.backend.get_memory_nodes(&node_ids).await?;
-            parts.push("## Hydrated Context Nodes\n".to_string());
+            
             for wiki in hydrated.wiki_nodes {
                 total_read += calc_tokens(&wiki.name, &wiki.content, None);
-                parts.push(format!("### 📚 Distilled Insight: {}\nScope: {}\n{}\n", wiki.name, wiki.scope, wiki.content));
+                insights_parts.push(format!("**Distilled Insight: {}**\n{}", wiki.name, wiki.content));
             }
             for wisdom in hydrated.wisdom_rules {
                 let rule_content = format!("Avoid: {}\nCausal: {}\nRemedy: {}", wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy);
                 total_read += calc_tokens(&wisdom.target_pattern, &rule_content, None);
-                parts.push(format!(
-                    "### 💡 Wisdom Rule: {}\n- **Avoid**: {}\n- **Causal**: {}\n- **Remedy**: {}\n",
+                insights_parts.push(format!(
+                    "**Wisdom Rule: {}**\n- Avoid: {}\n- Causal: {}\n- Remedy: {}",
                     wisdom.target_pattern, wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy
                 ));
             }
@@ -1109,7 +1259,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 total_read += calc_tokens(&ep.title, &ep.content, ep.facts.as_deref());
                 if let Some(ref ep_id) = ep.id {
                     let rendered = super::format_episode_or_parent(&*state.backend, &surreal_backend.db, ep_id, &ep.title, &ep.content, ep.scope.as_deref()).await?;
-                    parts.push(rendered);
+                    insights_parts.push(rendered);
                 }
             }
         } else {
@@ -1129,7 +1279,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 None,
             )).await?;
 
-            parts.push("## Retrieved Semantic Context\n".to_string());
+            
             for res in search_res.results {
                 if res.discovery_tokens.is_some() {
                     has_discovery = true;
@@ -1139,7 +1289,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 }
                 total_read += calc_tokens(&res.title, &res.content, None);
                 if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
-                    parts.push(formatted);
+                    insights_parts.push(formatted);
                 }
             }
         }
@@ -1171,7 +1321,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             None,
         )).await?;
 
-        parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));
+        
         let mut high_confidence_memories_found = false;
         for res in search_res.results {
             if res.id.starts_with("episode:") && res.similarity >= 0.80 {
@@ -1185,7 +1335,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
             total_read += calc_tokens(&res.title, &res.content, None);
             if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
-                parts.push(formatted);
+                insights_parts.push(formatted);
             }
         }
 
@@ -1196,39 +1346,19 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     }
 
+    
     let active_node_opt = stm_map.get("active_hypothesis_node")
         .or_else(|| stm_map.get("active_node"))
         .cloned();
+        
+    let current_scope = std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string());
+    let path_buf = std::path::Path::new(&current_scope);
+    let canonical = path_buf.canonicalize().unwrap_or_else(|_| path_buf.to_path_buf());
+    let folder_name = canonical.file_name().and_then(|n| n.to_str()).unwrap_or("general").to_string();
 
-    if let Some(active_node_id) = active_node_opt {
-        let mut hyp_res = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;")
-            .bind(("node_id", active_node_id.as_str()))
-            .await?;
-        let hyp_nodes: Vec<HypothesisNode> = hyp_res.take(0)?;
-        if let Some(hyp_node) = hyp_nodes.first() {
-            if let Some(ref parent_id) = hyp_node.parent_id {
-                let mut siblings_res = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
-                    .bind(("parent_id", parent_id.as_str()))
-                    .bind(("node_id", active_node_id.as_str()))
-                    .await?;
-                let siblings: Vec<HypothesisNode> = siblings_res.take(0)?;
-                if !siblings.is_empty() {
-                    let mut constraint_parts = Vec::new();
-                    constraint_parts.push("\n### ⚠️ Arbor HTR Negative Constraints".to_string());
-                    constraint_parts.push("The following sibling hypotheses have failed or been pruned in this HTR execution. Avoid repeating these approaches:".to_string());
-                    for sib in siblings {
-                        let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
-                        let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
-                        constraint_parts.push(format!("- **Approach to Avoid**: `{}` (Status: {})\n  - **Reason**: {}", sib.hypothesis, status_label, reason));
-                    }
-                    parts.push(constraint_parts.join("\n"));
-                }
-            }
-        }
-    }
+    let p0_policy = collect_policy_context(surreal_backend, &folder_name, active_node_opt.as_ref()).await;
+    let mut p1_advisory = collect_advisory_context(surreal_backend, &folder_name, &loaded_belief_states, &insights_parts).await;
 
-    let joined_context = parts.join("\n");
-    
     let count_tokens = |text: &str| -> usize {
         if let Some(ref embedder) = surreal_backend.embedder {
             embedder.count_tokens(text).unwrap_or_else(|_| text.split_whitespace().count())
@@ -1237,19 +1367,60 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     };
 
+    let budget_env = std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "3000".to_string());
+    let token_budget: usize = budget_env.parse().unwrap_or(3000);
+    
+    // Broker/Handoff metadata is in `parts`
+    let preamble = parts.join("
+");
+    let mut p2_stm = stm_str.clone();
+    
+    let base_playbook = "### 💡 Mythrax Skill Playbook Reminder
+> [!IMPORTANT]
+> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.
+
+";
+
+    if caller != Some("distiller") {
+        loop {
+            let current_total = count_tokens(base_playbook)
+                + count_tokens(&preamble)
+                + count_tokens(&p0_policy)
+                + count_tokens(&p1_advisory)
+                + count_tokens(&p2_stm);
+
+            if current_total <= token_budget {
+                break;
+            }
+
+            if !p1_advisory.is_empty() {
+                // To properly truncate advisory, we just drop it entirely in extreme cases for this simple logic,
+                // or we could split lines. But the spec says P1 is truncated first. We'll clear it if it exceeds.
+                p1_advisory.clear();
+            } else if !p2_stm.is_empty() {
+                p2_stm.clear();
+            } else {
+                break; // Can't truncate P0 or preamble
+            }
+        }
+    }
+    
     let initial_context = {
         let mut base = String::new();
-        base.push_str("### 💡 Mythrax Skill Playbook Reminder\n> [!IMPORTANT]\n> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.\n\n");
-        if !belief_part.is_empty() {
-            base.push_str(&belief_part);
+        base.push_str(base_playbook);
+        base.push_str(&preamble);
+        base.push_str(&p0_policy);
+        if !p1_advisory.is_empty() {
+            base.push_str(&p1_advisory);
         }
-        if !capabilities_wisdom_part.is_empty() {
-            base.push_str(&capabilities_wisdom_part);
+        if !p2_stm.is_empty() {
+            base.push_str(&p2_stm);
         }
-        base.push_str(&joined_context);
         base
     };
+
     let context_tokens = count_tokens(&initial_context);
+
 
     let mut allowed_history = Vec::new();
     let mut history_tokens = 0;
@@ -1403,7 +1574,7 @@ pub async fn handle_complete_code_task(state: &ApiState, args: Value) -> Result<
     let config = state.backend.get_llm_config().await?;
     let model = model_override.unwrap_or(&config.model);
 
-    let client = crate::llm::LLMClient::new();
+    let client = crate::llm::LLMClient::default();
     let response = client.completion_explicit(
         state.backend.as_ref(),
         "local",
@@ -1516,5 +1687,152 @@ async fn format_search_result_hybrid(
         )))
     } else {
         Ok(None)
+    }
+}
+
+
+/// Collects non-negotiable policy context from permanent wisdom, pruned hypotheses, conflict nodes, and Arbor HTR constraints.
+pub async fn collect_policy_context(surreal_backend: &SurrealBackend, current_scope: &str, active_node_opt: Option<&String>) -> String {
+    let mut policy_parts = Vec::new();
+
+    // 1. Permanent Wisdom
+    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM wisdom WHERE tier = 'permanent';").await {
+        if let Ok(rules) = resp.take::<Vec<crate::contracts::WisdomRule>>(0) {
+            for r in rules {
+                policy_parts.push(format!(
+                    "> [!CAUTION]
+> **Rule on {}**:
+> - **Avoid**: {}
+> - **Remedy**: {}",
+                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
+                ));
+            }
+        }
+    }
+
+    // 2. Pruned Hypotheses
+    let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
+    if let Ok(mut resp) = surreal_backend.db.query(sql_pruned).bind(("scope", current_scope)).await {
+        if let Ok(rules) = resp.take::<Vec<serde_json::Value>>(0) {
+            for val in rules {
+                if let (Some(pat), Some(avoid), Some(remedy)) = (
+                    val.get("target_pattern").and_then(|v| v.as_str()),
+                    val.get("action_to_avoid").and_then(|v| v.as_str()),
+                    val.get("prescribed_remedy").and_then(|v| v.as_str()),
+                ) {
+                    policy_parts.push(format!(
+                        "> [!CAUTION]
+> **Pruned Path: {}**
+> - **Avoid**: {}
+> - **Remedy**: {}",
+                        pat, avoid, remedy
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. Conflict Nodes
+    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'conflict' AND (scope = $scope OR scope = 'general');").bind(("scope", current_scope)).await {
+        if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
+            for val in episodes {
+                if let (Some(title), Some(content)) = (
+                    val.get("title").and_then(|v| v.as_str()),
+                    val.get("content").and_then(|v| v.as_str()),
+                ) {
+                    policy_parts.push(format!(
+                        "> [!CAUTION]
+> **Knowledge Conflict: {}**
+> {}",
+                        title, content
+                    ));
+                }
+            }
+        }
+    }
+
+    // 4. Arbor HTR Negative Constraints
+    if let Some(active_node_id) = active_node_opt {
+        if let Ok(mut hyp_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;").bind(("node_id", active_node_id.as_str())).await {
+            if let Ok(hyp_nodes) = hyp_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
+                if let Some(hyp_node) = hyp_nodes.first() {
+                    if let Some(ref parent_id) = hyp_node.parent_id {
+                        if let Ok(mut siblings_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
+                            .bind(("parent_id", parent_id.as_str()))
+                            .bind(("node_id", active_node_id.as_str()))
+                            .await 
+                        {
+                            if let Ok(siblings) = siblings_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
+                                for sib in siblings {
+                                    let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
+                                    let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
+                                    policy_parts.push(format!(
+                                        "> [!CAUTION]
+> **Arbor Constraint ({}): {}**
+> - **Reason**: {}",
+                                        status_label, sib.hypothesis, reason
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if policy_parts.is_empty() {
+        String::new()
+    } else {
+        format!("### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n", policy_parts.join("\n"))
+    }
+}
+
+/// Collects advisory context from semantic insights, experience episodes, and belief state.
+pub async fn collect_advisory_context(surreal_backend: &SurrealBackend, current_scope: &str, belief_states: &[crate::contracts::BeliefState], insights_parts: &[String]) -> String {
+    let mut advisory_parts = Vec::new();
+
+    // 1. Belief State
+    if let Some(bs) = belief_states.first() {
+        advisory_parts.push(format!(
+            "> [!TIP]
+> **POMDP Belief State (Session: `{}`):**
+> - **Confidence**: {:.2}
+> - **Tasks Todo**: {:?}
+> - **Hypotheses Tested**: {:?}
+> - **Uncertainty Areas**: {:?}",
+            bs.session_id, bs.confidence_score, bs.tasks_todo, bs.hypotheses_tested, bs.uncertainty_areas
+        ));
+    }
+
+    // 2. Experience Episodes
+    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'experience' AND (scope = $scope OR scope = 'general');").bind(("scope", current_scope)).await {
+        if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
+            for val in episodes {
+                if let (Some(title), Some(content)) = (
+                    val.get("title").and_then(|v| v.as_str()),
+                    val.get("content").and_then(|v| v.as_str()),
+                ) {
+                    advisory_parts.push(format!(
+                        "> [!TIP]
+> **Experience: {}**
+> {}",
+                        title, content
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. Retrieved Insights (from semantic search or handoff hydration)
+    for insight in insights_parts {
+        advisory_parts.push(format!("> [!TIP]
+> {}", insight.replace("\n", "\n> ")));
+    }
+
+    if advisory_parts.is_empty() {
+        String::new()
+    } else {
+        format!("### 💡 Advisory (Suggested Approaches)\n{}\n\n", advisory_parts.join("\n"))
     }
 }

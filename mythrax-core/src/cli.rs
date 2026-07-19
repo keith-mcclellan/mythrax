@@ -81,6 +81,23 @@ pub enum Commands {
         #[arg(short, long)]
         force: bool,
     },
+    /// Bulk ingest logs into the memory store in chronological batches
+    Ingest {
+        /// Path to the log directory or file
+        #[arg(short, long)]
+        source: String,
+        /// Harness type (e.g. 'antigravity', 'claude', 'cursor', etc.)
+        #[arg(short, long)]
+        harness: String,
+        /// Optional scope (defaults to 'general')
+        #[arg(long, default_value = "general")]
+        scope: String,
+        /// Batch size for chunked ingestion
+        #[arg(long, default_value_t = 50)]
+        batch_size: usize,
+    },
+    /// Run the pre-invocation hook (reads stdin, queries daemon, prints stdout)
+    PreInvocation,
 }
 
 #[derive(Subcommand, Debug, Clone)]

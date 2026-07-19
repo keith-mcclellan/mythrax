@@ -168,14 +168,18 @@ pub async fn route_task(db: &dyn StorageBackend, profile: &TaskProfile) -> Model
         }
     }
 
-    if score < 30.0 {
-        ModelTier::Micro
-    } else if score < 55.0 {
-        ModelTier::Small
-    } else if score < 75.0 {
-        ModelTier::Medium
-    } else if score < 95.0 {
-        ModelTier::Large
+    if std::env::var("MYTHRAX_FORCE_LOCAL").is_ok() {
+        if score < 30.0 {
+            ModelTier::Micro
+        } else if score < 55.0 {
+            ModelTier::Small
+        } else if score < 75.0 {
+            ModelTier::Medium
+        } else if score < 95.0 {
+            ModelTier::Large
+        } else {
+            ModelTier::Cloud
+        }
     } else {
         ModelTier::Cloud
     }

@@ -128,7 +128,9 @@ impl SurrealBackend {
                     word_count: $word_count,
                     node_type: $node_type,
                     created_at: type::datetime($created_at),
-                    importance: $importance
+                    importance: $importance,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end
                 };
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
@@ -158,7 +160,9 @@ impl SurrealBackend {
                     word_count: $word_count,
                     node_type: $node_type,
                     created_at: type::datetime($created_at),
-                    importance: $importance
+                    importance: $importance,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end
                 };
                 
                 CREATE $met CONTENT {
@@ -214,6 +218,8 @@ impl SurrealBackend {
             .bind(("node_type", node_type_val))
             .bind(("created_at", created_at_val))
             .bind(("importance", episode.importance.unwrap_or(5.0)))
+            .bind(("temporal_range_start", episode.temporal_range_start))
+            .bind(("temporal_range_end", episode.temporal_range_end))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -519,7 +525,8 @@ impl SurrealBackend {
                         superseded_at: $superseded_at,
                         superseded_by: $superseded_by,
                         severity: $severity,
-                        blocking: $blocking
+                        blocking: $blocking,
+                        rule_type: $rule_type
                     };
                     UPDATE metrics SET utility_score = $utility_score WHERE target_id = $rule;
                     COMMIT TRANSACTION;
@@ -543,7 +550,8 @@ impl SurrealBackend {
                         superseded_at: $superseded_at,
                         superseded_by: $superseded_by,
                         severity: $severity,
-                        blocking: $blocking
+                        blocking: $blocking,
+                        rule_type: $rule_type
                     };
                     COMMIT TRANSACTION;
                 ".to_string()
@@ -569,7 +577,8 @@ impl SurrealBackend {
                     superseded_at: $superseded_at,
                     superseded_by: $superseded_by,
                     severity: $severity,
-                    blocking: $blocking
+                    blocking: $blocking,
+                    rule_type: $rule_type
                 };
                 
                 CREATE $met CONTENT {
@@ -624,6 +633,7 @@ impl SurrealBackend {
             .bind(("superseded_by", rule.superseded_by.as_deref()))
             .bind(("severity", rule.severity.as_deref()))
             .bind(("blocking", rule.blocking.unwrap_or(false)))
+            .bind(("rule_type", rule.rule_type.as_deref().unwrap_or("aesthetic")))
             .await?
             .check().context("SurrealDB save_wisdom_rule transaction failed")?;
 
@@ -801,7 +811,7 @@ impl SurrealBackend {
     }
 
     pub async fn get_unprocessed_episodes_db(&self) -> Result<Vec<Episode>> {
-        let sql = "SELECT * FROM episode WHERE processed_in_dream = false;";
+        let sql = "SELECT * FROM episode WHERE processed_in_dream = false AND (node_type IS NONE OR node_type != 'experience');";
         let mut response = self.db.query(sql).await?.check().context("Query unprocessed episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
         let episodes = raw_episodes.into_iter().map(Episode::from).collect();
@@ -1008,7 +1018,12 @@ impl SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end,
+                    metacognitive_confidence: $metacognitive_confidence,
+                    node_type: $node_type,
+                    updated_at: time::now()
                 };
                 COMMIT TRANSACTION;
             "
@@ -1021,7 +1036,13 @@ impl SurrealBackend {
                     content: $content,
                     scope: $target_scope,
                     vault_path: $vault_path,
-                    embedding: $embedding
+                    embedding: $embedding,
+                    temporal_range_start: $temporal_range_start,
+                    temporal_range_end: $temporal_range_end,
+                    metacognitive_confidence: $metacognitive_confidence,
+                    node_type: $node_type,
+                    created_at: time::now(),
+                    updated_at: time::now()
                 };
                 COMMIT TRANSACTION;
             "
@@ -1050,6 +1071,10 @@ impl SurrealBackend {
             .bind(("target_scope", node.scope.as_str()))
             .bind(("vault_path", vp_val.as_str()))
             .bind(("embedding", embedding_val.clone()))
+            .bind(("temporal_range_start", node.temporal_range_start))
+            .bind(("temporal_range_end", node.temporal_range_end))
+            .bind(("metacognitive_confidence", node.metacognitive_confidence))
+            .bind(("node_type", node.node_type.as_deref().unwrap_or("insight")))
             .await?;
 
         response.check().context("SurrealDB save_wiki_node transaction failed")?;
@@ -1179,6 +1204,16 @@ impl SurrealBackend {
         self.db.query(sql1).bind(("vault_path", vault_path)).await?.check()?;
         self.db.query(sql2).bind(("vault_path", vault_path)).await?.check()?;
         self.db.query(sql3).bind(("vault_path", vault_path)).await?.check()?;
+        Ok(())
+    }
+
+    pub async fn delete_wiki_node_db(&self, name: &str, scope: &str) -> Result<()> {
+        let sql = "DELETE FROM wiki_node WHERE name = $name AND scope = $scope;";
+        self.db.query(sql)
+            .bind(("name", name))
+            .bind(("scope", scope))
+            .await?
+            .check()?;
         Ok(())
     }
 
@@ -1479,15 +1514,7 @@ impl SurrealBackend {
                 "wiki_node" => {
                     let node_opt: Option<WikiNodeRaw> = self.db.select(thing_id.clone()).await?;
                     if let Some(raw) = node_opt {
-                        let node = WikiNode {
-                            id: Some(format_record_id(&raw.id)),
-                            name: raw.name,
-                            content: raw.content,
-                            scope: raw.scope,
-                            vault_path: raw.vault_path,
-                            embedding: raw.embedding,
-                        };
-                        wiki_nodes.push(node);
+                        wiki_nodes.push(raw.into_wiki_node());
                     }
                 }
                 _ => {
@@ -1926,15 +1953,17 @@ impl SurrealBackend {
             }
         }
 
+        let is_mock_embedder = self.embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
         if let Some(ref _embedder) = self.embedder {
-            let embed_text = if combined.len() > 500 {
-                &combined[..500]
-            } else {
-                &combined
-            };
-            if let Ok(q_vec) = self.embed(embed_text).await {
+            if !is_mock_embedder {
+                let embed_text = if combined.len() > 500 {
+                    &combined[..500]
+                } else {
+                    &combined
+                };
+                if let Ok(q_vec) = self.embed(embed_text).await {
                 let sql = "
-                    SELECT causal_explanation, prescribed_remedy, embedding FROM wisdom
+                    SELECT causal_explanation, prescribed_remedy, vector::similarity::cosine(embedding, $query_embedding) AS similarity FROM wisdom
                     WHERE status != 'superseded' AND (embedding <|1, 10|> $query_embedding);
                 ";
                 let res = self.db.query(sql).bind(("query_embedding", q_vec.clone())).await?;
@@ -1943,19 +1972,17 @@ impl SurrealBackend {
                 struct WisdomVectorRaw {
                     causal_explanation: String,
                     prescribed_remedy: String,
-                    embedding: Option<Vec<f32>>,
+                    similarity: Option<f32>,
                 }
                 let rules: Vec<WisdomVectorRaw> = res.take(0)?;
                 let mut best_match = None;
                 let mut best_similarity = 0.0_f32;
 
                 for r in rules {
-                    if let Some(ref e_vec) = r.embedding {
-                        let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                        if dot > best_similarity {
-                            best_similarity = dot;
-                            best_match = Some(r);
-                        }
+                    let sim = r.similarity.unwrap_or(0.0);
+                    if sim > best_similarity {
+                        best_similarity = sim;
+                        best_match = Some(r);
                     }
                 }
 
@@ -1965,6 +1992,7 @@ impl SurrealBackend {
                     }
                 }
             }
+        }
         }
 
         Ok(None)

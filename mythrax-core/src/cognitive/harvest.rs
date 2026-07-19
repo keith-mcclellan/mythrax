@@ -70,7 +70,7 @@ impl Default for Harvester {
 impl Harvester {
     pub fn new() -> Self {
         Self {
-            llm: LLMClient::new(),
+            llm: LLMClient::default(),
         }
     }
 

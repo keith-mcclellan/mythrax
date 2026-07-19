@@ -15,6 +15,7 @@ pub trait ArborLlmClient: Send + Sync + Clone + 'static {
         parent_hypothesis: &str,
         target_files: &[(String, String)],
         constraints: &[String],
+        stm_anchors: &[String],
     ) -> impl std::future::Future<Output = Result<String>> + Send;
     fn evaluate_run(&self, db: &dyn StorageBackend, run_logs: &str) -> impl std::future::Future<Output = Result<String>> + Send;
     fn abstract_insights(&self, db: &dyn StorageBackend, parent_insight: Option<&str>, child_insight: &str) -> impl std::future::Future<Output = Result<String>> + Send;
@@ -232,7 +233,15 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             .ok_or_else(|| anyhow!("Parent node not found"))?;
 
         let files_context = self.get_current_files_context(&parent);
-        let response = self.llm_client.propose_hypotheses(&self.backend, &parent.node_id, &parent.hypothesis, &files_context, &parent.constraints).await?;
+        let stm_anchors = crate::cognitive::compactor::get_active_stm_anchors(&self.vault_root);
+        let response = self.llm_client.propose_hypotheses(
+            &self.backend,
+            &parent.node_id,
+            &parent.hypothesis,
+            &files_context,
+            &parent.constraints,
+            &stm_anchors,
+        ).await?;
         let proposals: Vec<serde_json::Value> = serde_json::from_str(&response)?;
         
         let mut children_ids = vec![];
@@ -593,7 +602,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                 let uuid = uuid::Uuid::new_v4().to_string();
                 let rule = WisdomRule {
                     id: Some(format!("wisdom:{}", uuid)),
-                    target_pattern: format!("Failed path: {}", node.hypothesis),
+                    target_pattern: format!("PRUNED: Failed path: {}", node.hypothesis),
                     action_to_avoid: format!("Avoid implementing hypothesis: {}", node.hypothesis),
                     causal_explanation: format!("This approach failed tests. Logs/Insight: {}", insight_str),
                     prescribed_remedy: "Try an alternative refactoring approach or adjust target files.".to_string(),

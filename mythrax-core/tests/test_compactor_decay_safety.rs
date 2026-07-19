@@ -64,6 +64,7 @@ async fn test_compactor_decay_referenced_safety() -> Result<()> {
         scope: "general".to_string(),
         vault_path: None,
         embedding: None,
+        ..Default::default()
     };
     backend.save_wiki_node(&node_contract).await?;
     backend.relate_nodes(&ep_id, "wiki_node:target_node", None, None, None).await?;

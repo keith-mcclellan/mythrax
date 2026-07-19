@@ -77,8 +77,8 @@ Granular legacy tools are consolidated into 4 action-based tools to reduce conte
   - *Parameters*: `scope: String`, `chunks: Vec<Value>`
   - *Usage*: Internal compactor pipeline writes.
 - **`ingest_bulk`**: Bulk ingest directories or files.
-  - *Parameters*: `paths: Vec<String>`, `scope: String`
-  - *Usage*: Use to index new vault or code directories.
+  - *Parameters*: `paths: Vec<String>`, `scope: String`, `limit: Option<u32>`, `offset: Option<u32>`
+  - *Usage*: Use to index new vault or code directories incrementally in chronological batches.
 - **`ingest_forge`**: Ingest candidate wisdom rules.
   - *Parameters*: `path: String`, `scope: String`
   - *Usage*: Use to graduate rules.
@@ -107,7 +107,7 @@ Granular legacy tools are consolidated into 4 action-based tools to reduce conte
   - *Usage*: Use to regenerate embeddings and re-chunk files.
 - **`summarize_vault`**: Trigger compactions.
   - *Parameters*: `scope: String`
-  - *Usage*: Use to manually start background dreaming loops.
+  - *Usage*: Use to manually start background dreaming loops. *CAUTION*: On macOS, to prevent Metal GPU Hang/Timeout crashes, always call this synchronously and sequentially (one scope at a time) rather than concurrently.
 - **`audit_compliance`**: Scan codebase against rules.
   - *Parameters*: `files: Vec<String>`
   - *Usage*: Use to identify compliance violations.
@@ -134,10 +134,13 @@ Granular legacy tools are consolidated into 4 action-based tools to reduce conte
    - **Similarity >= 0.80**: Hydrated fully.
    - **Similarity [0.60, 0.80)**: Listed in summary tables.
    - **Similarity < 0.60**: Discarded.
-2. **Boot Verification**: You **MUST** output compliance verification on the first line of your first response:
+2. **Policy vs. Advisory Separation**: Context injection strictly segregates high-importance P0 binding rules (Policy) from P1 suggestions (Advisory):
+   - **Policy Section**: Rendered first, using warning callouts (`> [!CAUTION]`) to enforce critical constraints (e.g. GPU timeouts, path safety).
+   - **Advisory Section**: Rendered second, using tip callouts (`> [!TIP]`) for optional guidance and performance suggestions.
+3. **Boot Verification**: You **MUST** output compliance verification on the first line of your first response:
    `Execution Check: [Karpathy Rules applied? Yes/No] [Local Model verified? Yes/No/Fallback]`
-3. **Enforced Memory Search**: If the pre-invocation context is empty, manually run `read(action="search_memory", query="...")` before editing code.
-4. **Reinforcement**: Run `write(action="save_episode")` to log results and `write(action="record_feedback")` to reinforce the pathway.
+4. **Enforced Memory Search**: If the pre-invocation context is empty, manually run `read(action="search_memory", query="...")` before editing code.
+5. **Reinforcement**: Run `write(action="save_episode")` to log results and `write(action="record_feedback")` to reinforce the pathway.
 
 ### 6-Signal Unified Retrieval Pipeline
 The system scores memory candidate retrieval using six signals: vector similarity, BM25, concept spreading activation, active STM memory injection (using `embed_batch` to avoid sequential embedding calls), temporal neighbors, and Gaussian time decay.
@@ -149,9 +152,12 @@ The system scores memory candidate retrieval using six signals: vector similarit
 When delegating tasks:
 1. Discover the vault root via `read(action="get_vault_root")`.
 2. Write the contract file to `<vault_root>/.handoffs/handoff_<task_id>.md`.
-3. Save the distilled context node IDs in STM under key `"distilled_context_nodes"`.
-4. Call `agent(action="save_handoff", ...)` to link nodes in SurrealDB.
-5. Spawn the subagent pointing to the contract path:
+3. **Typed I/O Contracts**: The handoff system enforces strict YAML-based contract validation on boundaries:
+   - **`save_handoff`**: Parses the handoff contract's input parameters, validating types, requirements, and allowed enum values before spawning the subagent. Input values are safely logged to the subagent's STM.
+   - **`complete_handoff`**: Validates the subagent's final output outputs, formats status strings using regex filters, and promotes output values to the parent session's STM.
+4. Save the distilled context node IDs in STM under key `"distilled_context_nodes"`.
+5. Call `agent(action="save_handoff", ...)` to link nodes in SurrealDB.
+6. Spawn the subagent pointing to the contract path:
    > *"Read and execute the handoff at `file:///<vault_root>/.handoffs/handoff_<task_id>.md` and rules at `file:///Users/keith/.gemini/AGENT.md`. Output first: `Execution Check: [Karpathy Rules applied? Yes/No] [Local Model verified? Yes/No/Fallback]`"*
 
 ---
@@ -162,3 +168,14 @@ To fit large codebases into context windows:
 1. **Virtual Skeletons**: `read(action="view_file")` returns code with placeholders (e.g. `[Paged Symbol: ...]`) instead of full bodies. Disk files remain untouched.
 2. **Paging-Aware Edits**: `write(action="edit_file")` and `write(action="multi_edit_file")` parse placeholders, query `symbol_archive` to restore bodies in memory, apply the replacement, and write back to disk. Target placeholders exactly as they appear in the skeleton.
 3. **LRU Eviction**: Unused memories are evicted from RAM. Wisdom rules, high importance nodes ($\ge 8.0$), active handoffs, and active STM are pinned.
+
+---
+
+## Post-Task Reflect Hook
+
+To consolidate lessons and prevent forgetting loops:
+1. **Asynchronous Reflection**: The daemon periodically harvests finished sessions and triggers a `reflection_distillation` task.
+2. **Cognitive Ingestion**:
+   - Successful tasks are distilled into experience episodes (`node_type: "experience"`) to reinforce similar future queries.
+   - Failed tasks undergo contrastive analysis to identify contradictions, generating new pruned hypotheses or updating/reinforcing existing wisdom rules.
+3. **Dreaming Exclusion**: Experience episodes are strictly excluded from dreaming compactions to preserve raw execution trajectories and prevent semantic hallucination.

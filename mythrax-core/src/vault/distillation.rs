@@ -168,6 +168,7 @@ pub async fn run_summarization_task(
                 result: None,
                 ttl_minutes: 10,
                 injected_at: None,
+                session_id: None,
             };
             
             if surreal_backend.create_cognitive_task(&task).await.is_ok() {
@@ -315,6 +316,7 @@ pub async fn distill_transcript_file(
                     result: None,
                     ttl_minutes: 10,
                     injected_at: None,
+                    session_id: Some(conversation_id.to_string()),
                 };
                 
                 if surreal_backend.create_cognitive_task(&task).await.is_ok() {
@@ -482,6 +484,7 @@ pub async fn ingest_artifacts_in_dir(
                         scope: scope.to_string(),
                         vault_path: Some(rel_path_str),
                         embedding: None,
+                        ..Default::default()
                     };
                     db.save_wiki_node(&node).await?;
                 }
@@ -570,7 +573,7 @@ pub async fn seed_wisdom_from_rules(
     if direct_agents.exists() { candidate_files.push(direct_agents); }
     
     let mut saved_count = 0;
-    let client = LLMClient::new();
+    let client = LLMClient::default();
     
     // Get existing rules to check for duplicates
     let existing_rules = db.get_all_wisdom_rules().await.unwrap_or_default();
@@ -623,6 +626,7 @@ pub async fn seed_wisdom_from_rules(
                         result: None,
                         ttl_minutes: 10,
                         injected_at: None,
+                        session_id: None,
                     };
                     
                     if surreal_backend.create_cognitive_task(&task).await.is_ok() {

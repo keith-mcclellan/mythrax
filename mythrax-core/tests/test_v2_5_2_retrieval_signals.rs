@@ -200,6 +200,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     // --- TASK B.3: MLX Cross-Encoder Reranker (Mocked in test mode) ---
     // 1. Enable Cross-Encoder Reranking
     backend.save_profile_key("search.enable_cross_encoder_rerank", "true").await?;
+    backend.save_profile_key("search.mock_reranker", "true").await?;
     backend.save_profile_key("search.rerank_pool_size", "5").await?;
 
     // 2. Perform a search with two episodes in candidates
@@ -236,6 +237,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
     
     // Disabling the reranker should run without setting similarity to 0.95
     backend.save_profile_key("search.enable_cross_encoder_rerank", "false").await?;
+    backend.save_profile_key("search.mock_reranker", "false").await?;
     let resp_no_rerank = backend.search(mythrax_core::contracts::SearchParams::from_positional(
         "Database Transaction Isolation",
         Some("general"),

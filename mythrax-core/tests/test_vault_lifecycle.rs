@@ -12,7 +12,7 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
 
     // 1. Initialize persistent backend
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // 2. Save an episode
@@ -41,7 +41,7 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
             let _ = std::fs::remove_file(&lock_file);
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        match SurrealBackend::new(&surreal_url).await {
+        match SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await {
             Ok(b) => {
                 backend2 = Some(b);
                 break;
@@ -81,7 +81,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // Create a mock Antigravity transcript structure
@@ -94,12 +94,14 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     fs::write(logs_dir.join("transcript.jsonl"), transcript_content)?;
 
     // Run bulk ingestion for Antigravity
-    let (count, errors) = bulk_ingest_vault(
+    let (count, errors, _has_more) = bulk_ingest_vault(
         &vault_root,
         &source_dir,
         "antigravity",
         "antigravity-scope",
-        &backend
+        &backend,
+        None,
+        None,
     ).await?;
 
     assert_eq!(count, 1);
@@ -259,7 +261,7 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // Create a mock Antigravity folder
@@ -283,12 +285,14 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     fs::write(session_dir.join("implementation_plan.md"), "Plan artifact content")?;
 
     // Run bulk ingestion
-    let (count, errors) = bulk_ingest_vault(
+    let (count, errors, _has_more) = bulk_ingest_vault(
         &vault_root,
         &source_dir,
         "antigravity",
         "testing-linking-scope",
-        &backend
+        &backend,
+        None,
+        None,
     ).await?;
 
     // We ingested 8 episode parts + 1 parent index + 2 artifacts = 11 success counts
@@ -346,7 +350,7 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url).await?;
+    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
     backend.init().await?;
 
     // Create a mock Antigravity folder
@@ -369,12 +373,14 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     fs::write(session_dir.join("large_plan.md"), &large_artifact)?;
 
     // Run bulk ingestion
-    let (count, errors) = bulk_ingest_vault(
+    let (count, errors, _has_more) = bulk_ingest_vault(
         &vault_root,
         &source_dir,
         "antigravity",
         "testing-art-chunking-scope",
-        &backend
+        &backend,
+        None,
+        None,
     ).await?;
 
     // We ingested 1 episode part + 3 artifact parts = 4 success counts

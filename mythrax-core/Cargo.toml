@@ -36,11 +36,14 @@ pdf-extract = "0.10.0"
 chrono = { version = "0.4", features = ["serde"] }
 rlimit = "0.10"
 libc = "0.2"
+socket2 = "0.5"
 sha2 = "0.10"
 hex = "0.4"
 mlx-rs = { version = "0.25.3", features = ["metal"], optional = true }
 safetensors = { version = "0.4.3", optional = true }
-half = "2.4"
+half = { version = "2.4", optional = true }
+dashmap = "6.2.1"
+async-trait = "0.1"
 
 [dev-dependencies]
 lopdf = "0.38.0"
@@ -51,7 +54,7 @@ name = "mythrax"
 path = "src/main.rs"
 
 [features]
-mlx = ["dep:mlx-rs", "dep:safetensors"]
+mlx = ["dep:mlx-rs", "dep:safetensors", "dep:half"]
 bench = []
 
 [[bin]]
@@ -66,6 +69,10 @@ path = "src/bin/tune_arbor.rs"
 [[bin]]
 name = "generate_seeds"
 path = "scratch/generate_seeds.rs"
+
+[[bin]]
+name = "simulate"
+path = "scratch/simulate.rs"
 
 [profile.release]
 opt-level = 3

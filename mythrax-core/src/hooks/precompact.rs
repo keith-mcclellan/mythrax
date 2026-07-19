@@ -68,6 +68,12 @@ fn extract_text(value: &serde_json::Value) -> String {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BootstrapCheckpoint {
+    session_id: String,
+    last_processed_index: usize,
+}
+
 pub async fn mine_transcript(
     session: &str,
     transcript_path: &str,
@@ -76,6 +82,18 @@ pub async fn mine_transcript(
     ignore: &WatchIgnoreList,
 ) -> Result<usize> {
     use std::io::Seek;
+
+    let checkpoint_path = store.vault_root.join(".mythrax/bootstrap_checkpoint.json");
+    let mut last_processed_index = None;
+    if checkpoint_path.exists() {
+        if let Ok(c_content) = std::fs::read_to_string(&checkpoint_path) {
+            if let Ok(cp) = serde_json::from_str::<BootstrapCheckpoint>(&c_content) {
+                if cp.session_id == session {
+                    last_processed_index = Some(cp.last_processed_index);
+                }
+            }
+        }
+    }
 
     let mut start_offset: u64 = 0;
     if let Ok(stm_map) = backend.get_stm(session, Some("transcript_offset")).await {
@@ -112,6 +130,7 @@ pub async fn mine_transcript(
     });
 
     let mut buf = String::new();
+    let mut line_idx = 0;
     loop {
         buf.clear();
         let bytes_read = match reader.read_line(&mut buf) {
@@ -122,6 +141,14 @@ pub async fn mine_transcript(
 
         let next_offset = current_offset + bytes_read as u64;
         let line_str = buf.trim_end_matches('\n').trim_end_matches('\r');
+
+        if let Some(lpi) = last_processed_index {
+            if line_idx <= lpi {
+                line_idx += 1;
+                current_offset = next_offset;
+                continue;
+            }
+        }
 
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
             // Extract tool calls
@@ -225,6 +252,18 @@ pub async fn mine_transcript(
                 }
             }
         }
+        // Save checkpoint progress
+        let checkpoint = BootstrapCheckpoint {
+            session_id: session.to_string(),
+            last_processed_index: line_idx,
+        };
+        let checkpoint_dir = store.vault_root.join(".mythrax");
+        let _ = std::fs::create_dir_all(&checkpoint_dir);
+        if let Ok(json_str) = serde_json::to_string(&checkpoint) {
+            let _ = std::fs::write(checkpoint_dir.join("bootstrap_checkpoint.json"), json_str);
+        }
+
+        line_idx += 1;
         current_offset = next_offset;
     }
 

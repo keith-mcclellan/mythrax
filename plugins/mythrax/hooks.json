@@ -1,0 +1,10 @@
+{
+    "mythrax-pre-invocation": {
+        "PreInvocation": [
+            {
+                "type": "command",
+                "command": "mythrax pre-invocation"
+            }
+        ]
+    }
+}
