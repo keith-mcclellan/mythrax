@@ -811,7 +811,7 @@ impl SurrealBackend {
     }
 
     pub async fn get_unprocessed_episodes_db(&self) -> Result<Vec<Episode>> {
-        let sql = "SELECT * FROM episode WHERE processed_in_dream = false;";
+        let sql = "SELECT * FROM episode WHERE processed_in_dream = false AND (node_type IS NONE OR node_type != 'experience');";
         let mut response = self.db.query(sql).await?.check().context("Query unprocessed episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
         let episodes = raw_episodes.into_iter().map(Episode::from).collect();

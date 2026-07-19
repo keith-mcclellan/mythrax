@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::db::StorageBackend;
 use crate::db::SurrealBackend;
 use crate::db::CognitiveTask;
+use crate::contracts::{EpisodeSave, WisdomRule};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ToolCall {
@@ -129,4 +130,94 @@ Return JSON format matching:
     } else {
         anyhow::bail!("SurrealBackend required for cognitive callback")
     }
+}
+
+pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<()> {
+    let sql = "SELECT * FROM cognitive_task WHERE task_type = 'reflection_distillation' AND status = 'Completed';";
+    let mut res = backend.db.query(sql).await?;
+    let tasks: Vec<CognitiveTask> = res.take(0)?;
+    
+    for task in tasks {
+        if let Some(ref result_str) = task.result {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(result_str) {
+                let outcome = parsed["outcome"].as_str().map(|s| s.to_string());
+                let causal = parsed["causal_explanation"].as_str().map(|s| s.to_string());
+                let mut files = vec![];
+                if let Some(arr) = parsed["files_modified"].as_array() {
+                    for v in arr {
+                        if let Some(s) = v.as_str() {
+                            files.push(s.to_string());
+                        }
+                    }
+                }
+                
+                let title = format!("Session Reflection: {}", task.session_id.as_deref().unwrap_or("Unknown"));
+                let content = format!("Lessons:\n{:?}\nError Patterns:\n{:?}", parsed["lessons"], parsed["error_patterns"]);
+
+                let ep = EpisodeSave::builder(title, content)
+                    .node_type(Some("experience".to_string()))
+                    .session_id(task.session_id.clone())
+                    .outcome(outcome.clone())
+                    .causal_explanation(causal.clone())
+                    .files_modified(Some(files))
+                    .build();
+
+                let ep_id = backend.save_episode_db(&ep).await?;
+
+                if outcome.as_deref() == Some("failure") {
+                    if let Some(embedder) = &backend.embedder {
+                        let text_to_embed = format!("{} {:?}", causal.unwrap_or_default(), parsed["lessons"]);
+                        if let Ok(vec) = embedder.embed(&text_to_embed) {
+                            let rule_sql = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active';";
+                            if let Ok(mut rule_res) = backend.db.query(rule_sql).await {
+                                if let Ok(rules) = rule_res.take::<Vec<WisdomRule>>(0) {
+                                    let mut matched = false;
+                                    for mut rule in rules {
+                                        if let Some(ref rule_emb) = rule.embedding {
+                                            let sim = crate::embeddings::cosine_similarity(&vec, rule_emb);
+                                            if sim > 0.85 {
+                                                rule.utility = Some(rule.utility.unwrap_or(50.0) + 10.0);
+                                                let _ = backend.save_wisdom_rule_db(&rule).await;
+                                                matched = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if !matched {
+                                        let new_rule = WisdomRule {
+                                            id: None,
+                                            target_pattern: "Failed session approach".to_string(),
+                                            action_to_avoid: "Repeat failed approach".to_string(),
+                                            causal_explanation: format!("{:?}", parsed["causal_explanation"]),
+                                            prescribed_remedy: format!("Lessons: {:?}", parsed["lessons"]),
+                                            tier: "working".to_string(),
+                                            scope: "general".to_string(),
+                                            vault_path: None,
+                                            source_episodes: vec![ep_id],
+                                            generator_name: "reflect_harvester".to_string(),
+                                            embedding: Some(vec),
+                                            utility: Some(50.0),
+                                            status: Some("active".to_string()),
+                                            superseded_at: None,
+                                            superseded_by: None,
+                                            severity: Some("low".to_string()),
+                                            blocking: Some(false),
+                                            rule_type: Some("pruned_hypothesis".to_string()),
+                                        };
+                                        let _ = backend.save_wisdom_rule_db(&new_rule).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                let del_sql = "DELETE type::thing('cognitive_task', $id);";
+                if let Some(id_part) = task.id.strip_prefix("cognitive_task:") {
+                    let _ = backend.db.query(del_sql).bind(("id", id_part)).await;
+                }
+            }
+        }
+    }
+    Ok(())
 }

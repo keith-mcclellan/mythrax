@@ -232,6 +232,17 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     }
                 });
 
+                // Spawn reflection harvester loop
+                let backend_harvest = backend.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await; // every 60 seconds
+                        if let Err(e) = crate::hooks::reflect::harvest_completed_reflections(&*backend_harvest).await {
+                            tracing::error!("Reflection harvester failed: {:?}", e);
+                        }
+                    }
+                });
+
                 // Spawn the tokio background scheduler loop
                 let backend_dream = backend.clone();
                 let store_dream = store.clone();
