@@ -4,7 +4,7 @@
 - [x] Task: Implement `test_bootstrap_e2e.rs` using mock environments to establish success criteria (TDD mandate). (ba0e762)
 - [x] Task: Add `skip_llm` Mode to Ingestion Pipeline (`ingestion.rs`, `vault_handlers.rs`, `main.rs`). (0b310f8)
 - [x] Task: Implement Per-Episode Distillation (`synthesis.rs`, `crud_operations.rs`) and add `summary` field to the `Episode` schema in SurrealDB. (f901aac)
-- [ ] Task: Temporally-Anchor Graph Edges (`synthesis.rs`, `ingestion.rs`).
+- [x] Task: Temporally-Anchor Graph Edges (`synthesis.rs`, `ingestion.rs`). (f0b441e)
 - [ ] Task: Wire HTR Pipeline Integration - `backpropagate_directions()` into post-dream hook.
 - [ ] Task: Wire HTR Pipeline Integration - `promote_insight_to_direction()` after insight creation.
 - [ ] Task: Wire HTR Pipeline Integration - Fix contradiction resolution to preserve evidence and create conflict nodes.
