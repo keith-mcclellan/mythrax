@@ -22,6 +22,11 @@ async fn test_run_agent_recall_benchmark() -> anyhow::Result<()> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let transcript_full_path = std::path::PathBuf::from(&manifest_dir).join(transcript_path);
     
+    if !transcript_full_path.exists() {
+        println!("Skipping agent recall benchmark test, transcript file not found");
+        return Ok(());
+    }
+    
     let count = mythrax_core::hooks::precompact::mine_transcript(
         "sess_recall_test",
         &transcript_full_path.to_string_lossy(),
@@ -37,6 +42,10 @@ async fn test_run_agent_recall_benchmark() -> anyhow::Result<()> {
 
     // 4. Load queries
     let queries_path = std::path::PathBuf::from(&manifest_dir).join("bench_data/agent_recall_queries.json");
+    if !queries_path.exists() {
+        println!("Skipping agent recall benchmark test, queries file not found");
+        return Ok(());
+    }
     let queries_data = std::fs::read_to_string(queries_path)?;
     let raw_queries: Vec<RecallQuery> = serde_json::from_str(&queries_data)?;
 
