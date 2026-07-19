@@ -23,10 +23,13 @@ pub mod retrieval;
 pub mod bench;
 
 pub fn is_test_mock() -> bool {
-    std::env::var("MYTHRAX_TEST_MOCK").map(|v| v == "1" || v == "true" || v == "yes").unwrap_or(false)
-        || std::env::var("MYTHRAX_MOCK_LLM").map(|v| v == "1" || v == "true" || v == "yes").unwrap_or(false)
-        || std::env::var("MYTHRAX_TEST_MOCK").is_ok()
-        || std::env::var("MYTHRAX_MOCK_LLM").is_ok()
+    let check_var = |name: &str| -> bool {
+        match std::env::var(name) {
+            Ok(v) => v == "1" || v == "true" || v == "yes",
+            Err(_) => false,
+        }
+    };
+    check_var("MYTHRAX_TEST_MOCK") || check_var("MYTHRAX_MOCK_LLM")
 }
 
 

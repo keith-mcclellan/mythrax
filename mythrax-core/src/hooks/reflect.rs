@@ -188,7 +188,14 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                     }
                                     if !matched {
                                         let causal_str = parsed["causal_explanation"].as_str().unwrap_or("").to_string();
-                                        let lessons_str = parsed["lessons"].as_str().unwrap_or("").to_string();
+                                        let lessons_str = if let Some(arr) = parsed["lessons"].as_array() {
+                                            let items: Vec<String> = arr.iter()
+                                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                                .collect();
+                                            items.join(", ")
+                                        } else {
+                                            parsed["lessons"].as_str().unwrap_or("").to_string()
+                                        };
                                         let new_rule = WisdomRule {
                                             id: None,
                                             target_pattern: format!("PRUNED: {}", causal_str),

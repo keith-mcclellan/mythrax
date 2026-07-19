@@ -4265,3 +4265,119 @@ user: That's really helpful, thank you!  I went to a 3-day photography workshop 
 user: I'm interested in learning more about camera sensors and how they affect astrophotography images. Can you explain how camera sensors work and what factors affect their performance in low-light conditions? Additionally, I've been thinking of upgrading my camera, do you have any recommendations for cameras that are suitable for astrophotography?
 ====================================
 
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_456 ===
+Weather is nice today so
+I went for a walk to
+deg: math
+fav: red
+====================================
+
+=== PROFILE FOR session_id = test_session_123 ===
+I started my study.
+I prefer coffee over tea.
+My occupation is a software engineer.
+I live in Boston.
+degree: physics
+favorite_color: blue
+====================================
+
+=== PROFILE FOR session_id = session123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_bar ===
+context_guard: Avoid concurrent RocksDB process lock by starting in client mode
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_10 ===
+big_key: A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A 
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:1dad03be-1e32-410d-9dae-af5417d08f75", "episode:82621850-4744-4ad1-b270-0da23a39ff89"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_obs_test ===
+distilled_context_nodes: ["wisdom:delete"]
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_ttl ===
+
+====================================
+
