@@ -732,14 +732,14 @@ pub async fn sync_file_to_db_with_cache(
                         #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
                         struct RelatesToRaw {
                             id: surrealdb::types::RecordId,
-                            relation: String,
+                            relation: Option<String>,
                             out: surrealdb::types::RecordId,
                         }
                         if let Ok(existing) = existing_resp.take::<Vec<RelatesToRaw>>(0) {
                             // Delete removed relations
                             for ext in &existing {
                                 let is_still_desired = desired.iter().any(|(tid, rel, _)| {
-                                    tid == &ext.out && rel == &ext.relation
+                                    tid == &ext.out && Some(rel) == ext.relation.as_ref()
                                 });
                                 if !is_still_desired {
                                     let delete_q = "DELETE FROM relates_to WHERE id = $rel_id;";
@@ -752,7 +752,7 @@ pub async fn sync_file_to_db_with_cache(
                             // Create new relations
                             for (tid, rel, strength_opt) in desired {
                                 let already_exists = existing.iter().any(|ext| {
-                                    &ext.out == &tid && &ext.relation == &rel
+                                    &ext.out == &tid && ext.relation.as_ref() == Some(&rel)
                                 });
                                 if !already_exists {
                                     let relate_q = "RELATE $from->relates_to->$to CONTENT { relation: $relation, strength: $strength };";
@@ -826,7 +826,7 @@ pub async fn sync_file_to_db_with_cache(
             #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
             struct RelatesToRaw {
                 id: surrealdb::types::RecordId,
-                relation: String,
+                relation: Option<String>,
                 out: surrealdb::types::RecordId,
             }
             
@@ -835,7 +835,7 @@ pub async fn sync_file_to_db_with_cache(
             // Delete removed relations
             for ext in &existing {
                 let is_still_desired = desired.iter().any(|(tid, rel, _)| {
-                    tid == &ext.out && rel == &ext.relation
+                    tid == &ext.out && Some(rel) == ext.relation.as_ref()
                 });
                 if !is_still_desired {
                     let delete_q = "DELETE FROM relates_to WHERE id = $rel_id;";
@@ -848,7 +848,7 @@ pub async fn sync_file_to_db_with_cache(
             // Create new relations
             for (tid, rel, strength_opt) in desired {
                 let already_exists = existing.iter().any(|ext| {
-                    &ext.out == &tid && &ext.relation == &rel
+                    &ext.out == &tid && ext.relation.as_ref() == Some(&rel)
                 });
                 if !already_exists {
                     let relate_q = "RELATE $from->relates_to->$to CONTENT { relation: $relation, strength: $strength };";

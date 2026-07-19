@@ -234,26 +234,63 @@ impl RealLlmProvider {
             ).await;
         }
 
-        if IS_HIBERNATING.load(Ordering::SeqCst) {
-            let retry_secs = std::env::var("MYTHRAX_QUOTA_RETRY_SECS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(3600);
-            tracing::info!(
-                phase = "hibernation",
-                progress = "waiting",
-                "Cloud completion called while hibernating. Waiting for {} seconds.",
-                retry_secs
-            );
-            tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
-            IS_HIBERNATING.store(false, Ordering::SeqCst);
-            CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
+        // --- 1. PRIORITY 1: COGNITIVE CALLBACK ---
+        if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
+            if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                let task = crate::db::CognitiveTask {
+                    id: task_id.clone(),
+                    task_type: format!("{:?}", profile.archetype),
+                    prompt: prompt.to_string(),
+                    system_instruction: system_instruction.unwrap_or_default().to_string(),
+                    expected_format: "Any".to_string(),
+                    priority: "Normal".to_string(),
+                    created_at: chrono::Utc::now(),
+                    status: "Pending".to_string(),
+                    result: None,
+                    ttl_minutes: 10,
+                    injected_at: None,
+                    session_id: None,
+                };
+                
+                if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                    let start = std::time::Instant::now();
+                    let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
+                        .ok()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(60);
+                    let timeout = std::time::Duration::from_secs(timeout_secs);
+                    let mut completed_opt = None;
+                    while start.elapsed() < timeout {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                            if updated.status == "Completed" {
+                                if let Some(res) = updated.result {
+                                    completed_opt = Some(res);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(res) = completed_opt {
+                        return Ok(res);
+                    }
+                    tracing::warn!("Cognitive callback timed out, falling back to direct cloud / local models");
+                }
+            }
         }
 
+        // --- 2. PRIORITY 2: CLOUD Completion ---
         let config = db.get_llm_config().await?;
-        let mut tier = crate::llm::router::route_task(db, profile).await;
+        let api_key = config.api_key.clone().unwrap_or_else(|| {
+            if config.cloud_provider == "gemini" {
+                std::env::var("GEMINI_API_KEY").unwrap_or_default()
+            } else {
+                std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+            }
+        });
 
-        if tier == crate::contracts::ModelTier::Cloud {
+        if !api_key.is_empty() {
             // Apply rate limit around cloud calls
             let rpm = std::env::var("MYTHRAX_CLOUD_RPM")
                 .ok()
@@ -292,92 +329,43 @@ impl RealLlmProvider {
                 }
             }
 
-            let cloud_res = async {
-                // Try cognitive callback first if not bootstrapping in CLI mode
-                if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
-                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-                        let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
-                        let task = crate::db::CognitiveTask {
-                            id: task_id.clone(),
-                            task_type: format!("{:?}", profile.archetype),
-                            prompt: prompt.to_string(),
-                            system_instruction: system_instruction.unwrap_or_default().to_string(),
-                            expected_format: "Any".to_string(),
-                            priority: "Normal".to_string(),
-                            created_at: chrono::Utc::now(),
-                            status: "Pending".to_string(),
-                            result: None,
-                            ttl_minutes: 10,
-                            injected_at: None,
-                            session_id: None,
-                        };
-                        
-                        if surreal_backend.create_cognitive_task(&task).await.is_ok() {
-                            let start = std::time::Instant::now();
-                            let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
-                                .ok()
-                                .and_then(|v| v.parse::<u64>().ok())
-                                .unwrap_or(60);
-                            let timeout = std::time::Duration::from_secs(timeout_secs);
-                            while start.elapsed() < timeout {
-                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                                if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
-                                    if updated.status == "Completed" {
-                                        if let Some(res) = updated.result {
-                                            return Ok(res);
-                                        }
-                                    }
-                                }
-                            }
-                            tracing::warn!("Cognitive callback for cloud model timed out, falling back to direct API / local model");
-                            let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
-                                || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
-                            if disable_fallback {
-                                anyhow::bail!("Cognitive callback for cloud model timed out and fallbacks are disabled");
-                            }
-                        } else {
-                            let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
-                                || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
-                            if disable_fallback {
-                                anyhow::bail!("Failed to create cognitive task and fallbacks are disabled");
-                            }
-                        }
-                    }
-                }
+            if IS_HIBERNATING.load(Ordering::SeqCst) {
+                let retry_secs = std::env::var("MYTHRAX_QUOTA_RETRY_SECS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(3600);
+                tracing::info!(
+                    phase = "hibernation",
+                    progress = "waiting",
+                    "Cloud completion called while hibernating. Waiting for {} seconds.",
+                    retry_secs
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
+                IS_HIBERNATING.store(false, Ordering::SeqCst);
+                CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
+            }
 
-                let api_key = config.api_key.clone().unwrap_or_else(|| {
-                    if config.cloud_provider == "gemini" {
-                        std::env::var("GEMINI_API_KEY").unwrap_or_default()
-                    } else {
-                        std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
-                    }
-                });
-                if api_key.is_empty() {
-                    tracing::warn!("Cloud tier selected but no API key is configured. Degrading to local Large model.");
-                    anyhow::bail!("No API key configured for Cloud model");
-                }
+            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                "gemini-1.5-flash"
+            } else {
+                &config.model
+            };
 
-                let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
-                    "gemini-1.5-flash"
-                } else {
-                    &config.model
-                };
-
-                self.completion_explicit(
-                    db,
-                    "cloud",
-                    &config.cloud_provider,
-                    cloud_model,
-                    system_instruction,
-                    prompt,
-                    false,
-                    false,
-                ).await
-            }.await;
+            let cloud_res = self.completion_explicit(
+                db,
+                "cloud",
+                &config.cloud_provider,
+                cloud_model,
+                system_instruction,
+                prompt,
+                false,
+                false,
+            ).await;
 
             match &cloud_res {
                 Ok(_) => {
                     CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
+                    return cloud_res;
                 }
                 Err(e) => {
                     let failures = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
@@ -402,30 +390,10 @@ impl RealLlmProvider {
                     }
                 }
             }
-
-            if cloud_res.is_ok() {
-                return cloud_res;
-            } else {
-                let disable_fallback = std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok()
-                    || db.get_profile_key("settings:disable_fallback").await.ok().flatten().map(|v| v == "true").unwrap_or(false);
-                if disable_fallback {
-                    return cloud_res;
-                }
-
-                let api_key = config.api_key.clone().unwrap_or_else(|| {
-                    if config.cloud_provider == "gemini" {
-                        std::env::var("GEMINI_API_KEY").unwrap_or_default()
-                    } else {
-                        std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
-                    }
-                });
-                if api_key.is_empty() {
-                    tier = crate::contracts::ModelTier::Large;
-                } else {
-                    return cloud_res;
-                }
-            }
         }
+
+        // --- 3. PRIORITY 3: LOCAL MODEL (FALLBACK) ---
+        let tier = crate::llm::router::route_task(db, profile).await;
         let _gpu_permit = crate::llm::router::gpu_reservation_lock().lock().await;
 
         let local_model = match tier {
