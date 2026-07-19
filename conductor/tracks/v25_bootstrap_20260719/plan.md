@@ -8,7 +8,7 @@
 - [x] Task: Wire HTR Pipeline Integration - `backpropagate_directions()` into post-dream hook. (0fc6f6b)
 - [x] Task: Wire HTR Pipeline Integration - `promote_insight_to_direction()` after insight creation. (30f3bd0)
 - [x] Task: Wire HTR Pipeline Integration - Fix contradiction resolution to preserve evidence and create conflict nodes. (5f37275)
-- [ ] Task: Wire HTR Pipeline Integration - Fix compactor to create `superseded_by` edges and expand temporal ranges.
+- [x] Task: Wire HTR Pipeline Integration - Fix compactor to create `superseded_by` edges and expand temporal ranges. (bd0b205)
 - [ ] Task: Wire HTR Pipeline Integration - Fix graduation to create graph edges from insights to wisdom.
 - [ ] Task: Wire HTR Pipeline Integration - Fix ingestion to create DB edges for linked artifacts.
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
