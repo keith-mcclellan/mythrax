@@ -2,6 +2,7 @@ pub mod shell;
 pub mod precompact;
 pub mod stop;
 pub mod adapters;
+pub mod reflect;
 
 use crate::contracts::HookResult;
 

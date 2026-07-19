@@ -147,6 +147,7 @@ pub struct CognitiveTask {
     pub result: Option<String>,
     pub ttl_minutes: i64,
     pub injected_at: Option<DateTime<Utc>>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
@@ -162,6 +163,7 @@ pub struct CognitiveTaskRaw {
     pub result: Option<String>,
     pub ttl_minutes: i64,
     pub injected_at: Option<DateTime<Utc>>,
+    pub session_id: Option<String>,
 }
 
 impl From<CognitiveTaskRaw> for CognitiveTask {
@@ -178,6 +180,7 @@ impl From<CognitiveTaskRaw> for CognitiveTask {
             result: raw.result,
             ttl_minutes: raw.ttl_minutes,
             injected_at: raw.injected_at,
+            session_id: raw.session_id,
         }
     }
 }
@@ -195,7 +198,8 @@ impl SurrealBackend {
                 status: $status,
                 result: $result,
                 ttl_minutes: $ttl_minutes,
-                injected_at: $injected_at
+                injected_at: $injected_at,
+                session_id: $session_id
             };
         ";
         let id_val = if task.id.contains(':') {
@@ -215,6 +219,7 @@ impl SurrealBackend {
             .bind(("result", task.result.as_deref()))
             .bind(("ttl_minutes", task.ttl_minutes))
             .bind(("injected_at", task.injected_at))
+            .bind(("session_id", task.session_id.as_deref()))
             .await?;
         
         let created: Option<CognitiveTaskRaw> = response.take(0)?;
@@ -321,5 +326,29 @@ impl SurrealBackend {
             .await?
             .check()?;
         Ok(())
+    }
+
+    pub async fn delete_cognitive_task(&self, id: &str) -> Result<()> {
+        let rec_id = if id.contains(':') {
+            id.to_string()
+        } else {
+            format!("cognitive_task:{}", id)
+        };
+        let id_val = rec_id.splitn(2, ':').collect::<Vec<&str>>()[1].to_string();
+        let query_str = "DELETE type::record('cognitive_task', $id_val);";
+        self.db.query(query_str)
+            .bind(("id_val", id_val.as_str()))
+            .await?
+            .check()?;
+        Ok(())
+    }
+
+    pub async fn get_completed_cognitive_tasks(&self, task_type: &str) -> Result<Vec<CognitiveTask>> {
+        let query_str = "SELECT * FROM cognitive_task WHERE status = 'Completed' AND task_type = $task_type;";
+        let mut response = self.db.query(query_str)
+            .bind(("task_type", task_type))
+            .await?;
+        let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
+        Ok(tasks.into_iter().map(CognitiveTask::from).collect())
     }
 }

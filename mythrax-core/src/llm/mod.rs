@@ -309,6 +309,7 @@ impl RealLlmProvider {
                             result: None,
                             ttl_minutes: 10,
                             injected_at: None,
+                            session_id: None,
                         };
                         
                         if surreal_backend.create_cognitive_task(&task).await.is_ok() {

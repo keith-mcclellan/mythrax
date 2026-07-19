@@ -104,6 +104,16 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             let count = decision.unwrap_or(0);
             Ok(json!({ "status": "success", "block": block, "episodes_saved": count }))
         }
+        "reflect" => {
+            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for reflect")?;
+            let transcript_path_str = args.get("transcript_path").and_then(|v| v.as_str()).context("Missing transcript_path parameter for reflect")?;
+            let status = crate::hooks::reflect::handle_reflect(
+                session_id,
+                transcript_path_str,
+                state.backend.as_ref(),
+            ).await?;
+            Ok(json!({ "status": status }))
+        }
         "audit_response" => {
             let response_text = args.get("response").and_then(|v| v.as_str()).context("Missing response parameter for audit_response")?;
             let rules_path_opt = args.get("rules_path").and_then(|v| v.as_str());
@@ -185,6 +195,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     result: None,
                     ttl_minutes: 10,
                     injected_at: None,
+                    session_id: session_id_opt.map(|s| s.to_string()),
                 };
                 
                 let surreal_backend = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>()

@@ -168,6 +168,7 @@ pub async fn run_summarization_task(
                 result: None,
                 ttl_minutes: 10,
                 injected_at: None,
+                session_id: None,
             };
             
             if surreal_backend.create_cognitive_task(&task).await.is_ok() {
@@ -315,6 +316,7 @@ pub async fn distill_transcript_file(
                     result: None,
                     ttl_minutes: 10,
                     injected_at: None,
+                    session_id: Some(conversation_id.to_string()),
                 };
                 
                 if surreal_backend.create_cognitive_task(&task).await.is_ok() {
@@ -624,6 +626,7 @@ pub async fn seed_wisdom_from_rules(
                         result: None,
                         ttl_minutes: 10,
                         injected_at: None,
+                        session_id: None,
                     };
                     
                     if surreal_backend.create_cognitive_task(&task).await.is_ok() {

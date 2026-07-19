@@ -96,28 +96,47 @@ pub struct Entity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct Episode {
+    #[serde(default)]
     pub id: Option<String>,
     pub title: String,
     pub content: String,
+    #[serde(default)]
     pub source: Option<String>,
+    #[serde(default)]
     pub scope: Option<String>,
+    #[serde(default)]
     pub vault_path: Option<String>,
+    #[serde(default)]
     pub embedding: Option<Vec<f32>>,
+    #[serde(default)]
     pub processed_in_dream: Option<bool>,
+    #[serde(default)]
     pub source_episode: Option<String>,
+    #[serde(default)]
     pub last_retrieved_at: Option<String>,
+    #[serde(default)]
     pub utility: Option<f32>,
+    #[serde(default)]
     pub archived: Option<bool>,
+    #[serde(default)]
     pub discovery_tokens: Option<u32>,
+    #[serde(default)]
     pub facts: Option<Vec<String>>,
+    #[serde(default)]
     pub concepts: Option<Vec<String>>,
+    #[serde(default)]
     pub files_read: Option<Vec<String>>,
+    #[serde(default)]
     pub files_modified: Option<Vec<String>>,
+    #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
     pub word_count: Option<u32>,
+    #[serde(default)]
     pub archived_at: Option<String>,
+    #[serde(default)]
     pub node_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub importance: Option<f32>,
@@ -127,6 +146,12 @@ pub struct Episode {
     pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub causal_explanation: Option<String>,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -134,19 +159,31 @@ pub struct EpisodeSave {
     pub title: String,
     pub content: String,
     pub entities: Vec<Entity>,
+    #[serde(default)]
     pub scope: Option<String>,
+    #[serde(default)]
     pub vault_path: Option<String>,
+    #[serde(default)]
     pub source_episode: Option<String>,
+    #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
     pub task_id: Option<String>,
+    #[serde(default)]
     pub discovery_tokens: Option<u32>,
+    #[serde(default)]
     pub facts: Option<Vec<String>>,
+    #[serde(default)]
     pub concepts: Option<Vec<String>>,
+    #[serde(default)]
     pub files_read: Option<Vec<String>>,
+    #[serde(default)]
     pub files_modified: Option<Vec<String>>,
+    #[serde(default)]
     pub node_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub importance: Option<f32>,
@@ -154,6 +191,12 @@ pub struct EpisodeSave {
     pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub causal_explanation: Option<String>,
+    #[serde(default)]
+    pub parent_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +220,9 @@ pub struct EpisodeSaveBuilder {
     pub importance: Option<f32>,
     pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
     pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
+    pub outcome: Option<String>,
+    pub causal_explanation: Option<String>,
+    pub parent_task_id: Option<String>,
 }
 
 impl EpisodeSaveBuilder {
@@ -201,6 +247,9 @@ impl EpisodeSaveBuilder {
             importance: None,
             temporal_range_start: None,
             temporal_range_end: None,
+            outcome: None,
+            causal_explanation: None,
+            parent_task_id: None,
         }
     }
 
@@ -289,6 +338,21 @@ impl EpisodeSaveBuilder {
         self
     }
 
+    pub fn outcome(mut self, outcome: Option<String>) -> Self {
+        self.outcome = outcome;
+        self
+    }
+
+    pub fn causal_explanation(mut self, causal_explanation: Option<String>) -> Self {
+        self.causal_explanation = causal_explanation;
+        self
+    }
+
+    pub fn parent_task_id(mut self, parent_task_id: Option<String>) -> Self {
+        self.parent_task_id = parent_task_id;
+        self
+    }
+
     pub fn build(self) -> EpisodeSave {
         EpisodeSave {
             title: self.title,
@@ -310,6 +374,9 @@ impl EpisodeSaveBuilder {
             importance: self.importance,
             temporal_range_start: self.temporal_range_start,
             temporal_range_end: self.temporal_range_end,
+            outcome: self.outcome,
+            causal_explanation: self.causal_explanation,
+            parent_task_id: self.parent_task_id,
         }
     }
 }

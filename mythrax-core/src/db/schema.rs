@@ -41,6 +41,9 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS temporal_range_end ON episode TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS graduated_to ON episode TYPE option<record<wisdom>>;
     DEFINE FIELD IF NOT EXISTS metacognitive_confidence ON episode TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS outcome ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS causal_explanation ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS parent_task_id ON episode TYPE option<string>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -419,6 +422,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS result ON cognitive_task TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS ttl_minutes ON cognitive_task TYPE int DEFAULT 30;
     DEFINE FIELD IF NOT EXISTS injected_at ON cognitive_task TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS session_id ON cognitive_task TYPE option<string>;
 
     DEFINE TABLE IF NOT EXISTS pipeline_state SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS forged_section_hash SCHEMALESS;
