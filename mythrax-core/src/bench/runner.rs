@@ -917,9 +917,16 @@ async fn run_evaluation(
         let param_overrides = param_overrides.clone();
 
         join_set.spawn(async move {
-            let backend = SurrealBackend::new_in_memory()
+            let config = mythrax_core::db::backend::BackendConfig {
+                check_daemon: false,
+                embedder: None, // Uses real LocalEmbedder
+                llm: None,
+            };
+            let backend = SurrealBackend::new("mem://", config)
                 .await
                 .context("Failed to create in-memory backend")?;
+            let random_db = format!("db_{}", uuid::Uuid::new_v4().to_string().replace("-", "_"));
+            backend.db.use_ns("mythrax").use_db(&random_db).await?;
             backend.init().await.context("Failed to initialize database schema")?;
             backend.set_search_mode(&mode).await;
             if let Some(ref o) = param_overrides {

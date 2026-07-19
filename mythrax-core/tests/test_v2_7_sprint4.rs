@@ -62,6 +62,7 @@ async fn test_cognitive_task_crud() -> anyhow::Result<()> {
         result: None,
         ttl_minutes: 30,
         injected_at: None,
+        session_id: None,
     };
 
     // 1. Create
@@ -115,6 +116,7 @@ async fn test_cognitive_task_injection() -> anyhow::Result<()> {
         result: None,
         ttl_minutes: 30,
         injected_at: None,
+        session_id: None,
     };
     let task_norm1 = CognitiveTask {
         id: "cognitive_task:norm_task1".to_string(),
@@ -128,6 +130,7 @@ async fn test_cognitive_task_injection() -> anyhow::Result<()> {
         result: None,
         ttl_minutes: 30,
         injected_at: None,
+        session_id: None,
     };
     let task_norm2 = CognitiveTask {
         id: "cognitive_task:norm_task2".to_string(),
@@ -141,6 +144,7 @@ async fn test_cognitive_task_injection() -> anyhow::Result<()> {
         result: None,
         ttl_minutes: 30,
         injected_at: None,
+        session_id: None,
     };
 
     surreal_backend.create_cognitive_task(&task_imm).await?;
@@ -215,6 +219,7 @@ async fn test_cognitive_callback_validation() -> anyhow::Result<()> {
         result: None,
         ttl_minutes: 30,
         injected_at: None,
+        session_id: None,
     };
     surreal_backend.create_cognitive_task(&task).await?;
 
@@ -325,6 +330,7 @@ async fn test_pipeline_state_serialization() -> anyhow::Result<()> {
         result: None,
         ttl_minutes: 30,
         injected_at: Some(Utc::now()),
+        session_id: None,
     };
     surreal_backend.create_cognitive_task(&task).await?;
 
@@ -370,6 +376,7 @@ async fn test_ttl_sweep_fallback() -> anyhow::Result<()> {
         result: None,
         ttl_minutes: 10,
         injected_at: Some(Utc::now() - Duration::minutes(20)),
+        session_id: None,
     };
     surreal_backend.create_cognitive_task(&task).await?;
 

@@ -1,3 +1,9 @@
+//! # Mythrax Cognitive Synthesis Pipeline
+//!
+//! Provides the primary cognitive architecture for episodic memory distillation,
+//! hierarchical clustering via DBSCAN, Direction backpropagation, and Wisdom graduation.
+//! Incorporates Strunk & White concision rules and compression warning metrics.
+
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
