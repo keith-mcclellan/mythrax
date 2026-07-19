@@ -177,8 +177,9 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                     for mut rule in rules {
                                         if let Some(ref rule_emb) = rule.embedding {
                                             let sim = crate::math::cosine_similarity(&vec, rule_emb);
-                                            if sim > 0.85 {
-                                                rule.utility = Some(rule.utility.unwrap_or(50.0) + 10.0);
+                                            if sim >= 0.80 {
+                                                let current_imp = rule.importance.unwrap_or(0.0);
+                                                rule.importance = Some((current_imp + 0.2).min(1.0));
                                                 let _ = backend.save_wisdom_rule_db(&rule).await;
                                                 matched = true;
                                                 break;
@@ -186,12 +187,14 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                         }
                                     }
                                     if !matched {
+                                        let causal_str = parsed["causal_explanation"].as_str().unwrap_or("").to_string();
+                                        let lessons_str = parsed["lessons"].as_str().unwrap_or("").to_string();
                                         let new_rule = WisdomRule {
                                             id: None,
-                                            target_pattern: "Failed session approach".to_string(),
+                                            target_pattern: format!("PRUNED: {}", causal_str),
                                             action_to_avoid: "Repeat failed approach".to_string(),
-                                            causal_explanation: format!("{:?}", parsed["causal_explanation"]),
-                                            prescribed_remedy: format!("Lessons: {:?}", parsed["lessons"]),
+                                            causal_explanation: causal_str,
+                                            prescribed_remedy: format!("Lessons: {}", lessons_str),
                                             tier: Tier::Working,
                                             scope: "general".to_string(),
                                             vault_path: None,
@@ -205,12 +208,13 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                             severity: Some("low".to_string()),
                                             blocking: Some(false),
                                             rule_type: Some("pruned_hypothesis".to_string()),
+                                            importance: Some(0.2), // Initial importance
                                             ..Default::default()
                                         };
                                         let _ = backend.save_wisdom_rule_db(&new_rule).await;
                                     }
                                 }
-                            }
+                             }
                         }
                     }
                 }

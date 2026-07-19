@@ -129,7 +129,7 @@ async fn test_harvest_completed_reflections() {
 
     let rule = mythrax_core::contracts::WisdomRule {
         id: None,
-        target_pattern: "Failed session approach".to_string(),
+        target_pattern: "PRUNED: Existing causal".to_string(),
         action_to_avoid: "Repeat failed approach".to_string(),
         causal_explanation: "Existing causal".to_string(),
         prescribed_remedy: "Existing remedy".to_string(),
@@ -146,6 +146,7 @@ async fn test_harvest_completed_reflections() {
         severity: Some("low".to_string()),
         blocking: Some(false),
         rule_type: Some("pruned_hypothesis".to_string()),
+        importance: Some(0.2),
         ..Default::default()
     };
     backend.save_wisdom_rule_db(&rule).await.unwrap();
@@ -165,12 +166,11 @@ async fn test_harvest_completed_reflections() {
     assert_eq!(eps[0]["node_type"], "experience");
     
     let rule_sql = "
-        SELECT *,
-               (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+        SELECT *
         FROM wisdom
         WHERE rule_type = 'pruned_hypothesis';
     ";
     let mut rule_res = backend.db.query(rule_sql).await.unwrap();
     let rules: Vec<serde_json::Value> = rule_res.take(0).unwrap();
-    assert!(rules.iter().any(|r| r["utility"].as_f64().unwrap_or(0.0) > 50.0));
+    assert!(rules.iter().any(|r| r["importance"].as_f64().unwrap_or(0.0) > 0.3));
 }

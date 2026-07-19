@@ -74,7 +74,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
             let run_res = async {
                 // Composition root: inject mock dependencies when test env vars are set
-                let backend_config = if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
+                let backend_config = if crate::is_test_mock() {
                     crate::db::BackendConfig {
                         check_daemon: false,
                         embedder: Some(Arc::new(crate::embeddings::MockEmbedder)),

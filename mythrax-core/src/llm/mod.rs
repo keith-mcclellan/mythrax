@@ -116,7 +116,7 @@ pub struct LLMClient {
 impl Default for LLMClient {
     fn default() -> Self {
         // Composition root: env vars determine which provider to inject
-        if std::env::var("MYTHRAX_TEST_MOCK").is_ok() || std::env::var("MYTHRAX_MOCK_LLM").is_ok() {
+        if crate::is_test_mock() {
             Self::new_mock()
         } else {
             Self::new_real()
