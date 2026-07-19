@@ -716,6 +716,10 @@ pub async fn bulk_ingest_vault(
                         .vault_path(Some(parent_relative_path.clone()))
                         .session_id(Some(dir_name.clone()))
                         .created_at(Some(created_at_opt.clone()))
+                        .temporal_range_start(chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                            .ok().map(|dt| dt.with_timezone(&chrono::Utc)))
+                        .temporal_range_end(chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                            .ok().map(|dt| dt.with_timezone(&chrono::Utc)))
                         .build();
                         if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
                             success_count += 1;
@@ -783,6 +787,10 @@ pub async fn bulk_ingest_vault(
                         .vault_path(Some(relative_path.clone()))
                         .session_id(Some(dir_name.clone()))
                         .created_at(Some(created_at_opt.clone()))
+                        .temporal_range_start(chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                            .ok().map(|dt| dt.with_timezone(&chrono::Utc)))
+                        .temporal_range_end(chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                            .ok().map(|dt| dt.with_timezone(&chrono::Utc)))
                         .build();
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
                             success_count += 1;

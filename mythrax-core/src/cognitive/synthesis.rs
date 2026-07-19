@@ -837,15 +837,26 @@ impl DreamCoordinator {
 
                         let mut source_ep_links = Vec::new();
                         let mut eps_to_link = Vec::new();
+                        let mut starts = Vec::new();
                         if let Ok(mem_nodes) = db.get_memory_nodes(&new_source_episodes).await {
                             for ep in mem_nodes.episodes {
                                 if let Some(ref path) = ep.vault_path {
-                                    let target = path.strip_suffix(".md").unwrap_or(path);
+                                    let target = path.strip_suffix(".md").unwrap_or(&path);
                                     source_ep_links.push(format!("- [[{}|{}]]", target, ep.title));
                                     eps_to_link.push((path.clone(), ep.title.clone()));
                                 }
+                                let t_start = ep.temporal_range_start
+                                    .or_else(|| ep.created_at.as_ref()
+                                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                        .map(|dt| dt.with_timezone(&chrono::Utc)));
+                                if let Some(ts) = t_start {
+                                    starts.push(ts);
+                                }
                             }
                         }
+                        let temporal_start = starts.iter().min().cloned();
+                        let temporal_end = starts.iter().max().cloned();
+
                         let source_ep_section = if !source_ep_links.is_empty() {
                             format!("\n\n## Source Episodes\n{}", source_ep_links.join("\n"))
                         } else {
@@ -881,11 +892,17 @@ impl DreamCoordinator {
                             scope: scope.clone(),
                             vault_path: Some(relative_path.clone()),
                             embedding: None,
+                            temporal_range_start: temporal_start,
+                            temporal_range_end: temporal_end,
                             ..Default::default()
                         };
                         if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
                             if let Some(ref ep_id) = ep.id {
-                                let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
+                                let ep_start = ep.temporal_range_start
+                                    .or_else(|| ep.created_at.as_ref()
+                                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                        .map(|dt| dt.with_timezone(&chrono::Utc)));
+                                let _ = db.relate_nodes(ep_id, &wiki_node_id, ep_start, ep_start, Some(1.0)).await;
                             }
                         }
                         
@@ -1013,6 +1030,15 @@ impl DreamCoordinator {
 
                 let cluster_ep_ids: Vec<String> = cluster_eps.iter().map(|ep| ep.id.clone().unwrap_or_default()).collect();
 
+                let cluster_starts: Vec<_> = cluster_eps.iter()
+                    .filter_map(|ep| ep.temporal_range_start
+                        .or_else(|| ep.created_at.as_ref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&chrono::Utc))))
+                    .collect();
+                let temporal_start = cluster_starts.iter().min().cloned();
+                let temporal_end = cluster_starts.iter().max().cloned();
+
                 let clean_title = slugify_title(&analysis.title);
                 let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
                 let insight_content = format!(
@@ -1035,11 +1061,19 @@ impl DreamCoordinator {
                     embedding: None,
                     metacognitive_confidence: analysis.metacognitive_confidence,
                     node_type: analysis.node_type.clone().or(Some("insight".to_string())),
+                    temporal_range_start: temporal_start,
+                    temporal_range_end: temporal_end,
                     ..Default::default()
                 };
                 if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
-                    for ep_id in &cluster_ep_ids {
-                        let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
+                    for ep in &cluster_eps {
+                        if let Some(ref ep_id) = ep.id {
+                            let ep_start = ep.temporal_range_start
+                                .or_else(|| ep.created_at.as_ref()
+                                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                    .map(|dt| dt.with_timezone(&chrono::Utc)));
+                            let _ = db.relate_nodes(ep_id, &wiki_node_id, ep_start, ep_start, Some(1.0)).await;
+                        }
                     }
                 }
                 
@@ -1336,6 +1370,15 @@ impl DreamCoordinator {
                                     }
 
                                     // Save WikiNode to SurrealDB
+                                    let group_starts: Vec<_> = group.iter()
+                                        .filter_map(|ep| ep.temporal_range_start
+                                            .or_else(|| ep.created_at.as_ref()
+                                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                                .map(|dt| dt.with_timezone(&chrono::Utc))))
+                                        .collect();
+                                    let temporal_start = group_starts.iter().min().cloned();
+                                    let temporal_end = group_starts.iter().max().cloned();
+
                                     let node_contract = WikiNode {
                                         id: None,
                                         name: analysis.title.clone(),
@@ -1345,6 +1388,8 @@ impl DreamCoordinator {
                                         embedding: None,
                                         metacognitive_confidence: analysis.metacognitive_confidence,
                                         node_type: analysis.node_type.clone().or(Some("insight".to_string())),
+                                        temporal_range_start: temporal_start,
+                                        temporal_range_end: temporal_end,
                                         ..Default::default()
                                     };
                                     
@@ -1353,7 +1398,11 @@ impl DreamCoordinator {
                                     if let Ok(wiki_node_id) = save_res {
                                         for ep in &group {
                                             if let Some(ref ep_id) = ep.id {
-                                                let _ = db.relate_nodes(ep_id, &wiki_node_id, None, None, None).await;
+                                                let ep_start = ep.temporal_range_start
+                                                    .or_else(|| ep.created_at.as_ref()
+                                                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                                        .map(|dt| dt.with_timezone(&chrono::Utc)));
+                                                let _ = db.relate_nodes(ep_id, &wiki_node_id, ep_start, ep_start, Some(1.0)).await;
                                             }
                                         }
                                     }
@@ -1389,6 +1438,8 @@ impl DreamCoordinator {
                 content: String,
                 embedding: Vec<f32>,
                 is_procedural: bool,
+                temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
+                temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
             }
 
             let mut candidates = Vec::new();
@@ -1404,6 +1455,8 @@ impl DreamCoordinator {
                             content: node.content,
                             embedding: emb.clone(),
                             is_procedural: false,
+                            temporal_range_start: node.temporal_range_start,
+                            temporal_range_end: node.temporal_range_end,
                         });
                     }
                 }
@@ -1414,6 +1467,10 @@ impl DreamCoordinator {
                 for ep in episodes {
                     if !ep.archived.unwrap_or(false) {
                         if let Some(ref emb) = ep.embedding {
+                            let ep_start = ep.temporal_range_start
+                                .or_else(|| ep.created_at.as_ref()
+                                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                    .map(|dt| dt.with_timezone(&chrono::Utc)));
                             candidates.push(GradCandidate {
                                 id: ep.id.unwrap_or_default().replace("`", ""),
                                 scope: ep.scope.unwrap_or_else(|| "general".to_string()),
@@ -1421,6 +1478,8 @@ impl DreamCoordinator {
                                 content: ep.content,
                                 embedding: emb.clone(),
                                 is_procedural: true,
+                                temporal_range_start: ep_start,
+                                temporal_range_end: ep.temporal_range_end.or(ep_start),
                             });
                         }
                     }
@@ -1509,6 +1568,8 @@ impl DreamCoordinator {
                             content: node.content,
                             embedding: node.embedding.unwrap_or_default(),
                             is_procedural: false,
+                            temporal_range_start: node.temporal_range_start,
+                            temporal_range_end: node.temporal_range_end,
                         });
                     }
                 }
@@ -1536,6 +1597,10 @@ impl DreamCoordinator {
                 } else {
                     for ep in matches_ep {
                         let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                        let ep_start = ep.temporal_range_start
+                            .or_else(|| ep.created_at.as_ref()
+                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                .map(|dt| dt.with_timezone(&chrono::Utc)));
                         cluster.push(GradCandidate {
                             id: ep.id.unwrap_or_default().replace("`", ""),
                             scope: ep_scope,
@@ -1543,6 +1608,8 @@ impl DreamCoordinator {
                             content: ep.content,
                             embedding: ep.embedding.unwrap_or_default(),
                             is_procedural: true,
+                            temporal_range_start: ep_start,
+                            temporal_range_end: ep.temporal_range_end.or(ep_start),
                         });
                     }
                 }
@@ -1655,7 +1722,7 @@ impl DreamCoordinator {
                                 Ok(wisdom_id) => {
                                     println!("DEBUG - save_wisdom_rule_with_deduplication succeeded: {}", wisdom_id);
                                     for member in &cluster {
-                                        let _ = db.relate_nodes(&member.id, &wisdom_id, None, None, None).await;
+                                        let _ = db.relate_nodes(&member.id, &wisdom_id, member.temporal_range_start, member.temporal_range_end, None).await;
                                     }
                                 }
                                 Err(e) => {
