@@ -1161,6 +1161,9 @@ impl DreamCoordinator {
                 name: String,
                 content: String,
                 embedding: Vec<f32>,
+                // ⚡ Bolt: Precalculated Euclidean norm of the embedding to avoid
+                // recalculating it inside the O(N^2) inner loops during similarity checks.
+                norm: f32,
                 is_procedural: bool,
             }
 
@@ -1176,6 +1179,7 @@ impl DreamCoordinator {
                             name: node.name,
                             content: node.content,
                             embedding: emb.clone(),
+                            norm: emb.iter().map(|x| x * x).sum::<f32>().sqrt(),
                             is_procedural: false,
                         });
                     }
@@ -1193,6 +1197,7 @@ impl DreamCoordinator {
                                 name: ep.title,
                                 content: ep.content,
                                 embedding: emb.clone(),
+                                norm: emb.iter().map(|x| x * x).sum::<f32>().sqrt(),
                                 is_procedural: true,
                             });
                         }
@@ -1260,8 +1265,8 @@ impl DreamCoordinator {
                         if !other.is_procedural && other.scope != cand.scope {
                             let sim = {
                                 let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
-                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_u: f32 = cand.norm;
+                                let norm_v: f32 = other.norm;
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
                                 } else {
@@ -1280,6 +1285,7 @@ impl DreamCoordinator {
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
+                            norm: node.embedding.as_ref().map(|e| e.iter().map(|x| x * x).sum::<f32>().sqrt()).unwrap_or(0.0),
                             embedding: node.embedding.unwrap_or_default(),
                             is_procedural: false,
                         });
@@ -1291,8 +1297,8 @@ impl DreamCoordinator {
                         if other.is_procedural && other.scope != cand.scope {
                             let sim = {
                                 let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
-                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_u: f32 = cand.norm;
+                                let norm_v: f32 = other.norm;
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
                                 } else {
@@ -1314,6 +1320,7 @@ impl DreamCoordinator {
                             scope: ep_scope,
                             name: ep.title,
                             content: ep.content,
+                            norm: ep.embedding.as_ref().map(|e| e.iter().map(|x| x * x).sum::<f32>().sqrt()).unwrap_or(0.0),
                             embedding: ep.embedding.unwrap_or_default(),
                             is_procedural: true,
                         });
