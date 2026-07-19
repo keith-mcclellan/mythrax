@@ -1428,6 +1428,12 @@ impl DreamCoordinator {
         }
         }
 
+        // Run direction backpropagation after dreaming completes for all scopes
+        tracing::info!("Running direction backpropagation...");
+        if let Err(e) = backpropagate_directions(db, store).await {
+            tracing::warn!("Direction backpropagation failed: {:?}", e);
+        }
+
         // --- Tasks C.6 & C.6a: Cross-Scope Graduation Pass ---
         if db.is_feature_enabled("compactor.enable_cross_scope_graduation", true).await {
             #[derive(Clone, Debug)]
