@@ -25,4 +25,4 @@ Bootstrap Mythrax in a workspace with 1000+ historical transcripts using a two-p
 - `test_bootstrap_e2e.rs` passes (with all 23 structural/temporal assertions), proving full pipeline correctness.
 - 1000+ transcripts can be successfully ingested and asynchronously distilled.
 - `DEVELOPER_DIR` empirical test is run and documented.
-- No `#[allow(dead_code)]` or redundant test files remain.
+- All dead code (`#[allow(dead_code)]`) is properly integrated into the HTR pipeline rather than deleted.

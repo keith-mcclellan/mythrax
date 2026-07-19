@@ -5,7 +5,12 @@
 - [ ] Task: Add `skip_llm` Mode to Ingestion Pipeline (`ingestion.rs`, `vault_handlers.rs`, `main.rs`).
 - [ ] Task: Implement Per-Episode Distillation (`synthesis.rs`, `crud_operations.rs`) and add `summary` field to the `Episode` schema in SurrealDB.
 - [ ] Task: Temporally-Anchor Graph Edges (`synthesis.rs`, `ingestion.rs`).
-- [ ] Task: Wire HTR Pipeline Integration (Arbor) — implement `backpropagate_directions()`, `promote_insight_to_direction()`, contradiction conflict nodes, and `superseded_by` edges.
+- [ ] Task: Wire HTR Pipeline Integration - `backpropagate_directions()` into post-dream hook.
+- [ ] Task: Wire HTR Pipeline Integration - `promote_insight_to_direction()` after insight creation.
+- [ ] Task: Wire HTR Pipeline Integration - Fix contradiction resolution to preserve evidence and create conflict nodes.
+- [ ] Task: Wire HTR Pipeline Integration - Fix compactor to create `superseded_by` edges and expand temporal ranges.
+- [ ] Task: Wire HTR Pipeline Integration - Fix graduation to create graph edges from insights to wisdom.
+- [ ] Task: Wire HTR Pipeline Integration - Fix ingestion to create DB edges for linked artifacts.
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
 
 ## Phase 2: Feedback Loop Hardening & Configuration
@@ -19,7 +24,7 @@
 ## Phase 3: Tech Debt Cleanups & Empirical Testing
 - [ ] Task: Delete redundant E2E tests (`test_distillation.rs`, `test_schema_upgrades.rs`, etc.).
 - [ ] Task: Remove `socket2` dependency from `Cargo.toml`.
-- [ ] Task: Cleanly remove dead code masked by `#[allow(dead_code)]`.
+- [ ] Task: Integrate dead code (`#[allow(dead_code)]`) into the pipeline properly rather than eliminating it.
 - [ ] Task: Align `SKILL.md` with MCP schemas.
 - [ ] Task: Run `DEVELOPER_DIR` empirical runtime risk test.
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
