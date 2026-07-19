@@ -110,12 +110,19 @@ fn parse_model_tier(s: &str) -> Option<ModelTier> {
     }
 }
 
-/// Resolves the tier for a task based on task profile, swap pressure, database mappings, and heuristics
 pub async fn route_task(db: &dyn StorageBackend, profile: &TaskProfile) -> ModelTier {
-    if let Ok((total_swap, _used_swap)) = get_swap_usage() {
-        if total_swap >= 4000.0 {
-            tracing::warn!("Swap usage total is {:.2}MB (>= 4000MB), routing to Cloud under memory pressure", total_swap);
-            return ModelTier::Cloud;
+    if std::env::var("MYTHRAX_DISABLE_SWAP_ROUTING").is_err() {
+        if let Ok((_total_swap, used_swap)) = get_swap_usage() {
+            if used_swap >= 4000.0 {
+                let has_cloud_key = std::env::var("GEMINI_API_KEY").map(|s| !s.trim().is_empty()).unwrap_or(false)
+                    || std::env::var("ANTHROPIC_API_KEY").map(|s| !s.trim().is_empty()).unwrap_or(false);
+                if has_cloud_key {
+                    tracing::warn!("Swap usage used is {:.2}MB (>= 4000MB), routing to Cloud under memory pressure", used_swap);
+                    return ModelTier::Cloud;
+                } else {
+                    tracing::info!("Swap usage used is {:.2}MB, but no Cloud API keys configured. Staying local.", used_swap);
+                }
+            }
         }
     }
 
