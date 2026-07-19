@@ -836,8 +836,7 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
         "arguments": args_root
     })).await?;
     let text_root = resp_root["content"][0]["text"].as_str().unwrap();
-    assert!(text_root.contains("Retrieved Semantic Context"), "Expected Retrieved Semantic Context in: {}", text_root);
-    assert!(text_root.contains("Pinned Deep-Search Instruction"), "Expected Pinned Deep-Search Instruction in: {}", text_root);
+        assert!(text_root.contains("Pinned Deep-Search Instruction"), "Expected Pinned Deep-Search Instruction in: {}", text_root);
 
     Ok(())
 }

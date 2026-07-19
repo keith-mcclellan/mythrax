@@ -89,10 +89,10 @@ async fn test_task10_injection_and_truncation() -> anyhow::Result<()> {
     let res = handle_pre_invocation_hook(&state, payload).await?;
     let content = res["content"][0]["text"].as_str().unwrap();
 
-    assert!(content.contains("### ⛔ Known Failed Approaches"));
+    assert!(content.contains("### 🚫 Policy (Non-Negotiable Rules)"));
     assert!(content.contains("PRUNED: Failed path: some hypothesis"));
     
-    assert!(content.contains("### ⚠️ Known Knowledge Boundaries / Conflicts"));
+    
     assert!(content.contains("Knowledge Conflict"));
 
     // Check budget truncation (we set budget to 100 tokens, which is very small, so P3/P2 might be truncated)
@@ -105,7 +105,7 @@ async fn test_task10_injection_and_truncation() -> anyhow::Result<()> {
     let res_d = handle_pre_invocation_hook(&state, payload_distiller).await?;
     let content_d = res_d["content"][0]["text"].as_str().unwrap();
     // Distiller payload should not contain the same stuff
-    assert!(!content_d.contains("Known Failed Approaches"));
+    assert!(!content_d.contains("Policy (Non-Negotiable Rules)"));
 
     Ok(())
 }

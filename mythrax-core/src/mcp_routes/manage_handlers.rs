@@ -874,38 +874,15 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             .await;
     }
 
-    let mut capabilities_wisdom_part = String::new();
-    let capabilities_res = surreal_backend.db.query("SELECT * FROM wisdom WHERE tier = 'permanent';").await;
-    if let Ok(mut resp) = capabilities_res {
-        let rules: Vec<WisdomRule> = resp.take(0).unwrap_or_default();
-        if !rules.is_empty() {
-            let mut rule_strings = Vec::new();
-            for r in rules {
-                rule_strings.push(format!(
-                    "- **Rule on {}**:\n  - **Avoid**: {}\n  - **Remedy**: {}",
-                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
-                ));
-            }
-            capabilities_wisdom_part = format!(
-                "### 🛠️ Mythrax Capabilities & Tool Wisdom\n{}\n\n",
-                rule_strings.join("\n")
-            );
-        }
-    }
 
-    let mut belief_part = String::new();
+
+    let mut loaded_belief_states: Vec<BeliefState> = Vec::new();
     let belief_res = surreal_backend.db.query("SELECT session_id, tasks_todo, hypotheses_tested, confidence_score, uncertainty_areas, updated_at FROM belief_state WHERE session_id = $session_id;")
         .bind(("session_id", session_id))
         .await;
     
     if let Ok(mut resp) = belief_res {
-        let belief_states: Vec<BeliefState> = resp.take(0).unwrap_or_default();
-        if let Some(bs) = belief_states.first() {
-            belief_part = format!(
-                "### 🧠 POMDP Belief State\n- **Session**: `{}`\n- **Confidence**: {:.2}\n- **Tasks Todo**: {:?}\n- **Hypotheses Tested**: {:?}\n- **Uncertainty Areas**: {:?}\n\n",
-                bs.session_id, bs.confidence_score, bs.tasks_todo, bs.hypotheses_tested, bs.uncertainty_areas
-            );
-        }
+        loaded_belief_states = resp.take(0).unwrap_or_default();
     }
 
     let mut handoffs_resp = surreal_backend.db.query("SELECT parent_conversation_id, summary, scope FROM handoff WHERE subagent_conversation_id = $subagent AND status = 'PENDING';")
@@ -1080,6 +1057,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     }
     parts.push(broker_status);
 
+    
+let mut insights_parts = Vec::new();
     if !handoffs.is_empty() {
         let active_handoff = &handoffs[0];
         let parent_conversation_id = active_handoff.get("parent_conversation_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -1124,16 +1103,16 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
         if !node_ids.is_empty() {
             let hydrated = state.backend.get_memory_nodes(&node_ids).await?;
-            parts.push("## Hydrated Context Nodes\n".to_string());
+            
             for wiki in hydrated.wiki_nodes {
                 total_read += calc_tokens(&wiki.name, &wiki.content, None);
-                parts.push(format!("### 📚 Distilled Insight: {}\nScope: {}\n{}\n", wiki.name, wiki.scope, wiki.content));
+                insights_parts.push(format!("**Distilled Insight: {}**\n{}", wiki.name, wiki.content));
             }
             for wisdom in hydrated.wisdom_rules {
                 let rule_content = format!("Avoid: {}\nCausal: {}\nRemedy: {}", wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy);
                 total_read += calc_tokens(&wisdom.target_pattern, &rule_content, None);
-                parts.push(format!(
-                    "### 💡 Wisdom Rule: {}\n- **Avoid**: {}\n- **Causal**: {}\n- **Remedy**: {}\n",
+                insights_parts.push(format!(
+                    "**Wisdom Rule: {}**\n- Avoid: {}\n- Causal: {}\n- Remedy: {}",
                     wisdom.target_pattern, wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy
                 ));
             }
@@ -1147,7 +1126,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 total_read += calc_tokens(&ep.title, &ep.content, ep.facts.as_deref());
                 if let Some(ref ep_id) = ep.id {
                     let rendered = super::format_episode_or_parent(&*state.backend, &surreal_backend.db, ep_id, &ep.title, &ep.content, ep.scope.as_deref()).await?;
-                    parts.push(rendered);
+                    insights_parts.push(rendered);
                 }
             }
         } else {
@@ -1167,7 +1146,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 None,
             )).await?;
 
-            parts.push("## Retrieved Semantic Context\n".to_string());
+            
             for res in search_res.results {
                 if res.discovery_tokens.is_some() {
                     has_discovery = true;
@@ -1177,7 +1156,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 }
                 total_read += calc_tokens(&res.title, &res.content, None);
                 if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
-                    parts.push(formatted);
+                    insights_parts.push(formatted);
                 }
             }
         }
@@ -1209,7 +1188,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             None,
         )).await?;
 
-        parts.push(format!("## Retrieved Semantic Context (Scope: `{}`)\n", dynamic_scope));
+        
         let mut high_confidence_memories_found = false;
         for res in search_res.results {
             if res.id.starts_with("episode:") && res.similarity >= 0.80 {
@@ -1223,7 +1202,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
             total_read += calc_tokens(&res.title, &res.content, None);
             if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
-                parts.push(formatted);
+                insights_parts.push(formatted);
             }
         }
 
@@ -1234,37 +1213,18 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     }
 
+    
     let active_node_opt = stm_map.get("active_hypothesis_node")
         .or_else(|| stm_map.get("active_node"))
         .cloned();
+        
+    let current_scope = std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string());
+    let path_buf = std::path::Path::new(&current_scope);
+    let canonical = path_buf.canonicalize().unwrap_or_else(|_| path_buf.to_path_buf());
+    let folder_name = canonical.file_name().and_then(|n| n.to_str()).unwrap_or("general").to_string();
 
-    if let Some(active_node_id) = active_node_opt {
-        let mut hyp_res = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;")
-            .bind(("node_id", active_node_id.as_str()))
-            .await?;
-        let hyp_nodes: Vec<HypothesisNode> = hyp_res.take(0)?;
-        if let Some(hyp_node) = hyp_nodes.first() {
-            if let Some(ref parent_id) = hyp_node.parent_id {
-                let mut siblings_res = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
-                    .bind(("parent_id", parent_id.as_str()))
-                    .bind(("node_id", active_node_id.as_str()))
-                    .await?;
-                let siblings: Vec<HypothesisNode> = siblings_res.take(0)?;
-                if !siblings.is_empty() {
-                    let mut constraint_parts = Vec::new();
-                    constraint_parts.push("\n### ⚠️ Arbor HTR Negative Constraints".to_string());
-                    constraint_parts.push("The following sibling hypotheses have failed or been pruned in this HTR execution. Avoid repeating these approaches:".to_string());
-                    for sib in siblings {
-                        let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
-                        let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
-                        constraint_parts.push(format!("- **Approach to Avoid**: `{}` (Status: {})\n  - **Reason**: {}", sib.hypothesis, status_label, reason));
-                    }
-                    parts.push(constraint_parts.join("\n"));
-                }
-            }
-        }
-    }
-
+    let p0_policy = collect_policy_context(surreal_backend, &folder_name, active_node_opt.as_ref()).await;
+    let mut p1_advisory = collect_advisory_context(surreal_backend, &folder_name, &loaded_belief_states, &insights_parts).await;
 
     let count_tokens = |text: &str| -> usize {
         if let Some(ref embedder) = surreal_backend.embedder {
@@ -1277,83 +1237,37 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     let budget_env = std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "3000".to_string());
     let token_budget: usize = budget_env.parse().unwrap_or(3000);
     
-    // P0: Pruned hypotheses & conflict nodes
-    let mut p0_pruned_part = String::new();
-    let current_scope = std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string());
-    let path = std::path::Path::new(&current_scope);
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let folder_name = canonical.file_name().and_then(|n| n.to_str()).unwrap_or("general").to_string();
+    // Broker/Handoff metadata is in `parts`
+    let preamble = parts.join("
+");
+    let mut p2_stm = stm_str.clone();
     
-    let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
-    if let Ok(mut resp) = surreal_backend.db.query(sql_pruned).bind(("scope", folder_name)).await {
-        if let Ok(raw_vals) = resp.take::<Vec<serde_json::Value>>(0) {
-            if !raw_vals.is_empty() {
-                p0_pruned_part.push_str("### ⛔ Known Failed Approaches\n");
-                for val in raw_vals {
-                    if let (Some(pat), Some(avoid), Some(remedy)) = (
-                        val.get("target_pattern").and_then(|v| v.as_str()),
-                        val.get("action_to_avoid").and_then(|v| v.as_str()),
-                        val.get("prescribed_remedy").and_then(|v| v.as_str()),
-                    ) {
-                        p0_pruned_part.push_str(&format!("- **Pattern**: {}\n  **Avoid**: {}\n  **Remedy**: {}\n", pat, avoid, remedy));
-                    }
-                }
-                p0_pruned_part.push('\n');
-            }
-        }
-    }
+    let base_playbook = "### 💡 Mythrax Skill Playbook Reminder
+> [!IMPORTANT]
+> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.
 
-    let mut p0_conflict_part = String::new();
-    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'conflict';").await {
-        if let Ok(raw_vals) = resp.take::<Vec<serde_json::Value>>(0) {
-            if !raw_vals.is_empty() {
-                p0_conflict_part.push_str("### ⚠️ Known Knowledge Boundaries / Conflicts\n");
-                for val in raw_vals {
-                    if let (Some(title), Some(content)) = (
-                        val.get("title").and_then(|v| v.as_str()),
-                        val.get("content").and_then(|v| v.as_str()),
-                    ) {
-                        p0_conflict_part.push_str(&format!("- **{}**: {}\n", title, content));
-                    }
-                }
-                p0_conflict_part.push('\n');
-            }
-        }
-    }
-    
-    let p0_combined = format!("{}{}", p0_pruned_part, p0_conflict_part);
-    
-    // Start truncating based on priority: P3 -> P2 -> P1, preserve P0
-    // Distiller payload is excluded from budget
-    let mut p3_belief = belief_part.clone();
-    let mut p2_stm = stm_str.clone(); // From earlier refactor
-    let mut p1_wisdom = capabilities_wisdom_part.clone();
-    
-    let joined_context = parts.join("\n");
-    
-    let base_playbook = "### 💡 Mythrax Skill Playbook Reminder\n> [!IMPORTANT]\n> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.\n\n";
+";
 
     if caller != Some("distiller") {
         loop {
             let current_total = count_tokens(base_playbook)
-                + count_tokens(&p0_combined)
-                + count_tokens(&p1_wisdom)
-                + count_tokens(&p2_stm)
-                + count_tokens(&p3_belief)
-                + count_tokens(&joined_context);
+                + count_tokens(&preamble)
+                + count_tokens(&p0_policy)
+                + count_tokens(&p1_advisory)
+                + count_tokens(&p2_stm);
 
             if current_total <= token_budget {
                 break;
             }
 
-            if !p3_belief.is_empty() {
-                p3_belief.clear();
+            if !p1_advisory.is_empty() {
+                // To properly truncate advisory, we just drop it entirely in extreme cases for this simple logic,
+                // or we could split lines. But the spec says P1 is truncated first. We'll clear it if it exceeds.
+                p1_advisory.clear();
             } else if !p2_stm.is_empty() {
                 p2_stm.clear();
-            } else if !p1_wisdom.is_empty() {
-                p1_wisdom.clear();
             } else {
-                break; // Can't truncate P0 or other parts
+                break; // Can't truncate P0 or preamble
             }
         }
     }
@@ -1361,19 +1275,17 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     let initial_context = {
         let mut base = String::new();
         base.push_str(base_playbook);
-        base.push_str(&p0_combined);
-        if !p3_belief.is_empty() {
-            base.push_str(&p3_belief);
+        base.push_str(&preamble);
+        base.push_str(&p0_policy);
+        if !p1_advisory.is_empty() {
+            base.push_str(&p1_advisory);
         }
         if !p2_stm.is_empty() {
             base.push_str(&p2_stm);
         }
-        if !p1_wisdom.is_empty() {
-            base.push_str(&p1_wisdom);
-        }
-        base.push_str(&joined_context);
         base
     };
+
     let context_tokens = count_tokens(&initial_context);
 
 
@@ -1642,5 +1554,152 @@ async fn format_search_result_hybrid(
         )))
     } else {
         Ok(None)
+    }
+}
+
+
+/// Collects non-negotiable policy context from permanent wisdom, pruned hypotheses, conflict nodes, and Arbor HTR constraints.
+pub async fn collect_policy_context(surreal_backend: &SurrealBackend, current_scope: &str, active_node_opt: Option<&String>) -> String {
+    let mut policy_parts = Vec::new();
+
+    // 1. Permanent Wisdom
+    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM wisdom WHERE tier = 'permanent';").await {
+        if let Ok(rules) = resp.take::<Vec<crate::contracts::WisdomRule>>(0) {
+            for r in rules {
+                policy_parts.push(format!(
+                    "> [!CAUTION]
+> **Rule on {}**:
+> - **Avoid**: {}
+> - **Remedy**: {}",
+                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
+                ));
+            }
+        }
+    }
+
+    // 2. Pruned Hypotheses
+    let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
+    if let Ok(mut resp) = surreal_backend.db.query(sql_pruned).bind(("scope", current_scope)).await {
+        if let Ok(rules) = resp.take::<Vec<serde_json::Value>>(0) {
+            for val in rules {
+                if let (Some(pat), Some(avoid), Some(remedy)) = (
+                    val.get("target_pattern").and_then(|v| v.as_str()),
+                    val.get("action_to_avoid").and_then(|v| v.as_str()),
+                    val.get("prescribed_remedy").and_then(|v| v.as_str()),
+                ) {
+                    policy_parts.push(format!(
+                        "> [!CAUTION]
+> **Pruned Path: {}**
+> - **Avoid**: {}
+> - **Remedy**: {}",
+                        pat, avoid, remedy
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. Conflict Nodes
+    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'conflict' AND (scope = $scope OR scope = 'general');").bind(("scope", current_scope)).await {
+        if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
+            for val in episodes {
+                if let (Some(title), Some(content)) = (
+                    val.get("title").and_then(|v| v.as_str()),
+                    val.get("content").and_then(|v| v.as_str()),
+                ) {
+                    policy_parts.push(format!(
+                        "> [!CAUTION]
+> **Knowledge Conflict: {}**
+> {}",
+                        title, content
+                    ));
+                }
+            }
+        }
+    }
+
+    // 4. Arbor HTR Negative Constraints
+    if let Some(active_node_id) = active_node_opt {
+        if let Ok(mut hyp_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;").bind(("node_id", active_node_id.as_str())).await {
+            if let Ok(hyp_nodes) = hyp_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
+                if let Some(hyp_node) = hyp_nodes.first() {
+                    if let Some(ref parent_id) = hyp_node.parent_id {
+                        if let Ok(mut siblings_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
+                            .bind(("parent_id", parent_id.as_str()))
+                            .bind(("node_id", active_node_id.as_str()))
+                            .await 
+                        {
+                            if let Ok(siblings) = siblings_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
+                                for sib in siblings {
+                                    let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
+                                    let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
+                                    policy_parts.push(format!(
+                                        "> [!CAUTION]
+> **Arbor Constraint ({}): {}**
+> - **Reason**: {}",
+                                        status_label, sib.hypothesis, reason
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if policy_parts.is_empty() {
+        String::new()
+    } else {
+        format!("### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n", policy_parts.join("\n"))
+    }
+}
+
+/// Collects advisory context from semantic insights, experience episodes, and belief state.
+pub async fn collect_advisory_context(surreal_backend: &SurrealBackend, current_scope: &str, belief_states: &[crate::contracts::BeliefState], insights_parts: &[String]) -> String {
+    let mut advisory_parts = Vec::new();
+
+    // 1. Belief State
+    if let Some(bs) = belief_states.first() {
+        advisory_parts.push(format!(
+            "> [!TIP]
+> **POMDP Belief State (Session: `{}`):**
+> - **Confidence**: {:.2}
+> - **Tasks Todo**: {:?}
+> - **Hypotheses Tested**: {:?}
+> - **Uncertainty Areas**: {:?}",
+            bs.session_id, bs.confidence_score, bs.tasks_todo, bs.hypotheses_tested, bs.uncertainty_areas
+        ));
+    }
+
+    // 2. Experience Episodes
+    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'experience' AND (scope = $scope OR scope = 'general');").bind(("scope", current_scope)).await {
+        if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
+            for val in episodes {
+                if let (Some(title), Some(content)) = (
+                    val.get("title").and_then(|v| v.as_str()),
+                    val.get("content").and_then(|v| v.as_str()),
+                ) {
+                    advisory_parts.push(format!(
+                        "> [!TIP]
+> **Experience: {}**
+> {}",
+                        title, content
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. Retrieved Insights (from semantic search or handoff hydration)
+    for insight in insights_parts {
+        advisory_parts.push(format!("> [!TIP]
+> {}", insight.replace("\n", "\n> ")));
+    }
+
+    if advisory_parts.is_empty() {
+        String::new()
+    } else {
+        format!("### 💡 Advisory (Suggested Approaches)\n{}\n\n", advisory_parts.join("\n"))
     }
 }
