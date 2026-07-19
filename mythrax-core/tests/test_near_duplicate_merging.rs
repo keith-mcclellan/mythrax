@@ -55,9 +55,9 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
     let older_id = backend.save_episode(&ep_older).await?;
     store.write_file("episodes/older.md", "Older content")?;
 
-    // Manually set embedding and last_retrieved_at to be older
+    // Manually set embedding, temporal range and last_retrieved_at to be older
     let older_raw_id = older_id.split(':').nth(1).unwrap().to_string();
-    backend.db.query("UPDATE type::record('episode', $id) SET embedding = $emb, last_retrieved_at = '2026-07-05T10:00:00Z', node_type = 'test_type';")
+    backend.db.query("UPDATE type::record('episode', $id) SET embedding = $emb, last_retrieved_at = '2026-07-05T10:00:00Z', node_type = 'test_type', temporal_range_start = <datetime>'2026-07-01T10:00:00Z', temporal_range_end = <datetime>'2026-07-02T10:00:00Z';")
         .bind(("id", older_raw_id.clone()))
         .bind(("emb", embedding.clone()))
         .await?.check()?;
@@ -80,9 +80,9 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
     let newer_id = backend.save_episode(&ep_newer).await?;
     store.write_file("episodes/newer.md", "Newer content")?;
 
-    // Manually set embedding and last_retrieved_at to be newer
+    // Manually set embedding, temporal range and last_retrieved_at to be newer
     let newer_raw_id = newer_id.split(':').nth(1).unwrap().to_string();
-    backend.db.query("UPDATE type::record('episode', $id) SET embedding = $emb, last_retrieved_at = '2026-07-05T12:00:00Z', node_type = 'test_type';")
+    backend.db.query("UPDATE type::record('episode', $id) SET embedding = $emb, last_retrieved_at = '2026-07-05T12:00:00Z', node_type = 'test_type', temporal_range_start = <datetime>'2026-07-03T10:00:00Z', temporal_range_end = <datetime>'2026-07-04T10:00:00Z';")
         .bind(("id", newer_raw_id.clone()))
         .bind(("emb", embedding.clone()))
         .await?.check()?;
@@ -90,6 +90,13 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
     // Update metrics with access count = 3 for newer
     backend.db.query("UPDATE metrics SET access_count = 3 WHERE target_id = type::record('episode', $id);")
         .bind(("id", newer_raw_id.clone()))
+        .await?.check()?;
+
+    // Create target wiki node and relate to newer episode
+    backend.db.query("CREATE wiki_node:target CONTENT { name: 'Target Node', scope: 'test_scope', content: 'Target content' };").await?.check()?;
+    let newer_record_id = mythrax_core::db::backend::parse_record_id(&newer_id)?;
+    backend.db.query("RELATE wiki_node:target -> relates_to -> $newer_id CONTENT { confidence: 0.8 };")
+        .bind(("newer_id", newer_record_id))
         .await?.check()?;
 
     // Run compact_scope
@@ -120,11 +127,29 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
 
     // Verify older metrics has access count = 8 (5 + 3)
     let mut resp = backend.db.query("SELECT access_count FROM metrics WHERE target_id = type::record('episode', $id);")
-        .bind(("id", older_raw_id))
+        .bind(("id", older_raw_id.clone()))
         .await?;
     let rows: Vec<serde_json::Value> = resp.take(0)?;
     let access_count = rows[0].get("access_count").and_then(|v| v.as_i64()).unwrap();
     assert_eq!(access_count, 8);
+
+
+    // Verify relates_to edge is transferred: wiki_node:target -> relates_to -> older
+    let mut resp = backend.db.query("SELECT * FROM relates_to WHERE in = wiki_node:target AND out = type::record('episode', $older_id);")
+        .bind(("older_id", older_raw_id.clone()))
+        .await?;
+    let rows: Vec<serde_json::Value> = resp.take(0)?;
+    assert!(!rows.is_empty(), "relates_to edge should be transferred to the surviving older episode");
+
+    // Verify temporal range start/end expanded on surviving node
+    let mut resp = backend.db.query("SELECT temporal_range_start, temporal_range_end FROM type::record('episode', $id);")
+        .bind(("id", older_raw_id.clone()))
+        .await?;
+    let rows: Vec<serde_json::Value> = resp.take(0)?;
+    let start_val = rows[0].get("temporal_range_start").unwrap().as_str().unwrap();
+    let end_val = rows[0].get("temporal_range_end").unwrap().as_str().unwrap();
+    assert!(start_val.starts_with("2026-07-01"));
+    assert!(end_val.starts_with("2026-07-04"));
 
     Ok(())
 }

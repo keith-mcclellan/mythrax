@@ -364,6 +364,94 @@ impl Compactor {
                                             .await;
                                     }
 
+                                    // 1. Create superseded_by edge: newer -> superseded_by -> older
+                                    let relate_sql = "RELATE $newer -> superseded_by -> $older CONTENT {
+                                        reason: 'Deduplicated during compaction',
+                                        created_at: time::now()
+                                    };";
+                                    if let Err(e) = surreal_backend.db.query(relate_sql)
+                                        .bind(("newer", newer_rec.clone()))
+                                        .bind(("older", older_rec.clone()))
+                                        .await.and_then(|r| r.check()) {
+                                        tracing::error!("Failed to create superseded_by relation in compactor: {:?}", e);
+                                    }
+
+                                    // 2. Transfer all edges from newer node to older node before deletion
+
+                                    let sql = "SELECT * FROM relates_to WHERE in = $newer OR out = $newer;";
+                                    match surreal_backend.db.query(sql).bind(("newer", newer_rec.clone())).await {
+                                        Ok(mut resp) => {
+                                            match resp.take::<Vec<serde_json::Value>>(0) {
+                                                Ok(edges) => {
+                                                    tracing::debug!("Found {} raw edges to transfer in compactor. newer_rec={:?} older_rec={:?}", edges.len(), newer_rec, older_rec);
+                                                    for edge in edges {
+                                                        let edge_id_str = edge.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                                                        let in_str = edge.get("in").and_then(|v| v.as_str()).unwrap_or("");
+                                                        let out_str = edge.get("out").and_then(|v| v.as_str()).unwrap_or("");
+                                                        
+                                                        if let (Ok(in_rec), Ok(out_rec)) = (
+                                                            crate::db::backend::parse_record_id(in_str),
+                                                            crate::db::backend::parse_record_id(out_str)
+                                                        ) {
+                                                            let target_in = if in_rec == newer_rec { older_rec.clone() } else { in_rec };
+                                                            let target_out = if out_rec == newer_rec { older_rec.clone() } else { out_rec };
+                                                            
+                                                            let confidence = edge.get("confidence").and_then(|v| v.as_f64()).map(|f| f as f32);
+                                                            let created_at = edge.get("created_at").and_then(|v| v.as_str())
+                                                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                                                .map(|dt| dt.with_timezone(&chrono::Utc));
+                                                            let valid_from = edge.get("valid_from").and_then(|v| v.as_str())
+                                                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                                                .map(|dt| dt.with_timezone(&chrono::Utc));
+                                                            let valid_to = edge.get("valid_to").and_then(|v| v.as_str())
+                                                                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                                                                .map(|dt| dt.with_timezone(&chrono::Utc));
+                                                            
+                                                            tracing::debug!("Transfer edge={} -> target_in={:?} target_out={:?}", edge_id_str, target_in, target_out);
+                                                            
+                                                            let relate_edge_sql = "RELATE $in -> relates_to -> $out CONTENT {
+                                                                confidence: $confidence,
+                                                                created_at: $created_at,
+                                                                valid_from: $valid_from,
+                                                                valid_to: $valid_to
+                                                            };";
+                                                            
+                                                            if let Err(e) = surreal_backend.db.query(relate_edge_sql)
+                                                                .bind(("in", target_in))
+                                                                .bind(("out", target_out))
+                                                                .bind(("confidence", confidence))
+                                                                .bind(("created_at", created_at))
+                                                                .bind(("valid_from", valid_from))
+                                                                .bind(("valid_to", valid_to))
+                                                                .await.and_then(|r| r.check()) {
+                                                                tracing::error!("Failed to transfer edge {} in compactor: {:?}", edge_id_str, e);
+                                                            }
+                                                        } else {
+                                                            tracing::warn!("Failed to parse in_str={} or out_str={} in compactor", in_str, out_str);
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => tracing::error!("Failed to deserialize relates_to edges in compactor: {:?}", e),
+                                            }
+                                        }
+                                        Err(e) => tracing::error!("Failed to query relates_to edges in compactor: {:?}", e),
+                                    }
+
+                                    // 3. Expand temporal range on surviving node
+                                    if let (Some(newer_start), Some(older_start)) = (newer.temporal_range_start, older.temporal_range_start) {
+                                        let min_start = newer_start.min(older_start);
+                                        let max_end = newer.temporal_range_end.unwrap_or(newer_start)
+                                            .max(older.temporal_range_end.unwrap_or(older_start));
+                                        if let Err(e) = surreal_backend.db.query(
+                                            "UPDATE $id SET temporal_range_start = $start, temporal_range_end = $end;"
+                                        ).bind(("id", older_rec.clone()))
+                                         .bind(("start", min_start))
+                                         .bind(("end", max_end))
+                                         .await.and_then(|r| r.check()) {
+                                            tracing::error!("Failed to expand temporal range in compactor: {:?}", e);
+                                        }
+                                    }
+
                                     if newer_exists {
                                         let delete_metric_sql = "DELETE FROM metrics WHERE target_id = $target_id;";
                                         let _ = surreal_backend.db.query(delete_metric_sql)

@@ -175,7 +175,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS duration ON followed_by TYPE option<duration>;
     DEFINE FIELD IF NOT EXISTS created_at ON followed_by TYPE datetime DEFAULT time::now();
 
-    DEFINE TABLE IF NOT EXISTS superseded_by SCHEMAFULL TYPE RELATION IN wisdom OUT wisdom;
+    DEFINE TABLE OVERWRITE superseded_by SCHEMAFULL TYPE RELATION IN wisdom | episode | wiki_node OUT wisdom | episode | wiki_node;
     DEFINE FIELD IF NOT EXISTS reason ON superseded_by TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON superseded_by TYPE datetime DEFAULT time::now();
 
