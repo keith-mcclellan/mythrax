@@ -226,6 +226,9 @@ def main():
         for issue in issues:
             scorecard += f"- {issue}\n"
 
+    if len(scorecard) > 60000:
+        scorecard = scorecard[:60000] + "\n\n...[TRUNCATED due to GitHub API limit]..."
+
     print(scorecard)
 
     with open("sanitation_scorecard.md", "w") as f:
