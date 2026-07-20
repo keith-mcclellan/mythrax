@@ -25,8 +25,8 @@
 - [x] Task: Delete redundant E2E tests (`test_distillation.rs`, `test_schema_upgrades.rs`, etc.). (46b3ce6)
 - [x] Task: Remove `socket2` dependency from `Cargo.toml`. (2cb499a)
 - [x] Task: Integrate dead code (`#[allow(dead_code)]`) into the pipeline properly rather than eliminating it. (54e36ed)
-- [~] Task: Align `SKILL.md` with MCP schemas.
-- [ ] Task: Run `DEVELOPER_DIR` empirical runtime risk test.
+- [x] Task: Align `SKILL.md` with MCP schemas. (c73a335)
+- [~] Task: Run `DEVELOPER_DIR` empirical runtime risk test.
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
 
 ## Phase 4: MCP-Driven Bootstrapping Orchestration
