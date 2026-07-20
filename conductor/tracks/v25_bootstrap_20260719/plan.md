@@ -11,7 +11,7 @@
 - [x] Task: Wire HTR Pipeline Integration - Fix compactor to create `superseded_by` edges and expand temporal ranges. (bd0b205)
 - [x] Task: Wire HTR Pipeline Integration - Fix graduation to create graph edges from insights to wisdom. (60fe3ae)
 - [x] Task: Wire HTR Pipeline Integration - Fix ingestion to create DB edges for linked artifacts. (f60d3a5)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md). (949cf28)
 
 ## Phase 2: Feedback Loop Hardening & Configuration
 - [ ] Task: Add Positional Correction Detection to Bulk Ingestion (`ingestion.rs`).
@@ -35,3 +35,6 @@
 - [ ] Task: Execute Fast Bulk Ingest with `skip_llm`.
 - [ ] Task: Trigger Async Distillation to complete the bootstrap process.
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
+
+## Phase: Review Fixes
+- [x] Task: Apply review suggestions (949cf28)
