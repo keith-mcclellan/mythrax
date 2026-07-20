@@ -1,6 +1,6 @@
 # Implementation Plan: v2.5 Memory Engine Bootstrap & Stabilization
 
-## Phase 1: Test-Driven Framework & Core Architecture
+## Phase 1: Test-Driven Framework & Core Architecture [checkpoint: 949cf28]
 - [x] Task: Implement `test_bootstrap_e2e.rs` using mock environments to establish success criteria (TDD mandate). (ba0e762)
 - [x] Task: Add `skip_llm` Mode to Ingestion Pipeline (`ingestion.rs`, `vault_handlers.rs`, `main.rs`). (0b310f8)
 - [x] Task: Implement Per-Episode Distillation (`synthesis.rs`, `crud_operations.rs`) and add `summary` field to the `Episode` schema in SurrealDB. (f901aac)
