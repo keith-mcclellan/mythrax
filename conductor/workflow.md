@@ -185,34 +185,40 @@ that also concludes a phase in `plan.md`.
     -   **PAUSE** and await the user's response. Do not proceed without an
         explicit yes or confirmation.
 
-6.  **Identify Target Commit for Report:**
+6.  **Run Adversarial CTO Review:**
+
+    -   **Action:** Immediately after the user provides confirmation, invoke the `cto_reviewer` subagent to audit the phase's implementation against the original plan and specifications.
+    -   **Verification:** The CTO Reviewer must verify that no code/test gaps exist, no edges are missing, and no technical debt was bypassed.
+    -   **Gate:** If the CTO Reviewer identifies critical or major findings, the fixes must be implemented and verified *before* proceeding to the checkpoint step. The phase cannot be checkpointed without CTO Reviewer approval.
+
+7.  **Identify Target Commit for Report:**
 
     -   Do NOT create a new empty commit for checkpointing.
     -   Identify the hash of the last functional commit made during this phase. This will be the target for the verification report.
 
-7.  **Attach Auditable Verification Report using Git Notes:**
+8.  **Attach Auditable Verification Report using Git Notes:**
 
-    -   **Step 7.1: Draft Note Content:** Create a detailed verification report
+    -   **Step 8.1: Draft Note Content:** Create a detailed verification report
         including the automated test command, the manual verification steps, and
         the user's confirmation.
-    -   **Step 7.2: Attach Note:** Use the `git notes` command to attach the full report to the target commit identified in step 6.
+    -   **Step 8.2: Attach Note:** Use the `git notes` command to attach the full report to the target commit identified in step 7.
 
-8.  **Get and Record Phase Checkpoint SHA:**
+9.  **Get and Record Phase Checkpoint SHA:**
 
-    -   **Step 8.1: Get Commit Hash:** Obtain the hash of the *just-created
+    -   **Step 9.1: Get Commit Hash:** Obtain the hash of the *just-created
         checkpoint commit* (`git log -1 --format="%H"`).
-    -   **Step 8.2: Update Plan:** Read `plan.md`, find the heading for the
+    -   **Step 9.2: Update Plan:** Read `plan.md`, find the heading for the
         completed phase, and append the first 7 characters of the commit hash in
         the format `[checkpoint: <sha>]`.
-    -   **Step 8.3: Write Plan:** Write the updated content back to `plan.md`.
+    -   **Step 9.3: Write Plan:** Write the updated content back to `plan.md`.
 
-9.  **Commit Plan Update:**
+10. **Commit Plan Update:**
 
     -   **Action:** Stage the modified `plan.md` file.
     -   **Action:** Commit this change with a descriptive message following the
         format `conductor(plan): Mark phase '<PHASE NAME>' as complete`.
 
-10. **Announce Completion:** Inform the user that the phase is complete and the
+11. **Announce Completion:** Inform the user that the phase is complete and the
     checkpoint has been created, with the detailed verification report attached
     as a git note.
 
