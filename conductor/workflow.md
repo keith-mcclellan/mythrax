@@ -39,7 +39,7 @@ All tasks follow a strict lifecycle:
     -   Run the test suite again and confirm that all tests now pass. This is
         the "Green" phase.
 
-5.  **Refactor (Optional but Recommended):**
+5.  **Refactor (Obligatory):**
 
     -   With the safety of passing tests, refactor the implementation code and
         the test code to improve clarity, remove duplication, and enhance
