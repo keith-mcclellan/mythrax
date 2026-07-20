@@ -187,6 +187,7 @@ fn test_episode_raw_conversion() {
         importance: Some(5.0),
         temporal_range_start: None,
         temporal_range_end: None,
+        created_at: None,
     };
 
     let episode = Episode::from(raw);

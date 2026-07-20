@@ -275,7 +275,16 @@ impl RealLlmProvider {
                     if let Some(res) = completed_opt {
                         return Ok(res);
                     }
+                    
+                    if std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok() {
+                        anyhow::bail!("Cognitive callback for cloud model timed out and fallbacks are disabled");
+                    }
+                    
                     tracing::warn!("Cognitive callback timed out, falling back to direct cloud / local models");
+                } else {
+                    if std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok() {
+                        anyhow::bail!("Failed to create cognitive task and fallbacks are disabled");
+                    }
                 }
             }
         }
@@ -564,7 +573,7 @@ impl RealLlmProvider {
                 } else if prompt.contains("TOC") || prompt.contains("Table of Contents") {
                     return Ok(r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string());
                 } else if prompt.contains("direction synthesizer") || prompt.contains("Existing Direction Content:") {
-                    return Ok("This is a refined direction content containing Backpropagated Evidence.".to_string());
+                    return Ok("This is a refined direction content containing Backpropagated Evidence and Child Insight.".to_string());
                 } else if prompt.contains("Insights:") {
                     return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
                 } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {

@@ -924,12 +924,12 @@ impl Compactor {
             if ep.archived.unwrap_or(false) {
                 continue;
             }
-            let last_ret = if let Some(ref ca_str) = ep.created_at {
-                chrono::DateTime::parse_from_rfc3339(ca_str)
+            let last_ret = if let Some(ref lr_str) = ep.last_retrieved_at {
+                chrono::DateTime::parse_from_rfc3339(lr_str)
                     .map(|dt| std::time::SystemTime::from(dt))
                     .unwrap_or(now)
-            } else if let Some(ref lr_str) = ep.last_retrieved_at {
-                chrono::DateTime::parse_from_rfc3339(lr_str)
+            } else if let Some(ref ca_str) = ep.created_at {
+                chrono::DateTime::parse_from_rfc3339(ca_str)
                     .map(|dt| std::time::SystemTime::from(dt))
                     .unwrap_or(now)
             } else {

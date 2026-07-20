@@ -61,7 +61,7 @@ async fn test_contradiction_detection_resolution() -> Result<()> {
     };
 
     // Run contradiction resolution save
-    let result_id = coordinator.save_wiki_node_with_contradiction_resolution(&backend, &store, &new_node, None).await?;
+    let result_id = coordinator.save_wiki_node_with_contradiction_resolution(&backend, &store, &new_node, None, vec![]).await?;
 
     // Assert that the returned ID is the existing node's ID
     assert_eq!(result_id, existing_id);

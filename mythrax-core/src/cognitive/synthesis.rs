@@ -448,6 +448,7 @@ impl DreamCoordinator {
         store: &MarkdownStore,
         node: &WikiNode,
         embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
+        source_episodes: Vec<String>,
     ) -> Result<String> {
         if !db.is_feature_enabled("compactor.enable_contradiction_detection", true).await {
             return db.save_wiki_node(node).await;
@@ -467,7 +468,9 @@ impl DreamCoordinator {
         // Get all existing wiki nodes in the SAME scope
         let all_nodes = db.get_all_wiki_nodes().await?;
         let same_scope_nodes: Vec<WikiNode> = all_nodes.into_iter()
-            .filter(|n| n.scope == node.scope && n.embedding.is_some())
+            .filter(|n| n.scope == node.scope 
+                && n.embedding.is_some()
+                && n.node_type.as_deref().unwrap_or("insight") == "insight")
             .collect();
 
         let mut candidates = Vec::new();
@@ -534,6 +537,11 @@ impl DreamCoordinator {
                             };
                             let conflict_id = db.save_wiki_node(&conflict_node).await?;
 
+                            // Relate the source episodes representing the new node to the conflict node
+                            for ep_id in &source_episodes {
+                                let _ = db.relate_nodes(ep_id, &conflict_id, None, None, Some(res.confidence)).await;
+                            }
+
                             // 2. Create relates_to edges from conflicting nodes to conflict node
                             if let Some(ref existing_id) = existing_node.id {
                                 let _ = db.relate_nodes(existing_id, &conflict_id, None, None, Some(res.confidence)).await;
@@ -574,13 +582,40 @@ impl DreamCoordinator {
                             let new_id = db.save_wiki_node(&new_node).await?;
                             let _ = db.relate_nodes(&new_id, &conflict_id, None, None, Some(res.confidence)).await;
 
+                            // Update existing node with resolved content
+                            if existing_node.id.is_some() {
+                                let mut updated_existing = existing_node.clone();
+                                updated_existing.content = resolution.clone();
+                                if let Some(ref emb) = embedder {
+                                    let max_tokens = 2048;
+                                    let truncated_content = truncate_by_tokens(&updated_existing.content, max_tokens, Some(emb.as_ref()));
+                                    if let Ok(e) = emb.embed(&truncated_content) {
+                                        updated_existing.embedding = Some(e);
+                                    }
+                                }
+                                db.save_wiki_node(&updated_existing).await?;
+
+                                // Write resolved content to existing node's physical file
+                                if let Some(ref vp) = existing_node.vault_path {
+                                    let new_file_content = format!(
+                                        "---\ntitle: \"{}\"\nscope: \"{}\"\n---\n\n{}",
+                                        existing_node.name, existing_node.scope, resolution
+                                    );
+                                    let _ = store.write_file(vp, &new_file_content);
+                                }
+                            }
+
                             // 3. Write conflict to vault
                             let _ = store.write_file(&rel_path, &format!(
                                 "---\ntitle: \"{}\"\nscope: \"{}\"\nnode_type: \"conflict\"\n---\n\n{}",
                                 conflict_node.name, node.scope, conflict_node.content
                             ));
 
-                            return Ok(conflict_id);
+                            if let Some(ref existing_id) = existing_node.id {
+                                return Ok(existing_id.clone());
+                            } else {
+                                return Ok(conflict_id);
+                            }
                         }
                     }
                 }
@@ -932,7 +967,8 @@ impl DreamCoordinator {
                             temporal_range_end: temporal_end,
                             ..Default::default()
                         };
-                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
+                        let source_eps = vec![ep.id.clone().unwrap_or_default()];
+                        if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone(), source_eps).await {
                             if let Some(ref ep_id) = ep.id {
                                 let ep_start = ep.temporal_range_start
                                     .or_else(|| ep.created_at.as_ref()
@@ -1110,7 +1146,7 @@ impl DreamCoordinator {
                     temporal_range_end: temporal_end,
                     ..Default::default()
                 };
-                if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await {
+                if let Ok(wiki_node_id) = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone(), cluster_ep_ids.clone()).await {
                     for ep in &cluster_eps {
                         if let Some(ref ep_id) = ep.id {
                             let ep_start = ep.temporal_range_start
@@ -1446,7 +1482,8 @@ impl DreamCoordinator {
                                         ..Default::default()
                                     };
                                     
-                                    let save_res = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone()).await;
+                                    let group_ep_ids = group.iter().filter_map(|ep| ep.id.clone()).collect::<Vec<_>>();
+                                    let save_res = self.save_wiki_node_with_contradiction_resolution(db, store, &node_contract, embedder.clone(), group_ep_ids).await;
 
                                     if let Ok(wiki_node_id) = save_res {
                                         for ep in &group {

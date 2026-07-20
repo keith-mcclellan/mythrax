@@ -224,13 +224,19 @@ async fn test_bootstrap_e2e() -> Result<()> {
 
     // ✅ Conflicts: ≥1 WikiNode with node_type="conflict" preserving both positions
     let conflicts: Vec<_> = wiki_nodes.iter().filter(|n| n.node_type.as_deref() == Some("conflict")).collect();
+    println!("DEBUG - Conflicts count: {}", conflicts.len());
+    for (c_idx, c) in conflicts.iter().enumerate() {
+        println!("DEBUG - Conflict {}: id={:?}, name={:?}, vault_path={:?}, content={:?}", c_idx, c.id, c.name, c.vault_path, c.content);
+    }
     assert!(!conflicts.is_empty(), "ORM contradiction should produce a conflict node");
     assert!(conflicts[0].content.contains("Conflicting Positions"));
 
     // ✅ Conflict Edges: relates_to edges from both conflicting nodes → conflict node
     let rel_orm = backend.get_related_node_ids(&ep_orm_id).await?;
+    println!("DEBUG - rel_orm for {} (ORM): {:?}", ep_orm_id, rel_orm);
     assert!(rel_orm.contains(conflicts[0].id.as_ref().unwrap()));
     let rel_no_orm = backend.get_related_node_ids(&ep_no_orm_id).await?;
+    println!("DEBUG - rel_no_orm for {} (No ORM): {:?}", ep_no_orm_id, rel_no_orm);
     assert!(rel_no_orm.contains(conflicts[0].id.as_ref().unwrap()));
 
     // ✅ Conflict Vault: wiki/{scope}/conflicts/*.md files exist
