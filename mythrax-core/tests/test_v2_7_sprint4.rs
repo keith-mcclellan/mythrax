@@ -1,17 +1,17 @@
 // Sprint 4 Integration Test Suite: Parasitic Cognitive Callbacks
 
+use chrono::{Duration, Utc};
+use serde_json::json;
 use std::sync::Arc;
 use tempfile::tempdir;
-use chrono::{Utc, Duration};
-use serde_json::json;
 
-use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use mythrax_core::api::ApiState;
-use mythrax_core::store::MarkdownStore;
-use mythrax_core::vault::watcher::WatchIgnoreList;
+use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use mythrax_core::db::cognitive_tasks::{CognitiveTask, TaskStatus};
 use mythrax_core::mcp_routes::manage_handlers::handle_pre_invocation_hook;
 use mythrax_core::mcp_routes::write_handlers::handle_cognitive_callback;
+use mythrax_core::store::MarkdownStore;
+use mythrax_core::vault::watcher::WatchIgnoreList;
 
 fn setup_env_vars() {
     unsafe {
@@ -22,7 +22,15 @@ fn setup_env_vars() {
 
 async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiState> {
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&formatsurreal_path(&db_path), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
+    let backend = SurrealBackend::new(
+        &formatsurreal_path(&db_path),
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -47,7 +55,11 @@ async fn test_cognitive_task_crud() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     let task_id = "cognitive_task:task123";
     let task = CognitiveTask {
@@ -82,13 +94,21 @@ async fn test_cognitive_task_crud() -> anyhow::Result<()> {
     assert_eq!(pending[0].id, task_id);
 
     // 4. Update Status to Injected
-    surreal_backend.update_cognitive_task_status(task_id, TaskStatus::Injected, None).await?;
+    surreal_backend
+        .update_cognitive_task_status(task_id, TaskStatus::Injected, None)
+        .await?;
     let retrieved = surreal_backend.get_cognitive_task(task_id).await?.unwrap();
     assert_eq!(retrieved.status, "Injected");
     assert!(retrieved.injected_at.is_some());
 
     // 5. Update Status to Completed with Result
-    surreal_backend.update_cognitive_task_status(task_id, TaskStatus::Completed, Some("{\"key\": \"val\"}".to_string())).await?;
+    surreal_backend
+        .update_cognitive_task_status(
+            task_id,
+            TaskStatus::Completed,
+            Some("{\"key\": \"val\"}".to_string()),
+        )
+        .await?;
     let retrieved = surreal_backend.get_cognitive_task(task_id).await?.unwrap();
     assert_eq!(retrieved.status, "Completed");
     assert_eq!(retrieved.result, Some("{\"key\": \"val\"}".to_string()));
@@ -101,7 +121,11 @@ async fn test_cognitive_task_injection() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     // Create 1 Immediate and 2 Normal tasks
     let task_imm = CognitiveTask {
@@ -166,15 +190,27 @@ async fn test_cognitive_task_injection() -> anyhow::Result<()> {
     assert!(!text.contains("Normal Prompt 2"));
 
     // Verify status
-    let t_imm = surreal_backend.get_cognitive_task("cognitive_task:imm_task").await?.unwrap();
+    let t_imm = surreal_backend
+        .get_cognitive_task("cognitive_task:imm_task")
+        .await?
+        .unwrap();
     assert_eq!(t_imm.status, "Injected");
     assert!(t_imm.injected_at.is_some());
 
-    let t_norm1 = surreal_backend.get_cognitive_task("cognitive_task:norm_task1").await?.unwrap();
+    let t_norm1 = surreal_backend
+        .get_cognitive_task("cognitive_task:norm_task1")
+        .await?
+        .unwrap();
     assert_eq!(t_norm1.status, "Pending");
 
     // Complete the Immediate task
-    surreal_backend.update_cognitive_task_status("cognitive_task:imm_task", TaskStatus::Completed, Some("done".to_string())).await?;
+    surreal_backend
+        .update_cognitive_task_status(
+            "cognitive_task:imm_task",
+            TaskStatus::Completed,
+            Some("done".to_string()),
+        )
+        .await?;
 
     // Pre-invocation again - should inject the 2 Normal tasks
     let payload2 = json!({
@@ -191,9 +227,15 @@ async fn test_cognitive_task_injection() -> anyhow::Result<()> {
     assert!(text2.contains("Normal Prompt 2"));
 
     // Verify status of normal tasks is now Injected
-    let t_norm1 = surreal_backend.get_cognitive_task("cognitive_task:norm_task1").await?.unwrap();
+    let t_norm1 = surreal_backend
+        .get_cognitive_task("cognitive_task:norm_task1")
+        .await?
+        .unwrap();
     assert_eq!(t_norm1.status, "Injected");
-    let t_norm2 = surreal_backend.get_cognitive_task("cognitive_task:norm_task2").await?.unwrap();
+    let t_norm2 = surreal_backend
+        .get_cognitive_task("cognitive_task:norm_task2")
+        .await?
+        .unwrap();
     assert_eq!(t_norm2.status, "Injected");
 
     Ok(())
@@ -204,7 +246,11 @@ async fn test_cognitive_callback_validation() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     // 1. Task with Json format
     let task = CognitiveTask {
@@ -229,10 +275,15 @@ async fn test_cognitive_callback_validation() -> anyhow::Result<()> {
         "result": "{\"valid\": true}"
     });
     let callback_res = handle_cognitive_callback(&state, callback_payload.clone()).await;
-    assert!(callback_res.is_err(), "Callback on Pending status must fail");
+    assert!(
+        callback_res.is_err(),
+        "Callback on Pending status must fail"
+    );
 
     // Move status to Injected
-    surreal_backend.update_cognitive_task_status("cognitive_task:task_json", TaskStatus::Injected, None).await?;
+    surreal_backend
+        .update_cognitive_task_status("cognitive_task:task_json", TaskStatus::Injected, None)
+        .await?;
 
     // Call callback with invalid JSON format -> should fail
     let bad_json_payload = json!({
@@ -240,7 +291,10 @@ async fn test_cognitive_callback_validation() -> anyhow::Result<()> {
         "result": "{bad json"
     });
     let callback_res = handle_cognitive_callback(&state, bad_json_payload).await;
-    assert!(callback_res.is_err(), "Callback with malformed JSON must fail");
+    assert!(
+        callback_res.is_err(),
+        "Callback with malformed JSON must fail"
+    );
 
     // Call callback with valid JSON format -> should succeed
     let good_payload = json!({
@@ -250,7 +304,10 @@ async fn test_cognitive_callback_validation() -> anyhow::Result<()> {
     let callback_res = handle_cognitive_callback(&state, good_payload).await?;
     assert_eq!(callback_res["status"], "success");
 
-    let final_task = surreal_backend.get_cognitive_task("cognitive_task:task_json").await?.unwrap();
+    let final_task = surreal_backend
+        .get_cognitive_task("cognitive_task:task_json")
+        .await?
+        .unwrap();
     assert_eq!(final_task.status, "Completed");
     assert_eq!(final_task.result, Some("{\"valid\": true}".to_string()));
 
@@ -263,7 +320,9 @@ async fn test_cognitive_fallback_disabled() -> anyhow::Result<()> {
     let _temp_dir = tempdir()?;
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
-    let profile = mythrax_core::contracts::TaskProfile::new(mythrax_core::contracts::TaskArchetype::Reasoning);
+    let profile = mythrax_core::contracts::TaskProfile::new(
+        mythrax_core::contracts::TaskArchetype::Reasoning,
+    );
 
     unsafe {
         std::env::set_var("MYTHRAX_DISABLE_FALLBACK", "true");
@@ -274,7 +333,9 @@ async fn test_cognitive_fallback_disabled() -> anyhow::Result<()> {
 
     let llm = mythrax_core::llm::LLMClient::default();
 
-    let res = llm.routed_completion(&backend, &profile, None, "test prompt").await;
+    let res = llm
+        .routed_completion(&backend, &profile, None, "test prompt")
+        .await;
 
     unsafe {
         std::env::remove_var("MYTHRAX_DISABLE_FALLBACK");
@@ -283,12 +344,16 @@ async fn test_cognitive_fallback_disabled() -> anyhow::Result<()> {
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
 
-    assert!(res.is_err(), "Completion must fail when fallback is disabled");
+    assert!(
+        res.is_err(),
+        "Completion must fail when fallback is disabled"
+    );
     let err_msg = res.unwrap_err().to_string();
     assert!(
         err_msg.contains("Cognitive callback for cloud model timed out and fallbacks are disabled")
             || err_msg.contains("Failed to create cognitive task and fallbacks are disabled"),
-        "Unexpected error: {}", err_msg
+        "Unexpected error: {}",
+        err_msg
     );
 
     Ok(())
@@ -299,18 +364,25 @@ async fn test_pipeline_state_serialization() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     let target_file = temp_dir.path().join("out.txt");
     let callback_id = "cognitive_task:cb_pipeline";
-    
+
     // Save pipeline state
     let state_json = json!({
         "target_file": target_file.to_string_lossy().to_string(),
         "extra_info": "sprint4"
-    }).to_string();
+    })
+    .to_string();
 
-    surreal_backend.save_pipeline_state(callback_id, &state_json).await?;
+    surreal_backend
+        .save_pipeline_state(callback_id, &state_json)
+        .await?;
 
     // Assert it exists
     let saved = surreal_backend.get_pipeline_state(callback_id).await?;
@@ -358,7 +430,11 @@ async fn test_ttl_sweep_fallback() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     let target_file = temp_dir.path().join("out_ttl.txt");
     let callback_id = "cognitive_task:cb_ttl";
@@ -383,8 +459,11 @@ async fn test_ttl_sweep_fallback() -> anyhow::Result<()> {
     // Save pipeline state for continuation
     let state_json = json!({
         "target_file": target_file.to_string_lossy().to_string()
-    }).to_string();
-    surreal_backend.save_pipeline_state(callback_id, &state_json).await?;
+    })
+    .to_string();
+    surreal_backend
+        .save_pipeline_state(callback_id, &state_json)
+        .await?;
 
     // 2. Call pre-invocation hook, which triggers the TTL Sweep
     let payload = json!({
@@ -396,7 +475,10 @@ async fn test_ttl_sweep_fallback() -> anyhow::Result<()> {
     handle_pre_invocation_hook(&state, payload).await?;
 
     // 3. Verify task is Expired and has fallback result
-    let updated_task = surreal_backend.get_cognitive_task(callback_id).await?.unwrap();
+    let updated_task = surreal_backend
+        .get_cognitive_task(callback_id)
+        .await?
+        .unwrap();
     assert_eq!(updated_task.status, "Expired");
     assert!(updated_task.result.is_some());
     let fallback_result = updated_task.result.unwrap();
@@ -407,7 +489,9 @@ async fn test_ttl_sweep_fallback() -> anyhow::Result<()> {
     assert_eq!(file_content, fallback_result);
 
     // Save pipeline state again to verify late cloud callback can overwrite
-    surreal_backend.save_pipeline_state(callback_id, &state_json).await?;
+    surreal_backend
+        .save_pipeline_state(callback_id, &state_json)
+        .await?;
 
     // 4. Late cloud callback arrives with cloud result -> should succeed and overwrite
     let late_cloud_payload = json!({
@@ -416,7 +500,10 @@ async fn test_ttl_sweep_fallback() -> anyhow::Result<()> {
     });
     handle_cognitive_callback(&state, late_cloud_payload).await?;
 
-    let final_task = surreal_backend.get_cognitive_task(callback_id).await?.unwrap();
+    let final_task = surreal_backend
+        .get_cognitive_task(callback_id)
+        .await?
+        .unwrap();
     assert_eq!(final_task.status, "Completed");
     assert_eq!(final_task.result, Some("Cloud Wins!".to_string()));
 

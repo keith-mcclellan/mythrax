@@ -1,13 +1,17 @@
 use super::*;
-use serde_json::{json, Value};
-use anyhow::{Result, Context};
 use crate::api::ApiState;
-use crate::db::SurrealBackend;
 use crate::cognitive::paging::intercept_and_restore_symbols;
+use crate::db::SurrealBackend;
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
 use surrealdb_types::SurrealValue;
 
 pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter")?.to_string();
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .context("Missing action parameter")?
+        .to_string();
     let mapped_action = match action.as_str() {
         "view" | "view_file" => "view",
         "search" | "search_memory" => "search",
@@ -24,12 +28,16 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
         other => other,
     };
     if let Some(obj) = args.as_object_mut() {
-        obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+        obj.insert(
+            "action".to_string(),
+            serde_json::Value::String(mapped_action.to_string()),
+        );
     }
 
     match mapped_action {
         "view" => {
-            let _path = args.get("path")
+            let _path = args
+                .get("path")
                 .or_else(|| args.get("AbsolutePath"))
                 .or_else(|| args.get("TargetFile"))
                 .and_then(|v| v.as_str())
@@ -37,49 +45,78 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
             super::manage_handlers::handle_manage_file(state, args).await
         }
         "search" | "search_index" => {
-            let _query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
+            let _query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .context("Missing query")?;
             handle_query_memory(state, args).await
         }
         "rules" => {
-            let _query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
+            let _query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .context("Missing query")?;
             handle_query_memory(state, args).await
         }
         "nodes" => {
             let node_ids_val = args.get("node_ids").context("Missing node_ids")?;
-            let _node_ids_arr = node_ids_val.as_array().context("node_ids must be an array")?;
+            let _node_ids_arr = node_ids_val
+                .as_array()
+                .context("node_ids must be an array")?;
             handle_query_memory(state, args).await
         }
         "query_symbolic" => {
-            let _node_id = args.get("node_id").and_then(|v| v.as_str()).context("Missing node_id")?;
+            let _node_id = args
+                .get("node_id")
+                .and_then(|v| v.as_str())
+                .context("Missing node_id")?;
             handle_query_memory(state, args).await
         }
         "timeline" => {
-            if args.get("anchor_id").and_then(|v| v.as_str()).is_none() && args.get("query").and_then(|v| v.as_str()).is_none() {
+            if args.get("anchor_id").and_then(|v| v.as_str()).is_none()
+                && args.get("query").and_then(|v| v.as_str()).is_none()
+            {
                 anyhow::bail!("Either anchor_id or query must be provided for timeline");
             }
             handle_query_memory(state, args).await
         }
         "get_full" => {
-            if args.get("ids").and_then(|v| v.as_array()).is_none() && args.get("node_ids").and_then(|v| v.as_array()).is_none() {
+            if args.get("ids").and_then(|v| v.as_array()).is_none()
+                && args.get("node_ids").and_then(|v| v.as_array()).is_none()
+            {
                 anyhow::bail!("Missing ids or node_ids array parameter");
             }
             handle_query_memory(state, args).await
         }
-        "root" => {
-            handle_query_memory(state, args).await
-        }
+        "root" => handle_query_memory(state, args).await,
         "get" => {
-            if action == "get_short_term" || (action == "get" && (args.get("key").and_then(|v| v.as_str()).is_some() || args.get("session_id").and_then(|v| v.as_str()).is_some())) {
-                let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
-                let _key = args.get("key").and_then(|v| v.as_str()).context("Missing key")?;
+            if action == "get_short_term"
+                || (action == "get"
+                    && (args.get("key").and_then(|v| v.as_str()).is_some()
+                        || args.get("session_id").and_then(|v| v.as_str()).is_some()))
+            {
+                let _session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .context("Missing session_id")?;
+                let _key = args
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .context("Missing key")?;
                 super::manage_handlers::handle_manage_stm(state, args).await
             } else {
                 super::manage_handlers::handle_manage_config(state, args).await
             }
         }
         "search_by_concept" => {
-            let concept = args.get("concept").and_then(|v| v.as_str()).context("Missing concept")?;
-            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+            let concept = args
+                .get("concept")
+                .and_then(|v| v.as_str())
+                .context("Missing concept")?;
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required")?;
             let res = search_by_concept_db(surreal_backend, concept).await?;
             let text = serde_json::to_string_pretty(&res)?;
@@ -93,9 +130,18 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
             }))
         }
         "diff_sessions" => {
-            let session_a = args.get("session_a").and_then(|v| v.as_str()).context("Missing session_a")?;
-            let session_b = args.get("session_b").and_then(|v| v.as_str()).context("Missing session_b")?;
-            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+            let session_a = args
+                .get("session_a")
+                .and_then(|v| v.as_str())
+                .context("Missing session_a")?;
+            let session_b = args
+                .get("session_b")
+                .and_then(|v| v.as_str())
+                .context("Missing session_b")?;
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required")?;
             let res = diff_sessions_db(surreal_backend, session_a, session_b).await?;
             let text = serde_json::to_string_pretty(&res)?;
@@ -113,40 +159,71 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
 }
 
 pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value> {
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required")?;
-    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("search");
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("search");
     match action {
         "search" => {
-            let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .context("Missing query")?;
             let scope = args.get("scope").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
-            let token_budget = args.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
-            let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
-            let include_episodes = args.get("include_episodes").and_then(|v| v.as_bool()).unwrap_or(false);
-            let include_artifacts = args.get("include_artifacts").and_then(|v| v.as_bool()).unwrap_or(false);
+            let threshold = args
+                .get("threshold")
+                .and_then(|v| v.as_f64())
+                .map(|t| t as f32)
+                .unwrap_or(0.55);
+            let token_budget = args
+                .get("token_budget")
+                .and_then(|v| v.as_u64())
+                .map(|t| t as usize);
+            let allow_downward = args
+                .get("allow_downward")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let include_episodes = args
+                .get("include_episodes")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let include_artifacts = args
+                .get("include_artifacts")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let session_id = args.get("session_id").and_then(|v| v.as_str());
-            let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
+            let include_archived = args
+                .get("include_archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
             let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
 
-            let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
-                query,
-                scope,
-                false,
-                limit,
-                offset,
-                threshold,
-                token_budget,
-                allow_downward,
-                include_episodes,
-                include_artifacts,
-                session_id,
-                include_archived,
-                temporal_anchor,
-            )).await?;
-            
+            let search_res = state
+                .backend
+                .search(crate::contracts::SearchParams::from_positional(
+                    query,
+                    scope,
+                    false,
+                    limit,
+                    offset,
+                    threshold,
+                    token_budget,
+                    allow_downward,
+                    include_episodes,
+                    include_artifacts,
+                    session_id,
+                    include_archived,
+                    temporal_anchor,
+                ))
+                .await?;
+
             if let Some(sess_id) = session_id {
                 let mut cited_ids = Vec::new();
                 for r in &search_res.results {
@@ -156,7 +233,11 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                 }
                 if !cited_ids.is_empty() {
                     let mut existing_citations = Vec::new();
-                    if let Ok(stm_map) = state.backend.get_stm(sess_id, Some("_session_citations")).await {
+                    if let Ok(stm_map) = state
+                        .backend
+                        .get_stm(sess_id, Some("_session_citations"))
+                        .await
+                    {
                         if let Some(existing_str) = stm_map.get("_session_citations") {
                             if let Ok(parsed) = serde_json::from_str::<Vec<String>>(existing_str) {
                                 existing_citations = parsed;
@@ -167,17 +248,24 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                     existing_citations.sort();
                     existing_citations.dedup();
                     if let Ok(serialized) = serde_json::to_string(&existing_citations) {
-                        let _ = state.backend.save_stm(sess_id, "_session_citations", &serialized).await;
+                        let _ = state
+                            .backend
+                            .save_stm(sess_id, "_session_citations", &serialized)
+                            .await;
                     }
                 }
             }
 
-            let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
-                r.embedding = None;
-                let mut v = serde_json::to_value(&r).unwrap();
-                strip_nulls(&mut v);
-                v
-            }).collect();
+            let stripped_results: Vec<Value> = search_res
+                .results
+                .into_iter()
+                .map(|mut r| {
+                    r.embedding = None;
+                    let mut v = serde_json::to_value(&r).unwrap();
+                    strip_nulls(&mut v);
+                    v
+                })
+                .collect();
 
             let mut text = serde_json::to_string_pretty(&stripped_results)?;
             if search_res.has_more {
@@ -209,32 +297,51 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
             }))
         }
         "search_index" => {
-            let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .context("Missing query")?;
             let scope = args.get("scope").and_then(|v| v.as_str());
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
-            let token_budget = args.get("token_budget").and_then(|v| v.as_u64()).map(|t| t as usize);
-            let allow_downward = args.get("allow_downward").and_then(|v| v.as_bool()).unwrap_or(false);
+            let threshold = args
+                .get("threshold")
+                .and_then(|v| v.as_f64())
+                .map(|t| t as f32)
+                .unwrap_or(0.55);
+            let token_budget = args
+                .get("token_budget")
+                .and_then(|v| v.as_u64())
+                .map(|t| t as usize);
+            let allow_downward = args
+                .get("allow_downward")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let session_id = args.get("session_id").and_then(|v| v.as_str());
-            let include_archived = args.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(true);
+            let include_archived = args
+                .get("include_archived")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
             let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
 
-            let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
-                query,
-                scope,
-                false,
-                limit,
-                offset,
-                threshold,
-                token_budget,
-                allow_downward,
-                true,
-                false,
-                session_id,
-                include_archived,
-                temporal_anchor,
-            )).await?;
+            let search_res = state
+                .backend
+                .search(crate::contracts::SearchParams::from_positional(
+                    query,
+                    scope,
+                    false,
+                    limit,
+                    offset,
+                    threshold,
+                    token_budget,
+                    allow_downward,
+                    true,
+                    false,
+                    session_id,
+                    include_archived,
+                    temporal_anchor,
+                ))
+                .await?;
 
             let mut index_rows = Vec::new();
             for r in search_res.results {
@@ -262,45 +369,50 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
         "timeline" => {
             let anchor_id = args.get("anchor_id").and_then(|v| v.as_str());
             let query = args.get("query").and_then(|v| v.as_str());
-            let depth_before = args.get("depth_before").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
-            let depth_after = args.get("depth_after").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+            let depth_before = args
+                .get("depth_before")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(3) as usize;
+            let depth_after = args
+                .get("depth_after")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(3) as usize;
 
             let resolved_anchor_id = if let Some(id) = anchor_id {
                 id.to_string()
             } else if let Some(q) = query {
-                let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
-                    q,
-                    None,
-                    false,
-                    1,
-                    0,
-                    0.0,
-                    None,
-                    false,
-                    true,
-                    false,
-                    None,
-                    true,
-                    None,
-                )).await?;
-                let best = search_res.results.first().context("No matching anchor episode found for query")?;
+                let search_res = state
+                    .backend
+                    .search(crate::contracts::SearchParams::from_positional(
+                        q, None, false, 1, 0, 0.0, None, false, true, false, None, true, None,
+                    ))
+                    .await?;
+                let best = search_res
+                    .results
+                    .first()
+                    .context("No matching anchor episode found for query")?;
                 best.id.clone()
             } else {
                 anyhow::bail!("Either anchor_id or query must be provided for timeline");
             };
 
             let anchor_record = crate::db::backend::parse_record_id(&resolved_anchor_id)?;
-            
+
             #[derive(serde::Deserialize, Debug, surrealdb_types::SurrealValue)]
             struct AnchorRow {
                 created_at: chrono::DateTime<chrono::Utc>,
             }
 
-            let mut response = surreal_backend.db.query("SELECT created_at FROM $id;")
+            let mut response = surreal_backend
+                .db
+                .query("SELECT created_at FROM $id;")
                 .bind(("id", anchor_record))
                 .await?;
             let anchor_rows: Vec<AnchorRow> = response.take(0)?;
-            let anchor_row = anchor_rows.into_iter().next().context("Anchor episode not found in database")?;
+            let anchor_row = anchor_rows
+                .into_iter()
+                .next()
+                .context("Anchor episode not found in database")?;
             let anchor_time = anchor_row.created_at;
 
             #[derive(serde::Deserialize, Debug, surrealdb_types::SurrealValue)]
@@ -356,15 +468,21 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
         }
         "get_full" => {
             let ids = if let Some(ids_val) = args.get("ids").and_then(|v| v.as_array()) {
-                ids_val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<String>>()
+                ids_val
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
             } else if let Some(node_ids_val) = args.get("node_ids").and_then(|v| v.as_array()) {
-                node_ids_val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<String>>()
+                node_ids_val
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<String>>()
             } else {
                 anyhow::bail!("Missing ids or node_ids array parameter");
             };
 
             let hydrated = state.backend.get_memory_nodes(&ids).await?;
-            
+
             let mut results = Vec::new();
             const MAX_HYDRATION_CHARS: usize = 10000;
             for ep in hydrated.episodes {
@@ -393,7 +511,8 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
             for wiki in hydrated.wiki_nodes {
                 let content = if wiki.content.chars().count() > MAX_HYDRATION_CHARS {
                     let truncated_len = wiki.content.chars().count() - MAX_HYDRATION_CHARS;
-                    let truncated: String = wiki.content.chars().take(MAX_HYDRATION_CHARS).collect();
+                    let truncated: String =
+                        wiki.content.chars().take(MAX_HYDRATION_CHARS).collect();
                     format!("{}... [truncated {} chars]", truncated, truncated_len)
                 } else {
                     wiki.content.clone()
@@ -452,19 +571,36 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
             }))
         }
         "rules" => {
-            let query = args.get("query").and_then(|v| v.as_str()).context("Missing query")?;
-            let tier = args.get("tier").and_then(|v| v.as_str()).and_then(|t| t.parse::<crate::contracts::Tier>().ok());
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .context("Missing query")?;
+            let tier = args
+                .get("tier")
+                .and_then(|v| v.as_str())
+                .and_then(|t| t.parse::<crate::contracts::Tier>().ok());
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let threshold = args.get("threshold").and_then(|v| v.as_f64()).map(|t| t as f32).unwrap_or(0.55);
+            let threshold = args
+                .get("threshold")
+                .and_then(|v| v.as_f64())
+                .map(|t| t as f32)
+                .unwrap_or(0.55);
 
-            let search_res = state.backend.get_wisdom(query, tier, limit, offset, threshold).await?;
-            let stripped_results: Vec<Value> = search_res.results.into_iter().map(|mut r| {
-                r.embedding = None;
-                let mut v = serde_json::to_value(&r).unwrap();
-                strip_nulls(&mut v);
-                v
-            }).collect();
+            let search_res = state
+                .backend
+                .get_wisdom(query, tier, limit, offset, threshold)
+                .await?;
+            let stripped_results: Vec<Value> = search_res
+                .results
+                .into_iter()
+                .map(|mut r| {
+                    r.embedding = None;
+                    let mut v = serde_json::to_value(&r).unwrap();
+                    strip_nulls(&mut v);
+                    v
+                })
+                .collect();
 
             let mut text = serde_json::to_string_pretty(&stripped_results)?;
             if search_res.has_more {
@@ -488,7 +624,9 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
         }
         "nodes" => {
             let node_ids_val = args.get("node_ids").context("Missing node_ids")?;
-            let node_ids_arr = node_ids_val.as_array().context("node_ids must be an array")?;
+            let node_ids_arr = node_ids_val
+                .as_array()
+                .context("node_ids must be an array")?;
             let mut node_ids = Vec::new();
             for v in node_ids_arr {
                 if let Some(s) = v.as_str() {
@@ -520,13 +658,22 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
             }))
         }
         "query_symbolic" => {
-            let node_id = args.get("node_id").and_then(|v| v.as_str()).context("Missing node_id")?;
+            let node_id = args
+                .get("node_id")
+                .and_then(|v| v.as_str())
+                .context("Missing node_id")?;
             let relation = args.get("relation").and_then(|v| v.as_str());
-            let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).map(|v| v as usize);
+            let max_depth = args
+                .get("max_depth")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize);
 
-            let traversed_ids = state.backend.query_symbolic(node_id, relation, max_depth).await?;
+            let traversed_ids = state
+                .backend
+                .query_symbolic(node_id, relation, max_depth)
+                .await?;
             let text = serde_json::to_string_pretty(&traversed_ids)?;
-            
+
             Ok(json!({
                 "content": [
                     {
@@ -563,31 +710,55 @@ fn make_subtitle(content: &str) -> String {
 
 pub async fn search_by_concept_db(backend: &SurrealBackend, concept: &str) -> Result<Value> {
     let sql = "SELECT * FROM episode WHERE archived = false AND ($concept IN concepts OR $concept IN facts OR string::contains(title, $concept) OR string::contains(content, $concept));";
-    let mut response = backend.db.query(sql).bind(("concept", concept)).await?.check()?;
+    let mut response = backend
+        .db
+        .query(sql)
+        .bind(("concept", concept))
+        .await?
+        .check()?;
     let raw_episodes: Vec<crate::db::backend::EpisodeRaw> = response.take(0)?;
-    let episodes: Vec<crate::contracts::Episode> = raw_episodes.into_iter().map(|raw| {
-        let mut ep = crate::contracts::Episode::from(raw);
-        ep.embedding = None;
-        ep
-    }).collect();
-    
+    let episodes: Vec<crate::contracts::Episode> = raw_episodes
+        .into_iter()
+        .map(|raw| {
+            let mut ep = crate::contracts::Episode::from(raw);
+            ep.embedding = None;
+            ep
+        })
+        .collect();
+
     let sql_wiki = "SELECT * FROM wiki_node WHERE string::contains(name, $concept) OR string::contains(content, $concept);";
-    let mut resp_wiki = backend.db.query(sql_wiki).bind(("concept", concept)).await?.check()?;
+    let mut resp_wiki = backend
+        .db
+        .query(sql_wiki)
+        .bind(("concept", concept))
+        .await?
+        .check()?;
     let raw_wiki: Vec<crate::db::backend::WikiNodeRaw> = resp_wiki.take(0)?;
-    let wiki_nodes: Vec<crate::contracts::WikiNode> = raw_wiki.into_iter().map(|raw| {
-        let mut wk = raw.into_wiki_node();
-        wk.embedding = None;
-        wk
-    }).collect();
+    let wiki_nodes: Vec<crate::contracts::WikiNode> = raw_wiki
+        .into_iter()
+        .map(|raw| {
+            let mut wk = raw.into_wiki_node();
+            wk.embedding = None;
+            wk
+        })
+        .collect();
 
     let sql_wisdom = "SELECT * FROM wisdom WHERE string::contains(target_pattern, $concept) OR string::contains(action_to_avoid, $concept) OR string::contains(causal_explanation, $concept) OR string::contains(prescribed_remedy, $concept);";
-    let mut resp_wisdom = backend.db.query(sql_wisdom).bind(("concept", concept)).await?.check()?;
+    let mut resp_wisdom = backend
+        .db
+        .query(sql_wisdom)
+        .bind(("concept", concept))
+        .await?
+        .check()?;
     let raw_wisdom: Vec<crate::db::backend::WisdomRaw> = resp_wisdom.take(0)?;
-    let wisdom_rules: Vec<crate::contracts::WisdomRule> = raw_wisdom.into_iter().map(|raw| {
-        let mut ws = raw.into_wisdom_rule();
-        ws.embedding = None;
-        ws
-    }).collect();
+    let wisdom_rules: Vec<crate::contracts::WisdomRule> = raw_wisdom
+        .into_iter()
+        .map(|raw| {
+            let mut ws = raw.into_wisdom_rule();
+            ws.embedding = None;
+            ws
+        })
+        .collect();
 
     Ok(json!({
         "episodes": episodes,
@@ -596,26 +767,54 @@ pub async fn search_by_concept_db(backend: &SurrealBackend, concept: &str) -> Re
     }))
 }
 
-pub async fn diff_sessions_db(backend: &SurrealBackend, session_a: &str, session_b: &str) -> Result<Value> {
+pub async fn diff_sessions_db(
+    backend: &SurrealBackend,
+    session_a: &str,
+    session_b: &str,
+) -> Result<Value> {
     let sql_a = "SELECT role, content, created_at FROM chat_history WHERE session_id = $session_a ORDER BY created_at ASC;";
-    let mut resp_a = backend.db.query(sql_a).bind(("session_a", session_a)).await?.check()?;
+    let mut resp_a = backend
+        .db
+        .query(sql_a)
+        .bind(("session_a", session_a))
+        .await?
+        .check()?;
     let chat_a: Vec<Value> = resp_a.take(0)?;
 
     let sql_b = "SELECT role, content, created_at FROM chat_history WHERE session_id = $session_b ORDER BY created_at ASC;";
-    let mut resp_b = backend.db.query(sql_b).bind(("session_b", session_b)).await?.check()?;
+    let mut resp_b = backend
+        .db
+        .query(sql_b)
+        .bind(("session_b", session_b))
+        .await?
+        .check()?;
     let chat_b: Vec<Value> = resp_b.take(0)?;
 
-    let text_a = chat_a.iter().map(|msg| {
-        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        format!("{}: {}", role, content)
-    }).collect::<Vec<_>>().join("\n");
+    let text_a = chat_a
+        .iter()
+        .map(|msg| {
+            let role = msg
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            format!("{}: {}", role, content)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    let text_b = chat_b.iter().map(|msg| {
-        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        format!("{}: {}", role, content)
-    }).collect::<Vec<_>>().join("\n");
+    let text_b = chat_b
+        .iter()
+        .map(|msg| {
+            let role = msg
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            format!("{}: {}", role, content)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let uuid = uuid::Uuid::new_v4().to_string();
     let path_a = std::env::temp_dir().join(format!("diff_a_{}.txt", uuid));

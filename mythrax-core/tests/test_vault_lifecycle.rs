@@ -1,9 +1,9 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::vault::ingestion::bulk_ingest_vault;
+use std::fs;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_rocksdb_connection_and_persistence() -> Result<()> {
@@ -12,7 +12,15 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
 
     // 1. Initialize persistent backend
-    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
+    let backend = SurrealBackend::new(
+        &surreal_url,
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await?;
     backend.init().await?;
 
     // 2. Save an episode
@@ -33,7 +41,7 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
 
     // 3. Drop connection and reconnect
     drop(backend);
-    
+
     let lock_file = db_path.join("LOCK");
     let mut backend2 = None;
     for attempt in 0..10 {
@@ -41,7 +49,16 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
             let _ = std::fs::remove_file(&lock_file);
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        match SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await {
+        match SurrealBackend::new(
+            &surreal_url,
+            mythrax_core::db::BackendConfig {
+                check_daemon: false,
+                embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+                llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+            },
+        )
+        .await
+        {
             Ok(b) => {
                 backend2 = Some(b);
                 break;
@@ -59,7 +76,10 @@ async fn test_rocksdb_connection_and_persistence() -> Result<()> {
     let all_eps = backend2.get_all_episodes().await?;
     assert_eq!(all_eps.len(), 1);
     assert_eq!(all_eps[0].title, "Persistence Test");
-    assert_eq!(all_eps[0].content, "Verifying persistent storage in rocksdb.");
+    assert_eq!(
+        all_eps[0].content,
+        "Verifying persistent storage in rocksdb."
+    );
 
     Ok(())
 }
@@ -70,10 +90,10 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     let vault_root = tmp.path().join("vault");
     let source_dir = tmp.path().join("source");
     let db_path = tmp.path().join("db");
-    
+
     fs::create_dir_all(&vault_root)?;
     fs::create_dir_all(&source_dir)?;
-    
+
     // Create folders inside vault
     let folders = ["episodes", "wiki", "wisdom", "general", "archive"];
     for f in &folders {
@@ -81,14 +101,22 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
+    let backend = SurrealBackend::new(
+        &surreal_url,
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await?;
     backend.init().await?;
 
     // Create a mock Antigravity transcript structure
     let session_dir = source_dir.join("session_123");
     let logs_dir = session_dir.join(".system_generated/logs");
     fs::create_dir_all(&logs_dir)?;
-    
+
     let transcript_content = r#"{"type":"USER_INPUT","content":"Please write a function to search."}
 {"type":"PLANNER_RESPONSE","content":"I will write a grep search helper."}"#;
     fs::write(logs_dir.join("transcript.jsonl"), transcript_content)?;
@@ -103,7 +131,8 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
         None,
         None,
         false,
-    ).await?;
+    )
+    .await?;
 
     assert_eq!(count, 1);
     assert!(errors.is_empty());
@@ -129,14 +158,19 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
         ..Default::default()
     };
     let stub_id = backend.save_episode(&save_stub).await?;
-    
+
     // Explicitly update db to clear its embedding to simulate missing models
     let record_id = mythrax_core::db::parse_record_id(&stub_id)?;
-    let _ = backend.db.query("UPDATE $id SET embedding = NONE;")
+    let _ = backend
+        .db
+        .query("UPDATE $id SET embedding = NONE;")
         .bind(("id", record_id))
-        .await?.check()?;
+        .await?
+        .check()?;
 
-    let ep_before = backend.get_all_episodes().await?
+    let ep_before = backend
+        .get_all_episodes()
+        .await?
         .into_iter()
         .find(|e| e.id.as_ref() == Some(&stub_id))
         .unwrap();
@@ -148,7 +182,7 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     for ep in all_eps_for_reprocess {
         if ep.embedding.is_none() {
             let s = EpisodeSave {
-        created_at: None,
+                created_at: None,
                 title: ep.title.clone(),
                 content: ep.content.clone(),
                 entities: vec![],
@@ -168,11 +202,13 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
     assert_eq!(reprocess_count, expected_reprocess_count);
 
     // Verify embedding generated (or remains None if models are missing, but connection doesn't crash)
-    let ep_after = backend.get_all_episodes().await?
+    let ep_after = backend
+        .get_all_episodes()
+        .await?
         .into_iter()
         .find(|e| e.id.as_ref() == Some(&stub_id))
         .unwrap();
-    
+
     if backend.embedder.is_some() {
         assert!(ep_after.embedding.is_some());
         assert_eq!(ep_after.embedding.unwrap().len(), 768);
@@ -225,19 +261,24 @@ async fn test_executor_applies_code_changes() -> Result<()> {
 
     // Dynamic code changes to apply
     let mut code_changes = std::collections::HashMap::new();
-    code_changes.insert("src/calc.rs".to_string(), "pub fn add(a: i32, b: i32) -> i32 { a + b }".to_string());
+    code_changes.insert(
+        "src/calc.rs".to_string(),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }".to_string(),
+    );
 
     let backend = mythrax_core::db::SurrealBackend::new_in_memory().await?;
     backend.init().await?;
 
     // Execute test command
-    let (success, logs) = executor.execute(
-        "test-node",
-        &commit_sha,
-        "cat src/calc.rs",
-        &Some(code_changes),
-        &backend,
-    ).await?;
+    let (success, logs) = executor
+        .execute(
+            "test-node",
+            &commit_sha,
+            "cat src/calc.rs",
+            &Some(code_changes),
+            &backend,
+        )
+        .await?;
 
     assert!(success);
     assert!(logs.contains("pub fn add(a: i32, b: i32) -> i32 { a + b }"));
@@ -251,25 +292,40 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     let vault_root = tmp.path().join("vault");
     let source_dir = tmp.path().join("source");
     let db_path = tmp.path().join("db");
-    
+
     fs::create_dir_all(&vault_root)?;
     fs::create_dir_all(&source_dir)?;
-    
+
     // Create folders inside vault
-    let folders = ["episodes", "wiki", "wiki/artifacts", "wisdom", "general", "archive"];
+    let folders = [
+        "episodes",
+        "wiki",
+        "wiki/artifacts",
+        "wisdom",
+        "general",
+        "archive",
+    ];
     for f in &folders {
         fs::create_dir_all(vault_root.join(f))?;
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
+    let backend = SurrealBackend::new(
+        &surreal_url,
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await?;
     backend.init().await?;
 
     // Create a mock Antigravity folder
     let session_dir = source_dir.join("session_linking_123");
     let logs_dir = session_dir.join(".system_generated/logs");
     fs::create_dir_all(&logs_dir)?;
-    
+
     // Create a large transcript of ~120,000 characters to trigger chunking into 2 parts (cap = 100k)
     let mut large_transcript = String::new();
     large_transcript.push_str("{\"type\":\"USER_INPUT\",\"content\":\"");
@@ -278,12 +334,18 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     large_transcript.push_str("{\"type\":\"PLANNER_RESPONSE\",\"content\":\"");
     large_transcript.push_str(&"B".repeat(60000));
     large_transcript.push_str("\"}\n");
-    
+
     fs::write(logs_dir.join("transcript.jsonl"), large_transcript)?;
 
     // Create mock artifacts
-    fs::write(session_dir.join("walkthrough.md"), "Walkthrough artifact content")?;
-    fs::write(session_dir.join("implementation_plan.md"), "Plan artifact content")?;
+    fs::write(
+        session_dir.join("walkthrough.md"),
+        "Walkthrough artifact content",
+    )?;
+    fs::write(
+        session_dir.join("implementation_plan.md"),
+        "Plan artifact content",
+    )?;
 
     // Run bulk ingestion
     let (count, errors, _has_more) = bulk_ingest_vault(
@@ -295,7 +357,8 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
         None,
         None,
         false,
-    ).await?;
+    )
+    .await?;
 
     // We ingested 8 episode parts + 1 parent index + 2 artifacts = 11 success counts
     assert_eq!(count, 11);
@@ -305,10 +368,10 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     let all_eps = backend.get_all_episodes().await?;
     // We should have 8 parts and 1 parent index
     assert_eq!(all_eps.len(), 9);
-    
+
     let ep_part1 = all_eps.iter().find(|e| e.title.contains("part1")).unwrap();
     let ep_part2 = all_eps.iter().find(|e| e.title.contains("part2")).unwrap();
-    
+
     // 2. Verify links inside files in Obsidian
     let ep_part1_file = fs::read_to_string(vault_root.join(ep_part1.vault_path.as_ref().unwrap()))?;
     assert!(ep_part1_file.contains("[[wiki/testing-linking-scope/raw/walkthrough]]"));
@@ -326,10 +389,14 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     assert!(walkthrough_file.contains(&ep_part2.title));
 
     // 3. Verify graph relationships in SurrealDB
-    let ep1_related = backend.get_related_node_ids(ep_part1.id.as_ref().unwrap()).await?;
+    let ep1_related = backend
+        .get_related_node_ids(ep_part1.id.as_ref().unwrap())
+        .await?;
     assert!(ep1_related.len() >= 3); // walkthrough, implementation_plan & parent index
-    
-    let ep2_related = backend.get_related_node_ids(ep_part2.id.as_ref().unwrap()).await?;
+
+    let ep2_related = backend
+        .get_related_node_ids(ep_part2.id.as_ref().unwrap())
+        .await?;
     assert!(ep2_related.len() >= 3);
 
     Ok(())
@@ -341,25 +408,40 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     let vault_root = tmp.path().join("vault");
     let source_dir = tmp.path().join("source");
     let db_path = tmp.path().join("db");
-    
+
     fs::create_dir_all(&vault_root)?;
     fs::create_dir_all(&source_dir)?;
-    
+
     // Create folders inside vault
-    let folders = ["episodes", "wiki", "wiki/artifacts", "wisdom", "general", "archive"];
+    let folders = [
+        "episodes",
+        "wiki",
+        "wiki/artifacts",
+        "wisdom",
+        "general",
+        "archive",
+    ];
     for f in &folders {
         fs::create_dir_all(vault_root.join(f))?;
     }
 
     let surreal_url = format!("rocksdb://{}", db_path.to_string_lossy());
-    let backend = SurrealBackend::new(&surreal_url, mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
+    let backend = SurrealBackend::new(
+        &surreal_url,
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await?;
     backend.init().await?;
 
     // Create a mock Antigravity folder
     let session_dir = source_dir.join("session_chunk_artifact_123");
     let logs_dir = session_dir.join(".system_generated/logs");
     fs::create_dir_all(&logs_dir)?;
-    
+
     // Create a small transcript so it is not chunked (1 part)
     let transcript = "{\"type\":\"USER_INPUT\",\"content\":\"Short user prompt\"}\n";
     fs::write(logs_dir.join("transcript.jsonl"), transcript)?;
@@ -384,7 +466,8 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
         None,
         None,
         false,
-    ).await?;
+    )
+    .await?;
 
     // We ingested 1 episode part + 3 artifact parts = 4 success counts
     assert_eq!(count, 4);
@@ -393,9 +476,9 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     // 1. Verify episodes in DB
     let all_eps = backend.get_all_episodes().await?;
     assert_eq!(all_eps.len(), 1);
-    
+
     let ep = &all_eps[0];
-    
+
     // 2. Verify links inside the episode in Obsidian
     let ep_file = fs::read_to_string(vault_root.join(ep.vault_path.as_ref().unwrap()))?;
     assert!(ep_file.contains("[[wiki/testing-art-chunking-scope/raw/large_plan_part1]]"));
@@ -406,7 +489,7 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     let art1_rel_path = "wiki/testing-art-chunking-scope/raw/large_plan_part1.md";
     let art2_rel_path = "wiki/testing-art-chunking-scope/raw/large_plan_part2.md";
     let art3_rel_path = "wiki/testing-art-chunking-scope/raw/large_plan_part3.md";
-    
+
     assert!(vault_root.join(art1_rel_path).exists());
     assert!(vault_root.join(art2_rel_path).exists());
     assert!(vault_root.join(art3_rel_path).exists());
@@ -424,10 +507,10 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     assert!(art3_file.contains(&ep.title));
 
     // 3. Verify graph relationships in SurrealDB
-    let ep_related = backend.get_related_node_ids(ep.id.as_ref().unwrap()).await?;
+    let ep_related = backend
+        .get_related_node_ids(ep.id.as_ref().unwrap())
+        .await?;
     assert_eq!(ep_related.len(), 3); // large_plan_part1, large_plan_part2 & large_plan_part3
 
     Ok(())
 }
-
-

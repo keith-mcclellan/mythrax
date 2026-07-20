@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use crate::llm::mlx_weights::{get_embedding, get_linear, get_quantized_linear, get_rms_norm};
 use anyhow::Result;
-use mlx_rs::{Array, StreamOrDevice};
 use mlx_rs::module::Module;
-use mlx_rs::nn::{Embedding, QuantizedEmbedding, RmsNorm, QuantizedLinear, Linear};
-use crate::llm::mlx_weights::{get_quantized_linear, get_rms_norm, get_linear, get_embedding};
+use mlx_rs::nn::{Embedding, Linear, QuantizedEmbedding, QuantizedLinear, RmsNorm};
 use mlx_rs::ops::indexing::TryIndexMutOp;
+use mlx_rs::{Array, StreamOrDevice};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum QwenEmbedding {
@@ -20,24 +20,24 @@ impl QwenEmbedding {
                 use mlx_rs::ops::indexing::IndexOp;
                 let s = x.shape();
                 let x_flat = x.flatten(None, None)?;
-                
+
                 let w = qemb.inner.weight.value.index(&x_flat);
                 let scales = qemb.scales.value.index(&x_flat);
                 let biases = qemb.biases.value.index(&x_flat);
-                
+
                 w.eval()?;
                 scales.eval()?;
                 biases.eval()?;
-                
+
                 let out = mlx_rs::ops::dequantize_device(
                     &w,
                     &scales,
                     &biases,
                     qemb.group_size,
                     qemb.bits,
-                    StreamOrDevice::gpu()
+                    StreamOrDevice::gpu(),
                 )?;
-                
+
                 let mut ret_shape = s.to_vec();
                 ret_shape.push(-1);
                 out.reshape(&ret_shape)
@@ -52,7 +52,6 @@ impl QwenEmbedding {
         }
     }
 }
-
 
 pub struct Qwen2Attention {
     pub q_proj: QuantizedLinear,
@@ -76,10 +75,34 @@ impl Qwen2Attention {
         group_size: i32,
         bits: i32,
     ) -> Result<Self> {
-        let q_proj = get_quantized_linear(weights, &format!("{}.q_proj", prefix), true, group_size, bits)?;
-        let k_proj = get_quantized_linear(weights, &format!("{}.k_proj", prefix), true, group_size, bits)?;
-        let v_proj = get_quantized_linear(weights, &format!("{}.v_proj", prefix), true, group_size, bits)?;
-        let o_proj = get_quantized_linear(weights, &format!("{}.o_proj", prefix), false, group_size, bits)?;
+        let q_proj = get_quantized_linear(
+            weights,
+            &format!("{}.q_proj", prefix),
+            true,
+            group_size,
+            bits,
+        )?;
+        let k_proj = get_quantized_linear(
+            weights,
+            &format!("{}.k_proj", prefix),
+            true,
+            group_size,
+            bits,
+        )?;
+        let v_proj = get_quantized_linear(
+            weights,
+            &format!("{}.v_proj", prefix),
+            true,
+            group_size,
+            bits,
+        )?;
+        let o_proj = get_quantized_linear(
+            weights,
+            &format!("{}.o_proj", prefix),
+            false,
+            group_size,
+            bits,
+        )?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -122,7 +145,8 @@ impl Qwen2Attention {
             position_offset,
             None,
             StreamOrDevice::gpu(),
-        ).map_err(|e| anyhow::anyhow!("RoPE Q failed: {:?}", e))?;
+        )
+        .map_err(|e| anyhow::anyhow!("RoPE Q failed: {:?}", e))?;
 
         let k = mlx_rs::fast::rope_device(
             &k,
@@ -133,7 +157,8 @@ impl Qwen2Attention {
             position_offset,
             None,
             StreamOrDevice::gpu(),
-        ).map_err(|e| anyhow::anyhow!("RoPE K failed: {:?}", e))?;
+        )
+        .map_err(|e| anyhow::anyhow!("RoPE K failed: {:?}", e))?;
 
         // Transpose to [batch, heads, seq_len, head_dim]
         let q = q.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())?;
@@ -143,8 +168,16 @@ impl Qwen2Attention {
         // Concatenate along the sequence axis (axis 2) if cache is present
         if let Some((cached_k, cached_v)) = cache {
             if cached_k.shape()[2] > 0 {
-                k = mlx_rs::ops::concatenate_axis_device(&[cached_k.clone(), k], 2, StreamOrDevice::gpu())?;
-                v = mlx_rs::ops::concatenate_axis_device(&[cached_v.clone(), v], 2, StreamOrDevice::gpu())?;
+                k = mlx_rs::ops::concatenate_axis_device(
+                    &[cached_k.clone(), k],
+                    2,
+                    StreamOrDevice::gpu(),
+                )?;
+                v = mlx_rs::ops::concatenate_axis_device(
+                    &[cached_v.clone(), v],
+                    2,
+                    StreamOrDevice::gpu(),
+                )?;
             }
             *cached_k = k.clone();
             *cached_v = v.clone();
@@ -167,7 +200,8 @@ impl Qwen2Attention {
             scale,
             mask.map(|m| m.into()),
             StreamOrDevice::gpu(),
-        ).map_err(|e| anyhow::anyhow!("SDP Attention failed: {:?}", e))?;
+        )
+        .map_err(|e| anyhow::anyhow!("SDP Attention failed: {:?}", e))?;
 
         // Transpose back to [batch, seq_len, num_heads * head_dim]
         let out = out.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())?;
@@ -191,10 +225,32 @@ impl Qwen2MLP {
         group_size: i32,
         bits: i32,
     ) -> Result<Self> {
-        let gate_proj = get_quantized_linear(weights, &format!("{}.gate_proj", prefix), false, group_size, bits)?;
-        let up_proj = get_quantized_linear(weights, &format!("{}.up_proj", prefix), false, group_size, bits)?;
-        let down_proj = get_quantized_linear(weights, &format!("{}.down_proj", prefix), false, group_size, bits)?;
-        Ok(Self { gate_proj, up_proj, down_proj })
+        let gate_proj = get_quantized_linear(
+            weights,
+            &format!("{}.gate_proj", prefix),
+            false,
+            group_size,
+            bits,
+        )?;
+        let up_proj = get_quantized_linear(
+            weights,
+            &format!("{}.up_proj", prefix),
+            false,
+            group_size,
+            bits,
+        )?;
+        let down_proj = get_quantized_linear(
+            weights,
+            &format!("{}.down_proj", prefix),
+            false,
+            group_size,
+            bits,
+        )?;
+        Ok(Self {
+            gate_proj,
+            up_proj,
+            down_proj,
+        })
     }
 
     pub fn forward(&mut self, x: &Array) -> Result<Array> {
@@ -224,15 +280,25 @@ impl Qwen3MoEMLP {
         bits: i32,
     ) -> Result<Self> {
         let gate = get_linear(weights, &format!("{}.gate", prefix), false)?;
-        
+
         let mut experts = Vec::new();
         for i in 0..num_experts {
-            let expert = Qwen2MLP::new(weights, &format!("{}.experts.{}", prefix, i), group_size, bits)?;
+            let expert = Qwen2MLP::new(
+                weights,
+                &format!("{}.experts.{}", prefix, i),
+                group_size,
+                bits,
+            )?;
             experts.push(expert);
         }
-        
-        let shared_expert = Qwen2MLP::new(weights, &format!("{}.shared_expert", prefix), group_size, bits)?;
-        
+
+        let shared_expert = Qwen2MLP::new(
+            weights,
+            &format!("{}.shared_expert", prefix),
+            group_size,
+            bits,
+        )?;
+
         Ok(Self {
             gate,
             experts,
@@ -252,16 +318,22 @@ impl Qwen3MoEMLP {
 
         // 1. Router logits and softmax scores
         let router_logits = self.gate.forward(&x_flat)?;
-        let scores = mlx_rs::ops::softmax_axis_device(&router_logits, -1, false, StreamOrDevice::gpu())?;
+        let scores =
+            mlx_rs::ops::softmax_axis_device(&router_logits, -1, false, StreamOrDevice::gpu())?;
 
         // 2. Select top-k experts
         let num_experts = self.experts.len() as i32;
         let k = self.num_experts_per_tok;
-        
+
         let sorted_indices = mlx_rs::ops::argsort_axis_device(&scores, -1, StreamOrDevice::gpu())?;
         use mlx_rs::ops::indexing::TryIndexOp;
         let top_k_indices = sorted_indices.try_index((.., (num_experts - k)..num_experts))?;
-        let top_k_gates = mlx_rs::ops::indexing::take_along_axis_device(&scores, &top_k_indices, -1, StreamOrDevice::gpu())?;
+        let top_k_gates = mlx_rs::ops::indexing::take_along_axis_device(
+            &scores,
+            &top_k_indices,
+            -1,
+            StreamOrDevice::gpu(),
+        )?;
 
         let sum_gates = top_k_gates.sum_axes_device(&[-1], true, StreamOrDevice::gpu())?;
         let top_k_gates = top_k_gates.divide(&sum_gates)?;
@@ -271,8 +343,10 @@ impl Qwen3MoEMLP {
 
         // 4. Vectorized routing for each expert
         for e in 0..num_experts {
-            let expert_mask_expanded = top_k_indices.eq_device(&Array::from(e as i32), StreamOrDevice::gpu())?;
-            let expert_mask = expert_mask_expanded.any_axes_device(&[1], false, StreamOrDevice::gpu())?;
+            let expert_mask_expanded =
+                top_k_indices.eq_device(&Array::from(e as i32), StreamOrDevice::gpu())?;
+            let expert_mask =
+                expert_mask_expanded.any_axes_device(&[1], false, StreamOrDevice::gpu())?;
 
             let any_selected = expert_mask.any_device(false, StreamOrDevice::gpu())?;
             any_selected.eval()?;
@@ -280,9 +354,11 @@ impl Qwen3MoEMLP {
                 let x_expert = x_flat.try_index(expert_mask.clone())?;
                 let out_expert = self.experts[e as usize].forward(&x_expert)?;
 
-                let gate_masked = expert_mask_expanded.as_dtype(mlx_rs::Dtype::Float32)?
+                let gate_masked = expert_mask_expanded
+                    .as_dtype(mlx_rs::Dtype::Float32)?
                     .multiply(&top_k_gates)?;
-                let expert_gates = gate_masked.sum_axes_device(&[1], false, StreamOrDevice::gpu())?;
+                let expert_gates =
+                    gate_masked.sum_axes_device(&[1], false, StreamOrDevice::gpu())?;
                 let active_gates = expert_gates.try_index(expert_mask.clone())?;
 
                 let out_expert_weighted = out_expert.multiply(&active_gates.reshape(&[-1, 1])?)?;
@@ -347,7 +423,7 @@ impl Qwen2DecoderLayer {
             group_size,
             bits,
         )?;
-        
+
         let mlp = if let Some(n_exp) = num_experts {
             MLPLayer::MoE(Qwen3MoEMLP::new(
                 weights,
@@ -358,11 +434,24 @@ impl Qwen2DecoderLayer {
                 bits,
             )?)
         } else {
-            MLPLayer::Dense(Qwen2MLP::new(weights, &format!("{}.mlp", prefix), group_size, bits)?)
+            MLPLayer::Dense(Qwen2MLP::new(
+                weights,
+                &format!("{}.mlp", prefix),
+                group_size,
+                bits,
+            )?)
         };
 
-        let input_layernorm = get_rms_norm(weights, &format!("{}.input_layernorm.weight", prefix), rms_norm_eps)?;
-        let post_attention_layernorm = get_rms_norm(weights, &format!("{}.post_attention_layernorm.weight", prefix), rms_norm_eps)?;
+        let input_layernorm = get_rms_norm(
+            weights,
+            &format!("{}.input_layernorm.weight", prefix),
+            rms_norm_eps,
+        )?;
+        let post_attention_layernorm = get_rms_norm(
+            weights,
+            &format!("{}.post_attention_layernorm.weight", prefix),
+            rms_norm_eps,
+        )?;
         Ok(Self {
             self_attn,
             mlp,
@@ -380,7 +469,9 @@ impl Qwen2DecoderLayer {
     ) -> Result<Array> {
         let residual = x;
         let norm_x = self.input_layernorm.forward(x)?;
-        let attn_out = self.self_attn.forward(&norm_x, mask, position_offset, cache)?;
+        let attn_out = self
+            .self_attn
+            .forward(&norm_x, mask, position_offset, cache)?;
         let x = residual.add(&attn_out)?;
 
         let residual = &x;
@@ -461,7 +552,9 @@ impl Qwen2Model {
         }
 
         let out = self.norm.forward(&x)?;
-        let logits = self.embed_tokens.as_linear(&out)
+        let logits = self
+            .embed_tokens
+            .as_linear(&out)
             .map_err(|e| anyhow::anyhow!("embed_tokens.as_linear failed: {:?}", e))?;
         Ok(logits)
     }
@@ -472,13 +565,29 @@ mod tests {
     use super::*;
     use mlx_rs::Array;
 
-    fn mock_quantized_linear_weights(weights: &mut HashMap<String, Array>, prefix: &str, in_dims: i32, out_dims: i32, group_size: i32, bits: i32) {
+    fn mock_quantized_linear_weights(
+        weights: &mut HashMap<String, Array>,
+        prefix: &str,
+        in_dims: i32,
+        out_dims: i32,
+        group_size: i32,
+        bits: i32,
+    ) {
         let packed_cols = in_dims / (32 / bits);
         let group_count = in_dims / group_size;
 
-        weights.insert(format!("{}.weight", prefix), Array::zeros::<u32>(&[out_dims, packed_cols]).unwrap());
-        weights.insert(format!("{}.scales", prefix), Array::zeros::<f32>(&[out_dims, group_count]).unwrap());
-        weights.insert(format!("{}.biases", prefix), Array::zeros::<f32>(&[out_dims, group_count]).unwrap());
+        weights.insert(
+            format!("{}.weight", prefix),
+            Array::zeros::<u32>(&[out_dims, packed_cols]).unwrap(),
+        );
+        weights.insert(
+            format!("{}.scales", prefix),
+            Array::zeros::<f32>(&[out_dims, group_count]).unwrap(),
+        );
+        weights.insert(
+            format!("{}.biases", prefix),
+            Array::zeros::<f32>(&[out_dims, group_count]).unwrap(),
+        );
     }
 
     #[test]
@@ -494,32 +603,102 @@ mod tests {
         let rms_norm_eps = 1e-6;
 
         // Embed tokens weight
-        weights.insert("model.embed_tokens.weight".to_string(), Array::zeros::<f32>(&[vocab_size, hidden_size]).unwrap());
+        weights.insert(
+            "model.embed_tokens.weight".to_string(),
+            Array::zeros::<f32>(&[vocab_size, hidden_size]).unwrap(),
+        );
         // Model norm weight
-        weights.insert("model.norm.weight".to_string(), Array::zeros::<f32>(&[hidden_size]).unwrap());
+        weights.insert(
+            "model.norm.weight".to_string(),
+            Array::zeros::<f32>(&[hidden_size]).unwrap(),
+        );
 
         // Layer 0 weights
         let layer_prefix = "model.layers.0";
         // input_layernorm
-        weights.insert(format!("{}.input_layernorm.weight", layer_prefix), Array::zeros::<f32>(&[hidden_size]).unwrap());
+        weights.insert(
+            format!("{}.input_layernorm.weight", layer_prefix),
+            Array::zeros::<f32>(&[hidden_size]).unwrap(),
+        );
         // post_attention_layernorm
-        weights.insert(format!("{}.post_attention_layernorm.weight", layer_prefix), Array::zeros::<f32>(&[hidden_size]).unwrap());
+        weights.insert(
+            format!("{}.post_attention_layernorm.weight", layer_prefix),
+            Array::zeros::<f32>(&[hidden_size]).unwrap(),
+        );
 
         // self_attn quantized projections
-        mock_quantized_linear_weights(&mut weights, &format!("{}.self_attn.q_proj", layer_prefix), hidden_size, hidden_size, group_size, bits);
-        mock_quantized_linear_weights(&mut weights, &format!("{}.self_attn.k_proj", layer_prefix), hidden_size, num_kv_heads * head_dim, group_size, bits);
-        mock_quantized_linear_weights(&mut weights, &format!("{}.self_attn.v_proj", layer_prefix), hidden_size, num_kv_heads * head_dim, group_size, bits);
-        mock_quantized_linear_weights(&mut weights, &format!("{}.self_attn.o_proj", layer_prefix), hidden_size, hidden_size, group_size, bits);
+        mock_quantized_linear_weights(
+            &mut weights,
+            &format!("{}.self_attn.q_proj", layer_prefix),
+            hidden_size,
+            hidden_size,
+            group_size,
+            bits,
+        );
+        mock_quantized_linear_weights(
+            &mut weights,
+            &format!("{}.self_attn.k_proj", layer_prefix),
+            hidden_size,
+            num_kv_heads * head_dim,
+            group_size,
+            bits,
+        );
+        mock_quantized_linear_weights(
+            &mut weights,
+            &format!("{}.self_attn.v_proj", layer_prefix),
+            hidden_size,
+            num_kv_heads * head_dim,
+            group_size,
+            bits,
+        );
+        mock_quantized_linear_weights(
+            &mut weights,
+            &format!("{}.self_attn.o_proj", layer_prefix),
+            hidden_size,
+            hidden_size,
+            group_size,
+            bits,
+        );
 
         // self_attn biases for qkv
-        weights.insert(format!("{}.self_attn.q_proj.bias", layer_prefix), Array::zeros::<f32>(&[hidden_size]).unwrap());
-        weights.insert(format!("{}.self_attn.k_proj.bias", layer_prefix), Array::zeros::<f32>(&[num_kv_heads * head_dim]).unwrap());
-        weights.insert(format!("{}.self_attn.v_proj.bias", layer_prefix), Array::zeros::<f32>(&[num_kv_heads * head_dim]).unwrap());
+        weights.insert(
+            format!("{}.self_attn.q_proj.bias", layer_prefix),
+            Array::zeros::<f32>(&[hidden_size]).unwrap(),
+        );
+        weights.insert(
+            format!("{}.self_attn.k_proj.bias", layer_prefix),
+            Array::zeros::<f32>(&[num_kv_heads * head_dim]).unwrap(),
+        );
+        weights.insert(
+            format!("{}.self_attn.v_proj.bias", layer_prefix),
+            Array::zeros::<f32>(&[num_kv_heads * head_dim]).unwrap(),
+        );
 
         // mlp projections
-        mock_quantized_linear_weights(&mut weights, &format!("{}.mlp.gate_proj", layer_prefix), hidden_size, 128, group_size, bits);
-        mock_quantized_linear_weights(&mut weights, &format!("{}.mlp.up_proj", layer_prefix), hidden_size, 128, group_size, bits);
-        mock_quantized_linear_weights(&mut weights, &format!("{}.mlp.down_proj", layer_prefix), 128, hidden_size, group_size, bits);
+        mock_quantized_linear_weights(
+            &mut weights,
+            &format!("{}.mlp.gate_proj", layer_prefix),
+            hidden_size,
+            128,
+            group_size,
+            bits,
+        );
+        mock_quantized_linear_weights(
+            &mut weights,
+            &format!("{}.mlp.up_proj", layer_prefix),
+            hidden_size,
+            128,
+            group_size,
+            bits,
+        );
+        mock_quantized_linear_weights(
+            &mut weights,
+            &format!("{}.mlp.down_proj", layer_prefix),
+            128,
+            hidden_size,
+            group_size,
+            bits,
+        );
 
         let mut model = Qwen2Model::new(
             &weights,
@@ -535,16 +714,15 @@ mod tests {
             bits,
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Run forward pass with input sequence
         let ids = Array::from_slice(&[1, 2, 3, 4], &[1, 4]);
-        let mut kv_cache = vec![
-            (
-                mlx_rs::ops::zeros::<f32>(&[1, num_kv_heads, 0, head_dim]).unwrap(),
-                mlx_rs::ops::zeros::<f32>(&[1, num_kv_heads, 0, head_dim]).unwrap(),
-            )
-        ];
+        let mut kv_cache = vec![(
+            mlx_rs::ops::zeros::<f32>(&[1, num_kv_heads, 0, head_dim]).unwrap(),
+            mlx_rs::ops::zeros::<f32>(&[1, num_kv_heads, 0, head_dim]).unwrap(),
+        )];
 
         let logits = model.forward(&ids, None, 0, &mut kv_cache).unwrap();
         assert_eq!(logits.shape(), &[1, 4, vocab_size]);
@@ -553,7 +731,7 @@ mod tests {
         let next_id = Array::from_slice(&[5], &[1, 1]);
         let logits2 = model.forward(&next_id, None, 4, &mut kv_cache).unwrap();
         assert_eq!(logits2.shape(), &[1, 1, vocab_size]);
-        
+
         // Assert KV Cache sequence length is updated to 5
         assert_eq!(kv_cache[0].0.shape()[2], 5);
     }

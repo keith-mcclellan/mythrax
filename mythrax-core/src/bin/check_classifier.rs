@@ -1,5 +1,5 @@
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::db::backend::QueryCategory;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 fn normalize_spelling(word: &str) -> &str {
     match word {
@@ -176,17 +176,17 @@ fn original_classify_query(query: &str) -> QueryCategory {
         })
         .collect();
 
-    let has_temporal = processed_tokens.iter().any(|stemmed| {
-        is_temporal_vocab(stemmed)
-    });
+    let has_temporal = processed_tokens
+        .iter()
+        .any(|stemmed| is_temporal_vocab(stemmed));
 
-    let has_preference = processed_tokens.iter().any(|stemmed| {
-        is_preference_vocab(stemmed)
-    });
+    let has_preference = processed_tokens
+        .iter()
+        .any(|stemmed| is_preference_vocab(stemmed));
 
-    let has_user_vocab_match = processed_tokens.iter().any(|stemmed| {
-        is_user_vocab(stemmed)
-    });
+    let has_user_vocab_match = processed_tokens
+        .iter()
+        .any(|stemmed| is_user_vocab(stemmed));
 
     let lower_query = query.to_lowercase();
     let has_phrase_match = lower_query.contains("who am i")
@@ -218,8 +218,13 @@ async fn main() {
     let val: serde_json::Value = serde_json::from_str(&data).unwrap();
     let questions = val.as_array().unwrap();
 
-    println!("Mismatch analysis between original classifier and DB classifier on dev50 (first 50 queries):");
-    println!("{:<60} | {:<12} | {:<12}", "Question", "Original", "DB Class");
+    println!(
+        "Mismatch analysis between original classifier and DB classifier on dev50 (first 50 queries):"
+    );
+    println!(
+        "{:<60} | {:<12} | {:<12}",
+        "Question", "Original", "DB Class"
+    );
     println!("{}", "-".repeat(90));
 
     let mut mismatches = 0;
@@ -238,15 +243,25 @@ async fn main() {
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
                     .collect();
-                let processed: Vec<String> = tokens.iter().map(|t| mythrax_core::retrieval::bm25::stem(expand_synonyms(normalize_spelling(t)))).collect();
+                let processed: Vec<String> = tokens
+                    .iter()
+                    .map(|t| {
+                        mythrax_core::retrieval::bm25::stem(expand_synonyms(normalize_spelling(t)))
+                    })
+                    .collect();
                 println!("DEBUG: question='{}'", question);
                 println!("DEBUG: tokens={:?}", tokens);
                 println!("DEBUG: processed={:?}", processed);
                 println!("DEBUG: is_when_temporal={}", is_temporal_vocab("when"));
             }
-            println!("{:<60} | {:<12?} | {:<12?}", 
-                if question.len() > 58 { &question[..58] } else { question }, 
-                sync_cat, 
+            println!(
+                "{:<60} | {:<12?} | {:<12?}",
+                if question.len() > 58 {
+                    &question[..58]
+                } else {
+                    question
+                },
+                sync_cat,
                 db_cat
             );
         }

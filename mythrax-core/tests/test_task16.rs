@@ -1,6 +1,6 @@
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::api::ApiState;
-use mythrax_core::mcp_routes::manage_handlers::{handle_manage_stm, handle_manage};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use mythrax_core::mcp_routes::manage_handlers::{handle_manage, handle_manage_stm};
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -10,13 +10,13 @@ async fn setup_state() -> ApiState {
     let tmp = tempdir().unwrap();
     let vault_root = tmp.path().join("vault");
     std::fs::create_dir_all(&vault_root).unwrap();
-    
+
     let backend = Arc::new(SurrealBackend::new_in_memory().await.unwrap());
     backend.init().await.unwrap();
-    
+
     let store = Arc::new(mythrax_core::store::MarkdownStore::new(&vault_root).unwrap());
     let ignore_list = Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new());
-    
+
     ApiState {
         backend,
         store,
@@ -49,7 +49,7 @@ inputs:
     required: true
 ---"#;
     let path = create_handoff_file(&state, "test_1", yaml).await;
-    
+
     let args = json!({
         "action": "handoff",
         "parent_conversation_id": "parent-1",
@@ -57,7 +57,7 @@ inputs:
         "summary": "test",
         "handoff_file_path": path
     });
-    
+
     let res = handle_manage_stm(&state, args).await;
     assert!(res.is_err());
     let err_str = res.unwrap_err().to_string();
@@ -79,7 +79,7 @@ inputs:
     value: "some_value"
 ---"#;
     let path = create_handoff_file(&state, "test_2", yaml).await;
-    
+
     let args = json!({
         "action": "handoff",
         "parent_conversation_id": "parent-1",
@@ -87,13 +87,17 @@ inputs:
         "summary": "test",
         "handoff_file_path": path
     });
-    
+
     let res = handle_manage_stm(&state, args).await;
     assert!(res.is_ok());
-    
+
     // Check DB status remains PENDING
     // Check STM
-    let stm = state.backend.get_stm("sub-1", Some("stm_test_2_input_req_input")).await.unwrap();
+    let stm = state
+        .backend
+        .get_stm("sub-1", Some("stm_test_2_input_req_input"))
+        .await
+        .unwrap();
     assert!(stm.contains_key("stm_test_2_input_req_input"));
 }
 
@@ -103,7 +107,7 @@ async fn test_save_handoff_legacy_markdown() {
     let md = r#"# Legacy Handoff
 No YAML here."#;
     let path = create_handoff_file(&state, "test_3", md).await;
-    
+
     let args = json!({
         "action": "handoff",
         "parent_conversation_id": "parent-1",
@@ -111,7 +115,7 @@ No YAML here."#;
         "summary": "test",
         "handoff_file_path": path
     });
-    
+
     let res = handle_manage_stm(&state, args).await;
     assert!(res.is_ok()); // Should bypass validation
 }
@@ -123,7 +127,7 @@ async fn test_save_handoff_malformed_yaml() {
 task_id: [broken
 ---"#;
     let path = create_handoff_file(&state, "test_4", md).await;
-    
+
     let args = json!({
         "action": "handoff",
         "parent_conversation_id": "parent-1",
@@ -131,10 +135,14 @@ task_id: [broken
         "summary": "test",
         "handoff_file_path": path
     });
-    
+
     let res = handle_manage_stm(&state, args).await;
     assert!(res.is_err());
-    assert!(res.unwrap_err().to_string().contains("Malformed contract frontmatter"));
+    assert!(
+        res.unwrap_err()
+            .to_string()
+            .contains("Malformed contract frontmatter")
+    );
 }
 
 #[tokio::test]
@@ -151,16 +159,16 @@ outputs:
     required: true
 ---"#;
     let path = create_handoff_file(&state, "test_5", yaml).await;
-    
+
     let args = json!({
         "action": "complete_handoff",
         "task_id": "test_5"
     });
-    
+
     let res = handle_manage(&state, args).await;
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("missing_output"));
-    
+
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("status: \"failed\""));
 }
@@ -179,17 +187,17 @@ outputs:
     required: true
 ---"#;
     let path = create_handoff_file(&state, "test_6", yaml).await;
-    
+
     let args = json!({
         "action": "complete_handoff",
         "task_id": "test_6",
         "status": "failed",
         "fail_reason": "I gave up"
     });
-    
+
     let res = handle_manage(&state, args).await;
     assert!(res.is_err());
-    
+
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("status: \"failed\""));
     assert!(content.contains("I gave up"));
@@ -210,7 +218,7 @@ outputs:
     enum: ["pass", "fail"]
 ---"#;
     let path = create_handoff_file(&state, "test_7", yaml).await;
-    
+
     let args = json!({
         "action": "complete_handoff",
         "task_id": "test_7",
@@ -218,7 +226,7 @@ outputs:
             "req_out": "maybe"
         }
     });
-    
+
     let res = handle_manage(&state, args).await;
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("enum"));
@@ -231,7 +239,7 @@ async fn test_complete_handoff_task_not_found() {
         "action": "complete_handoff",
         "task_id": "nonexistent"
     });
-    
+
     let res = handle_manage(&state, args).await;
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("not found"));
@@ -256,7 +264,7 @@ outputs:
     required: true
 ---"#;
     let path = create_handoff_file(&state, "test_10", yaml).await;
-    
+
     let args = json!({
         "action": "complete_handoff",
         "task_id": "test_10",
@@ -264,10 +272,14 @@ outputs:
             "req_out": "done"
         }
     });
-    
+
     let res = handle_manage(&state, args).await;
     assert!(res.is_ok());
-    
-    let stm = state.backend.get_stm("parent-1", Some("stm_test_10_output_req_out")).await.unwrap();
+
+    let stm = state
+        .backend
+        .get_stm("parent-1", Some("stm_test_10_output_req_out"))
+        .await
+        .unwrap();
     assert!(stm.contains_key("stm_test_10_output_req_out"));
 }

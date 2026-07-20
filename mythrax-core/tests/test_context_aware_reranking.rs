@@ -1,5 +1,5 @@
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_user_profile_compilation_and_sorting() {
@@ -9,8 +9,14 @@ async fn test_user_profile_compilation_and_sorting() {
     let session_id = "test_session_123";
 
     // 1. Save STM facts
-    backend.save_stm(session_id, "favorite_color", "blue").await.unwrap();
-    backend.save_stm(session_id, "degree", "physics").await.unwrap();
+    backend
+        .save_stm(session_id, "favorite_color", "blue")
+        .await
+        .unwrap();
+    backend
+        .save_stm(session_id, "degree", "physics")
+        .await
+        .unwrap();
 
     // 2. Save episodes with out-of-order and identical timestamps (as done in transaction batching)
     // We name the title with numeric Turn indices.
@@ -53,7 +59,10 @@ async fn test_user_profile_compilation_and_sorting() {
     backend.save_episode(&ep3).await.unwrap();
 
     // Compile profile with limit=0 (no truncation)
-    backend.save_profile_key("search.user_profile_max_len", "0").await.unwrap();
+    backend
+        .save_profile_key("search.user_profile_max_len", "0")
+        .await
+        .unwrap();
     let profile = backend.compile_user_profile(session_id).await.unwrap();
 
     // The output should sort the user turns chronologically (1 -> 2 -> 3 -> 10)
@@ -65,7 +74,8 @@ async fn test_user_profile_compilation_and_sorting() {
         "I live in Boston.",
         "degree: physics",
         "favorite_color: blue",
-    ].join("\n");
+    ]
+    .join("\n");
 
     assert_eq!(profile.trim(), expected.trim());
 }
@@ -79,7 +89,7 @@ async fn test_user_profile_smart_truncation() {
 
     // STM facts: 40 chars
     backend.save_stm(session_id, "deg", "math").await.unwrap(); // deg: math (9 chars)
-    backend.save_stm(session_id, "fav", "red").await.unwrap();  // fav: red (8 chars)
+    backend.save_stm(session_id, "fav", "red").await.unwrap(); // fav: red (8 chars)
 
     // User turns:
     // Turn 1: 15 chars
@@ -124,7 +134,10 @@ async fn test_user_profile_smart_truncation() {
     // So turns kept: Turn 2, Turn 3.
     // Re-reversed chronologically: Turn 2 -> Turn 3.
     // Expected output: "Weather is nice today so\nI went for a walk to\ndeg: math\nfav: red";
-    backend.save_profile_key("search.user_profile_max_len", "65").await.unwrap();
+    backend
+        .save_profile_key("search.user_profile_max_len", "65")
+        .await
+        .unwrap();
     let profile = backend.compile_user_profile(session_id).await.unwrap();
 
     let expected = "Weather is nice today so\nI went for a walk to\ndeg: math\nfav: red";
@@ -137,8 +150,14 @@ async fn test_pipeline_retrieval_optimizations() {
     backend.init().await.unwrap();
 
     // Verify default TF-IDF pool size configuration can be queried
-    backend.save_profile_key("search.tfidf_pool_size", "100").await.unwrap();
-    let tfidf_pool = backend.get_profile_key("search.tfidf_pool_size").await.unwrap();
+    backend
+        .save_profile_key("search.tfidf_pool_size", "100")
+        .await
+        .unwrap();
+    let tfidf_pool = backend
+        .get_profile_key("search.tfidf_pool_size")
+        .await
+        .unwrap();
     assert_eq!(tfidf_pool.unwrap(), "100");
 }
 
@@ -150,8 +169,11 @@ async fn test_dynamic_ladder_boost_scaling() {
     }
     let backend = SurrealBackend::new_in_memory().await.unwrap();
     backend.init().await.unwrap();
-    backend.save_profile_key("search.enable_access_reinforcement", "false").await.unwrap();
-    
+    backend
+        .save_profile_key("search.enable_access_reinforcement", "false")
+        .await
+        .unwrap();
+
     // Save a mock episode with query-matching content and title forced to 0.85 similarity
     let ep = EpisodeSave {
         created_at: None,
@@ -161,65 +183,83 @@ async fn test_dynamic_ladder_boost_scaling() {
         ..Default::default()
     };
     let ep_id = backend.save_episode(&ep).await.unwrap();
-    
+
     // 1. Scale = 0.0 (no boost) -> raw_vector_sim should be exactly 0.85
-    backend.save_profile_key("search.ladder_scale", "0.0").await.unwrap();
-    let res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Rust database locks",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+    backend
+        .save_profile_key("search.ladder_scale", "0.0")
+        .await
+        .unwrap();
+    let res = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Rust database locks",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await
+        .unwrap();
     assert!(!res.results.is_empty());
     let r = res.results.iter().find(|x| x.id == ep_id).unwrap();
     assert_eq!(r.raw_vector_sim.unwrap(), 0.85f32);
-    
+
     // 2. Scale = 1.0 (full boost) -> raw_vector_sim should be 0.85 + 0.15 = 1.0
-    backend.save_profile_key("search.ladder_scale", "1.0").await.unwrap();
-    let res2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Rust database locks",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+    backend
+        .save_profile_key("search.ladder_scale", "1.0")
+        .await
+        .unwrap();
+    let res2 = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Rust database locks",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await
+        .unwrap();
     let r2 = res2.results.iter().find(|x| x.id == ep_id).unwrap();
     assert_eq!(r2.raw_vector_sim.unwrap(), 1.0f32);
-    
+
     // 3. Scale = 0.5 (half boost) -> raw_vector_sim should be 0.85 + 0.075 = 0.925
-    backend.save_profile_key("search.ladder_scale", "0.5").await.unwrap();
-    let res3 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Rust database locks",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+    backend
+        .save_profile_key("search.ladder_scale", "0.5")
+        .await
+        .unwrap();
+    let res3 = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Rust database locks",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await
+        .unwrap();
     let r3 = res3.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r3.raw_vector_sim.unwrap() - 0.925f32).abs() < 1e-5);
 }
@@ -231,8 +271,11 @@ async fn test_dynamic_temporal_decay_floor() {
     }
     let backend = SurrealBackend::new_in_memory().await.unwrap();
     backend.init().await.unwrap();
-    backend.save_profile_key("search.enable_access_reinforcement", "false").await.unwrap();
-    
+    backend
+        .save_profile_key("search.enable_access_reinforcement", "false")
+        .await
+        .unwrap();
+
     // Save a mock episode with query-matching content
     let ep = EpisodeSave {
         created_at: None,
@@ -243,55 +286,66 @@ async fn test_dynamic_temporal_decay_floor() {
     };
     let ep_id = backend.save_episode(&ep).await.unwrap();
     let uuid = ep_id.split(':').nth(1).unwrap();
-    
+
     // Update created_at and clear last_retrieved_at to force decay fallback to created_at
     backend.db.query("UPDATE type::record('episode', $id) MERGE { created_at: time::now() - 365d, last_retrieved_at: NONE };")
         .bind(("id", uuid))
         .await.unwrap().check().unwrap();
-        
+
     // 1. Decay floor = 0.20 -> factor_multiplier should be 0.25 + 0.5 * 0.20 = 0.35
-    backend.save_profile_key("search.temporal_decay_floor", "0.20").await.unwrap();
-    let res = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Rust database locks",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+    backend
+        .save_profile_key("search.temporal_decay_floor", "0.20")
+        .await
+        .unwrap();
+    let res = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Rust database locks",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await
+        .unwrap();
     let r = res.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r.factor_multiplier.unwrap() - 0.35f32).abs() < 1e-4);
-    
+
     // Reset created_at and clear last_retrieved_at again to force decay on the second search
     backend.db.query("UPDATE type::record('episode', $id) MERGE { created_at: time::now() - 365d, last_retrieved_at: NONE };")
         .bind(("id", uuid))
         .await.unwrap().check().unwrap();
 
     // 2. Decay floor = 0.45 -> factor_multiplier should be 0.25 + 0.5 * 0.45 = 0.475
-    backend.save_profile_key("search.temporal_decay_floor", "0.45").await.unwrap();
-    let res2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Rust database locks",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+    backend
+        .save_profile_key("search.temporal_decay_floor", "0.45")
+        .await
+        .unwrap();
+    let res2 = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Rust database locks",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await
+        .unwrap();
     let r2 = res2.results.iter().find(|x| x.id == ep_id).unwrap();
     assert!((r2.factor_multiplier.unwrap() - 0.475f32).abs() < 1e-4);
 }
-

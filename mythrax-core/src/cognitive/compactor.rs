@@ -1,13 +1,13 @@
+use crate::cognitive::synthesis::load_insights;
+use crate::contracts::WikiNode;
 use crate::db::StorageBackend;
 use crate::db::parse_record_id;
 use crate::llm::LLMClient;
-use crate::store::MarkdownStore;
-use crate::cognitive::synthesis::load_insights;
-use crate::contracts::WikiNode;
-use surrealdb_types::SurrealValue;
-use std::path::Path;
-use anyhow::Result;
 use crate::math::cosine_similarity;
+use crate::store::MarkdownStore;
+use anyhow::Result;
+use std::path::Path;
+use surrealdb_types::SurrealValue;
 
 pub struct Compactor {
     llm: LLMClient,
@@ -26,7 +26,6 @@ impl Compactor {
         }
     }
 
-
     pub async fn delta_compact_checkpoints(&self, db: &dyn StorageBackend) -> Result<String> {
         let checkpoints = db.get_checkpoints().await?;
         if checkpoints.is_empty() {
@@ -35,10 +34,19 @@ impl Compactor {
 
         let mut prompt_content = String::new();
         for (i, chk) in checkpoints.iter().enumerate() {
-            let timestamp = chk.get("timestamp").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let project_type = chk.get("project_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let timestamp = chk
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let project_type = chk
+                .get("project_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let exit_code = chk.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
-            let errors = chk.get("compiler_errors").and_then(|v| v.as_str()).unwrap_or("");
+            let errors = chk
+                .get("compiler_errors")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let git_diff = chk.get("git_diff").and_then(|v| v.as_str()).unwrap_or("");
 
             if i < 2 {
@@ -49,12 +57,30 @@ impl Compactor {
                      Compiler Exit Code: {}\n\
                      Compiler/Linter Output:\n{}\n\
                      Git Diff:\n{}\n\n",
-                    i + 1, timestamp, project_type, exit_code, errors, git_diff
+                    i + 1,
+                    timestamp,
+                    project_type,
+                    exit_code,
+                    errors,
+                    git_diff
                 ));
             } else {
                 let compact_diff = if git_diff.len() > 200 {
-                    let summary_prompt = format!("Summarize this git diff briefly (under 50 words):\n\n{}", git_diff);
-                    self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some("You are a code summarizer."), &summary_prompt).await.unwrap_or_else(|_| "Git diff summary failed".to_string())
+                    let summary_prompt = format!(
+                        "Summarize this git diff briefly (under 50 words):\n\n{}",
+                        git_diff
+                    );
+                    self.llm
+                        .routed_completion(
+                            db,
+                            &crate::contracts::TaskProfile::new(
+                                crate::contracts::TaskArchetype::Summarization,
+                            ),
+                            Some("You are a code summarizer."),
+                            &summary_prompt,
+                        )
+                        .await
+                        .unwrap_or_else(|_| "Git diff summary failed".to_string())
                 } else {
                     git_diff.to_string()
                 };
@@ -65,13 +91,25 @@ impl Compactor {
                      Project Type: {}\n\
                      Compiler Exit Code: {}\n\
                      Summary of Changes:\n{}\n\n",
-                    i + 1, timestamp, project_type, exit_code, compact_diff
+                    i + 1,
+                    timestamp,
+                    project_type,
+                    exit_code,
+                    compact_diff
                 ));
             }
         }
 
         let sys_prompt = "You are a master systems architect. Analyze the sequence of checkpoints and summarize the transitions between them, detailing how the codebase evolved, what errors were resolved, and the progression of active changes.";
-        let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_content).await?;
+        let summary = self
+            .llm
+            .routed_completion(
+                db,
+                &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization),
+                Some(sys_prompt),
+                &prompt_content,
+            )
+            .await?;
         Ok(summary)
     }
 
@@ -82,7 +120,10 @@ impl Compactor {
         scope: &str,
         _embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
             // Garbage collect low-confidence nodes updated more than 30 days ago
             #[derive(serde::Deserialize, SurrealValue)]
             struct GcNode {
@@ -90,10 +131,19 @@ impl Compactor {
                 vault_path: Option<String>,
             }
             let gc_sql = "SELECT id, vault_path FROM wiki_node WHERE scope = $scope AND metacognitive_confidence < 3 AND updated_at < time::now() - 30d;";
-            if let Ok(mut resp) = surreal_backend.db.query(gc_sql).bind(("scope", scope)).await {
+            if let Ok(mut resp) = surreal_backend
+                .db
+                .query(gc_sql)
+                .bind(("scope", scope))
+                .await
+            {
                 if let Ok(nodes) = resp.take::<Vec<GcNode>>(0) {
                     for node in nodes {
-                        let _ = surreal_backend.db.query("DELETE $id;").bind(("id", node.id)).await;
+                        let _ = surreal_backend
+                            .db
+                            .query("DELETE $id;")
+                            .bind(("id", node.id))
+                            .await;
                         if let Some(ref vp) = node.vault_path {
                             let src_file = store.vault_root.join(vp);
                             if src_file.exists() {
@@ -111,8 +161,14 @@ impl Compactor {
             }
 
             // Hebbian synaptic pruning
-            let _ = surreal_backend.db.query("UPDATE relates_to SET weight = (weight OR 1.0) * 0.9;").await;
-            let _ = surreal_backend.db.query("DELETE relates_to WHERE weight < 0.1;").await;
+            let _ = surreal_backend
+                .db
+                .query("UPDATE relates_to SET weight = (weight OR 1.0) * 0.9;")
+                .await;
+            let _ = surreal_backend
+                .db
+                .query("DELETE relates_to WHERE weight < 0.1;")
+                .await;
         }
 
         let _ = db.prune_stale_memories(&store.vault_root).await;
@@ -122,14 +178,19 @@ impl Compactor {
         // Enforce 500-node procedural episode cap per scope
         // -------------------------------------------------------------
         if let Ok(mut active_procs) = db.get_episodes_by_node_type("procedural").await {
-            active_procs.retain(|ep| ep.scope.as_deref() == Some(scope) && !ep.archived.unwrap_or(false));
+            active_procs
+                .retain(|ep| ep.scope.as_deref() == Some(scope) && !ep.archived.unwrap_or(false));
             if active_procs.len() > 500 {
                 active_procs.sort_by(|a, b| {
-                    let time_a = a.last_retrieved_at.as_ref()
+                    let time_a = a
+                        .last_retrieved_at
+                        .as_ref()
                         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|| chrono::Utc::now());
-                    let time_b = b.last_retrieved_at.as_ref()
+                    let time_b = b
+                        .last_retrieved_at
+                        .as_ref()
                         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|| chrono::Utc::now());
@@ -137,7 +198,10 @@ impl Compactor {
                 });
 
                 let num_to_archive = active_procs.len() - 500;
-                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                if let Some(surreal_backend) = db
+                    .as_any()
+                    .downcast_ref::<crate::db::backend::SurrealBackend>()
+                {
                     for i in 0..num_to_archive {
                         if let Some(ref ep_id) = active_procs[i].id {
                             let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
@@ -147,7 +211,11 @@ impl Compactor {
                                 utility: 1.0,
                                 importance: 1.0
                             };";
-                            let _ = surreal_backend.db.query(archive_sql).bind(("id", id_raw)).await;
+                            let _ = surreal_backend
+                                .db
+                                .query(archive_sql)
+                                .bind(("id", id_raw))
+                                .await;
 
                             if let Some(ref vp) = active_procs[i].vault_path {
                                 let src_file = store.vault_root.join(vp);
@@ -170,7 +238,10 @@ impl Compactor {
         // -------------------------------------------------------------
         // Task C.1: Near-Duplicate Episodic Merging
         // -------------------------------------------------------------
-        if db.is_feature_enabled("compactor.enable_near_duplicate_merging", true).await {
+        if db
+            .is_feature_enabled("compactor.enable_near_duplicate_merging", true)
+            .await
+        {
             let mut dedup_threshold = 0.90f32;
             if let Ok(Some(val_str)) = db.get_profile_key("compactor.dedup_threshold").await {
                 if let Ok(parsed) = val_str.parse::<f32>() {
@@ -179,12 +250,13 @@ impl Compactor {
             }
 
             if let Ok(episodes) = db.get_all_episodes().await {
-                let mut active_eps: Vec<crate::contracts::Episode> = episodes.into_iter()
+                let mut active_eps: Vec<crate::contracts::Episode> = episodes
+                    .into_iter()
                     .filter(|ep| {
-                        ep.scope.as_deref() == Some(scope) &&
-                        !ep.archived.unwrap_or(false) &&
-                        ep.embedding.is_some() &&
-                        ep.id.is_some()
+                        ep.scope.as_deref() == Some(scope)
+                            && !ep.archived.unwrap_or(false)
+                            && ep.embedding.is_some()
+                            && ep.id.is_some()
                     })
                     .collect();
 
@@ -209,32 +281,39 @@ impl Compactor {
                             // Check similarity
                             let sim = cosine_similarity(
                                 active_eps[i].embedding.as_ref().unwrap(),
-                                active_eps[j].embedding.as_ref().unwrap()
+                                active_eps[j].embedding.as_ref().unwrap(),
                             );
 
                             if sim >= dedup_threshold {
                                 // Determine older vs newer
-                                let time_i = active_eps[i].last_retrieved_at.as_ref()
+                                let time_i = active_eps[i]
+                                    .last_retrieved_at
+                                    .as_ref()
                                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                     .map(|dt| dt.with_timezone(&chrono::Utc))
                                     .unwrap_or_else(|| chrono::Utc::now());
-                                let time_j = active_eps[j].last_retrieved_at.as_ref()
+                                let time_j = active_eps[j]
+                                    .last_retrieved_at
+                                    .as_ref()
                                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                     .map(|dt| dt.with_timezone(&chrono::Utc))
                                     .unwrap_or_else(|| chrono::Utc::now());
 
-                                let (older_idx, newer_idx) = if time_i <= time_j {
-                                    (i, j)
-                                } else {
-                                    (j, i)
-                                };
+                                let (older_idx, newer_idx) =
+                                    if time_i <= time_j { (i, j) } else { (j, i) };
 
                                 let older = active_eps[older_idx].clone();
                                 let newer = active_eps[newer_idx].clone();
 
-                                let merged_content = format!("{}\n{}", older.content, newer.content);
-                                let merged_last_retrieved_at = newer.last_retrieved_at.clone().or(older.last_retrieved_at.clone());
-                                let merged_word_count = Some(older.word_count.unwrap_or(0) + newer.word_count.unwrap_or(0));
+                                let merged_content =
+                                    format!("{}\n{}", older.content, newer.content);
+                                let merged_last_retrieved_at = newer
+                                    .last_retrieved_at
+                                    .clone()
+                                    .or(older.last_retrieved_at.clone());
+                                let merged_word_count = Some(
+                                    older.word_count.unwrap_or(0) + newer.word_count.unwrap_or(0),
+                                );
 
                                 let mut merged_facts = older.facts.clone().unwrap_or_default();
                                 if let Some(ref new_facts) = newer.facts {
@@ -244,9 +323,14 @@ impl Compactor {
                                         }
                                     }
                                 }
-                                let merged_facts = if merged_facts.is_empty() { None } else { Some(merged_facts) };
+                                let merged_facts = if merged_facts.is_empty() {
+                                    None
+                                } else {
+                                    Some(merged_facts)
+                                };
 
-                                let mut merged_concepts = older.concepts.clone().unwrap_or_default();
+                                let mut merged_concepts =
+                                    older.concepts.clone().unwrap_or_default();
                                 if let Some(ref new_concepts) = newer.concepts {
                                     for c in new_concepts {
                                         if !merged_concepts.contains(c) {
@@ -254,9 +338,14 @@ impl Compactor {
                                         }
                                     }
                                 }
-                                let merged_concepts = if merged_concepts.is_empty() { None } else { Some(merged_concepts) };
+                                let merged_concepts = if merged_concepts.is_empty() {
+                                    None
+                                } else {
+                                    Some(merged_concepts)
+                                };
 
-                                let mut merged_files_read = older.files_read.clone().unwrap_or_default();
+                                let mut merged_files_read =
+                                    older.files_read.clone().unwrap_or_default();
                                 if let Some(ref new_files) = newer.files_read {
                                     for f in new_files {
                                         if !merged_files_read.contains(f) {
@@ -264,9 +353,14 @@ impl Compactor {
                                         }
                                     }
                                 }
-                                let merged_files_read = if merged_files_read.is_empty() { None } else { Some(merged_files_read) };
+                                let merged_files_read = if merged_files_read.is_empty() {
+                                    None
+                                } else {
+                                    Some(merged_files_read)
+                                };
 
-                                let mut merged_files_modified = older.files_modified.clone().unwrap_or_default();
+                                let mut merged_files_modified =
+                                    older.files_modified.clone().unwrap_or_default();
                                 if let Some(ref new_files) = newer.files_modified {
                                     for f in new_files {
                                         if !merged_files_modified.contains(f) {
@@ -274,22 +368,38 @@ impl Compactor {
                                         }
                                     }
                                 }
-                                let merged_files_modified = if merged_files_modified.is_empty() { None } else { Some(merged_files_modified) };
+                                let merged_files_modified = if merged_files_modified.is_empty() {
+                                    None
+                                } else {
+                                    Some(merged_files_modified)
+                                };
 
                                 // Update older episode in active_eps
                                 active_eps[older_idx].content = merged_content.clone();
-                                active_eps[older_idx].last_retrieved_at = merged_last_retrieved_at.clone();
+                                active_eps[older_idx].last_retrieved_at =
+                                    merged_last_retrieved_at.clone();
                                 active_eps[older_idx].word_count = merged_word_count;
                                 active_eps[older_idx].facts = merged_facts.clone();
                                 active_eps[older_idx].concepts = merged_concepts.clone();
                                 active_eps[older_idx].files_read = merged_files_read.clone();
-                                active_eps[older_idx].files_modified = merged_files_modified.clone();
+                                active_eps[older_idx].files_modified =
+                                    merged_files_modified.clone();
 
                                 let newer_id = newer.id.as_ref().unwrap();
                                 deleted_ids.insert(newer_id.clone());
 
-                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-                                    let older_raw_id = older.id.as_ref().unwrap().split(':').nth(1).unwrap_or(older.id.as_ref().unwrap()).to_string();
+                                if let Some(surreal_backend) =
+                                    db.as_any()
+                                        .downcast_ref::<crate::db::backend::SurrealBackend>()
+                                {
+                                    let older_raw_id = older
+                                        .id
+                                        .as_ref()
+                                        .unwrap()
+                                        .split(':')
+                                        .nth(1)
+                                        .unwrap_or(older.id.as_ref().unwrap())
+                                        .to_string();
                                     let query_sql = "UPDATE type::record('episode', $id) MERGE {
                                         content: $content,
                                         last_retrieved_at: $last_retrieved_at,
@@ -299,7 +409,9 @@ impl Compactor {
                                         files_modified: $files_modified,
                                         word_count: $word_count
                                     };";
-                                    let _ = surreal_backend.db.query(query_sql)
+                                    let _ = surreal_backend
+                                        .db
+                                        .query(query_sql)
                                         .bind(("id", older_raw_id))
                                         .bind(("content", merged_content.clone()))
                                         .bind(("last_retrieved_at", merged_last_retrieved_at))
@@ -310,8 +422,14 @@ impl Compactor {
                                         .bind(("word_count", merged_word_count))
                                         .await;
 
-                                    let older_rec = crate::db::backend::parse_record_id(older.id.as_ref().unwrap()).unwrap();
-                                    let newer_rec = crate::db::backend::parse_record_id(newer.id.as_ref().unwrap()).unwrap();
+                                    let older_rec = crate::db::backend::parse_record_id(
+                                        older.id.as_ref().unwrap(),
+                                    )
+                                    .unwrap();
+                                    let newer_rec = crate::db::backend::parse_record_id(
+                                        newer.id.as_ref().unwrap(),
+                                    )
+                                    .unwrap();
 
                                     let mut older_count = 0;
                                     let mut newer_count = 0;
@@ -319,10 +437,13 @@ impl Compactor {
                                     let mut newer_exists = false;
 
                                     let metrics_sql = "SELECT target_id, access_count FROM metrics WHERE target_id = $older OR target_id = $newer;";
-                                    if let Ok(mut resp) = surreal_backend.db.query(metrics_sql)
+                                    if let Ok(mut resp) = surreal_backend
+                                        .db
+                                        .query(metrics_sql)
                                         .bind(("older", older_rec.clone()))
                                         .bind(("newer", newer_rec.clone()))
-                                        .await {
+                                        .await
+                                    {
                                         #[derive(serde::Deserialize, SurrealValue)]
                                         struct MetRow {
                                             target_id: surrealdb::types::RecordId,
@@ -330,11 +451,16 @@ impl Compactor {
                                         }
                                         if let Ok(rows) = resp.take::<Vec<MetRow>>(0) {
                                             for r in rows {
-                                                let r_target_str = crate::db::backend::format_record_id(&r.target_id);
+                                                let r_target_str =
+                                                    crate::db::backend::format_record_id(
+                                                        &r.target_id,
+                                                    );
                                                 if r_target_str == *older.id.as_ref().unwrap() {
                                                     older_count = r.access_count;
                                                     older_exists = true;
-                                                } else if r_target_str == *newer.id.as_ref().unwrap() {
+                                                } else if r_target_str
+                                                    == *newer.id.as_ref().unwrap()
+                                                {
                                                     newer_count = r.access_count;
                                                     newer_exists = true;
                                                 }
@@ -345,7 +471,9 @@ impl Compactor {
                                     let sum_count = older_count + newer_count;
                                     if older_exists {
                                         let update_metric_sql = "UPDATE metrics SET access_count = $count, last_accessed = time::now() WHERE target_id = $target_id;";
-                                        let _ = surreal_backend.db.query(update_metric_sql)
+                                        let _ = surreal_backend
+                                            .db
+                                            .query(update_metric_sql)
                                             .bind(("count", sum_count))
                                             .bind(("target_id", older_rec.clone()))
                                             .await;
@@ -357,7 +485,9 @@ impl Compactor {
                                             access_count: $count,
                                             last_accessed: time::now()
                                         };";
-                                        let _ = surreal_backend.db.query(create_sql)
+                                        let _ = surreal_backend
+                                            .db
+                                            .query(create_sql)
                                             .bind(("metrics_uuid", metrics_uuid))
                                             .bind(("target_id", older_rec.clone()))
                                             .bind(("count", sum_count))
@@ -365,38 +495,81 @@ impl Compactor {
                                     }
 
                                     // 1. Create superseded_by edge: newer -> superseded_by -> older
-                                    let relate_sql = "RELATE $newer -> superseded_by -> $older CONTENT {
+                                    let relate_sql =
+                                        "RELATE $newer -> superseded_by -> $older CONTENT {
                                         reason: 'Deduplicated during compaction',
                                         created_at: time::now()
                                     };";
-                                    if let Err(e) = surreal_backend.db.query(relate_sql)
+                                    if let Err(e) = surreal_backend
+                                        .db
+                                        .query(relate_sql)
                                         .bind(("newer", newer_rec.clone()))
                                         .bind(("older", older_rec.clone()))
-                                        .await.and_then(|r| r.check()) {
-                                        tracing::error!("Failed to create superseded_by relation in compactor: {:?}", e);
+                                        .await
+                                        .and_then(|r| r.check())
+                                    {
+                                        tracing::error!(
+                                            "Failed to create superseded_by relation in compactor: {:?}",
+                                            e
+                                        );
                                     }
 
                                     // 2. Transfer all edges from newer node to older node before deletion
 
                                     let sql = "SELECT * FROM relates_to WHERE in = $newer OR out = $newer;";
-                                    match surreal_backend.db.query(sql).bind(("newer", newer_rec.clone())).await {
+                                    match surreal_backend
+                                        .db
+                                        .query(sql)
+                                        .bind(("newer", newer_rec.clone()))
+                                        .await
+                                    {
                                         Ok(mut resp) => {
                                             match resp.take::<Vec<serde_json::Value>>(0) {
                                                 Ok(edges) => {
-                                                    tracing::debug!("Found {} raw edges to transfer in compactor. newer_rec={:?} older_rec={:?}", edges.len(), newer_rec, older_rec);
+                                                    tracing::debug!(
+                                                        "Found {} raw edges to transfer in compactor. newer_rec={:?} older_rec={:?}",
+                                                        edges.len(),
+                                                        newer_rec,
+                                                        older_rec
+                                                    );
                                                     for edge in edges {
-                                                        let edge_id_str = edge.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                                                        let in_str = edge.get("in").and_then(|v| v.as_str()).unwrap_or("");
-                                                        let out_str = edge.get("out").and_then(|v| v.as_str()).unwrap_or("");
-                                                        
+                                                        let edge_id_str = edge
+                                                            .get("id")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("");
+                                                        let in_str = edge
+                                                            .get("in")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("");
+                                                        let out_str = edge
+                                                            .get("out")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("");
+
                                                         if let (Ok(in_rec), Ok(out_rec)) = (
-                                                            crate::db::backend::parse_record_id(in_str),
-                                                            crate::db::backend::parse_record_id(out_str)
+                                                            crate::db::backend::parse_record_id(
+                                                                in_str,
+                                                            ),
+                                                            crate::db::backend::parse_record_id(
+                                                                out_str,
+                                                            ),
                                                         ) {
-                                                            let target_in = if in_rec == newer_rec { older_rec.clone() } else { in_rec };
-                                                            let target_out = if out_rec == newer_rec { older_rec.clone() } else { out_rec };
-                                                            
-                                                            let confidence = edge.get("confidence").and_then(|v| v.as_f64()).map(|f| f as f32);
+                                                            let target_in = if in_rec == newer_rec {
+                                                                older_rec.clone()
+                                                            } else {
+                                                                in_rec
+                                                            };
+                                                            let target_out = if out_rec == newer_rec
+                                                            {
+                                                                older_rec.clone()
+                                                            } else {
+                                                                out_rec
+                                                            };
+
+                                                            let confidence = edge
+                                                                .get("confidence")
+                                                                .and_then(|v| v.as_f64())
+                                                                .map(|f| f as f32);
                                                             let created_at = edge.get("created_at").and_then(|v| v.as_str())
                                                                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                                                 .map(|dt| dt.with_timezone(&chrono::Utc));
@@ -406,41 +579,68 @@ impl Compactor {
                                                             let valid_to = edge.get("valid_to").and_then(|v| v.as_str())
                                                                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                                                 .map(|dt| dt.with_timezone(&chrono::Utc));
-                                                            
-                                                            tracing::debug!("Transfer edge={} -> target_in={:?} target_out={:?}", edge_id_str, target_in, target_out);
-                                                            
+
+                                                            tracing::debug!(
+                                                                "Transfer edge={} -> target_in={:?} target_out={:?}",
+                                                                edge_id_str,
+                                                                target_in,
+                                                                target_out
+                                                            );
+
                                                             let relate_edge_sql = "RELATE $in -> relates_to -> $out CONTENT {
                                                                 confidence: $confidence,
                                                                 created_at: $created_at,
                                                                 valid_from: $valid_from,
                                                                 valid_to: $valid_to
                                                             };";
-                                                            
-                                                            if let Err(e) = surreal_backend.db.query(relate_edge_sql)
+
+                                                            if let Err(e) = surreal_backend
+                                                                .db
+                                                                .query(relate_edge_sql)
                                                                 .bind(("in", target_in))
                                                                 .bind(("out", target_out))
                                                                 .bind(("confidence", confidence))
                                                                 .bind(("created_at", created_at))
                                                                 .bind(("valid_from", valid_from))
                                                                 .bind(("valid_to", valid_to))
-                                                                .await.and_then(|r| r.check()) {
-                                                                tracing::error!("Failed to transfer edge {} in compactor: {:?}", edge_id_str, e);
+                                                                .await
+                                                                .and_then(|r| r.check())
+                                                            {
+                                                                tracing::error!(
+                                                                    "Failed to transfer edge {} in compactor: {:?}",
+                                                                    edge_id_str,
+                                                                    e
+                                                                );
                                                             }
                                                         } else {
-                                                            tracing::warn!("Failed to parse in_str={} or out_str={} in compactor", in_str, out_str);
+                                                            tracing::warn!(
+                                                                "Failed to parse in_str={} or out_str={} in compactor",
+                                                                in_str,
+                                                                out_str
+                                                            );
                                                         }
                                                     }
                                                 }
-                                                Err(e) => tracing::error!("Failed to deserialize relates_to edges in compactor: {:?}", e),
+                                                Err(e) => tracing::error!(
+                                                    "Failed to deserialize relates_to edges in compactor: {:?}",
+                                                    e
+                                                ),
                                             }
                                         }
-                                        Err(e) => tracing::error!("Failed to query relates_to edges in compactor: {:?}", e),
+                                        Err(e) => tracing::error!(
+                                            "Failed to query relates_to edges in compactor: {:?}",
+                                            e
+                                        ),
                                     }
 
                                     // 3. Expand temporal range on surviving node
-                                    if let (Some(newer_start), Some(older_start)) = (newer.temporal_range_start, older.temporal_range_start) {
+                                    if let (Some(newer_start), Some(older_start)) =
+                                        (newer.temporal_range_start, older.temporal_range_start)
+                                    {
                                         let min_start = newer_start.min(older_start);
-                                        let max_end = newer.temporal_range_end.unwrap_or(newer_start)
+                                        let max_end = newer
+                                            .temporal_range_end
+                                            .unwrap_or(newer_start)
                                             .max(older.temporal_range_end.unwrap_or(older_start));
                                         if let Err(e) = surreal_backend.db.query(
                                             "UPDATE $id SET temporal_range_start = $start, temporal_range_end = $end;"
@@ -453,19 +653,36 @@ impl Compactor {
                                     }
 
                                     if newer_exists {
-                                        let delete_metric_sql = "DELETE FROM metrics WHERE target_id = $target_id;";
-                                        let _ = surreal_backend.db.query(delete_metric_sql)
+                                        let delete_metric_sql =
+                                            "DELETE FROM metrics WHERE target_id = $target_id;";
+                                        let _ = surreal_backend
+                                            .db
+                                            .query(delete_metric_sql)
                                             .bind(("target_id", newer_rec))
                                             .await;
                                     }
 
-                                     let newer_raw_id = newer.id.as_ref().unwrap().split(':').nth(1).unwrap_or(newer.id.as_ref().unwrap()).to_string();
-                                     let update_ep_sql = "UPDATE type::record('episode', $id) SET archived = true, status = 'superseded';";
-                                     if let Err(e) = surreal_backend.db.query(update_ep_sql)
-                                         .bind(("id", newer_raw_id))
-                                         .await.and_then(|r| r.check()) {
-                                         tracing::error!("Failed to update superseded episode in DB: {:?}", e);
-                                     }
+                                    let newer_raw_id = newer
+                                        .id
+                                        .as_ref()
+                                        .unwrap()
+                                        .split(':')
+                                        .nth(1)
+                                        .unwrap_or(newer.id.as_ref().unwrap())
+                                        .to_string();
+                                    let update_ep_sql = "UPDATE type::record('episode', $id) SET archived = true, status = 'superseded';";
+                                    if let Err(e) = surreal_backend
+                                        .db
+                                        .query(update_ep_sql)
+                                        .bind(("id", newer_raw_id))
+                                        .await
+                                        .and_then(|r| r.check())
+                                    {
+                                        tracing::error!(
+                                            "Failed to update superseded episode in DB: {:?}",
+                                            e
+                                        );
+                                    }
                                 }
 
                                 if let Some(ref vp) = older.vault_path {
@@ -486,8 +703,14 @@ impl Compactor {
         }
 
         // Prune chat history exceeding 100 turns per session
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let sessions_res = surreal_backend.db.query("SELECT session_id FROM chat_history GROUP BY session_id;").await;
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
+            let sessions_res = surreal_backend
+                .db
+                .query("SELECT session_id FROM chat_history GROUP BY session_id;")
+                .await;
             match sessions_res {
                 Ok(mut resp) => {
                     #[derive(serde::Deserialize, SurrealValue)]
@@ -508,7 +731,9 @@ impl Compactor {
                                 if ids.len() > 100 {
                                     let to_delete = &ids[100..];
                                     for item in to_delete {
-                                        let _ = surreal_backend.db.query("DELETE $id;")
+                                        let _ = surreal_backend
+                                            .db
+                                            .query("DELETE $id;")
                                             .bind(("id", item.id.clone()))
                                             .await;
                                     }
@@ -532,9 +757,16 @@ impl Compactor {
                 }
             }
         }
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
             let delete_query = "DELETE wiki_node WHERE scope = $scope AND (vault_path CONTAINS 'compactions/' OR name CONTAINS 'Compaction:');";
-            let _ = surreal_backend.db.query(delete_query).bind(("scope", scope)).await;
+            let _ = surreal_backend
+                .db
+                .query(delete_query)
+                .bind(("scope", scope))
+                .await;
         }
 
         let insights = load_insights(&store.vault_root);
@@ -568,7 +800,6 @@ impl Compactor {
         if !node_ids.is_empty() {
             if let Ok(nodes_resp) = db.get_memory_nodes(&node_ids).await {
                 for node in nodes_resp.wiki_nodes {
-
                     if let Some(ref id) = node.id {
                         wiki_nodes_map.insert(id.clone(), node.clone());
                         if let Some(ins) = ins_by_id.get(id) {
@@ -614,7 +845,10 @@ impl Compactor {
         }
 
         let result_clusters = compact_hierarchical_dbscan(&valid_insights, 0.10, 2);
-        let mut clusters: std::collections::HashMap<usize, Vec<(crate::cognitive::synthesis::InsightNote, String)>> = std::collections::HashMap::new();
+        let mut clusters: std::collections::HashMap<
+            usize,
+            Vec<(crate::cognitive::synthesis::InsightNote, String)>,
+        > = std::collections::HashMap::new();
         for (cluster_id, members) in result_clusters.into_iter().enumerate() {
             if members.len() > 1 {
                 clusters.insert(cluster_id, members);
@@ -627,7 +861,10 @@ impl Compactor {
         for (cluster_id, member_insights) in &clusters {
             let mut combined_content = String::new();
             for (ins, _) in member_insights {
-                combined_content.push_str(&format!("Insight Title: {}\nInsight Body:\n{}\n\n", ins.title, ins.content));
+                combined_content.push_str(&format!(
+                    "Insight Title: {}\nInsight Body:\n{}\n\n",
+                    ins.title, ins.content
+                ));
             }
 
             // Extract anchors and clean content
@@ -635,7 +872,17 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
+            let summary = self
+                .llm
+                .routed_completion(
+                    db,
+                    &crate::contracts::TaskProfile::new(
+                        crate::contracts::TaskArchetype::Summarization,
+                    ),
+                    Some(sys_prompt),
+                    &prompt_text,
+                )
+                .await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -646,16 +893,19 @@ impl Compactor {
                 }
             }
 
-            let first_title = member_insights.first().map(|(c, _)| c.title.as_str()).unwrap_or("compaction");
+            let first_title = member_insights
+                .first()
+                .map(|(c, _)| c.title.as_str())
+                .unwrap_or("compaction");
             let slug = first_title.to_lowercase().replace([' ', '/'], "_");
-            let relative_path = format!("wiki/{}/compactions/{}_cluster_{}.md", scope, slug, cluster_id);
+            let relative_path = format!(
+                "wiki/{}/compactions/{}_cluster_{}.md",
+                scope, slug, cluster_id
+            );
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
-                scope,
-                cluster_id,
-                scope,
-                summary
+                scope, cluster_id, scope, summary
             );
 
             file_content.push_str("\n\n## Component Insights\n");
@@ -697,7 +947,6 @@ impl Compactor {
             }
             if let Ok(ep_nodes_resp) = db.get_memory_nodes(&ep_ids).await {
                 for ep in ep_nodes_resp.episodes {
-
                     if let Some(ref created_at_str) = ep.created_at {
                         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
                             let utc_dt = dt.with_timezone(&chrono::Utc);
@@ -716,7 +965,6 @@ impl Compactor {
             let merged_start = starts.iter().filter_map(|&opt| opt).min();
             let merged_end = ends.iter().filter_map(|&opt| opt).max();
 
-
             let node_contract = WikiNode {
                 id: None,
                 name: format!("Compaction: {} - Cluster {}", scope, cluster_id),
@@ -731,17 +979,26 @@ impl Compactor {
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in member_insights {
                     if !insight_id.is_empty() {
-                        let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                        let _ = db
+                            .relate_nodes(insight_id, &compaction_id, None, None, None)
+                            .await;
                     }
                 }
-                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                if let Some(surreal_backend) = db
+                    .as_any()
+                    .downcast_ref::<crate::db::backend::SurrealBackend>()
+                {
                     for ep_id in &ep_ids {
                         let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
                             relation: 'derived_from',
                             created_at: time::now()
                         };";
-                        if let (Ok(from_thing), Ok(to_thing)) = (parse_record_id(&compaction_id), parse_record_id(ep_id)) {
-                            let _ = surreal_backend.db.query(rel_sql)
+                        if let (Ok(from_thing), Ok(to_thing)) =
+                            (parse_record_id(&compaction_id), parse_record_id(ep_id))
+                        {
+                            let _ = surreal_backend
+                                .db
+                                .query(rel_sql)
                                 .bind(("from", from_thing))
                                 .bind(("to", to_thing))
                                 .await;
@@ -750,14 +1007,21 @@ impl Compactor {
                 }
             }
 
-            tracing::info!("Compacted scope '{}' cluster {}: summary saved", scope, cluster_id);
+            tracing::info!(
+                "Compacted scope '{}' cluster {}: summary saved",
+                scope,
+                cluster_id
+            );
         }
 
         // 4. Handle outlier insights by grouping them into a single miscellaneous compaction
         if !outlier_insights.is_empty() {
             let mut combined_content = String::new();
             for (ins, _) in &outlier_insights {
-                combined_content.push_str(&format!("Insight Title: {}\nInsight Body:\n{}\n\n", ins.title, ins.content));
+                combined_content.push_str(&format!(
+                    "Insight Title: {}\nInsight Body:\n{}\n\n",
+                    ins.title, ins.content
+                ));
             }
 
             // Extract anchors and clean content
@@ -765,7 +1029,17 @@ impl Compactor {
 
             let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
-            let summary = self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt_text).await?;
+            let summary = self
+                .llm
+                .routed_completion(
+                    db,
+                    &crate::contracts::TaskProfile::new(
+                        crate::contracts::TaskArchetype::Summarization,
+                    ),
+                    Some(sys_prompt),
+                    &prompt_text,
+                )
+                .await?;
             let summary = page_markdown_code_blocks(db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
@@ -780,9 +1054,7 @@ impl Compactor {
 
             let mut file_content = format!(
                 "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: \"miscellaneous\"\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
-                scope,
-                scope,
-                summary
+                scope, scope, summary
             );
 
             file_content.push_str("\n\n## Component Insights\n");
@@ -826,7 +1098,6 @@ impl Compactor {
             }
             if let Ok(ep_nodes_resp) = db.get_memory_nodes(&ep_ids).await {
                 for ep in ep_nodes_resp.episodes {
-
                     if let Some(ref created_at_str) = ep.created_at {
                         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at_str) {
                             let utc_dt = dt.with_timezone(&chrono::Utc);
@@ -845,7 +1116,6 @@ impl Compactor {
             let merged_start = starts.iter().filter_map(|&opt| opt).min();
             let merged_end = ends.iter().filter_map(|&opt| opt).max();
 
-
             let node_contract = WikiNode {
                 id: None,
                 name: format!("Compaction: {} - Miscellaneous", scope),
@@ -860,17 +1130,26 @@ impl Compactor {
             if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
                 for (_, insight_id) in &outlier_insights {
                     if !insight_id.is_empty() {
-                        let _ = db.relate_nodes(insight_id, &compaction_id, None, None, None).await;
+                        let _ = db
+                            .relate_nodes(insight_id, &compaction_id, None, None, None)
+                            .await;
                     }
                 }
-                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                if let Some(surreal_backend) = db
+                    .as_any()
+                    .downcast_ref::<crate::db::backend::SurrealBackend>()
+                {
                     for ep_id in &ep_ids {
                         let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
                             relation: 'derived_from',
                             created_at: time::now()
                         };";
-                        if let (Ok(from_thing), Ok(to_thing)) = (parse_record_id(&compaction_id), parse_record_id(ep_id)) {
-                            let _ = surreal_backend.db.query(rel_sql)
+                        if let (Ok(from_thing), Ok(to_thing)) =
+                            (parse_record_id(&compaction_id), parse_record_id(ep_id))
+                        {
+                            let _ = surreal_backend
+                                .db
+                                .query(rel_sql)
                                 .bind(("from", from_thing))
                                 .bind(("to", to_thing))
                                 .await;
@@ -879,7 +1158,10 @@ impl Compactor {
                 }
             }
 
-            tracing::info!("Compacted scope '{}' outliers: miscellaneous summary saved", scope);
+            tracing::info!(
+                "Compacted scope '{}' outliers: miscellaneous summary saved",
+                scope
+            );
         }
 
         // Wire graduation pipeline to run opportunistically during compaction
@@ -888,7 +1170,6 @@ impl Compactor {
         Ok(())
     }
 
-
     async fn archive_decayed_episodes(
         &self,
         db: &dyn StorageBackend,
@@ -896,8 +1177,12 @@ impl Compactor {
     ) -> Result<()> {
         // Retrieve compaction.decay_threshold (default 0.15) from 'profile' table
         let mut decay_threshold = 0.15f32;
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-            let query_sql = "SELECT VALUE value FROM profile WHERE key = 'compaction.decay_threshold' LIMIT 1;";
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
+            let query_sql =
+                "SELECT VALUE value FROM profile WHERE key = 'compaction.decay_threshold' LIMIT 1;";
             if let Ok(mut resp) = surreal_backend.db.query(query_sql).await {
                 if let Ok(Some(val_str)) = resp.take::<Option<String>>(0) {
                     if let Ok(parsed) = val_str.parse::<f32>() {
@@ -908,7 +1193,10 @@ impl Compactor {
         }
 
         let mut access_counts = std::collections::HashMap::new();
-        if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
             let metrics_sql = "SELECT target_id, access_count FROM metrics;";
             if let Ok(mut resp) = surreal_backend.db.query(metrics_sql).await {
                 if let Ok(rows) = resp.take::<Vec<crate::db::backend::MetricAccess>>(0) {
@@ -937,21 +1225,24 @@ impl Compactor {
             } else {
                 now
             };
-            
+
             let is_procedural = ep.node_type.as_deref() == Some("procedural");
-            let access_count = ep.id.as_ref()
+            let access_count = ep
+                .id
+                .as_ref()
                 .and_then(|id| access_counts.get(id).copied())
                 .unwrap_or(0);
-            
+
             let t_half_type = if is_procedural { 365.0f32 } else { 30.0f32 };
             let t_half_eff = if is_procedural {
                 365.0f32
             } else {
                 t_half_type * (1.0f32 + 0.3f32 * ((1.0f32 + access_count as f32).log2()))
             };
-            
+
             let lambda_eff = 2.0f32.ln() / t_half_eff;
-            let t_secs = now.duration_since(last_ret)
+            let t_secs = now
+                .duration_since(last_ret)
                 .unwrap_or_default()
                 .as_secs_f32();
             let t_days = t_secs / 86400.0f32;
@@ -959,15 +1250,21 @@ impl Compactor {
             let utility = ep.utility.unwrap_or(50.0);
             let decayed_utility = utility * decay_factor;
 
-
-
             if decayed_utility < decay_threshold * 50.0 {
                 let mut is_referenced = false;
-                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                if let Some(surreal_backend) = db
+                    .as_any()
+                    .downcast_ref::<crate::db::backend::SurrealBackend>()
+                {
                     if let Some(ref ep_id) = ep.id {
                         if let Ok(ep_rec) = crate::db::backend::parse_record_id(ep_id) {
                             let check_ref_sql = "SELECT VALUE id FROM relates_to WHERE in = $ep OR out = $ep LIMIT 1;";
-                            if let Ok(mut resp) = surreal_backend.db.query(check_ref_sql).bind(("ep", ep_rec)).await {
+                            if let Ok(mut resp) = surreal_backend
+                                .db
+                                .query(check_ref_sql)
+                                .bind(("ep", ep_rec))
+                                .await
+                            {
                                 if let Ok(rows) = resp.take::<Vec<surrealdb::types::RecordId>>(0) {
                                     if !rows.is_empty() {
                                         is_referenced = true;
@@ -979,7 +1276,10 @@ impl Compactor {
                 }
 
                 if is_referenced {
-                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                    if let Some(surreal_backend) = db
+                        .as_any()
+                        .downcast_ref::<crate::db::backend::SurrealBackend>()
+                    {
                         if let Some(ref ep_id) = ep.id {
                             let query_sql = "UPDATE type::record('episode', $id) MERGE {
                                 archived: true,
@@ -988,7 +1288,9 @@ impl Compactor {
                                 importance: 1.0
                             };";
                             let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
-                            let _ = surreal_backend.db.query(query_sql)
+                            let _ = surreal_backend
+                                .db
+                                .query(query_sql)
                                 .bind(("id", id_raw))
                                 .await;
                         }
@@ -1008,18 +1310,36 @@ impl Compactor {
                         let dest_file = archive_dir.join(filename);
                         let _ = std::fs::rename(&src_file, &dest_file);
                     }
-                    
+
                     // 2. Generate high-level Raptor summary using the LLM
                     let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
                     let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
-                    match self.llm.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some(sys_prompt), &prompt).await {
+                    match self
+                        .llm
+                        .routed_completion(
+                            db,
+                            &crate::contracts::TaskProfile::new(
+                                crate::contracts::TaskArchetype::Summarization,
+                            ),
+                            Some(sys_prompt),
+                            &prompt,
+                        )
+                        .await
+                    {
                         Ok(summary) => {
                             // 3. Save as wiki Raptor summary node
                             let uuid = uuid::Uuid::new_v4().to_string();
-                            let resolved_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
-                            let archive_dir = store.vault_root.join(format!("wiki/{}/archive", resolved_scope));
+                            let resolved_scope =
+                                ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                            let archive_dir = store
+                                .vault_root
+                                .join(format!("wiki/{}/archive", resolved_scope));
                             let _ = std::fs::create_dir_all(&archive_dir);
-                            let wiki_rel = format!("wiki/{}/archive/raptor_summary_{}.md", resolved_scope, &uuid[..8]);
+                            let wiki_rel = format!(
+                                "wiki/{}/archive/raptor_summary_{}.md",
+                                resolved_scope,
+                                &uuid[..8]
+                            );
                             let wiki_content = format!(
                                 "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
                                 ep.title, ep.title, summary
@@ -1043,8 +1363,14 @@ impl Compactor {
                     }
 
                     // 4. Demote the record in the database instead of deleting it (Epic 3)
-                    if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-                        let ep_id = ep.id.as_ref().ok_or_else(|| anyhow::anyhow!("Episode ID missing"))?;
+                    if let Some(surreal_backend) = db
+                        .as_any()
+                        .downcast_ref::<crate::db::backend::SurrealBackend>()
+                    {
+                        let ep_id = ep
+                            .id
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("Episode ID missing"))?;
                         let filename = std::path::Path::new(vp)
                             .file_name()
                             .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
@@ -1058,7 +1384,9 @@ impl Compactor {
                             vault_path: $new_vp
                         };";
 
-                        let resp = surreal_backend.db.query(query_sql)
+                        let resp = surreal_backend
+                            .db
+                            .query(query_sql)
                             .bind(("id", ep_id.split(':').nth(1).unwrap_or(ep_id).to_string()))
                             .bind(("new_vp", new_vp))
                             .await?;
@@ -1073,8 +1401,12 @@ impl Compactor {
     }
 }
 
-pub fn calculate_decay_factor(now: std::time::SystemTime, last_retrieved_at: std::time::SystemTime) -> f32 {
-    let t_secs = now.duration_since(last_retrieved_at)
+pub fn calculate_decay_factor(
+    now: std::time::SystemTime,
+    last_retrieved_at: std::time::SystemTime,
+) -> f32 {
+    let t_secs = now
+        .duration_since(last_retrieved_at)
         .unwrap_or_default()
         .as_secs_f32();
     let t_days = t_secs / 86400.0f32;
@@ -1082,8 +1414,12 @@ pub fn calculate_decay_factor(now: std::time::SystemTime, last_retrieved_at: std
     (-lambda * t_days).exp()
 }
 
-pub fn should_prune_history(now: std::time::SystemTime, record_time: std::time::SystemTime) -> bool {
-    let t_secs = now.duration_since(record_time)
+pub fn should_prune_history(
+    now: std::time::SystemTime,
+    record_time: std::time::SystemTime,
+) -> bool {
+    let t_secs = now
+        .duration_since(record_time)
         .unwrap_or_default()
         .as_secs();
     t_secs > 30 * 86400
@@ -1129,14 +1465,17 @@ pub(crate) fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file()
-                && path.file_name().map_or(false, |name| name.to_string_lossy().starts_with("stm_"))
-                && path.extension().map_or(false, |ext| ext == "json") {
-                    if let Ok(metadata) = entry.metadata() {
-                        if let Ok(modified) = metadata.modified() {
-                            stm_files.push((path, modified));
-                        }
+                && path
+                    .file_name()
+                    .map_or(false, |name| name.to_string_lossy().starts_with("stm_"))
+                && path.extension().map_or(false, |ext| ext == "json")
+            {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        stm_files.push((path, modified));
                     }
                 }
+            }
         }
 
         stm_files.sort_by(|a, b| b.1.cmp(&a.1));
@@ -1189,7 +1528,8 @@ pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) 
             if line.trim() == "```" {
                 // End of code block. Page the content
                 let paged = if !current_lang.is_empty() {
-                    crate::cognitive::paging::page_code_block(surreal, &current_block, current_lang).await?
+                    crate::cognitive::paging::page_code_block(surreal, &current_block, current_lang)
+                        .await?
                 } else {
                     current_block.clone()
                 };
@@ -1241,7 +1581,11 @@ pub async fn page_markdown_code_blocks(db: &dyn StorageBackend, markdown: &str) 
 }
 
 pub fn compact_hierarchical_dbscan(
-    valid_insights: &[(crate::cognitive::synthesis::InsightNote, String, Option<Vec<f32>>)],
+    valid_insights: &[(
+        crate::cognitive::synthesis::InsightNote,
+        String,
+        Option<Vec<f32>>,
+    )],
     eps: f32,
     min_samples: usize,
 ) -> Vec<Vec<(crate::cognitive::synthesis::InsightNote, String)>> {
@@ -1249,11 +1593,17 @@ pub fn compact_hierarchical_dbscan(
         return Vec::new();
     }
 
-    let mut buckets: std::collections::HashMap<String, Vec<(crate::cognitive::synthesis::InsightNote, String, Vec<f32>)>> = std::collections::HashMap::new();
+    let mut buckets: std::collections::HashMap<
+        String,
+        Vec<(crate::cognitive::synthesis::InsightNote, String, Vec<f32>)>,
+    > = std::collections::HashMap::new();
     for (ins, id, emb_opt) in valid_insights {
         if let Some(emb) = emb_opt {
             let bucket = get_insight_chrono_bucket(ins);
-            buckets.entry(bucket).or_default().push((ins.clone(), id.clone(), emb.clone()));
+            buckets
+                .entry(bucket)
+                .or_default()
+                .push((ins.clone(), id.clone(), emb.clone()));
         }
     }
 
@@ -1267,13 +1617,19 @@ pub fn compact_hierarchical_dbscan(
 
         let embeddings: Vec<&[f32]> = group.iter().map(|(_, _, emb)| emb.as_slice()).collect();
         let labels = crate::cognitive::synthesis::dbscan(&embeddings, eps, min_samples);
-        
-        let mut local_clusters: std::collections::HashMap<usize, Vec<(crate::cognitive::synthesis::InsightNote, String, Vec<f32>)>> = std::collections::HashMap::new();
+
+        let mut local_clusters: std::collections::HashMap<
+            usize,
+            Vec<(crate::cognitive::synthesis::InsightNote, String, Vec<f32>)>,
+        > = std::collections::HashMap::new();
 
         for (idx, label) in labels.into_iter().enumerate() {
             let item = &group[idx];
             if let Some(cluster_id) = label {
-                local_clusters.entry(cluster_id).or_default().push(item.clone());
+                local_clusters
+                    .entry(cluster_id)
+                    .or_default()
+                    .push(item.clone());
             } else {
                 outliers.push((item.0.clone(), item.1.clone()));
             }
@@ -1301,7 +1657,15 @@ pub fn compact_hierarchical_dbscan(
                 vault_path: String::new(),
             };
 
-            sub_clusters.push((summary_ins, format!("sub_cluster_{}_{}", bucket_name, lc_id), centroid_emb, cluster_members.into_iter().map(|m| (m.0, m.1)).collect::<Vec<_>>()));
+            sub_clusters.push((
+                summary_ins,
+                format!("sub_cluster_{}_{}", bucket_name, lc_id),
+                centroid_emb,
+                cluster_members
+                    .into_iter()
+                    .map(|m| (m.0, m.1))
+                    .collect::<Vec<_>>(),
+            ));
         }
     }
 
@@ -1309,16 +1673,25 @@ pub fn compact_hierarchical_dbscan(
         return outliers.into_iter().map(|o| vec![o]).collect();
     }
 
-    let summary_embeddings: Vec<&[f32]> = sub_clusters.iter().map(|(_, _, emb, _)| emb.as_slice()).collect();
+    let summary_embeddings: Vec<&[f32]> = sub_clusters
+        .iter()
+        .map(|(_, _, emb, _)| emb.as_slice())
+        .collect();
     let final_labels = crate::cognitive::synthesis::dbscan(&summary_embeddings, eps, min_samples);
 
-    let mut final_clusters: std::collections::HashMap<usize, Vec<(crate::cognitive::synthesis::InsightNote, String)>> = std::collections::HashMap::new();
+    let mut final_clusters: std::collections::HashMap<
+        usize,
+        Vec<(crate::cognitive::synthesis::InsightNote, String)>,
+    > = std::collections::HashMap::new();
     let mut next_cluster_id = 0;
 
     for (idx, label) in final_labels.into_iter().enumerate() {
         let original_members = &sub_clusters[idx].3;
         if let Some(cluster_id) = label {
-            final_clusters.entry(cluster_id).or_default().extend(original_members.clone());
+            final_clusters
+                .entry(cluster_id)
+                .or_default()
+                .extend(original_members.clone());
             if cluster_id >= next_cluster_id {
                 next_cluster_id = cluster_id + 1;
             }
@@ -1348,7 +1721,10 @@ fn get_insight_chrono_bucket(ins: &crate::cognitive::synthesis::InsightNote) -> 
     }
     if let Ok(metadata) = std::fs::metadata(&ins.vault_path) {
         if let Ok(modified) = metadata.modified() {
-            if let Ok(dt) = chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339().parse::<chrono::DateTime<chrono::Utc>>() {
+            if let Ok(dt) = chrono::DateTime::<chrono::Utc>::from(modified)
+                .to_rfc3339()
+                .parse::<chrono::DateTime<chrono::Utc>>()
+            {
                 return dt.format("%Y-%m").to_string();
             }
         }

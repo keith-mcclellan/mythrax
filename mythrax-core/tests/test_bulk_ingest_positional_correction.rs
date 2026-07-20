@@ -1,9 +1,9 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::vault::ingestion::bulk_ingest_vault;
+use std::fs;
 use std::sync::Mutex;
+use tempfile::tempdir;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -47,7 +47,8 @@ async fn test_bulk_ingest_positional_correction() -> Result<()> {
         None,
         None,
         true,
-    ).await?;
+    )
+    .await?;
 
     assert_eq!(count, 1, "Should ingest 1 episode session");
     assert!(errors.is_empty(), "Should ingest without errors");
@@ -55,8 +56,17 @@ async fn test_bulk_ingest_positional_correction() -> Result<()> {
 
     // Verify if a cognitive task was enqueued for the correction keyword ("forgot")
     let pending_tasks = backend.get_pending_cognitive_tasks().await?;
-    assert_eq!(pending_tasks.len(), 1, "Should enqueue exactly 1 cognitive task for the correction");
-    assert!(pending_tasks[0].prompt.contains("forgot to handle division by zero"), "Task prompt should contain the correction content");
+    assert_eq!(
+        pending_tasks.len(),
+        1,
+        "Should enqueue exactly 1 cognitive task for the correction"
+    );
+    assert!(
+        pending_tasks[0]
+            .prompt
+            .contains("forgot to handle division by zero"),
+        "Task prompt should contain the correction content"
+    );
 
     Ok(())
 }

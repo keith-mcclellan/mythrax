@@ -1,10 +1,10 @@
+use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
+use mythrax_core::store::MarkdownStore;
+use mythrax_core::vault::watcher::WatchIgnoreList;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use tempfile::tempdir;
-use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
-use mythrax_core::store::MarkdownStore;
-use mythrax_core::vault::watcher::WatchIgnoreList;
 
 #[tokio::test]
 async fn test_live_session_feedback_hardening() -> anyhow::Result<()> {
@@ -42,7 +42,8 @@ async fn test_live_session_feedback_hardening() -> anyhow::Result<()> {
         backend.as_ref(),
         &store,
         &ignore,
-    ).await?;
+    )
+    .await?;
 
     assert_eq!(count, 3);
 
@@ -51,25 +52,43 @@ async fn test_live_session_feedback_hardening() -> anyhow::Result<()> {
     assert_eq!(episodes.len(), 3);
 
     // Find the feedback episode (Turn 3) and assistant episode (Turn 2)
-    let ep_feedback = episodes.iter().find(|e| e.content.contains("forgot to specify")).unwrap();
-    let ep_assistant = episodes.iter().find(|e| e.content.contains("I have created")).unwrap();
+    let ep_feedback = episodes
+        .iter()
+        .find(|e| e.content.contains("forgot to specify"))
+        .unwrap();
+    let ep_assistant = episodes
+        .iter()
+        .find(|e| e.content.contains("I have created"))
+        .unwrap();
 
     assert_eq!(ep_feedback.node_type.as_deref(), Some("user_feedback"));
     assert_eq!(ep_assistant.node_type.as_deref(), Some("agent_thought"));
 
     // Check if the 'corrects' edge exists between Turn 3 (feedback) and Turn 2 (assistant)
-    let mut db_res = backend.db.query("SELECT VALUE in FROM relates_to WHERE out = $assistant AND relation = 'corrects';")
-        .bind(("assistant", mythrax_core::db::parse_record_id(ep_assistant.id.as_ref().unwrap())?))
+    let mut db_res = backend
+        .db
+        .query("SELECT VALUE in FROM relates_to WHERE out = $assistant AND relation = 'corrects';")
+        .bind((
+            "assistant",
+            mythrax_core::db::parse_record_id(ep_assistant.id.as_ref().unwrap())?,
+        ))
         .await?;
     let corrects_sources: Vec<surrealdb::types::RecordId> = db_res.take(0)?;
-    assert_eq!(corrects_sources.len(), 1, "Should create a 'corrects' relation from feedback to agent thought");
+    assert_eq!(
+        corrects_sources.len(),
+        1,
+        "Should create a 'corrects' relation from feedback to agent thought"
+    );
 
     // Sleep briefly to let the spawned run_llm_critic finish
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     // Check if a WisdomRule was saved via the LLM critic
     let rules = backend.get_all_wisdom_rules().await?;
-    assert!(!rules.is_empty(), "Should extract and save at least one WisdomRule via LLM critic");
+    assert!(
+        !rules.is_empty(),
+        "Should extract and save at least one WisdomRule via LLM critic"
+    );
 
     Ok(())
 }

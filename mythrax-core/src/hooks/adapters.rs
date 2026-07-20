@@ -8,9 +8,9 @@
 //! - Codex (unsupported in v2.1.0 — real hook payload keys not yet specified)
 //! - Cursor (unsupported in v2.1.0 — real hook payload keys not yet specified)
 
+use crate::hooks::shell::{normalize_transcript_path, sanitize_session_id};
+use anyhow::{Context, Result};
 use serde::Deserialize;
-use anyhow::{Result, Context};
-use crate::hooks::shell::{sanitize_session_id, normalize_transcript_path};
 
 #[derive(Deserialize, Debug)]
 pub struct ClaudeCodePayload {
@@ -41,8 +41,8 @@ pub struct GeminiPayload {
 }
 
 pub fn adapt_claude_code(val: serde_json::Value) -> Result<(String, bool, String)> {
-    let payload: ClaudeCodePayload = serde_json::from_value(val)
-        .context("Failed to deserialize Claude Code payload")?;
+    let payload: ClaudeCodePayload =
+        serde_json::from_value(val).context("Failed to deserialize Claude Code payload")?;
     let session_id = sanitize_session_id(&payload.session_id);
     // default: active unless host explicitly disables (Epic 6 cadence)
     let stop_hook_active = payload.stop_hook_active.unwrap_or(true);
@@ -59,8 +59,8 @@ pub fn adapt_cursor(_val: serde_json::Value) -> Result<(String, bool, String)> {
 }
 
 pub fn adapt_gemini(val: serde_json::Value) -> Result<(String, bool, String)> {
-    let payload: GeminiPayload = serde_json::from_value(val)
-        .context("Failed to deserialize Gemini payload")?;
+    let payload: GeminiPayload =
+        serde_json::from_value(val).context("Failed to deserialize Gemini payload")?;
     let session_id = sanitize_session_id(&payload.session_id);
     // default: active unless host explicitly disables (Epic 6 cadence)
     let stop_hook_active = payload.stop_hook_active.unwrap_or(true);

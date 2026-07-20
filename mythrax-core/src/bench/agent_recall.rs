@@ -1,5 +1,5 @@
+use crate::db::backend::{StorageBackend, SurrealBackend};
 use serde::Deserialize;
-use crate::db::backend::{SurrealBackend, StorageBackend};
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct RecallQuery {
@@ -23,27 +23,32 @@ pub async fn run_agent_recall(
     threshold: f32,
     limit: usize,
 ) -> anyhow::Result<BenchmarkReport> {
-    let mut scores_by_type: std::collections::HashMap<String, Vec<bool>> = std::collections::HashMap::new();
+    let mut scores_by_type: std::collections::HashMap<String, Vec<bool>> =
+        std::collections::HashMap::new();
 
     for q in queries {
-        let response = backend.search(crate::contracts::SearchParams::from_positional(
-        &q.query,
-        None,
-        deep_insight,
-        limit,
-        0,
-        threshold,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
+        let response = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                &q.query,
+                None,
+                deep_insight,
+                limit,
+                0,
+                threshold,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await?;
 
         // Combine result content to search for fragments
-        let combined_results: String = response.results.iter()
+        let combined_results: String = response
+            .results
+            .iter()
             .map(|r| format!("{} {}", r.title, r.content).to_lowercase())
             .collect::<Vec<String>>()
             .join("\n");
@@ -62,7 +67,8 @@ pub async fn run_agent_recall(
             }
         }
 
-        scores_by_type.entry(q.query_type.clone())
+        scores_by_type
+            .entry(q.query_type.clone())
             .or_default()
             .push(matched_all);
     }

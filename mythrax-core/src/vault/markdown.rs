@@ -1,5 +1,5 @@
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde_yaml::Value;
-use pulldown_cmark::{Parser, Event, Tag, TagEnd};
 
 /// Parses YAML frontmatter (between `---` lines) and extracts metadata.
 /// Returns `(Some(Value), remainder)` if valid frontmatter is found,
@@ -52,9 +52,10 @@ pub fn extract_plain_text(markdown: &str) -> String {
                 }
             }
             Event::SoftBreak | Event::HardBreak
-                if !plain_text.is_empty() && !plain_text.ends_with(' ') => {
-                    plain_text.push(' ');
-                }
+                if !plain_text.is_empty() && !plain_text.ends_with(' ') =>
+            {
+                plain_text.push(' ');
+            }
             _ => {}
         }
     }

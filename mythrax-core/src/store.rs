@@ -1,8 +1,8 @@
-use anyhow::{Result, Context};
+use crate::secret_filter::SecretFilter;
+use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use crate::secret_filter::SecretFilter;
 
 pub struct MarkdownStore {
     pub vault_root: PathBuf,
@@ -12,7 +12,7 @@ impl MarkdownStore {
     pub fn new<P: AsRef<Path>>(vault_root: P) -> Result<Self> {
         let root = vault_root.as_ref().to_path_buf();
         fs::create_dir_all(&root).context("Failed to create vault root directory")?;
-        
+
         // Initialize vault folders
         fs::create_dir_all(root.join("episodes"))?;
         fs::create_dir_all(root.join("wisdom/pinned"))?;
@@ -23,7 +23,7 @@ impl MarkdownStore {
         fs::create_dir_all(root.join("archive"))?;
 
         let store = Self { vault_root: root };
-        
+
         // Ensure vault structure, directories, MOC.md, and gitignore exclusions are created/updated
         store.ensure_vault_structure()?;
 
@@ -91,7 +91,7 @@ Welcome to the Mythrax Vault.
 
     pub fn write_file(&self, relative_path: &str, content: &str) -> Result<()> {
         let dest_path = self.vault_root.join(relative_path);
-        
+
         // Ensure parent directory exists
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
@@ -103,22 +103,27 @@ Welcome to the Mythrax Vault.
         let sanitized_content = SecretFilter::clean(content);
 
         // 2. Write to temporary file
-        let mut file = File::create(&tmp_path)
-            .context("Failed to create temporary vault file")?;
+        let mut file = File::create(&tmp_path).context("Failed to create temporary vault file")?;
         file.write_all(sanitized_content.as_bytes())?;
         file.sync_all()?;
 
         // 3. Atomically replace destination (standard POSIX rename)
         fs::rename(tmp_path, &dest_path)
             .context("Failed to atomically rename temporary vault file")?;
-            
+
         // Enforce 0644 file permissions
         set_file_permissions_644(&dest_path)?;
 
         Ok(())
     }
 
-    pub fn append_link_to_file(&self, file_path: &str, section_title: &str, link_path: &str, link_label: &str) -> Result<()> {
+    pub fn append_link_to_file(
+        &self,
+        file_path: &str,
+        section_title: &str,
+        link_path: &str,
+        link_label: &str,
+    ) -> Result<()> {
         let dest_path = self.vault_root.join(file_path);
         if !dest_path.exists() {
             return Ok(());
@@ -201,11 +206,16 @@ pub fn find_vault_root() -> PathBuf {
 pub fn save_stm_file(session_id: &str, key: &str, value: &str) -> Result<()> {
     let root = find_vault_root();
     let handoffs_dir = root.join(".handoffs");
-    tracing::debug!("save_stm_file session_id={} root={:?} handoffs_dir={:?}", session_id, root, handoffs_dir);
+    tracing::debug!(
+        "save_stm_file session_id={} root={:?} handoffs_dir={:?}",
+        session_id,
+        root,
+        handoffs_dir
+    );
     fs::create_dir_all(&handoffs_dir)?;
 
     let file_path = handoffs_dir.join(format!("stm_{}.json", session_id));
-    
+
     let mut map = if file_path.exists() {
         let content = fs::read_to_string(&file_path).unwrap_or_default();
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
@@ -218,7 +228,7 @@ pub fn save_stm_file(session_id: &str, key: &str, value: &str) -> Result<()> {
     map.insert(key.to_string(), serde_json::Value::String(sanitized_value));
 
     let updated_content = serde_json::to_string_pretty(&map)?;
-    
+
     let tmp_path = file_path.with_extension("tmp");
     {
         let mut file = File::create(&tmp_path)?;
@@ -232,7 +242,9 @@ pub fn save_stm_file(session_id: &str, key: &str, value: &str) -> Result<()> {
 
 pub fn delete_stm_file(session_id: &str) -> Result<()> {
     let root = find_vault_root();
-    let file_path = root.join(".handoffs").join(format!("stm_{}.json", session_id));
+    let file_path = root
+        .join(".handoffs")
+        .join(format!("stm_{}.json", session_id));
     if file_path.exists() {
         fs::remove_file(file_path)?;
     }
@@ -375,13 +387,13 @@ fn set_db_backup_exclusion() -> Result<()> {
     if home.is_empty() {
         return Ok(());
     }
-    
+
     let mythrax_dir = PathBuf::from(&home).join(".mythrax");
     let db_dir = mythrax_dir.join("db.nosync");
-    
+
     // Create the DB directory if it doesn't exist
     fs::create_dir_all(&db_dir)?;
-    
+
     // Create `.nosync` files
     let nosync_file1 = mythrax_dir.join(".nosync");
     if !nosync_file1.exists() {
@@ -393,7 +405,7 @@ fn set_db_backup_exclusion() -> Result<()> {
         let _ = fs::write(&nosync_file2, "");
         let _ = set_file_permissions_644(&nosync_file2);
     }
-    
+
     #[cfg(target_os = "macos")]
     {
         let _ = set_exclude_from_backup(&mythrax_dir);
@@ -403,7 +415,7 @@ fn set_db_backup_exclusion() -> Result<()> {
 }
 
 fn is_mythrax_process_alive(pid_val: i32) -> bool {
-    use sysinfo::{System, Pid};
+    use sysinfo::{Pid, System};
     let mut system = System::new();
     let pid = Pid::from(pid_val as usize);
     system.refresh_process(pid);
@@ -436,10 +448,14 @@ pub fn cleanup_zombie_stm_files<P: AsRef<Path>>(vault_root: P) -> Result<()> {
                     } else {
                         // 2. Try to parse file contents to see if it has a pid/session_pid field
                         if let Ok(content) = fs::read_to_string(&path) {
-                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Ok(json_val) =
+                                serde_json::from_str::<serde_json::Value>(&content)
+                            {
                                 if let Some(p) = json_val.get("pid").and_then(|v| v.as_i64()) {
                                     pid_to_check = Some(p as i32);
-                                } else if let Some(p) = json_val.get("_pid").and_then(|v| v.as_i64()) {
+                                } else if let Some(p) =
+                                    json_val.get("_pid").and_then(|v| v.as_i64())
+                                {
                                     pid_to_check = Some(p as i32);
                                 }
                             }
@@ -509,19 +525,35 @@ mod tests {
         store.write_file(rel_path, content).unwrap();
 
         // 1. Append a link for the first time
-        store.append_link_to_file(rel_path, "Insights & Summaries", "wiki/scope/insights/My_Insight.md", "My Insight").unwrap();
-        
+        store
+            .append_link_to_file(
+                rel_path,
+                "Insights & Summaries",
+                "wiki/scope/insights/My_Insight.md",
+                "My Insight",
+            )
+            .unwrap();
+
         let dest = tmp.path().join(rel_path);
         let read_content_1 = fs::read_to_string(&dest).unwrap();
         assert!(read_content_1.contains("## Insights & Summaries"));
         assert!(read_content_1.contains("- [[wiki/scope/insights/My_Insight|My Insight]]"));
 
         // 2. Append the same link again (should not duplicate)
-        store.append_link_to_file(rel_path, "Insights & Summaries", "wiki/scope/insights/My_Insight.md", "My Insight").unwrap();
+        store
+            .append_link_to_file(
+                rel_path,
+                "Insights & Summaries",
+                "wiki/scope/insights/My_Insight.md",
+                "My Insight",
+            )
+            .unwrap();
         let read_content_2 = fs::read_to_string(&dest).unwrap();
-        
+
         // Count occurrences of the link string
-        let occurrences = read_content_2.matches("[[wiki/scope/insights/My_Insight|My Insight]]").count();
+        let occurrences = read_content_2
+            .matches("[[wiki/scope/insights/My_Insight|My Insight]]")
+            .count();
         assert_eq!(occurrences, 1);
     }
 
@@ -550,7 +582,7 @@ mod tests {
         assert!(gitignore_path.exists());
         let gitignore_content = fs::read_to_string(&gitignore_path).unwrap();
         assert!(gitignore_content.contains(".handoffs/"));
-        
+
         // 4. File permissions check (on Unix/macOS)
         #[cfg(unix)]
         {

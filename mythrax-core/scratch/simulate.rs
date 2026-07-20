@@ -3,11 +3,7 @@ use std::collections::HashMap;
 use surrealdb_types::SurrealValue;
 
 // A simple DBSCAN implementation matching the codebase's signature
-fn simulate_dbscan(
-    embeddings: &[&[f32]],
-    eps: f32,
-    min_samples: usize,
-) -> Vec<Option<usize>> {
+fn simulate_dbscan(embeddings: &[&[f32]], eps: f32, min_samples: usize) -> Vec<Option<usize>> {
     let n = embeddings.len();
     let mut labels = vec![None; n];
     let mut cluster_id = 0;
@@ -27,7 +23,16 @@ fn simulate_dbscan(
         }
 
         labels[i] = Some(cluster_id);
-        expand_cluster(embeddings, &mut labels, i, &neighbors, cluster_id, eps, min_samples, &mut visited);
+        expand_cluster(
+            embeddings,
+            &mut labels,
+            i,
+            &neighbors,
+            cluster_id,
+            eps,
+            min_samples,
+            &mut visited,
+        );
         cluster_id += 1;
     }
 
@@ -105,8 +110,10 @@ async fn main() -> Result<()> {
     db.use_ns("mythrax").use_db("memory").await?;
 
     // Query all episodes
-    let mut response = db.query("SELECT id, scope, title, embedding FROM episode;").await?;
-    
+    let mut response = db
+        .query("SELECT id, scope, title, embedding FROM episode;")
+        .await?;
+
     #[derive(serde::Deserialize, Debug, surrealdb_types::SurrealValue)]
     struct EpisodeRow {
         scope: Option<String>,
@@ -143,7 +150,7 @@ async fn main() -> Result<()> {
 
         for &eps in &eps_values {
             let labels = simulate_dbscan(&emb_refs, eps, 2);
-            
+
             let mut cluster_sizes: HashMap<usize, usize> = HashMap::new();
             let mut outlier_count = 0;
 

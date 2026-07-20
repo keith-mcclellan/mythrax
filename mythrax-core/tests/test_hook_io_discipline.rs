@@ -8,14 +8,14 @@ fn test_handler_returns_result_on_error() {
     // returns a non-blocking fallback HookResult, and does not panic.
     // We capture stdout to inspect the printed JSON.
     let error_input = Err(anyhow::anyhow!("Simulated compaction failure"));
-    
+
     // We mock/stub the stdout/stderr by using a thread-local or just running it.
     // Since emit_hook_result prints to stdout/stderr, we just run it to prove it doesn't panic
     // and produces a valid non-blocking result.
     let result = std::panic::catch_unwind(|| {
         emit_hook_result(error_input);
     });
-    
+
     assert!(result.is_ok(), "emit_hook_result panicked on Err input");
 }
 
@@ -30,7 +30,9 @@ fn test_emit_is_only_io_boundary() {
     for entry in entries {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rust") || path.extension().and_then(|s| s.to_str()) == Some("rs") {
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("rust")
+            || path.extension().and_then(|s| s.to_str()) == Some("rs")
+        {
             let filename = path.file_name().and_then(|s| s.to_str()).unwrap();
             let content = fs::read_to_string(&path).unwrap();
 
@@ -102,11 +104,23 @@ fn test_summarize_diff_math() {
     // Base: 33.33% resolved (1/3)
     // Curr: 66.67% resolved (2/3)
     // Delta: +33.33 percentage points
-    assert!(stdout_str.contains("+33.33 percentage points"), "Output should contain '+33.33 percentage points'");
-    assert!(stdout_str.contains("+1"), "Output should contain '+1' delta for resolved count");
+    assert!(
+        stdout_str.contains("+33.33 percentage points"),
+        "Output should contain '+33.33 percentage points'"
+    );
+    assert!(
+        stdout_str.contains("+1"),
+        "Output should contain '+1' delta for resolved count"
+    );
     // Assert status changes
-    assert!(stdout_str.contains("inst-2"), "Output should contain inst-2");
-    assert!(stdout_str.contains("Improved (+)"), "Output should contain 'Improved (+)'");
+    assert!(
+        stdout_str.contains("inst-2"),
+        "Output should contain inst-2"
+    );
+    assert!(
+        stdout_str.contains("Improved (+)"),
+        "Output should contain 'Improved (+)'"
+    );
 }
 
 #[test]
@@ -114,7 +128,7 @@ fn test_unconditional_println_hygiene_in_backend() {
     let backend_path = Path::new("src/db/backend.rs");
     assert!(backend_path.exists(), "src/db/backend.rs not found");
     let content = fs::read_to_string(backend_path).unwrap();
-    
+
     // Assert the Auto-Promoted println! message is not present
     assert!(
         !content.contains("println!(\"[Mythrax Synapse:"),

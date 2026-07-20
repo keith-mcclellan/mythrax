@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use anyhow::{Result, Context};
-use mlx_rs::{Array, StreamOrDevice};
+use crate::llm::mlx_weights::{get_layer_norm, get_linear};
+use anyhow::{Context, Result};
 use mlx_rs::module::Module;
 use mlx_rs::nn::{Embedding, LayerNorm, Linear};
 use mlx_rs::ops::indexing::TryIndexOp;
-use crate::llm::mlx_weights::{get_linear, get_layer_norm};
+use mlx_rs::{Array, StreamOrDevice};
+use std::collections::HashMap;
 
 pub struct NomicBertAttention {
     wqkv: Linear,
@@ -33,7 +33,7 @@ impl NomicBertAttention {
                 let angle = (pos as f32) * theta;
                 let c = angle.cos();
                 let s = angle.sin();
-                
+
                 cos_val[pos * head_dim + i] = c;
                 sin_val[pos * head_dim + i] = s;
                 cos_val[pos * head_dim + half + i] = c;
@@ -60,74 +60,103 @@ impl NomicBertAttention {
         let seq_len = shape[1];
 
         // Split into Q, K, V using IndexOp tuples
-        let q = qkv.try_index((.., .., 0..768))
+        let q = qkv
+            .try_index((.., .., 0..768))
             .map_err(|e| anyhow::anyhow!("Slice Q failed: {:?}", e))?;
-        let k = qkv.try_index((.., .., 768..1536))
+        let k = qkv
+            .try_index((.., .., 768..1536))
             .map_err(|e| anyhow::anyhow!("Slice K failed: {:?}", e))?;
-        let v = qkv.try_index((.., .., 1536..2304))
+        let v = qkv
+            .try_index((.., .., 1536..2304))
             .map_err(|e| anyhow::anyhow!("Slice V failed: {:?}", e))?;
 
         // Reshape to [batch, seq_len, num_heads, head_dim]
-        let q = q.reshape(&[batch, seq_len, self.num_heads, self.head_dim])
+        let q = q
+            .reshape(&[batch, seq_len, self.num_heads, self.head_dim])
             .map_err(|e| anyhow::anyhow!("Reshape Q failed: {:?}", e))?;
-        let k = k.reshape(&[batch, seq_len, self.num_heads, self.head_dim])
+        let k = k
+            .reshape(&[batch, seq_len, self.num_heads, self.head_dim])
             .map_err(|e| anyhow::anyhow!("Reshape K failed: {:?}", e))?;
-        let v = v.reshape(&[batch, seq_len, self.num_heads, self.head_dim])
+        let v = v
+            .reshape(&[batch, seq_len, self.num_heads, self.head_dim])
             .map_err(|e| anyhow::anyhow!("Reshape V failed: {:?}", e))?;
 
-        let q = q.add(&Array::from(0.0f32)).map_err(|e| anyhow::anyhow!("Contiguous Q failed: {:?}", e))?;
-        let k = k.add(&Array::from(0.0f32)).map_err(|e| anyhow::anyhow!("Contiguous K failed: {:?}", e))?;
-
+        let q = q
+            .add(&Array::from(0.0f32))
+            .map_err(|e| anyhow::anyhow!("Contiguous Q failed: {:?}", e))?;
+        let k = k
+            .add(&Array::from(0.0f32))
+            .map_err(|e| anyhow::anyhow!("Contiguous K failed: {:?}", e))?;
 
         // Manual RoPE implementation
         let half = self.head_dim / 2;
-        let q1 = q.try_index((.., .., .., 0..half))
+        let q1 = q
+            .try_index((.., .., .., 0..half))
             .map_err(|e| anyhow::anyhow!("Slice Q1 failed: {:?}", e))?;
-        let q2 = q.try_index((.., .., .., half..self.head_dim))
+        let q2 = q
+            .try_index((.., .., .., half..self.head_dim))
             .map_err(|e| anyhow::anyhow!("Slice Q2 failed: {:?}", e))?;
-        let neg_q2 = q2.negative()
+        let neg_q2 = q2
+            .negative()
             .map_err(|e| anyhow::anyhow!("Neg Q2 failed: {:?}", e))?;
-        let rotate_half_q = mlx_rs::ops::concatenate_axis_device(&[neg_q2, q1], 3, StreamOrDevice::gpu())
-            .map_err(|e| anyhow::anyhow!("Concat rotate Q failed: {:?}", e))?;
+        let rotate_half_q =
+            mlx_rs::ops::concatenate_axis_device(&[neg_q2, q1], 3, StreamOrDevice::gpu())
+                .map_err(|e| anyhow::anyhow!("Concat rotate Q failed: {:?}", e))?;
 
-        let k1 = k.try_index((.., .., .., 0..half))
+        let k1 = k
+            .try_index((.., .., .., 0..half))
             .map_err(|e| anyhow::anyhow!("Slice K1 failed: {:?}", e))?;
-        let k2 = k.try_index((.., .., .., half..self.head_dim))
+        let k2 = k
+            .try_index((.., .., .., half..self.head_dim))
             .map_err(|e| anyhow::anyhow!("Slice K2 failed: {:?}", e))?;
-        let neg_k2 = k2.negative()
+        let neg_k2 = k2
+            .negative()
             .map_err(|e| anyhow::anyhow!("Neg K2 failed: {:?}", e))?;
-        let rotate_half_k = mlx_rs::ops::concatenate_axis_device(&[neg_k2, k1], 3, StreamOrDevice::gpu())
-            .map_err(|e| anyhow::anyhow!("Concat rotate K failed: {:?}", e))?;
+        let rotate_half_k =
+            mlx_rs::ops::concatenate_axis_device(&[neg_k2, k1], 3, StreamOrDevice::gpu())
+                .map_err(|e| anyhow::anyhow!("Concat rotate K failed: {:?}", e))?;
 
         // Slice the precomputed cos and sin arrays to the current seq_len
-        let cos_arr = self.cos_cached.try_index((.., 0..seq_len, .., ..))
+        let cos_arr = self
+            .cos_cached
+            .try_index((.., 0..seq_len, .., ..))
             .map_err(|e| anyhow::anyhow!("Slice cos_cached failed: {:?}", e))?;
-        let sin_arr = self.sin_cached.try_index((.., 0..seq_len, .., ..))
+        let sin_arr = self
+            .sin_cached
+            .try_index((.., 0..seq_len, .., ..))
             .map_err(|e| anyhow::anyhow!("Slice sin_cached failed: {:?}", e))?;
 
-        let q = q.multiply(&cos_arr)?
+        let q = q
+            .multiply(&cos_arr)?
             .add(&rotate_half_q.multiply(&sin_arr)?)
             .map_err(|e| anyhow::anyhow!("Apply RoPE Q failed: {:?}", e))?;
-        let k = k.multiply(&cos_arr)?
+        let k = k
+            .multiply(&cos_arr)?
             .add(&rotate_half_k.multiply(&sin_arr)?)
             .map_err(|e| anyhow::anyhow!("Apply RoPE K failed: {:?}", e))?;
 
-
-
-        let q = q.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
+        let q = q
+            .transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
             .map_err(|e| anyhow::anyhow!("Transpose Q failed: {:?}", e))?;
-        let k = k.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
+        let k = k
+            .transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
             .map_err(|e| anyhow::anyhow!("Transpose K failed: {:?}", e))?;
-        let v = v.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
+        let v = v
+            .transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
             .map_err(|e| anyhow::anyhow!("Transpose V failed: {:?}", e))?;
 
         let scale = 1.0 / (self.head_dim as f32).sqrt();
 
         let mask_opt = if let Some(m) = mask {
             let one = Array::from(1.0f32);
-            let inv_m = one.subtract(m).map_err(|e| anyhow::anyhow!("Sub mask failed: {:?}", e))?;
-            let add_mask = inv_m.multiply(&Array::from(-1e9f32)).map_err(|e| anyhow::anyhow!("Mul mask failed: {:?}", e))?;
-            let add_mask_reshaped = add_mask.reshape(&[batch, 1, 1, seq_len])
+            let inv_m = one
+                .subtract(m)
+                .map_err(|e| anyhow::anyhow!("Sub mask failed: {:?}", e))?;
+            let add_mask = inv_m
+                .multiply(&Array::from(-1e9f32))
+                .map_err(|e| anyhow::anyhow!("Mul mask failed: {:?}", e))?;
+            let add_mask_reshaped = add_mask
+                .reshape(&[batch, 1, 1, seq_len])
                 .map_err(|e| anyhow::anyhow!("Reshape mask failed: {:?}", e))?;
             Some(add_mask_reshaped)
         } else {
@@ -141,16 +170,19 @@ impl NomicBertAttention {
             scale,
             mask_opt.as_ref().map(|x| x.into()),
             StreamOrDevice::gpu(),
-        ).map_err(|e| anyhow::anyhow!("SDP Attention failed: {:?}", e))?;
+        )
+        .map_err(|e| anyhow::anyhow!("SDP Attention failed: {:?}", e))?;
 
-        let out = out.transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
+        let out = out
+            .transpose_axes_device(&[0, 2, 1, 3], StreamOrDevice::gpu())
             .map_err(|e| anyhow::anyhow!("Transpose out failed: {:?}", e))?;
-        let out = out.reshape(&[batch, seq_len, 768])
+        let out = out
+            .reshape(&[batch, seq_len, 768])
             .map_err(|e| anyhow::anyhow!("Reshape out failed: {:?}", e))?;
 
-
-
-        let out = self.out_proj.forward(&out)
+        let out = self
+            .out_proj
+            .forward(&out)
             .map_err(|e| anyhow::anyhow!("Attention out projection failed: {:?}", e))?;
         Ok(out)
     }
@@ -171,15 +203,23 @@ impl NomicBertMLP {
     }
 
     pub fn forward(&mut self, x: &Array) -> Result<Array> {
-        let h1 = self.fc11.forward(x)
+        let h1 = self
+            .fc11
+            .forward(x)
             .map_err(|e| anyhow::anyhow!("MLP fc11 failed: {:?}", e))?;
-        let h2 = self.fc12.forward(x)
+        let h2 = self
+            .fc12
+            .forward(x)
             .map_err(|e| anyhow::anyhow!("MLP fc12 failed: {:?}", e))?;
-        let silu_h2 = h2.multiply(&mlx_rs::ops::sigmoid(&h2)?)
+        let silu_h2 = h2
+            .multiply(&mlx_rs::ops::sigmoid(&h2)?)
             .map_err(|e| anyhow::anyhow!("MLP Swish/SiLU failed: {:?}", e))?;
-        let activated = h1.multiply(&silu_h2)
+        let activated = h1
+            .multiply(&silu_h2)
             .map_err(|e| anyhow::anyhow!("MLP Activation multiply failed: {:?}", e))?;
-        let out = self.fc2.forward(&activated)
+        let out = self
+            .fc2
+            .forward(&activated)
             .map_err(|e| anyhow::anyhow!("MLP fc2 failed: {:?}", e))?;
         Ok(out)
     }
@@ -198,15 +238,24 @@ impl NomicBertLayer {
         let mlp = NomicBertMLP::new(weights, &format!("{}.mlp", prefix))?;
         let norm1 = get_layer_norm(weights, &format!("{}.norm1", prefix), 1e-5)?;
         let norm2 = get_layer_norm(weights, &format!("{}.norm2", prefix), 1e-5)?;
-        Ok(Self { attn, mlp, norm1, norm2 })
+        Ok(Self {
+            attn,
+            mlp,
+            norm1,
+            norm2,
+        })
     }
 
     pub fn forward(&mut self, x: &Array, mask: Option<&Array>) -> Result<Array> {
         let attn_out = self.attn.forward(x, mask)?;
-        let x_norm1 = self.norm1.forward(&x.add(&attn_out)?)
+        let x_norm1 = self
+            .norm1
+            .forward(&x.add(&attn_out)?)
             .map_err(|e| anyhow::anyhow!("Layer norm1 failed: {:?}", e))?;
         let mlp_out = self.mlp.forward(&x_norm1)?;
-        let out = self.norm2.forward(&x_norm1.add(&mlp_out)?)
+        let out = self
+            .norm2
+            .forward(&x_norm1.add(&mlp_out)?)
             .map_err(|e| anyhow::anyhow!("Layer norm2 failed: {:?}", e))?;
         Ok(out)
     }
@@ -221,7 +270,8 @@ pub struct NomicBertModel {
 
 impl NomicBertModel {
     pub fn new(weights: &HashMap<String, Array>) -> Result<Self> {
-        let word_emb_weight = weights.get("embeddings.word_embeddings.weight")
+        let word_emb_weight = weights
+            .get("embeddings.word_embeddings.weight")
             .context("embeddings.word_embeddings.weight not found")?
             .clone();
         let vocab_size = word_emb_weight.shape()[0];
@@ -229,7 +279,8 @@ impl NomicBertModel {
             .map_err(|e| anyhow::anyhow!("Failed to build word embedding: {:?}", e))?;
         word_embeddings.weight.value = word_emb_weight;
 
-        let type_emb_weight = weights.get("embeddings.token_type_embeddings.weight")
+        let type_emb_weight = weights
+            .get("embeddings.token_type_embeddings.weight")
             .context("embeddings.token_type_embeddings.weight not found")?
             .clone();
         let mut token_type_embeddings = Embedding::new(2, 768)
@@ -256,20 +307,27 @@ impl NomicBertModel {
         let shape = ids.shape();
         let batch = shape[0];
         let seq_len = shape[1];
-        
-        let word_embs = self.word_embeddings.forward(ids)
+
+        let word_embs = self
+            .word_embeddings
+            .forward(ids)
             .map_err(|e| anyhow::anyhow!("Word embedding forward failed: {:?}", e))?;
-        
+
         let token_type_ids = mlx_rs::ops::zeros::<i32>(&[batch, seq_len])
             .map_err(|e| anyhow::anyhow!("Token type IDs zero fill failed: {:?}", e))?;
-        let type_embs = self.token_type_embeddings.forward(&token_type_ids)
+        let type_embs = self
+            .token_type_embeddings
+            .forward(&token_type_ids)
             .map_err(|e| anyhow::anyhow!("Token type embedding forward failed: {:?}", e))?;
 
-        let mut x = word_embs.add(&type_embs)
+        let mut x = word_embs
+            .add(&type_embs)
             .map_err(|e| anyhow::anyhow!("Embeddings add failed: {:?}", e))?;
-        x = self.emb_ln.forward(&x)
+        x = self
+            .emb_ln
+            .forward(&x)
             .map_err(|e| anyhow::anyhow!("Embedding LayerNorm failed: {:?}", e))?;
-        
+
         for layer in &mut self.layers {
             x = layer.forward(&x, mask)?;
         }

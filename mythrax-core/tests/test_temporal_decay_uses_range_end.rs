@@ -1,16 +1,24 @@
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
+use chrono::{Duration, Utc};
 use mythrax_core::contracts::WikiNode;
-use chrono::{Utc, Duration};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_temporal_decay_uses_range_end() -> Result<()> {
-    unsafe { std::env::set_var("MYTHRAX_MOCK_LLM", "true"); }
+    unsafe {
+        std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+    }
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
-    backend.save_profile_key("search.enable_access_reinforcement", "false").await?;
-    backend.save_profile_key("search.enable_gaussian_temporal", "true").await?;
-    backend.save_profile_key("search.gaussian_temporal_sigma", "168.0").await?;
+    backend
+        .save_profile_key("search.enable_access_reinforcement", "false")
+        .await?;
+    backend
+        .save_profile_key("search.enable_gaussian_temporal", "true")
+        .await?;
+    backend
+        .save_profile_key("search.gaussian_temporal_sigma", "168.0")
+        .await?;
 
     let now = Utc::now();
     let old_created_at = now - Duration::days(30);
@@ -33,29 +41,38 @@ async fn test_temporal_decay_uses_range_end() -> Result<()> {
         .bind(("created_at", old_created_at.to_rfc3339()))
         .await?.check()?;
 
-    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Testing temporal range end",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        false,
-        None,
-    )).await?;
+    let resp = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Testing temporal range end",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            false,
+            None,
+        ))
+        .await?;
 
-    let matched = resp.results.iter().find(|r| r.id == id).expect("Should find the node");
-    
+    let matched = resp
+        .results
+        .iter()
+        .find(|r| r.id == id)
+        .expect("Should find the node");
+
     // Gaussian decay factor for 7 days (168 hours) is exp(-0.5) = 0.60653
     // Decayed utility = 100.0 * 0.60653 = ~60.65
     // If it used created_at (30 days), it would be MUCH lower.
     println!("DEBUG: gaussian utility = {}", matched.utility);
-    assert!(matched.utility > 0.5, "Utility should use temporal_range_end (7 days ago), not created_at (30 days ago).");
+    assert!(
+        matched.utility > 0.5,
+        "Utility should use temporal_range_end (7 days ago), not created_at (30 days ago)."
+    );
 
     Ok(())
 }

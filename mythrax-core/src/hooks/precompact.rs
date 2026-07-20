@@ -1,13 +1,13 @@
+use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-use anyhow::{Context, Result};
-use serde::Deserialize;
 
 use crate::contracts::EpisodeSave;
 use crate::db::backend::StorageBackend;
 use crate::store::MarkdownStore;
-use crate::vault::watcher::{save_episode_bidirectional, WatchIgnoreList};
+use crate::vault::watcher::{WatchIgnoreList, save_episode_bidirectional};
 
 #[derive(Deserialize)]
 struct SimpleMessage {
@@ -104,9 +104,11 @@ pub async fn mine_transcript(
         }
     }
 
-    let mut file = File::open(transcript_path)
-        .context(format!("Failed to open transcript file at {}", transcript_path))?;
-    
+    let mut file = File::open(transcript_path).context(format!(
+        "Failed to open transcript file at {}",
+        transcript_path
+    ))?;
+
     let metadata = file.metadata()?;
     if metadata.len() < start_offset {
         start_offset = 0;
@@ -161,8 +163,11 @@ pub async fn mine_transcript(
             }
 
             // Check for checklist items in the content (WU-3.3)
-            let content_opt = val.get("content").and_then(|c| c.as_str())
-                .or_else(|| val.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_str()));
+            let content_opt = val.get("content").and_then(|c| c.as_str()).or_else(|| {
+                val.get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+            });
             if let Some(content_str) = content_opt {
                 let mut checklist_lines = Vec::new();
                 for line in content_str.lines() {
@@ -173,16 +178,19 @@ pub async fn mine_transcript(
                 if !checklist_lines.is_empty() {
                     let checklist_str = checklist_lines.join("\n");
                     let _ = backend.save_stm(session, "checklist", &checklist_str).await;
-                    
-                    let ep = EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
-                        .scope(Some("general".to_string()))
-                        .session_id(Some(session.to_string()))
-                        .node_type(Some("task_checklist".to_string()))
-                        .build();
+
+                    let ep =
+                        EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
+                            .scope(Some("general".to_string()))
+                            .session_id(Some(session.to_string()))
+                            .node_type(Some("task_checklist".to_string()))
+                            .build();
                     let store_arc = Arc::new(crate::store::MarkdownStore {
                         vault_root: store.vault_root.clone(),
                     });
-                    if let Ok(saved_id) = save_episode_bidirectional(&ep, backend, &store_arc, ignore).await {
+                    if let Ok(saved_id) =
+                        save_episode_bidirectional(&ep, backend, &store_arc, ignore).await
+                    {
                         if let Some(ref prev_id) = prev_saved_id {
                             let _ = backend.relate_followed_by(prev_id, &saved_id).await;
                         }
@@ -194,8 +202,14 @@ pub async fn mine_transcript(
         }
 
         if let Ok(msg) = serde_json::from_str::<SimpleMessage>(&line_str) {
-            let role = msg.role.clone().or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
-            let content = msg.content.clone().or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
+            let role = msg
+                .role
+                .clone()
+                .or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
+            let content = msg
+                .content
+                .clone()
+                .or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
 
             if let (Some(r), Some(c)) = (role, content) {
                 let normalized_role = r.to_lowercase();
@@ -245,31 +259,38 @@ pub async fn mine_transcript(
                         .scope(Some("general".to_string()))
                         .session_id(Some(session.to_string()))
                         .node_type(Some(type_val))
-                        .build();    
+                        .build();
                     let store_arc = Arc::new(crate::store::MarkdownStore {
                         vault_root: store.vault_root.clone(),
                     });
                     let saved_id = save_episode_bidirectional(&ep, backend, &store_arc, ignore)
                         .await
-                        .context("Failed to save episode bidirectionally during transcript mining")?;
-                    
+                        .context(
+                            "Failed to save episode bidirectionally during transcript mining",
+                        )?;
+
                     if let Some(ref prev_id) = prev_saved_id {
                         if let Err(e) = backend.relate_followed_by(prev_id, &saved_id).await {
                             tracing::warn!("Failed to link mined sequential episodes: {:?}", e);
                         }
-                        
+
                         if is_correction {
-                            if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                            if let Some(surreal) =
+                                backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+                            {
                                 if let (Ok(from_thing), Ok(to_thing)) = (
                                     crate::db::parse_record_id(&saved_id),
-                                    crate::db::parse_record_id(prev_id)
+                                    crate::db::parse_record_id(prev_id),
                                 ) {
-                                    let relate_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                                    let relate_sql =
+                                        "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
                                         relation: 'corrects',
                                         created_at: time::now(),
                                         confidence: 1.0
                                     };";
-                                    let _ = surreal.db.query(relate_sql)
+                                    let _ = surreal
+                                        .db
+                                        .query(relate_sql)
                                         .bind(("from", from_thing))
                                         .bind(("to", to_thing))
                                         .await;
@@ -279,13 +300,15 @@ pub async fn mine_transcript(
                     }
 
                     if is_correction {
-                        if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                        if let Some(surreal) =
+                            backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+                        {
                             let backend_clone = Arc::new(surreal.clone());
                             let store_clone = store_arc.clone();
                             let content_clone = extracted.clone();
                             let scope_clone = Some("general".to_string());
                             let ep_id_clone = Some(saved_id.clone());
-                            
+
                             tokio::spawn(async move {
                                 if let Err(e) = crate::mcp_routes::write_handlers::run_llm_critic(
                                     backend_clone,
@@ -293,8 +316,13 @@ pub async fn mine_transcript(
                                     content_clone,
                                     scope_clone,
                                     ep_id_clone,
-                                ).await {
-                                    tracing::error!("Error running LLM critic in precompact: {:?}", e);
+                                )
+                                .await
+                                {
+                                    tracing::error!(
+                                        "Error running LLM critic in precompact: {:?}",
+                                        e
+                                    );
                                 }
                             });
                         }
@@ -320,25 +348,32 @@ pub async fn mine_transcript(
         current_offset = next_offset;
     }
 
-    let _ = backend.save_stm(session, "transcript_offset", &current_offset.to_string()).await;
+    let _ = backend
+        .save_stm(session, "transcript_offset", &current_offset.to_string())
+        .await;
 
     // Run n-gram analysis on the extracted tool sequence
     let _ = analyze_tool_calls_ngrams(backend, &tool_sequence).await;
 
     // 2.0 dual-durability journaling
-    backend.journal_state(&store.vault_root, Some(session))
+    backend
+        .journal_state(&store.vault_root, Some(session))
         .await
         .context("Failed to journal state after transcript mining")?;
 
     Ok(saved_count)
 }
 
-async fn analyze_tool_calls_ngrams(backend: &dyn StorageBackend, tool_sequence: &[String]) -> Result<()> {
+async fn analyze_tool_calls_ngrams(
+    backend: &dyn StorageBackend,
+    tool_sequence: &[String],
+) -> Result<()> {
     if tool_sequence.len() < 2 {
         return Ok(());
     }
 
-    let mut counts: std::collections::HashMap<Vec<String>, usize> = std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<Vec<String>, usize> =
+        std::collections::HashMap::new();
 
     for len in 2..=4 {
         if tool_sequence.len() < len {
@@ -357,9 +392,18 @@ async fn analyze_tool_calls_ngrams(backend: &dyn StorageBackend, tool_sequence: 
             let rule = crate::contracts::WisdomRule {
                 id: Some(format!("wisdom:{}", uuid)),
                 target_pattern: format!("Tool sequence: {}", chain_str),
-                action_to_avoid: format!("Avoid manually repeating this tool sequence: {}", chain_str),
-                causal_explanation: format!("This tool chain was used {} times in the session transcript.", count),
-                prescribed_remedy: format!("Automate this sequence using a combined batch route or helper tool: {}", chain_str),
+                action_to_avoid: format!(
+                    "Avoid manually repeating this tool sequence: {}",
+                    chain_str
+                ),
+                causal_explanation: format!(
+                    "This tool chain was used {} times in the session transcript.",
+                    count
+                ),
+                prescribed_remedy: format!(
+                    "Automate this sequence using a combined batch route or helper tool: {}",
+                    chain_str
+                ),
                 tier: crate::contracts::Tier::Project,
                 scope: "general".to_string(),
                 vault_path: None,

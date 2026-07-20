@@ -1,11 +1,13 @@
-use mythrax_core::cognitive::synthesis::{CONCISION_DIRECTIVE, build_synthesis_prompt, check_compression_ratio};
+use mythrax_core::cognitive::synthesis::{
+    CONCISION_DIRECTIVE, build_synthesis_prompt, check_compression_ratio,
+};
 use std::sync::{Arc, Mutex};
 
 #[test]
 fn test_concision_prompt_prepending() {
     let base_prompt = "You are a systems synthesizer.";
     let final_prompt = build_synthesis_prompt(base_prompt);
-    
+
     assert!(final_prompt.starts_with(CONCISION_DIRECTIVE));
     assert!(final_prompt.contains(base_prompt));
 }
@@ -50,12 +52,12 @@ impl tracing::field::Visit for StringVisitor {
 fn test_compression_warning_triggers() {
     let subscriber = MockWarningSubscriber::default();
     let warnings = subscriber.warnings.clone();
-    
+
     // Set the env var for the test
     unsafe {
         std::env::set_var("MYTHRAX_VERBOSITY_ALERT_RATIO", "1.5");
     }
-    
+
     // Run inside subscriber dispatcher
     tracing::subscriber::with_default(subscriber, || {
         // Mock large input and output compared to original tokens
@@ -67,14 +69,14 @@ fn test_compression_warning_triggers() {
         // ratio = 3.0 > 1.5 -> Should trigger warning
         let input_text = "a".repeat(800);
         let output_text = "a".repeat(400);
-        
+
         check_compression_ratio(&input_text, &output_text, 100);
-        
+
         // original_tokens = 300
         // ratio = 1.0 < 1.5 -> Should not trigger warning
         check_compression_ratio(&input_text, &output_text, 300);
     });
-    
+
     let w = warnings.lock().unwrap();
     assert_eq!(w.len(), 1);
     assert!(w[0].contains("Verbosity alert: compression ratio"));

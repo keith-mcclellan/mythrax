@@ -17,21 +17,38 @@ fn test_bm25_scoring_ranking() {
         "rusty metal pipes in the old basement".to_string(),
         "rust programming language and agentic systems".to_string(),
     ];
-    let corpus = docs.into_iter().enumerate().map(|(i, content)| (i.to_string(), content)).collect::<Vec<_>>();
-    
+    let corpus = docs
+        .into_iter()
+        .enumerate()
+        .map(|(i, content)| (i.to_string(), content))
+        .collect::<Vec<_>>();
+
     let bm25 = OkapiBM25::new(&corpus);
-    
+
     // Query: "rust language"
     let scores = bm25.score("rust language");
-    
+
     // The third document should have the highest score since it has both "rust" and "language"
     let doc_idx_2 = "2".to_string();
-    let score_2 = scores.iter().find(|(id, _)| id == &doc_idx_2).map(|(_, s)| *s).unwrap_or(0.0);
-    
+    let score_2 = scores
+        .iter()
+        .find(|(id, _)| id == &doc_idx_2)
+        .map(|(_, s)| *s)
+        .unwrap_or(0.0);
+
     let doc_idx_0 = "0".to_string();
-    let score_0 = scores.iter().find(|(id, _)| id == &doc_idx_0).map(|(_, s)| *s).unwrap_or(0.0);
-    
-    assert!(score_2 > score_0, "Doc 2 score ({}) should be higher than Doc 0 score ({})", score_2, score_0);
+    let score_0 = scores
+        .iter()
+        .find(|(id, _)| id == &doc_idx_0)
+        .map(|(_, s)| *s)
+        .unwrap_or(0.0);
+
+    assert!(
+        score_2 > score_0,
+        "Doc 2 score ({}) should be higher than Doc 0 score ({})",
+        score_2,
+        score_0
+    );
 }
 
 #[test]
@@ -42,10 +59,26 @@ fn test_bm25_min_max_normalization() {
     ];
     let bm25 = OkapiBM25::new(&corpus);
     let scores = bm25.score_normalized("query match");
-    
-    let norm_1 = scores.iter().find(|(id, _)| id == "1").map(|(_, s)| *s).unwrap_or(0.0);
-    let norm_2 = scores.iter().find(|(id, _)| id == "2").map(|(_, s)| *s).unwrap_or(0.0);
-    
-    assert!((norm_1 - 1.0).abs() < 1e-5, "Highest score must normalize to 1.0, got {}", norm_1);
-    assert!((norm_2 - 0.0).abs() < 1e-5, "Lowest score must normalize to 0.0, got {}", norm_2);
+
+    let norm_1 = scores
+        .iter()
+        .find(|(id, _)| id == "1")
+        .map(|(_, s)| *s)
+        .unwrap_or(0.0);
+    let norm_2 = scores
+        .iter()
+        .find(|(id, _)| id == "2")
+        .map(|(_, s)| *s)
+        .unwrap_or(0.0);
+
+    assert!(
+        (norm_1 - 1.0).abs() < 1e-5,
+        "Highest score must normalize to 1.0, got {}",
+        norm_1
+    );
+    assert!(
+        (norm_2 - 0.0).abs() < 1e-5,
+        "Lowest score must normalize to 0.0, got {}",
+        norm_2
+    );
 }

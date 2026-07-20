@@ -31,11 +31,15 @@ fn cleanup_daemon(home: &std::path::Path, port: &str) {
     let token_file = home.join(".mythrax/token");
     if token_file.exists() {
         if let Ok(token) = fs::read_to_string(&token_file) {
-            if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
                 let url = format!("http://127.0.0.1:{}/v1/daemon/stop", port);
                 let _ = rt.block_on(async {
                     let client = reqwest::Client::new();
-                    let _ = client.post(&url)
+                    let _ = client
+                        .post(&url)
                         .header("X-Mythrax-Token", token.trim())
                         .timeout(std::time::Duration::from_millis(500))
                         .send()
@@ -51,9 +55,7 @@ fn cleanup_daemon(home: &std::path::Path, port: &str) {
         if let Ok(pid_content) = fs::read_to_string(&pid_file) {
             let pid = pid_content.trim();
             if !pid.is_empty() {
-                let _ = Command::new("kill")
-                    .args(["-2", pid])
-                    .status();
+                let _ = Command::new("kill").args(["-2", pid]).status();
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
         }
@@ -69,7 +71,11 @@ fn print_daemon_log_on_failure(home: &Path) {
         if let Ok(log_content) = fs::read_to_string(&log_path) {
             eprintln!("=== Daemon Log (Last 50 lines) ===");
             let lines: Vec<&str> = log_content.lines().collect();
-            let start = if lines.len() > 50 { lines.len() - 50 } else { 0 };
+            let start = if lines.len() > 50 {
+                lines.len() - 50
+            } else {
+                0
+            };
             for line in &lines[start..] {
                 eprintln!("{}", line);
             }
@@ -98,7 +104,11 @@ fn test_help_exits_zero() {
 fn test_forge_missing_file_exits_nonzero() {
     let tmp = tempdir().expect("temp dir");
     let out = cmd(tmp.path(), "18092")
-        .args(["vault", "ingest-forge", "/tmp/does_not_exist_xyz_mythrax_e2e.md"])
+        .args([
+            "vault",
+            "ingest-forge",
+            "/tmp/does_not_exist_xyz_mythrax_e2e.md",
+        ])
         .output()
         .expect("spawn forge");
     assert!(
@@ -121,7 +131,13 @@ fn test_forge_text_file_exits_zero() {
     .expect("write doc");
 
     let out = cmd(tmp.path(), "18093")
-        .args(["vault", "ingest-forge", source.to_str().unwrap(), "--scope", "e2e_test"])
+        .args([
+            "vault",
+            "ingest-forge",
+            source.to_str().unwrap(),
+            "--scope",
+            "e2e_test",
+        ])
         .output()
         .expect("spawn forge");
 
@@ -137,7 +153,8 @@ fn test_forge_text_file_exits_zero() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Successfully forged source document") || stdout.contains("Forge ingestion complete"),
+        stdout.contains("Successfully forged source document")
+            || stdout.contains("Forge ingestion complete"),
         "Expected 'Successfully forged source document' or 'Forge ingestion complete' in stdout, got: {}",
         stdout
     );
@@ -157,8 +174,10 @@ fn test_forge_pdf_exits_zero() {
     let content_id = doc.new_object_id();
 
     let content = b"BT /F1 12 Tf 72 712 Td (Forge PDF E2E test content.) Tj ET";
-    doc.objects
-        .insert(content_id, Object::Stream(Stream::new(Dictionary::new(), content.to_vec())));
+    doc.objects.insert(
+        content_id,
+        Object::Stream(Stream::new(Dictionary::new(), content.to_vec())),
+    );
 
     let mut page_dict = Dictionary::new();
     page_dict.set("Type", "Page");
@@ -193,7 +212,13 @@ fn test_forge_pdf_exits_zero() {
     fs::write(&pdf_path, buf).expect("write pdf");
 
     let out = cmd(tmp.path(), "18094")
-        .args(["vault", "ingest-forge", pdf_path.to_str().unwrap(), "--scope", "e2e_test"])
+        .args([
+            "vault",
+            "ingest-forge",
+            pdf_path.to_str().unwrap(),
+            "--scope",
+            "e2e_test",
+        ])
         .output()
         .expect("spawn forge pdf");
 
@@ -261,14 +286,17 @@ fn test_cli_daemon_run_and_cleanup() {
     if pid_file.exists() {
         print_daemon_log_on_failure(tmp.path());
     }
-    assert!(!pid_file.exists(), "PID file should be deleted on clean SIGINT exit");
+    assert!(
+        !pid_file.exists(),
+        "PID file should be deleted on clean SIGINT exit"
+    );
     cleanup_daemon(tmp.path(), "19091");
 }
 
 #[test]
 fn test_cli_search_episodes_flag() {
     let tmp = tempdir().expect("temp dir");
-    
+
     // Start daemon on port 19096
     let mut daemon = cmd(tmp.path(), "19096")
         .args(["daemon", "run", "--port", "19096"])
@@ -309,14 +337,31 @@ fn test_cli_search_episodes_flag() {
 
     // Save episode via CLI
     let save_status = cmd(tmp.path(), "19096")
-        .args(["memory", "record", "search_test_doc", "--file", doc_file.to_str().unwrap(), "--scope", "e2e_search_test"])
+        .args([
+            "memory",
+            "record",
+            "search_test_doc",
+            "--file",
+            doc_file.to_str().unwrap(),
+            "--scope",
+            "e2e_search_test",
+        ])
         .status()
         .expect("spawn memory record");
-    assert!(save_status.success(), "memory record command should succeed");
+    assert!(
+        save_status.success(),
+        "memory record command should succeed"
+    );
 
     // Perform default search (should exclude episodes)
     let search_default_out = cmd(tmp.path(), "19096")
-        .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test"])
+        .args([
+            "memory",
+            "query",
+            "SpecialSearchQueryPattern",
+            "--scope",
+            "e2e_search_test",
+        ])
         .output()
         .expect("spawn memory query default");
     assert!(search_default_out.status.success());
@@ -329,7 +374,14 @@ fn test_cli_search_episodes_flag() {
 
     // Perform search with --episodes flag
     let search_episodes_out = cmd(tmp.path(), "19096")
-        .args(["memory", "query", "SpecialSearchQueryPattern", "--scope", "e2e_search_test", "--include-episodes"])
+        .args([
+            "memory",
+            "query",
+            "SpecialSearchQueryPattern",
+            "--scope",
+            "e2e_search_test",
+            "--include-episodes",
+        ])
         .output()
         .expect("spawn search with --episodes");
     assert!(search_episodes_out.status.success());

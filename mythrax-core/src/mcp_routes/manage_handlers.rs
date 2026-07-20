@@ -1,9 +1,9 @@
-use serde_json::{json, Value};
-use anyhow::{Result, Context};
-use std::path::Path;
 use crate::api::ApiState;
-use crate::db::{SurrealBackend, parse_record_id};
 use crate::contracts::*;
+use crate::db::{SurrealBackend, parse_record_id};
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use std::path::Path;
 use surrealdb_types::SurrealValue;
 
 pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
@@ -13,7 +13,11 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
     } else {
         if args.get("session_id").and_then(|v| v.as_str()).is_some() {
             "pre_invocation"
-        } else if args.get("workspace_path").and_then(|v| v.as_str()).is_some() {
+        } else if args
+            .get("workspace_path")
+            .and_then(|v| v.as_str())
+            .is_some()
+        {
             "audit_compliance"
         } else {
             anyhow::bail!("Missing action parameter for manage tool");
@@ -37,7 +41,10 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 
     match mapped_action {
         "complete_handoff" => {
-            let task_id = args.get("task_id").and_then(|v| v.as_str()).context("Missing task_id")?;
+            let task_id = args
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .context("Missing task_id")?;
             let vault_root = state.store.vault_root.clone();
             let abs_handoff_path = vault_root.join(format!(".handoffs/handoff_{}.md", task_id));
 
@@ -46,47 +53,57 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }
 
             let mut content = std::fs::read_to_string(&abs_handoff_path)?;
-            
+
             let status = args.get("status").and_then(|v| v.as_str());
             let fail_reason = args.get("fail_reason").and_then(|v| v.as_str());
             let mut failed = status == Some("failed");
             let mut computed_fail_reason = fail_reason.map(|s| s.to_string());
-            
+
             if !failed {
                 // validate outputs
                 if content.starts_with("---\n") {
                     if let Some(end_idx) = content[4..].find("\n---") {
-                        let yaml_str = &content[4..4+end_idx];
+                        let yaml_str = &content[4..4 + end_idx];
                         if let Ok(contract) = serde_yaml::from_str::<HandoffContract>(yaml_str) {
                             let outputs_map = args.get("outputs").and_then(|v| v.as_object());
                             for output in &contract.outputs {
-                                let has_val = outputs_map.map(|m| m.contains_key(&output.name)).unwrap_or(false);
+                                let has_val = outputs_map
+                                    .map(|m| m.contains_key(&output.name))
+                                    .unwrap_or(false);
                                 if output.required && !has_val {
                                     failed = true;
-                                    computed_fail_reason = Some(format!("missing_output: {}", output.name));
+                                    computed_fail_reason =
+                                        Some(format!("missing_output: {}", output.name));
                                     break;
                                 }
                                 if has_val {
                                     let val = outputs_map.unwrap().get(&output.name).unwrap();
-                                    
+
                                     // Enum validation
                                     if let Some(enums) = &output.enum_values {
                                         if let Some(val_str) = val.as_str() {
                                             if !enums.contains(&val_str.to_string()) {
                                                 failed = true;
-                                                computed_fail_reason = Some(format!("enum validation failed for: {}", output.name));
+                                                computed_fail_reason = Some(format!(
+                                                    "enum validation failed for: {}",
+                                                    output.name
+                                                ));
                                                 break;
                                             }
                                         }
                                     }
 
-                                    let mut val_str = serde_json::to_string(val).unwrap_or_default();
+                                    let mut val_str =
+                                        serde_json::to_string(val).unwrap_or_default();
                                     if val_str.len() > 1000 {
                                         val_str.truncate(1000);
                                         val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
                                     }
                                     let key = format!("stm_{}_output_{}", task_id, output.name);
-                                    let _ = state.backend.save_stm(&contract.parent_conversation_id, &key, &val_str).await;
+                                    let _ = state
+                                        .backend
+                                        .save_stm(&contract.parent_conversation_id, &key, &val_str)
+                                        .await;
                                 }
                             }
                         }
@@ -95,23 +112,33 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }
 
             let final_status = if failed { "failed" } else { "completed" };
-            
+
             let re = regex::Regex::new(r"(?m)^status:\s*.*$").unwrap();
-            content = re.replace(&content, format!("status: \"{}\"", final_status)).to_string();
+            content = re
+                .replace(&content, format!("status: \"{}\"", final_status))
+                .to_string();
 
             // Update database handoff status
             let db_status = if failed { "FAILED" } else { "COMPLETED" };
             let handoff_db_id = format!("handoff:{}", task_id);
-            let _ = state.backend.update_handoff_status(&handoff_db_id, db_status).await;
-            
+            let _ = state
+                .backend
+                .update_handoff_status(&handoff_db_id, db_status)
+                .await;
+
             if failed {
                 if let Some(reason) = &computed_fail_reason {
                     let re_fail = regex::Regex::new(r"(?m)^fail_reason:\s*.*$").unwrap();
                     if re_fail.is_match(&content) {
-                        content = re_fail.replace(&content, format!("fail_reason: \"{}\"", reason)).to_string();
+                        content = re_fail
+                            .replace(&content, format!("fail_reason: \"{}\"", reason))
+                            .to_string();
                     } else {
                         // Insert after status if not present
-                        content = content.replace(&format!("status: \"{}\"", final_status), &format!("status: \"{}\"\nfail_reason: \"{}\"", final_status, reason));
+                        content = content.replace(
+                            &format!("status: \"{}\"", final_status),
+                            &format!("status: \"{}\"\nfail_reason: \"{}\"", final_status, reason),
+                        );
                     }
                 }
             }
@@ -119,67 +146,114 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             std::fs::write(&abs_handoff_path, content)?;
 
             if failed {
-                anyhow::bail!("Handoff completed with failure: {}", computed_fail_reason.unwrap_or_default());
+                anyhow::bail!(
+                    "Handoff completed with failure: {}",
+                    computed_fail_reason.unwrap_or_default()
+                );
             }
 
             return Ok(json!({ "status": "success" }));
         }
-        "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk" | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
+        "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk"
+        | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
             match mapped_action {
                 "ingest_bulk" => {
-                    let _source = args.get("source").and_then(|v| v.as_str()).context("Missing source parameter for ingest_bulk")?;
-                    let _harness = args.get("harness").and_then(|v| v.as_str()).context("Missing harness parameter for ingest_bulk")?;
+                    let _source = args
+                        .get("source")
+                        .and_then(|v| v.as_str())
+                        .context("Missing source parameter for ingest_bulk")?;
+                    let _harness = args
+                        .get("harness")
+                        .and_then(|v| v.as_str())
+                        .context("Missing harness parameter for ingest_bulk")?;
                 }
                 "ingest_forge" => {
-                    let _source_path = args.get("source").or_else(|| args.get("source_path")).and_then(|v| v.as_str()).context("Missing source parameter for ingest_forge")?;
+                    let _source_path = args
+                        .get("source")
+                        .or_else(|| args.get("source_path"))
+                        .and_then(|v| v.as_str())
+                        .context("Missing source parameter for ingest_forge")?;
                 }
                 "save_forged_assets" => {
-                    let _doc_title = args.get("doc_title").context("Missing doc_title parameter for save_forged_assets")?;
+                    let _doc_title = args
+                        .get("doc_title")
+                        .context("Missing doc_title parameter for save_forged_assets")?;
                 }
                 _ => {}
             }
             let mut modified_args = args.clone();
             if let Some(obj) = modified_args.as_object_mut() {
-                obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+                obj.insert(
+                    "action".to_string(),
+                    serde_json::Value::String(mapped_action.to_string()),
+                );
             }
             super::vault_handlers::handle_manage_vault(state, modified_args).await
         }
         "init" | "ideate" | "execute" | "backprop" | "merge" | "run" => {
-            let _scope = args.get("scope").and_then(|v| v.as_str()).context("Missing scope parameter for HTR action")?;
+            let _scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .context("Missing scope parameter for HTR action")?;
             match mapped_action {
                 "init" | "run" => {
-                    let _hypothesis = args.get("hypothesis").and_then(|v| v.as_str()).context("Missing hypothesis parameter")?;
+                    let _hypothesis = args
+                        .get("hypothesis")
+                        .and_then(|v| v.as_str())
+                        .context("Missing hypothesis parameter")?;
                 }
                 "ideate" | "execute" | "backprop" | "merge" => {
-                    let _node_id = args.get("node_id").and_then(|v| v.as_str()).context("Missing node_id parameter")?;
+                    let _node_id = args
+                        .get("node_id")
+                        .and_then(|v| v.as_str())
+                        .context("Missing node_id parameter")?;
                 }
                 _ => {}
             }
             let mut modified_args = args.clone();
             if let Some(obj) = modified_args.as_object_mut() {
-                obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+                obj.insert(
+                    "action".to_string(),
+                    serde_json::Value::String(mapped_action.to_string()),
+                );
             }
             super::htr_handlers::handle_manage_htr(state, modified_args).await
         }
         "pre_invocation" => {
-            let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for pre_invocation")?;
+            let _session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id parameter for pre_invocation")?;
             handle_pre_invocation_hook(state, args).await
         }
         "precompact" => {
-            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for precompact")?;
-            let transcript_path_str = args.get("transcript_path").and_then(|v| v.as_str()).context("Missing transcript_path parameter for precompact")?;
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id parameter for precompact")?;
+            let transcript_path_str = args
+                .get("transcript_path")
+                .and_then(|v| v.as_str())
+                .context("Missing transcript_path parameter for precompact")?;
             let count = crate::hooks::precompact::mine_transcript(
                 session_id,
                 transcript_path_str,
                 state.backend.as_ref(),
                 state.store.as_ref(),
                 &state.ignore_list,
-            ).await?;
+            )
+            .await?;
             Ok(json!({ "status": "success", "episodes_saved": count }))
         }
         "stop" => {
-            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for stop")?;
-            let transcript_path_str = args.get("transcript_path").and_then(|v| v.as_str()).context("Missing transcript_path parameter for stop")?;
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id parameter for stop")?;
+            let transcript_path_str = args
+                .get("transcript_path")
+                .and_then(|v| v.as_str())
+                .context("Missing transcript_path parameter for stop")?;
             let decision = crate::hooks::stop::mine_if_due(
                 session_id,
                 transcript_path_str,
@@ -187,37 +261,54 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 &state.backend,
                 &state.store,
                 &state.ignore_list,
-            ).await?;
+            )
+            .await?;
             let block = decision.is_some();
             let count = decision.unwrap_or(0);
             Ok(json!({ "status": "success", "block": block, "episodes_saved": count }))
         }
         "reflect" => {
-            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id parameter for reflect")?;
-            let transcript_path_str = args.get("transcript_path").and_then(|v| v.as_str()).context("Missing transcript_path parameter for reflect")?;
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id parameter for reflect")?;
+            let transcript_path_str = args
+                .get("transcript_path")
+                .and_then(|v| v.as_str())
+                .context("Missing transcript_path parameter for reflect")?;
             let status = crate::hooks::reflect::handle_reflect(
                 session_id,
                 transcript_path_str,
                 state.backend.as_ref(),
-            ).await?;
+            )
+            .await?;
             Ok(json!({ "status": status }))
         }
         "audit_response" => {
-            let response_text = args.get("response").and_then(|v| v.as_str()).context("Missing response parameter for audit_response")?;
+            let response_text = args
+                .get("response")
+                .and_then(|v| v.as_str())
+                .context("Missing response parameter for audit_response")?;
             let rules_path_opt = args.get("rules_path").and_then(|v| v.as_str());
             let session_id_opt = args.get("session_id").and_then(|v| v.as_str());
-            let fail_on_violation = args.get("fail_on_violation").and_then(|v| v.as_bool()).unwrap_or(true);
-            
+            let fail_on_violation = args
+                .get("fail_on_violation")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
             // 1. Read rules from rules_path if provided, else fallback to standard locations
             let mut rules_content = String::new();
             if let Some(rules_path) = rules_path_opt {
                 if let Ok(content) = std::fs::read_to_string(rules_path) {
                     rules_content = content;
                 } else {
-                    tracing::warn!("Configured rules_path '{}' not found, falling back to default rules", rules_path);
+                    tracing::warn!(
+                        "Configured rules_path '{}' not found, falling back to default rules",
+                        rules_path
+                    );
                 }
             }
-            
+
             if rules_content.is_empty() {
                 // Try workspace AGENTS.md first
                 let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
@@ -225,8 +316,9 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                 let ws_agents_path = workspace_root.join(".agents").join("AGENTS.md");
-                let global_agents_path = std::path::PathBuf::from("/Users/keith/.gemini/config/AGENTS.md");
-                
+                let global_agents_path =
+                    std::path::PathBuf::from("/Users/keith/.gemini/config/AGENTS.md");
+
                 if let Ok(content) = std::fs::read_to_string(&ws_agents_path) {
                     rules_content.push_str(&content);
                     rules_content.push_str("\n\n");
@@ -285,12 +377,15 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     injected_at: None,
                     session_id: session_id_opt.map(|s| s.to_string()),
                 };
-                
-                let surreal_backend = state.backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>()
+
+                let surreal_backend = state
+                    .backend
+                    .as_any()
+                    .downcast_ref::<crate::db::backend::SurrealBackend>()
                     .context("SurrealBackend required for cognitive callback")?;
-                
+
                 surreal_backend.create_cognitive_task(&task).await?;
-                
+
                 let start = std::time::Instant::now();
                 let timeout = std::time::Duration::from_secs(60);
                 let mut completed_res = None;
@@ -305,24 +400,31 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                         }
                     }
                 }
-                
+
                 if let Some(res) = completed_res {
                     res
                 } else {
-                    tracing::warn!("Cognitive callback for response audit timed out, falling back to local model");
-                    match llm.completion_explicit(
-                        state.backend.as_ref(),
-                        "local",
-                        "gemini",
-                        "mlx-community/Qwen3.6-35B-A3B-4bit",
-                        Some(system_instruction),
-                        &prompt,
-                        false,
-                    ).await {
+                    tracing::warn!(
+                        "Cognitive callback for response audit timed out, falling back to local model"
+                    );
+                    match llm
+                        .completion_explicit(
+                            state.backend.as_ref(),
+                            "local",
+                            "gemini",
+                            "mlx-community/Qwen3.6-35B-A3B-4bit",
+                            Some(system_instruction),
+                            &prompt,
+                            false,
+                        )
+                        .await
+                    {
                         Ok(res) => res,
                         Err(_) => {
                             let config = state.backend.get_llm_config().await.unwrap_or_default();
-                            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                            let cloud_model = if config.cloud_provider == "gemini"
+                                && (config.model.contains("Qwen") || config.model.is_empty())
+                            {
                                 "gemini-1.5-flash"
                             } else {
                                 &config.model
@@ -335,24 +437,31 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                                 Some(system_instruction),
                                 &prompt,
                                 false,
-                            ).await.unwrap_or_else(|_| "APPROVED".to_string())
+                            )
+                            .await
+                            .unwrap_or_else(|_| "APPROVED".to_string())
                         }
                     }
                 }
             } else {
-                match llm.completion_explicit(
-                    state.backend.as_ref(),
-                    "local",
-                    "gemini",
-                    "mlx-community/Qwen3.6-35B-A3B-4bit",
-                    Some(system_instruction),
-                    &prompt,
-                    false,
-                ).await {
+                match llm
+                    .completion_explicit(
+                        state.backend.as_ref(),
+                        "local",
+                        "gemini",
+                        "mlx-community/Qwen3.6-35B-A3B-4bit",
+                        Some(system_instruction),
+                        &prompt,
+                        false,
+                    )
+                    .await
+                {
                     Ok(res) => res,
                     Err(_) => {
                         let config = state.backend.get_llm_config().await.unwrap_or_default();
-                        let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                        let cloud_model = if config.cloud_provider == "gemini"
+                            && (config.model.contains("Qwen") || config.model.is_empty())
+                        {
                             "gemini-1.5-flash"
                         } else {
                             &config.model
@@ -365,17 +474,20 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                             Some(system_instruction),
                             &prompt,
                             false,
-                        ).await.unwrap_or_else(|_| "APPROVED".to_string())
+                        )
+                        .await
+                        .unwrap_or_else(|_| "APPROVED".to_string())
                     }
                 }
             };
 
-            let compliant = audit_res.trim().to_uppercase().contains("APPROVED") || audit_res.trim().to_uppercase() == "APPROVED";
-            
+            let compliant = audit_res.trim().to_uppercase().contains("APPROVED")
+                || audit_res.trim().to_uppercase() == "APPROVED";
+
             if !compliant && fail_on_violation {
                 anyhow::bail!("Rule compliance audit failed:\n{}", audit_res);
             }
-            
+
             Ok(json!({
                 "status": "success",
                 "compliant": compliant,
@@ -387,7 +499,10 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 }
 
 pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter for agent tool")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .context("Missing action parameter for agent tool")?;
     let mapped_action = match action {
         "complete_task" => "complete_code_task",
         "save_handoff" => "handoff",
@@ -395,13 +510,25 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
     };
     match mapped_action {
         "complete_code_task" => {
-            let _prompt = args.get("prompt").and_then(|v| v.as_str()).context("Missing prompt parameter for agent:complete_code_task")?;
+            let _prompt = args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .context("Missing prompt parameter for agent:complete_code_task")?;
             handle_complete_code_task(state, args).await
         }
         "handoff" => {
-            let _parent = args.get("parent_conversation_id").and_then(|v| v.as_str()).context("Missing parent_conversation_id")?;
-            let _subagent = args.get("subagent_conversation_id").and_then(|v| v.as_str()).context("Missing subagent_conversation_id")?;
-            let _summary = args.get("summary").and_then(|v| v.as_str()).context("Missing summary")?;
+            let _parent = args
+                .get("parent_conversation_id")
+                .and_then(|v| v.as_str())
+                .context("Missing parent_conversation_id")?;
+            let _subagent = args
+                .get("subagent_conversation_id")
+                .and_then(|v| v.as_str())
+                .context("Missing subagent_conversation_id")?;
+            let _summary = args
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .context("Missing summary")?;
             handle_manage_stm(state, args).await
         }
         _ => anyhow::bail!("Invalid action for agent tool: {}", action),
@@ -409,12 +536,24 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
 }
 
 pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .context("Missing action")?;
     match action {
         "put" => {
-            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
-            let key = args.get("key").and_then(|v| v.as_str()).context("Missing key")?;
-            let value = args.get("value").and_then(|v| v.as_str()).context("Missing value")?;
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id")?;
+            let key = args
+                .get("key")
+                .and_then(|v| v.as_str())
+                .context("Missing key")?;
+            let value = args
+                .get("value")
+                .and_then(|v| v.as_str())
+                .context("Missing value")?;
 
             state.backend.save_stm(session_id, key, value).await?;
             Ok(json!({
@@ -427,7 +566,10 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "get" => {
-            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id")?;
             let key = args.get("key").and_then(|v| v.as_str());
 
             let map = state.backend.get_stm(session_id, key).await?;
@@ -448,7 +590,10 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "clear" => {
-            let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id")?;
 
             state.backend.clear_stm(session_id).await?;
             Ok(json!({
@@ -461,12 +606,32 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "handoff" => {
-            let parent_conversation_id = args.get("parent_conversation_id").and_then(|v| v.as_str()).context("Missing parent_conversation_id")?.to_string();
-            let subagent_conversation_id = args.get("subagent_conversation_id").and_then(|v| v.as_str()).context("Missing subagent_conversation_id")?.to_string();
-            let summary = args.get("summary").and_then(|v| v.as_str()).context("Missing summary")?.to_string();
-            let handoff_file_path = args.get("handoff_file_path").and_then(|v| v.as_str()).context("Missing handoff_file_path")?.to_string();
-            let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let include_tool_execution = args.get("include_tool_execution").and_then(|v| v.as_bool());
+            let parent_conversation_id = args
+                .get("parent_conversation_id")
+                .and_then(|v| v.as_str())
+                .context("Missing parent_conversation_id")?
+                .to_string();
+            let subagent_conversation_id = args
+                .get("subagent_conversation_id")
+                .and_then(|v| v.as_str())
+                .context("Missing subagent_conversation_id")?
+                .to_string();
+            let summary = args
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .context("Missing summary")?
+                .to_string();
+            let handoff_file_path = args
+                .get("handoff_file_path")
+                .and_then(|v| v.as_str())
+                .context("Missing handoff_file_path")?
+                .to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let include_tool_execution =
+                args.get("include_tool_execution").and_then(|v| v.as_bool());
 
             // Task 16: Typed I/O Contracts - Pre-launch validation
             let vault_root = state.store.vault_root.clone();
@@ -480,7 +645,7 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                 if let Ok(content) = std::fs::read_to_string(&abs_handoff_path) {
                     if content.starts_with("---\n") {
                         if let Some(end_idx) = content[4..].find("\n---") {
-                            let yaml_str = &content[4..4+end_idx];
+                            let yaml_str = &content[4..4 + end_idx];
                             match serde_yaml::from_str::<HandoffContract>(yaml_str) {
                                 Ok(contract) => {
                                     for input in &contract.inputs {
@@ -488,13 +653,20 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                                             anyhow::bail!("Missing required input: {}", input.name);
                                         }
                                         if let Some(val) = &input.value {
-                                            let mut val_str = serde_json::to_string(val).unwrap_or_default();
+                                            let mut val_str =
+                                                serde_json::to_string(val).unwrap_or_default();
                                             if val_str.len() > 1000 {
                                                 val_str.truncate(1000);
                                                 val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
                                             }
-                                            let key = format!("stm_{}_input_{}", contract.task_id, input.name);
-                                            let _ = state.backend.save_stm(&subagent_conversation_id, &key, &val_str).await;
+                                            let key = format!(
+                                                "stm_{}_input_{}",
+                                                contract.task_id, input.name
+                                            );
+                                            let _ = state
+                                                .backend
+                                                .save_stm(&subagent_conversation_id, &key, &val_str)
+                                                .await;
                                         }
                                     }
                                 }
@@ -520,7 +692,13 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
 
             let event_ep = EpisodeSave::builder(
                 "Handoff Event: Parent to Subagent".to_string(),
-                format!("Handoff registered. Parent: {}, Subagent: {}, Summary: {}, File Path: {}", parent_conversation_id, subagent_conversation_id, handoff.summary, handoff.handoff_file_path),
+                format!(
+                    "Handoff registered. Parent: {}, Subagent: {}, Summary: {}, File Path: {}",
+                    parent_conversation_id,
+                    subagent_conversation_id,
+                    handoff.summary,
+                    handoff.handoff_file_path
+                ),
             )
             .scope(handoff.scope.clone())
             .session_id(Some(parent_conversation_id.clone()))
@@ -528,29 +706,42 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             .build();
             let _ = state.backend.save_episode(&event_ep).await;
 
-            if let Ok(stm_map) = state.backend.get_stm(&parent_conversation_id, Some("_session_citations")).await {
+            if let Ok(stm_map) = state
+                .backend
+                .get_stm(&parent_conversation_id, Some("_session_citations"))
+                .await
+            {
                 if let Some(citations_str) = stm_map.get("_session_citations") {
                     if let Ok(episode_ids) = serde_json::from_str::<Vec<String>>(citations_str) {
                         if !episode_ids.is_empty() {
-                            if let Ok(nodes_resp) = state.backend.get_memory_nodes(&episode_ids).await {
+                            if let Ok(nodes_resp) =
+                                state.backend.get_memory_nodes(&episode_ids).await
+                            {
                                 let mut footnote = String::new();
                                 footnote.push_str("\n\n### Citations\n");
                                 let vault_root = state.store.vault_root.clone();
                                 for ep in nodes_resp.episodes {
                                     if let Some(ref vp) = ep.vault_path {
                                         let abs_path = vault_root.join(vp);
-                                        footnote.push_str(&format!("- [{}]((file://{}))\n", ep.title, abs_path.display()));
+                                        footnote.push_str(&format!(
+                                            "- [{}]((file://{}))\n",
+                                            ep.title,
+                                            abs_path.display()
+                                        ));
                                     }
                                 }
-                                
-                                let abs_handoff_path = if std::path::Path::new(&handoff_file_path).is_absolute() {
-                                    std::path::PathBuf::from(&handoff_file_path)
-                                } else {
-                                    vault_root.join(&handoff_file_path)
-                                };
+
+                                let abs_handoff_path =
+                                    if std::path::Path::new(&handoff_file_path).is_absolute() {
+                                        std::path::PathBuf::from(&handoff_file_path)
+                                    } else {
+                                        vault_root.join(&handoff_file_path)
+                                    };
 
                                 if abs_handoff_path.exists() {
-                                    if let Ok(mut content) = std::fs::read_to_string(&abs_handoff_path) {
+                                    if let Ok(mut content) =
+                                        std::fs::read_to_string(&abs_handoff_path)
+                                    {
                                         if !content.contains("### Citations") {
                                             content.push_str(&footnote);
                                             let _ = std::fs::write(&abs_handoff_path, content);
@@ -577,7 +768,10 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
 }
 
 pub async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .context("Missing action")?;
     match action {
         "get" => {
             let config = state.backend.get_llm_config().await?;
@@ -595,16 +789,36 @@ pub async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value
             }))
         }
         "set" => {
-            let provider = args.get("provider").and_then(|v| v.as_str()).context("Missing provider")?.to_string();
-            let duration = args.get("duration").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let model = args.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let cloud_provider = args.get("cloud_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let api_key = args.get("api_key").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let llm_post_inference_delay_ms = args.get("llm_post_inference_delay_ms")
-                .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok())));
+            let provider = args
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .context("Missing provider")?
+                .to_string();
+            let duration = args
+                .get("duration")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let model = args
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let cloud_provider = args
+                .get("cloud_provider")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let api_key = args
+                .get("api_key")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let llm_post_inference_delay_ms =
+                args.get("llm_post_inference_delay_ms").and_then(|v| {
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+                });
 
-            let model_tier_mappings = args.get("model_tier_mappings")
-                .and_then(|v| serde_json::from_value::<std::collections::HashMap<String, String>>(v.clone()).ok());
+            let model_tier_mappings = args.get("model_tier_mappings").and_then(|v| {
+                serde_json::from_value::<std::collections::HashMap<String, String>>(v.clone()).ok()
+            });
 
             let req = LlmConfigRequest {
                 provider,
@@ -632,9 +846,13 @@ pub async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value
 }
 
 pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
-    
-    let path = args.get("path")
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .context("Missing action")?;
+
+    let path = args
+        .get("path")
         .or_else(|| args.get("AbsolutePath"))
         .or_else(|| args.get("TargetFile"))
         .and_then(|v| v.as_str())
@@ -642,11 +860,13 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
 
     match action {
         "view" => {
-            let start_line = args.get("start_line")
+            let start_line = args
+                .get("start_line")
                 .or_else(|| args.get("StartLine"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
-            let end_line = args.get("end_line")
+            let end_line = args
+                .get("end_line")
                 .or_else(|| args.get("EndLine"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
@@ -658,12 +878,16 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
 
             let extension = get_extension(path_buf);
             let pageable_extensions = ["rs", "ts", "tsx", "js", "jsx", "py"];
-            
+
             let final_content = if let Some(ref ext) = extension {
                 if pageable_extensions.contains(&ext.as_str()) {
-                    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+                    let surreal_backend = state
+                        .backend
+                        .as_any()
+                        .downcast_ref::<SurrealBackend>()
                         .context("SurrealBackend required")?;
-                    crate::cognitive::paging::page_code_block(surreal_backend, &sliced_content, ext).await?
+                    crate::cognitive::paging::page_code_block(surreal_backend, &sliced_content, ext)
+                        .await?
                 } else {
                     sliced_content
                 }
@@ -681,23 +905,28 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             }))
         }
         "replace" => {
-            let target_content = args.get("target_content")
+            let target_content = args
+                .get("target_content")
                 .or_else(|| args.get("TargetContent"))
                 .and_then(|v| v.as_str())
                 .context("Missing target_content/TargetContent")?;
-            let replacement_content = args.get("replacement_content")
+            let replacement_content = args
+                .get("replacement_content")
                 .or_else(|| args.get("ReplacementContent"))
                 .and_then(|v| v.as_str())
                 .context("Missing replacement_content/ReplacementContent")?;
-            let start_line = args.get("start_line")
+            let start_line = args
+                .get("start_line")
                 .or_else(|| args.get("StartLine"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
-            let end_line = args.get("end_line")
+            let end_line = args
+                .get("end_line")
                 .or_else(|| args.get("EndLine"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as usize);
-            let allow_multiple = args.get("allow_multiple")
+            let allow_multiple = args
+                .get("allow_multiple")
                 .or_else(|| args.get("AllowMultiple"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
@@ -705,33 +934,39 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             let path_buf = Path::new(path);
             let file_content = std::fs::read_to_string(path_buf)?;
 
-            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required")?;
 
             let resolved_target = resolve_placeholders(surreal_backend, target_content).await;
-            let resolved_replacement = resolve_placeholders(surreal_backend, replacement_content).await;
+            let resolved_replacement =
+                resolve_placeholders(surreal_backend, replacement_content).await;
 
             let sliced_content = slice_content_by_lines(&file_content, start_line, end_line);
-            
+
             let occurrences = sliced_content.matches(&resolved_target).count();
             if occurrences == 0 {
                 anyhow::bail!("Target content not found in the file.");
             }
             if occurrences > 1 && !allow_multiple {
-                anyhow::bail!("Target content found multiple times in the file, but AllowMultiple is false.");
+                anyhow::bail!(
+                    "Target content found multiple times in the file, but AllowMultiple is false."
+                );
             }
 
             let new_content = if start_line.is_some() || end_line.is_some() {
                 let new_sliced = sliced_content.replace(&resolved_target, &resolved_replacement);
-                
+
                 let lines: Vec<&str> = file_content.lines().collect();
                 let start_idx = start_line.map(|s| s.saturating_sub(1)).unwrap_or(0);
                 let end_idx = end_line.map(|e| e.min(lines.len())).unwrap_or(lines.len());
-                
+
                 let mut new_lines: Vec<&str> = lines[..start_idx].to_vec();
                 new_lines.extend(new_sliced.lines());
                 new_lines.extend(lines[end_idx..].iter());
-                
+
                 new_lines.join("\n")
             } else {
                 file_content.replace(&resolved_target, &resolved_replacement)
@@ -746,7 +981,13 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             };
 
             let artifact_ep = EpisodeSave::builder(
-                format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
+                format!(
+                    "Artifact Edited: {}",
+                    path_buf
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("file")
+                ),
                 format!("File updated successfully: {}", rel_path),
             )
             .scope(Some("general".to_string()))
@@ -766,7 +1007,8 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             }))
         }
         "multi_replace" => {
-            let chunks = args.get("chunks")
+            let chunks = args
+                .get("chunks")
                 .or_else(|| args.get("ReplacementChunks"))
                 .and_then(|v| v.as_array())
                 .context("Missing/Invalid chunks/ReplacementChunks")?;
@@ -774,55 +1016,67 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             let path_buf = Path::new(path);
             let mut file_content = std::fs::read_to_string(path_buf)?;
 
-            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required")?;
 
             for chunk in chunks {
-                let target_content = chunk.get("target_content")
+                let target_content = chunk
+                    .get("target_content")
                     .or_else(|| chunk.get("TargetContent"))
                     .and_then(|v| v.as_str())
                     .context("Missing target_content/TargetContent in chunk")?;
-                let replacement_content = chunk.get("replacement_content")
+                let replacement_content = chunk
+                    .get("replacement_content")
                     .or_else(|| chunk.get("ReplacementContent"))
                     .and_then(|v| v.as_str())
                     .context("Missing replacement_content/ReplacementContent in chunk")?;
-                let start_line = chunk.get("start_line")
+                let start_line = chunk
+                    .get("start_line")
                     .or_else(|| chunk.get("StartLine"))
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize);
-                let end_line = chunk.get("end_line")
+                let end_line = chunk
+                    .get("end_line")
                     .or_else(|| chunk.get("EndLine"))
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize);
-                let allow_multiple = chunk.get("allow_multiple")
+                let allow_multiple = chunk
+                    .get("allow_multiple")
                     .or_else(|| chunk.get("AllowMultiple"))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
                 let resolved_target = resolve_placeholders(surreal_backend, target_content).await;
-                let resolved_replacement = resolve_placeholders(surreal_backend, replacement_content).await;
+                let resolved_replacement =
+                    resolve_placeholders(surreal_backend, replacement_content).await;
 
                 let sliced_content = slice_content_by_lines(&file_content, start_line, end_line);
-                
+
                 let occurrences = sliced_content.matches(&resolved_target).count();
                 if occurrences == 0 {
                     anyhow::bail!("Target content not found in the file.");
                 }
                 if occurrences > 1 && !allow_multiple {
-                    anyhow::bail!("Target content found multiple times in the file, but AllowMultiple is false.");
+                    anyhow::bail!(
+                        "Target content found multiple times in the file, but AllowMultiple is false."
+                    );
                 }
 
                 let new_content = if start_line.is_some() || end_line.is_some() {
-                    let new_sliced = sliced_content.replace(&resolved_target, &resolved_replacement);
-                    
+                    let new_sliced =
+                        sliced_content.replace(&resolved_target, &resolved_replacement);
+
                     let lines: Vec<&str> = file_content.lines().collect();
                     let start_idx = start_line.map(|s| s.saturating_sub(1)).unwrap_or(0);
                     let end_idx = end_line.map(|e| e.min(lines.len())).unwrap_or(lines.len());
-                    
+
                     let mut new_lines: Vec<&str> = lines[..start_idx].to_vec();
                     new_lines.extend(new_sliced.lines());
                     new_lines.extend(lines[end_idx..].iter());
-                    
+
                     new_lines.join("\n")
                 } else {
                     file_content.replace(&resolved_target, &resolved_replacement)
@@ -840,7 +1094,13 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             };
 
             let artifact_ep = EpisodeSave::builder(
-                format!("Artifact Edited: {}", path_buf.file_name().and_then(|s| s.to_str()).unwrap_or("file")),
+                format!(
+                    "Artifact Edited: {}",
+                    path_buf
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("file")
+                ),
                 format!("File updated successfully: {}", rel_path),
             )
             .scope(Some("general".to_string()))
@@ -865,15 +1125,24 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
 
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
     let mut stm_str = String::new();
-    let session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .context("Missing session_id")?;
     let caller = args.get("caller").and_then(|v| v.as_str());
 
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required for pre_invocation_hook")?;
 
     if caller == Some("distiller") {
         let now_unix = chrono::Utc::now().timestamp();
-        let _ = state.backend.save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string()).await;
+        let _ = state
+            .backend
+            .save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string())
+            .await;
         let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(state).await;
 
         let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
@@ -882,7 +1151,11 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         if let Some(t) = immediate_task {
             selected_tasks.push(t.clone());
         } else {
-            for t in pending_tasks.iter().filter(|t| t.priority != "Immediate").take(3) {
+            for t in pending_tasks
+                .iter()
+                .filter(|t| t.priority != "Immediate")
+                .take(3)
+            {
                 selected_tasks.push(t.clone());
             }
         }
@@ -895,7 +1168,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
                     task.id, task.task_type, task.prompt, task.system_instruction, task.expected_format, task.priority
                 ));
-                surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None).await?;
+                surreal_backend
+                    .update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None)
+                    .await?;
             }
             callback_injection.push('\n');
         }
@@ -909,7 +1184,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             ]
         }));
     }
-    
+
     let mut total_discovery = 0u32;
     let mut total_read = 0u32;
     let mut has_discovery = false;
@@ -928,7 +1203,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     let query = args.get("query").and_then(|v| v.as_str());
     let workspace_path = args.get("workspace_path").and_then(|v| v.as_str());
 
-    state.backend.journal_state(&state.store.vault_root, Some(session_id)).await?;
+    state
+        .backend
+        .journal_state(&state.store.vault_root, Some(session_id))
+        .await?;
 
     let all_eps = state.backend.get_all_episodes().await?;
     for ep in &all_eps {
@@ -947,7 +1225,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     }
 
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required for pre_invocation_hook")?;
 
     // WU-4.5: TTL Sweep & LargeLocal Fallback
@@ -956,7 +1237,12 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     // WU-6.9: PagingManager context window paging
     let token_budget = 8000u32;
     let sql_session = "SELECT * FROM episode WHERE session_id = $session_id AND archived = false;";
-    if let Ok(mut resp) = surreal_backend.db.query(sql_session).bind(("session_id", session_id)).await {
+    if let Ok(mut resp) = surreal_backend
+        .db
+        .query(sql_session)
+        .bind(("session_id", session_id))
+        .await
+    {
         if let Ok(episodes) = resp.take::<Vec<crate::contracts::Episode>>(0) {
             let mut total_tokens = 0u32;
             let mut pm = crate::cognitive::memory_os::PagingManager::new(500);
@@ -964,28 +1250,39 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             for ep in &episodes {
                 let tokens = calc_tokens(&ep.title, &ep.content, ep.facts.as_deref());
                 total_tokens += tokens;
-                
+
                 if let Some(ref id) = ep.id {
-                    let pinned = ep.node_type.as_deref() == Some("user_input") || ep.node_type.as_deref() == Some("task_checklist");
-                    pm.access_node(id.clone(), crate::cognitive::memory_os::ActiveNodeInfo {
-                        importance: ep.importance.unwrap_or(50.0),
-                        node_type: "episode".to_string(),
-                        pinned,
-                    });
+                    let pinned = ep.node_type.as_deref() == Some("user_input")
+                        || ep.node_type.as_deref() == Some("task_checklist");
+                    pm.access_node(
+                        id.clone(),
+                        crate::cognitive::memory_os::ActiveNodeInfo {
+                            importance: ep.importance.unwrap_or(50.0),
+                            node_type: "episode".to_string(),
+                            pinned,
+                        },
+                    );
                 }
             }
 
             if total_tokens > token_budget {
                 let excess_tokens = total_tokens.saturating_sub(token_budget);
                 let mut tokens_freed = 0u32;
-                
-                let mut evictable_episodes = episodes.iter()
+
+                let mut evictable_episodes = episodes
+                    .iter()
                     .filter(|ep| {
-                        let is_pinned = ep.node_type.as_deref() == Some("user_input") || ep.node_type.as_deref() == Some("task_checklist");
+                        let is_pinned = ep.node_type.as_deref() == Some("user_input")
+                            || ep.node_type.as_deref() == Some("task_checklist");
                         !is_pinned && ep.id.is_some()
                     })
                     .collect::<Vec<_>>();
-                evictable_episodes.sort_by(|a, b| a.importance.unwrap_or(50.0).partial_cmp(&b.importance.unwrap_or(50.0)).unwrap_or(std::cmp::Ordering::Equal));
+                evictable_episodes.sort_by(|a, b| {
+                    a.importance
+                        .unwrap_or(50.0)
+                        .partial_cmp(&b.importance.unwrap_or(50.0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
 
                 for ep in evictable_episodes {
                     if tokens_freed >= excess_tokens {
@@ -997,7 +1294,11 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     if let Some(ref id) = ep.id {
                         let id_raw = id.split(':').nth(1).unwrap_or(id).to_string();
                         let archive_sql = "UPDATE type::record('episode', $id) MERGE { archived: true, archived_at: time::now() };";
-                        let _ = surreal_backend.db.query(archive_sql).bind(("id", id_raw)).await;
+                        let _ = surreal_backend
+                            .db
+                            .query(archive_sql)
+                            .bind(("id", id_raw))
+                            .await;
                     }
                 }
             }
@@ -1006,19 +1307,19 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
     if let Some(q) = query {
         let insert_sql = "INSERT INTO chat_history { session_id: $session_id, role: 'user', content: $content, created_at: time::now() };";
-        let _ = surreal_backend.db.query(insert_sql)
+        let _ = surreal_backend
+            .db
+            .query(insert_sql)
             .bind(("session_id", session_id))
             .bind(("content", q.to_string()))
             .await;
     }
 
-
-
     let mut loaded_belief_states: Vec<BeliefState> = Vec::new();
     let belief_res = surreal_backend.db.query("SELECT session_id, tasks_todo, hypotheses_tested, confidence_score, uncertainty_areas, updated_at FROM belief_state WHERE session_id = $session_id;")
         .bind(("session_id", session_id))
         .await;
-    
+
     if let Ok(mut resp) = belief_res {
         loaded_belief_states = resp.take(0).unwrap_or_default();
     }
@@ -1036,8 +1337,16 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         if let Ok(file_content) = std::fs::read_to_string(path_str) {
             for line in file_content.lines().rev() {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                    let is_assistant = val.get("role").and_then(|r| r.as_str()).map(|r| r == "assistant").unwrap_or(false)
-                        || val.get("source").and_then(|s| s.as_str()).map(|s| s == "MODEL").unwrap_or(false);
+                    let is_assistant = val
+                        .get("role")
+                        .and_then(|r| r.as_str())
+                        .map(|r| r == "assistant")
+                        .unwrap_or(false)
+                        || val
+                            .get("source")
+                            .and_then(|s| s.as_str())
+                            .map(|s| s == "MODEL")
+                            .unwrap_or(false);
                     if is_assistant {
                         if let Some(content_str) = val.get("content").and_then(|c| c.as_str()) {
                             last_assistant_turn = Some(content_str.to_string());
@@ -1059,7 +1368,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             if let Ok(parsed) = serde_json::from_str::<Vec<String>>(nodes_str) {
                 injected_nodes = parsed;
             } else {
-                let cleaned = nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
+                let cleaned =
+                    nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
                 for part in cleaned.split(',') {
                     let part = part.trim().trim_matches('"');
                     if !part.is_empty() {
@@ -1072,60 +1382,111 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         if !injected_nodes.is_empty() {
             let hydrated = state.backend.get_memory_nodes(&injected_nodes).await?;
             let mut utilized_count = 0;
-            
+
             for wiki in &hydrated.wiki_nodes {
-                let is_util = turn_content.to_lowercase().contains(&wiki.name.to_lowercase());
-                if is_util { utilized_count += 1; }
+                let is_util = turn_content
+                    .to_lowercase()
+                    .contains(&wiki.name.to_lowercase());
+                if is_util {
+                    utilized_count += 1;
+                }
             }
-            
+
             for wisdom in &hydrated.wisdom_rules {
-                let is_util = turn_content.to_lowercase().contains(&wisdom.target_pattern.to_lowercase());
-                if is_util { utilized_count += 1; }
+                let is_util = turn_content
+                    .to_lowercase()
+                    .contains(&wisdom.target_pattern.to_lowercase());
+                if is_util {
+                    utilized_count += 1;
+                }
                 // EMA Reinforcement (WU-3.5)
                 let target_imp = if is_util { 10.0 } else { 1.0 };
                 let current_imp = wisdom.importance.unwrap_or(5.0) as f32;
                 let new_imp = 0.9 * current_imp + 0.1 * target_imp;
                 let update_sql = "UPDATE type::record('wisdom', $id) SET importance = $imp;";
-                let id_part = wisdom.id.as_ref().map(|s| s.split(':').nth(1).unwrap_or(s)).unwrap_or("");
-                let _ = surreal_backend.db.query(update_sql).bind(("id", id_part)).bind(("imp", new_imp)).await;
+                let id_part = wisdom
+                    .id
+                    .as_ref()
+                    .map(|s| s.split(':').nth(1).unwrap_or(s))
+                    .unwrap_or("");
+                let _ = surreal_backend
+                    .db
+                    .query(update_sql)
+                    .bind(("id", id_part))
+                    .bind(("imp", new_imp))
+                    .await;
             }
 
             for ep in &hydrated.episodes {
-                let is_util = turn_content.to_lowercase().contains(&ep.title.to_lowercase());
-                if is_util { utilized_count += 1; }
+                let is_util = turn_content
+                    .to_lowercase()
+                    .contains(&ep.title.to_lowercase());
+                if is_util {
+                    utilized_count += 1;
+                }
                 // EMA Reinforcement (WU-3.5)
                 let target_imp = if is_util { 10.0 } else { 1.0 };
                 let current_imp = ep.importance.unwrap_or(5.0) as f32;
                 let new_imp = 0.9 * current_imp + 0.1 * target_imp;
                 let update_sql = "UPDATE type::record('episode', $id) SET importance = $imp;";
-                let id_part = ep.id.as_ref().map(|s| s.split(':').nth(1).unwrap_or(s)).unwrap_or("");
-                let _ = surreal_backend.db.query(update_sql).bind(("id", id_part)).bind(("imp", new_imp)).await;
+                let id_part = ep
+                    .id
+                    .as_ref()
+                    .map(|s| s.split(':').nth(1).unwrap_or(s))
+                    .unwrap_or("");
+                let _ = surreal_backend
+                    .db
+                    .query(update_sql)
+                    .bind(("id", id_part))
+                    .bind(("imp", new_imp))
+                    .await;
             }
 
             let mem_util_score = (utilized_count * 100) / injected_nodes.len();
-            let _ = state.backend.save_stm(session_id, "_last_memory_utilization", &mem_util_score.to_string()).await;
+            let _ = state
+                .backend
+                .save_stm(
+                    session_id,
+                    "_last_memory_utilization",
+                    &mem_util_score.to_string(),
+                )
+                .await;
         }
 
         // 2. Guardrail Engine rule violations (WU-3.2)
-        let active_rules_res = surreal_backend.db.query("SELECT * FROM wisdom WHERE status = 'active';").await;
+        let active_rules_res = surreal_backend
+            .db
+            .query("SELECT * FROM wisdom WHERE status = 'active';")
+            .await;
         if let Ok(mut resp) = active_rules_res {
-            let active_rules: Vec<WisdomRule> = if let Ok(raw_rules) = resp.take::<Vec<crate::db::backend::WisdomRaw>>(0) {
-                raw_rules.into_iter().map(|r| r.into_wisdom_rule()).collect()
-            } else {
-                Vec::new()
-            };
+            let active_rules: Vec<WisdomRule> =
+                if let Ok(raw_rules) = resp.take::<Vec<crate::db::backend::WisdomRaw>>(0) {
+                    raw_rules
+                        .into_iter()
+                        .map(|r| r.into_wisdom_rule())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             for rule in active_rules {
-                if turn_content.to_lowercase().contains(&rule.target_pattern.to_lowercase()) {
-                    let severity = rule.severity.clone().unwrap_or_else(|| "WARNING".to_string()).to_uppercase();
+                if turn_content
+                    .to_lowercase()
+                    .contains(&rule.target_pattern.to_lowercase())
+                {
+                    let severity = rule
+                        .severity
+                        .clone()
+                        .unwrap_or_else(|| "WARNING".to_string())
+                        .to_uppercase();
                     let blocking = rule.blocking.unwrap_or(false);
-                    
+
                     if blocking {
                         blocking_directives.push(format!(
                             "> [!CAUTION]\n> **CRITICAL RULE ACKNOWLEDGEMENT REQUIRED**\n> You have triggered a blocking guardrail rule for `{}`.\n> Rule: Avoid `{}` because `{}`.\n> Remedy: `{}`.\n> You MUST explicitly state in your next turn how you will implement this remedy before proceeding!\n",
                             rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
                         ));
                     }
-                    
+
                     guardrail_blocks.push(format!(
                         "> [!{}]\n> **Rule Violation Alert**: Pertaining to `{}`\n> - **Avoid**: {}\n> - **Causal**: {}\n> - **Remedy**: {}\n",
                         severity, rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
@@ -1143,8 +1504,11 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
         if !checklist_lines.is_empty() {
             let checklist_str = checklist_lines.join("\n");
-            let _ = state.backend.save_stm(session_id, "checklist", &checklist_str).await;
-            
+            let _ = state
+                .backend
+                .save_stm(session_id, "checklist", &checklist_str)
+                .await;
+
             // Save as task_checklist episode
             let ep = EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
                 .scope(Some("general".to_string()))
@@ -1162,7 +1526,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         if let Ok(last_search_time) = last_search_str.parse::<i64>() {
             let elapsed = now_unix - last_search_time;
             if elapsed > 300 {
-                stale_search_warning = format!("\n> [!WARNING]\n> Warning: Memory searches are stale. Last search was {} seconds ago. Consider running a search query to pull relevant context.\n", elapsed);
+                stale_search_warning = format!(
+                    "\n> [!WARNING]\n> Warning: Memory searches are stale. Last search was {} seconds ago. Consider running a search query to pull relevant context.\n",
+                    elapsed
+                );
             }
         } else {
             stale_search_warning = "\n> [!WARNING]\n> Warning: Memory searches are stale. No search has been performed in this session yet.\n".to_string();
@@ -1178,7 +1545,11 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             Some(tier) => format!("{:?}", tier),
             None => "None (Idle)".to_string(),
         };
-        let emb_loaded = if broker.is_embedding_model_loaded() { "Loaded" } else { "Not Loaded" };
+        let emb_loaded = if broker.is_embedding_model_loaded() {
+            "Loaded"
+        } else {
+            "Not Loaded"
+        };
         let (model_name, execution_mode) = if let Some(weak_ref) = broker.get_weak_llm_reference() {
             if let Some(engine) = weak_ref.upgrade() {
                 (engine.name(), engine.execution_mode())
@@ -1195,12 +1566,17 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     }
     parts.push(broker_status);
 
-    
-let mut insights_parts = Vec::new();
+    let mut insights_parts = Vec::new();
     if !handoffs.is_empty() {
         let active_handoff = &handoffs[0];
-        let parent_conversation_id = active_handoff.get("parent_conversation_id").and_then(|v| v.as_str()).unwrap_or("");
-        let summary = active_handoff.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+        let parent_conversation_id = active_handoff
+            .get("parent_conversation_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let summary = active_handoff
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let scope = active_handoff.get("scope").and_then(|v| v.as_str());
 
         parts.push(format!(
@@ -1215,7 +1591,10 @@ let mut insights_parts = Vec::new();
             }
         }
         if !stm_parts.is_empty() {
-            stm_str = format!("### 🔑 Stashed Session Variables\n{}\n", stm_parts.join("\n"));
+            stm_str = format!(
+                "### 🔑 Stashed Session Variables\n{}\n",
+                stm_parts.join("\n")
+            );
         }
 
         let mut node_ids = Vec::new();
@@ -1229,7 +1608,8 @@ let mut insights_parts = Vec::new();
                     }
                 }
             } else {
-                let cleaned = nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
+                let cleaned =
+                    nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
                 for part in cleaned.split(',') {
                     let part = part.trim().trim_matches('"');
                     if !part.is_empty() {
@@ -1241,17 +1621,26 @@ let mut insights_parts = Vec::new();
 
         if !node_ids.is_empty() {
             let hydrated = state.backend.get_memory_nodes(&node_ids).await?;
-            
+
             for wiki in hydrated.wiki_nodes {
                 total_read += calc_tokens(&wiki.name, &wiki.content, None);
-                insights_parts.push(format!("**Distilled Insight: {}**\n{}", wiki.name, wiki.content));
+                insights_parts.push(format!(
+                    "**Distilled Insight: {}**\n{}",
+                    wiki.name, wiki.content
+                ));
             }
             for wisdom in hydrated.wisdom_rules {
-                let rule_content = format!("Avoid: {}\nCausal: {}\nRemedy: {}", wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy);
+                let rule_content = format!(
+                    "Avoid: {}\nCausal: {}\nRemedy: {}",
+                    wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy
+                );
                 total_read += calc_tokens(&wisdom.target_pattern, &rule_content, None);
                 insights_parts.push(format!(
                     "**Wisdom Rule: {}**\n- Avoid: {}\n- Causal: {}\n- Remedy: {}",
-                    wisdom.target_pattern, wisdom.action_to_avoid, wisdom.causal_explanation, wisdom.prescribed_remedy
+                    wisdom.target_pattern,
+                    wisdom.action_to_avoid,
+                    wisdom.causal_explanation,
+                    wisdom.prescribed_remedy
                 ));
             }
             for ep in hydrated.episodes {
@@ -1263,28 +1652,26 @@ let mut insights_parts = Vec::new();
                 }
                 total_read += calc_tokens(&ep.title, &ep.content, ep.facts.as_deref());
                 if let Some(ref ep_id) = ep.id {
-                    let rendered = super::format_episode_or_parent(&*state.backend, &surreal_backend.db, ep_id, &ep.title, &ep.content, ep.scope.as_deref()).await?;
+                    let rendered = super::format_episode_or_parent(
+                        &*state.backend,
+                        &surreal_backend.db,
+                        ep_id,
+                        &ep.title,
+                        &ep.content,
+                        ep.scope.as_deref(),
+                    )
+                    .await?;
                     insights_parts.push(rendered);
                 }
             }
         } else {
-            let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
-                summary,
-                scope,
-                false,
-                15,
-                0,
-                0.55,
-                None,
-                false,
-                true,
-                false,
-                None,
-                true,
-                None,
-            )).await?;
+            let search_res = state
+                .backend
+                .search(crate::contracts::SearchParams::from_positional(
+                    summary, scope, false, 15, 0, 0.55, None, false, true, false, None, true, None,
+                ))
+                .await?;
 
-            
             for res in search_res.results {
                 if res.discovery_tokens.is_some() {
                     has_discovery = true;
@@ -1293,40 +1680,46 @@ let mut insights_parts = Vec::new();
                     total_discovery += dt;
                 }
                 total_read += calc_tokens(&res.title, &res.content, None);
-                if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
+                if let Some(formatted) =
+                    format_search_result_hybrid(surreal_backend, &res, state).await?
+                {
                     insights_parts.push(formatted);
                 }
             }
         }
     } else {
-        let workspace_path_str = workspace_path.map(|s| s.to_string())
-            .unwrap_or_else(|| std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string()));
+        let workspace_path_str = workspace_path.map(|s| s.to_string()).unwrap_or_else(|| {
+            std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string())
+        });
         let path = std::path::Path::new(&workspace_path_str);
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let folder_name = canonical.file_name()
+        let folder_name = canonical
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("general")
             .to_string();
         let dynamic_scope = folder_name;
 
         let search_query = query.unwrap_or("general context");
-        let search_res = state.backend.search(crate::contracts::SearchParams::from_positional(
-            search_query,
-            Some(&dynamic_scope),
-            false,
-            15,
-            0,
-            0.55,
-            None,
-            false,
-            true,
-            false,
-            Some(session_id),
-            true,
-            None,
-        )).await?;
+        let search_res = state
+            .backend
+            .search(crate::contracts::SearchParams::from_positional(
+                search_query,
+                Some(&dynamic_scope),
+                false,
+                15,
+                0,
+                0.55,
+                None,
+                false,
+                true,
+                false,
+                Some(session_id),
+                true,
+                None,
+            ))
+            .await?;
 
-        
         let mut high_confidence_memories_found = false;
         for res in search_res.results {
             if res.id.starts_with("episode:") && res.similarity >= 0.80 {
@@ -1339,7 +1732,9 @@ let mut insights_parts = Vec::new();
                 total_discovery += dt;
             }
             total_read += calc_tokens(&res.title, &res.content, None);
-            if let Some(formatted) = format_search_result_hybrid(surreal_backend, &res, state).await? {
+            if let Some(formatted) =
+                format_search_result_hybrid(surreal_backend, &res, state).await?
+            {
                 insights_parts.push(formatted);
             }
         }
@@ -1351,35 +1746,53 @@ let mut insights_parts = Vec::new();
         }
     }
 
-    
-    let active_node_opt = stm_map.get("active_hypothesis_node")
+    let active_node_opt = stm_map
+        .get("active_hypothesis_node")
         .or_else(|| stm_map.get("active_node"))
         .cloned();
-        
+
     let current_scope = std::env::var("MYTHRAX_WORKSPACE_ROOT").unwrap_or_else(|_| ".".to_string());
     let path_buf = std::path::Path::new(&current_scope);
-    let canonical = path_buf.canonicalize().unwrap_or_else(|_| path_buf.to_path_buf());
-    let folder_name = canonical.file_name().and_then(|n| n.to_str()).unwrap_or("general").to_string();
+    let canonical = path_buf
+        .canonicalize()
+        .unwrap_or_else(|_| path_buf.to_path_buf());
+    let folder_name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("general")
+        .to_string();
 
-    let p0_policy = collect_policy_context(surreal_backend, &folder_name, active_node_opt.as_ref()).await;
-    let mut p1_advisory = collect_advisory_context(surreal_backend, &folder_name, &loaded_belief_states, &insights_parts).await;
+    let p0_policy =
+        collect_policy_context(surreal_backend, &folder_name, active_node_opt.as_ref()).await;
+    let mut p1_advisory = collect_advisory_context(
+        surreal_backend,
+        &folder_name,
+        &loaded_belief_states,
+        &insights_parts,
+    )
+    .await;
 
     let count_tokens = |text: &str| -> usize {
         if let Some(ref embedder) = surreal_backend.embedder {
-            embedder.count_tokens(text).unwrap_or_else(|_| text.split_whitespace().count())
+            embedder
+                .count_tokens(text)
+                .unwrap_or_else(|_| text.split_whitespace().count())
         } else {
             text.split_whitespace().count()
         }
     };
 
-    let budget_env = std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "3000".to_string());
+    let budget_env =
+        std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "3000".to_string());
     let token_budget: usize = budget_env.parse().unwrap_or(3000);
-    
+
     // Broker/Handoff metadata is in `parts`
-    let preamble = parts.join("
-");
+    let preamble = parts.join(
+        "
+",
+    );
     let mut p2_stm = stm_str.clone();
-    
+
     let base_playbook = "### 💡 Mythrax Skill Playbook Reminder
 > [!IMPORTANT]
 > **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.
@@ -1409,7 +1822,7 @@ let mut insights_parts = Vec::new();
             }
         }
     }
-    
+
     let initial_context = {
         let mut base = String::new();
         base.push_str(base_playbook);
@@ -1425,7 +1838,6 @@ let mut insights_parts = Vec::new();
     };
 
     let context_tokens = count_tokens(&initial_context);
-
 
     let mut allowed_history = Vec::new();
     let mut history_tokens = 0;
@@ -1443,7 +1855,15 @@ let mut insights_parts = Vec::new();
             }
             if let Ok(turns) = resp.take::<Vec<ChatTurn>>(0) {
                 for turn in turns {
-                    let turn_str = format!("- **{}**: {}\n", if turn.role == "user" { "User" } else { "Assistant" }, turn.content);
+                    let turn_str = format!(
+                        "- **{}**: {}\n",
+                        if turn.role == "user" {
+                            "User"
+                        } else {
+                            "Assistant"
+                        },
+                        turn.content
+                    );
                     let turn_tokens = count_tokens(&turn_str);
                     if context_tokens + history_tokens + turn_tokens <= 2048 {
                         history_tokens += turn_tokens;
@@ -1476,7 +1896,11 @@ let mut insights_parts = Vec::new();
     if let Some(t) = immediate_task {
         selected_tasks.push(t.clone());
     } else {
-        for t in pending_tasks.iter().filter(|t| t.priority != "Immediate").take(3) {
+        for t in pending_tasks
+            .iter()
+            .filter(|t| t.priority != "Immediate")
+            .take(3)
+        {
             selected_tasks.push(t.clone());
         }
     }
@@ -1489,7 +1913,9 @@ let mut insights_parts = Vec::new();
                 "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
                 task.id, task.task_type, task.prompt, task.system_instruction, task.expected_format, task.priority
             ));
-            surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None).await?;
+            surreal_backend
+                .update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None)
+                .await?;
         }
         callback_injection.push('\n');
     }
@@ -1497,12 +1923,13 @@ let mut insights_parts = Vec::new();
     if !callback_injection.is_empty() {
         final_context = format!("{}{}", callback_injection, final_context);
     }
-    
+
     let mut distiller_warning = String::new();
     if caller != Some("distiller") {
         if let Ok(pending) = surreal_backend.get_pending_cognitive_tasks().await {
             if !pending.is_empty() {
-                let last_hb = stm_map.get("_distiller_heartbeat")
+                let last_hb = stm_map
+                    .get("_distiller_heartbeat")
                     .and_then(|s| s.parse::<i64>().ok())
                     .unwrap_or(0);
                 let now_unix = chrono::Utc::now().timestamp();
@@ -1524,12 +1951,16 @@ let mut insights_parts = Vec::new();
     if !distiller_warning.is_empty() {
         final_context = format!("{}{}", distiller_warning, final_context);
     }
-    
+
     if !stale_search_warning.is_empty() {
         final_context = format!("{}{}", stale_search_warning, final_context);
     }
     if !guardrail_blocks.is_empty() {
-        final_context = format!("### 🛡️ Guardrail Alerts\n{}\n{}", guardrail_blocks.join("\n"), final_context);
+        final_context = format!(
+            "### 🛡️ Guardrail Alerts\n{}\n{}",
+            guardrail_blocks.join("\n"),
+            final_context
+        );
     }
     if !blocking_directives.is_empty() {
         final_context = format!("{}\n{}", blocking_directives.join("\n"), final_context);
@@ -1558,7 +1989,7 @@ let mut insights_parts = Vec::new();
                 "total_discovery": total_discovery,
                 "savings": savings,
                 "savings_percent": savings_percent
-            })
+            }),
         );
     }
 
@@ -1566,13 +1997,22 @@ let mut insights_parts = Vec::new();
 }
 
 pub async fn handle_complete_code_task(state: &ApiState, args: Value) -> Result<Value> {
-    let prompt = args.get("prompt").and_then(|v| v.as_str()).context("Missing prompt")?;
+    let prompt = args
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .context("Missing prompt")?;
     let system_instruction = args.get("system_instruction").and_then(|v| v.as_str());
     let model_override = args.get("model").and_then(|v| v.as_str());
-    let mut enable_thinking = args.get("enable_thinking").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mut enable_thinking = args
+        .get("enable_thinking")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let lower_prompt = prompt.to_lowercase();
-    if prompt.trim_start().starts_with("/think") || lower_prompt.contains("enable thinking") || lower_prompt.contains("with thinking") {
+    if prompt.trim_start().starts_with("/think")
+        || lower_prompt.contains("enable thinking")
+        || lower_prompt.contains("with thinking")
+    {
         enable_thinking = true;
     }
 
@@ -1580,15 +2020,17 @@ pub async fn handle_complete_code_task(state: &ApiState, args: Value) -> Result<
     let model = model_override.unwrap_or(&config.model);
 
     let client = crate::llm::LLMClient::default();
-    let response = client.completion_explicit(
-        state.backend.as_ref(),
-        "local",
-        &config.cloud_provider,
-        model,
-        system_instruction,
-        prompt,
-        enable_thinking,
-    ).await?;
+    let response = client
+        .completion_explicit(
+            state.backend.as_ref(),
+            "local",
+            &config.cloud_provider,
+            model,
+            system_instruction,
+            prompt,
+            enable_thinking,
+        )
+        .await?;
 
     Ok(json!({
         "content": [
@@ -1601,32 +2043,39 @@ pub async fn handle_complete_code_task(state: &ApiState, args: Value) -> Result<
 }
 
 fn get_extension(path: &Path) -> Option<String> {
-    path.extension().and_then(|ext| ext.to_str()).map(|s| s.to_string())
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|s| s.to_string())
 }
 
 fn slice_content_by_lines(content: &str, start: Option<usize>, end: Option<usize>) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let start_idx = start.map(|s| s.saturating_sub(1)).unwrap_or(0);
     let end_idx = end.map(|e| e.min(lines.len())).unwrap_or(lines.len());
-    
+
     if start_idx >= lines.len() || start_idx > end_idx {
         return String::new();
     }
-    
+
     lines[start_idx..end_idx].join("\n")
 }
 
 async fn resolve_placeholders(backend: &SurrealBackend, text: &str) -> String {
     let mut resolved = text.to_string();
     let prefix = "[Paged Symbol: Reference ";
-    
+
     let mut captures = Vec::new();
     let mut start = 0;
     while let Some(idx) = text[start..].find(prefix) {
         let absolute_start = start + idx + prefix.len();
         if let Some(end_idx) = text[absolute_start..].find(']') {
             let page_id = &text[absolute_start..absolute_start + end_idx];
-            if page_id.starts_with("page_") && page_id.chars().skip(5).all(|c| c.is_alphanumeric() || c == '_') {
+            if page_id.starts_with("page_")
+                && page_id
+                    .chars()
+                    .skip(5)
+                    .all(|c| c.is_alphanumeric() || c == '_')
+            {
                 captures.push(page_id.to_string());
             }
             start = absolute_start + end_idx + 1;
@@ -1634,20 +2083,25 @@ async fn resolve_placeholders(backend: &SurrealBackend, text: &str) -> String {
             break;
         }
     }
-    
+
     captures.sort();
     captures.dedup();
-    
+
     for page_id in captures {
         let sql = "SELECT VALUE content FROM type::record('symbol_archive', $page_id);";
-        if let Ok(mut response) = backend.db.query(sql).bind(("page_id", page_id.clone())).await {
+        if let Ok(mut response) = backend
+            .db
+            .query(sql)
+            .bind(("page_id", page_id.clone()))
+            .await
+        {
             if let Ok(Some(symbol_content)) = response.take::<Option<String>>(0) {
                 let placeholder = format!("[Paged Symbol: Reference {}]", page_id);
                 resolved = resolved.replace(&placeholder, &symbol_content);
             }
         }
     }
-    
+
     resolved
 }
 
@@ -1670,18 +2124,37 @@ async fn format_search_result_hybrid(
 ) -> Result<Option<String>> {
     if res.similarity >= 0.80 {
         if res.id.starts_with("wisdom:") {
-            Ok(Some(format!("### 💡 Wisdom Rule: {}\n{}\n", res.title, res.content)))
+            Ok(Some(format!(
+                "### 💡 Wisdom Rule: {}\n{}\n",
+                res.title, res.content
+            )))
         } else if res.id.starts_with("wiki_node:") {
-            Ok(Some(format!("### 📚 Distilled Insight: {}\n{}\n", res.title, res.content)))
+            Ok(Some(format!(
+                "### 📚 Distilled Insight: {}\n{}\n",
+                res.title, res.content
+            )))
         } else if res.id.starts_with("episode:") {
-            let rendered = super::format_episode_or_parent(&*state.backend, &backend.db, &res.id, &res.title, &res.content, None).await?;
+            let rendered = super::format_episode_or_parent(
+                &*state.backend,
+                &backend.db,
+                &res.id,
+                &res.title,
+                &res.content,
+                None,
+            )
+            .await?;
             Ok(Some(rendered))
         } else {
-            Ok(Some(format!("### 📝 Record: {}\n{}\n", res.title, res.content)))
+            Ok(Some(format!(
+                "### 📝 Record: {}\n{}\n",
+                res.title, res.content
+            )))
         }
     } else if res.similarity >= 0.60 {
         let scope = get_node_scope(backend, &res.id).await;
-        let summary = res.content.split(&['.', '!', '?'][..])
+        let summary = res
+            .content
+            .split(&['.', '!', '?'][..])
             .next()
             .unwrap_or("")
             .trim()
@@ -1695,13 +2168,20 @@ async fn format_search_result_hybrid(
     }
 }
 
-
 /// Collects non-negotiable policy context from permanent wisdom, pruned hypotheses, conflict nodes, and Arbor HTR constraints.
-pub async fn collect_policy_context(surreal_backend: &SurrealBackend, current_scope: &str, active_node_opt: Option<&String>) -> String {
+pub async fn collect_policy_context(
+    surreal_backend: &SurrealBackend,
+    current_scope: &str,
+    active_node_opt: Option<&String>,
+) -> String {
     let mut policy_parts = Vec::new();
 
     // 1. Permanent Wisdom
-    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM wisdom WHERE tier = 'permanent';").await {
+    if let Ok(mut resp) = surreal_backend
+        .db
+        .query("SELECT * FROM wisdom WHERE tier = 'permanent';")
+        .await
+    {
         if let Ok(rules) = resp.take::<Vec<crate::contracts::WisdomRule>>(0) {
             for r in rules {
                 policy_parts.push(format!(
@@ -1717,7 +2197,12 @@ pub async fn collect_policy_context(surreal_backend: &SurrealBackend, current_sc
 
     // 2. Pruned Hypotheses
     let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
-    if let Ok(mut resp) = surreal_backend.db.query(sql_pruned).bind(("scope", current_scope)).await {
+    if let Ok(mut resp) = surreal_backend
+        .db
+        .query(sql_pruned)
+        .bind(("scope", current_scope))
+        .await
+    {
         if let Ok(rules) = resp.take::<Vec<serde_json::Value>>(0) {
             for val in rules {
                 if let (Some(pat), Some(avoid), Some(remedy)) = (
@@ -1758,14 +2243,19 @@ pub async fn collect_policy_context(surreal_backend: &SurrealBackend, current_sc
 
     // 4. Arbor HTR Negative Constraints
     if let Some(active_node_id) = active_node_opt {
-        if let Ok(mut hyp_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;").bind(("node_id", active_node_id.as_str())).await {
+        if let Ok(mut hyp_res) = surreal_backend
+            .db
+            .query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;")
+            .bind(("node_id", active_node_id.as_str()))
+            .await
+        {
             if let Ok(hyp_nodes) = hyp_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
                 if let Some(hyp_node) = hyp_nodes.first() {
                     if let Some(ref parent_id) = hyp_node.parent_id {
                         if let Ok(mut siblings_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
                             .bind(("parent_id", parent_id.as_str()))
                             .bind(("node_id", active_node_id.as_str()))
-                            .await 
+                            .await
                         {
                             if let Ok(siblings) = siblings_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
                                 for sib in siblings {
@@ -1789,12 +2279,20 @@ pub async fn collect_policy_context(surreal_backend: &SurrealBackend, current_sc
     if policy_parts.is_empty() {
         String::new()
     } else {
-        format!("### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n", policy_parts.join("\n"))
+        format!(
+            "### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n",
+            policy_parts.join("\n")
+        )
     }
 }
 
 /// Collects advisory context from semantic insights, experience episodes, and belief state.
-pub async fn collect_advisory_context(surreal_backend: &SurrealBackend, current_scope: &str, belief_states: &[crate::contracts::BeliefState], insights_parts: &[String]) -> String {
+pub async fn collect_advisory_context(
+    surreal_backend: &SurrealBackend,
+    current_scope: &str,
+    belief_states: &[crate::contracts::BeliefState],
+    insights_parts: &[String],
+) -> String {
     let mut advisory_parts = Vec::new();
 
     // 1. Belief State
@@ -1806,7 +2304,11 @@ pub async fn collect_advisory_context(surreal_backend: &SurrealBackend, current_
 > - **Tasks Todo**: {:?}
 > - **Hypotheses Tested**: {:?}
 > - **Uncertainty Areas**: {:?}",
-            bs.session_id, bs.confidence_score, bs.tasks_todo, bs.hypotheses_tested, bs.uncertainty_areas
+            bs.session_id,
+            bs.confidence_score,
+            bs.tasks_todo,
+            bs.hypotheses_tested,
+            bs.uncertainty_areas
         ));
     }
 
@@ -1831,13 +2333,19 @@ pub async fn collect_advisory_context(surreal_backend: &SurrealBackend, current_
 
     // 3. Retrieved Insights (from semantic search or handoff hydration)
     for insight in insights_parts {
-        advisory_parts.push(format!("> [!TIP]
-> {}", insight.replace("\n", "\n> ")));
+        advisory_parts.push(format!(
+            "> [!TIP]
+> {}",
+            insight.replace("\n", "\n> ")
+        ));
     }
 
     if advisory_parts.is_empty() {
         String::new()
     } else {
-        format!("### 💡 Advisory (Suggested Approaches)\n{}\n\n", advisory_parts.join("\n"))
+        format!(
+            "### 💡 Advisory (Suggested Approaches)\n{}\n\n",
+            advisory_parts.join("\n")
+        )
     }
 }

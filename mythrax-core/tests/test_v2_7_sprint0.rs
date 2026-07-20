@@ -1,16 +1,16 @@
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
+use axum::{Router, response::IntoResponse, routing::post};
+use mythrax_core::api::{ApiState, create_router};
+use mythrax_core::cognitive::meta_skill::MetaSkillSynthesizer;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::mcp_routes::truncate_summary;
 use mythrax_core::secret_filter::SecretFilter;
-use std::sync::Arc;
-use tempfile::tempdir;
-use axum::{routing::post, Router, response::IntoResponse};
-use std::fs;
-use std::env;
-use mythrax_core::api::{create_router, ApiState};
 use mythrax_core::store::MarkdownStore;
 use mythrax_core::vault::watcher::WatchIgnoreList;
-use mythrax_core::cognitive::meta_skill::MetaSkillSynthesizer;
+use std::env;
+use std::fs;
+use std::sync::Arc;
+use tempfile::tempdir;
 
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -20,10 +20,10 @@ fn test_utf8_boundary_truncation() {
     // Let's create a string with 205 Chinese characters, so slicing at 200 bytes would fall in the middle of a character.
     let chinese_char = "中";
     let input = chinese_char.repeat(205);
-    
+
     // Call truncate_summary
     let truncated = truncate_summary(&input);
-    
+
     // It should not panic, and since it is > 200 chars, it should be truncated to exactly 200 chars plus "..."
     // Let's count characters in the truncated string
     let char_count = truncated.chars().count();
@@ -68,7 +68,11 @@ async fn test_embed_batch_error_propagation() -> Result<()> {
         llm: Some(mythrax_core::llm::LLMClient::new_mock()),
     };
     let backend = SurrealBackend::new("mem://", config).await?;
-    backend.db.use_ns("mythrax").use_db("test_embed_error").await?;
+    backend
+        .db
+        .use_ns("mythrax")
+        .use_db("test_embed_error")
+        .await?;
     backend.init().await?;
 
     let result = backend.embed_batch(&["test".to_string()]).await;
@@ -102,16 +106,24 @@ fn test_retry_jitter_distribution() {
         for i in 0..200 {
             let ns = 1718000000000000000 + i * 987654321;
             let jitter = mythrax_core::llm::calculate_lcg_jitter(attempt, ns);
-            assert!(jitter >= 0.0 && jitter < 100.0, "Jitter out of range: {}", jitter);
+            assert!(
+                jitter >= 0.0 && jitter < 100.0,
+                "Jitter out of range: {}",
+                jitter
+            );
             jitters.push(jitter);
         }
     }
-    
+
     let mut unique_values: std::collections::HashSet<i32> = std::collections::HashSet::new();
     for j in &jitters {
         unique_values.insert(*j as i32);
     }
-    assert!(unique_values.len() >= 70, "Entropy too low: got only {} unique values out of 1000", unique_values.len());
+    assert!(
+        unique_values.len() >= 70,
+        "Entropy too low: got only {} unique values out of 1000",
+        unique_values.len()
+    );
 }
 
 #[tokio::test]
@@ -153,7 +165,7 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await;
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    
+
     let mock_server_handle = if let Ok(l) = listener {
         let handle = tokio::spawn(async move {
             let _ = axum::serve(l, mock_app)
@@ -164,7 +176,9 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
         });
         Some((handle, shutdown_tx))
     } else {
-        println!("WARNING: Could not bind mock server to 127.0.0.1:8080. Skipping local mock check.");
+        println!(
+            "WARNING: Could not bind mock server to 127.0.0.1:8080. Skipping local mock check."
+        );
         None
     };
 
@@ -188,30 +202,33 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
 
     if mock_server_handle.is_some() {
         use tower::ServiceExt;
-        
+
         let request_body = serde_json::json!({
             "model": "test-model",
             "messages": [{"role": "user", "content": "hello"}],
             "stream": false
         });
 
-        let response = app.clone()
+        let response = app
+            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
                     .uri("/v1/chat/completions")
                     .header("X-Mythrax-Token", "test-token")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_vec(&request_body)?))?
+                    .body(axum::body::Body::from(serde_json::to_vec(&request_body)?))?,
             )
             .await?;
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        
+
         let body_bytes = axum::body::to_bytes(response.into_body(), 10000).await?;
         let res_val: serde_json::Value = serde_json::from_slice(&body_bytes)?;
-        let content = res_val["choices"][0]["message"]["content"].as_str().unwrap();
-        
+        let content = res_val["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap();
+
         assert_eq!(content, "Hello world from mock LLM!");
         assert!(!content.contains("Execution Check:"));
 
@@ -221,22 +238,25 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
             "stream": true
         });
 
-        let response_stream = app.clone()
+        let response_stream = app
+            .clone()
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
                     .uri("/v1/chat/completions")
                     .header("X-Mythrax-Token", "test-token")
                     .header("Content-Type", "application/json")
-                    .body(axum::body::Body::from(serde_json::to_vec(&request_body_stream)?))?
+                    .body(axum::body::Body::from(serde_json::to_vec(
+                        &request_body_stream,
+                    )?))?,
             )
             .await?;
 
         assert_eq!(response_stream.status(), axum::http::StatusCode::OK);
-        
+
         let body_bytes_stream = axum::body::to_bytes(response_stream.into_body(), 10000).await?;
         let stream_str = String::from_utf8(body_bytes_stream.to_vec())?;
-        
+
         assert!(stream_str.contains("Hello stream"));
         assert!(!stream_str.contains("Execution Check:"));
     }
@@ -265,7 +285,9 @@ async fn test_meta_skill_malformed_llm_json() -> Result<()> {
     backend.init().await?;
 
     if backend.embed("test").await.is_err() {
-        println!("Skipping test_meta_skill_malformed_llm_json: model files not present in ~/.mythrax/models/");
+        println!(
+            "Skipping test_meta_skill_malformed_llm_json: model files not present in ~/.mythrax/models/"
+        );
         unsafe {
             env::remove_var("MYTHRAX_MOCK_MALFORMED_MERGE");
         }
@@ -273,7 +295,9 @@ async fn test_meta_skill_malformed_llm_json() -> Result<()> {
     }
 
     let original_home = env::var("HOME").ok();
-    unsafe { env::set_var("HOME", tmp.path()); }
+    unsafe {
+        env::set_var("HOME", tmp.path());
+    }
 
     let store = MarkdownStore::new(&vault_root)?;
 
@@ -293,12 +317,15 @@ async fn test_meta_skill_malformed_llm_json() -> Result<()> {
     let suggestions = synthesizer.detect_skill_merges(&backend, &store).await?;
 
     assert!(!suggestions.is_empty());
-    assert_eq!(suggestions[0]["suggested_target_name"], serde_json::Value::Null);
+    assert_eq!(
+        suggestions[0]["suggested_target_name"],
+        serde_json::Value::Null
+    );
 
     let suggestions_file = vault_root.join("wiki/skill_merge_suggestions.md");
     assert!(suggestions_file.exists());
     let suggestions_content = fs::read_to_string(suggestions_file)?;
-    
+
     assert!(suggestions_content.contains("Unknown Target"));
     assert!(suggestions_content.contains("No reason provided."));
 
@@ -320,14 +347,22 @@ fn test_no_hardcoded_user_paths() {
     if !backend_path.exists() {
         backend_path = std::path::PathBuf::from("mythrax-core/src/db/backend.rs");
     }
-    
+
     let mut watcher_path = std::path::PathBuf::from("src/vault/watcher.rs");
     if !watcher_path.exists() {
         watcher_path = std::path::PathBuf::from("mythrax-core/src/vault/watcher.rs");
     }
 
-    assert!(backend_path.exists(), "backend.rs does not exist at {:?}", backend_path);
-    assert!(watcher_path.exists(), "watcher.rs does not exist at {:?}", watcher_path);
+    assert!(
+        backend_path.exists(),
+        "backend.rs does not exist at {:?}",
+        backend_path
+    );
+    assert!(
+        watcher_path.exists(),
+        "watcher.rs does not exist at {:?}",
+        watcher_path
+    );
 
     let backend_content = std::fs::read_to_string(&backend_path).unwrap();
     let watcher_content = std::fs::read_to_string(&watcher_path).unwrap();

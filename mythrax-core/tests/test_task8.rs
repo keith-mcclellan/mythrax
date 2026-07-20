@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
+use mythrax_core::llm::LLMClient;
 use mythrax_core::store::MarkdownStore;
 use mythrax_core::vault::watcher::WatchIgnoreList;
-use mythrax_core::llm::LLMClient;
 
 #[tokio::test]
 async fn test_checkpoint_resume() -> anyhow::Result<()> {
@@ -39,13 +39,14 @@ async fn test_checkpoint_resume() -> anyhow::Result<()> {
         backend.as_ref(),
         &store,
         &ignore,
-    ).await?;
+    )
+    .await?;
     assert_eq!(count1, 4);
 
     let checkpoint_dir = store.vault_root.join(".mythrax");
     std::fs::create_dir_all(&checkpoint_dir)?;
     let checkpoint_path = checkpoint_dir.join("bootstrap_checkpoint.json");
-    
+
     let checkpoint_json = r#"{"session_id": "sess_checkpoint_test", "last_processed_index": 1}"#;
     std::fs::write(&checkpoint_path, checkpoint_json)?;
 
@@ -57,7 +58,8 @@ async fn test_checkpoint_resume() -> anyhow::Result<()> {
         backend.as_ref(),
         &store,
         &ignore,
-    ).await?;
+    )
+    .await?;
     assert_eq!(count2, 2);
 
     Ok(())
@@ -68,7 +70,9 @@ async fn test_quota_exhaustion_hibernation() -> anyhow::Result<()> {
     let backend = Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
 
-    let profile = mythrax_core::contracts::TaskProfile::new(mythrax_core::contracts::TaskArchetype::Reasoning);
+    let profile = mythrax_core::contracts::TaskProfile::new(
+        mythrax_core::contracts::TaskArchetype::Reasoning,
+    );
 
     unsafe {
         std::env::set_var("GEMINI_API_KEY", "dummy_key");
@@ -82,16 +86,22 @@ async fn test_quota_exhaustion_hibernation() -> anyhow::Result<()> {
 
     let client = LLMClient::default();
 
-    let res1 = client.routed_completion(backend.as_ref(), &profile, None, "test").await;
+    let res1 = client
+        .routed_completion(backend.as_ref(), &profile, None, "test")
+        .await;
     assert!(res1.is_err());
     assert!(!mythrax_core::llm::is_hibernating());
 
-    let res2 = client.routed_completion(backend.as_ref(), &profile, None, "test").await;
+    let res2 = client
+        .routed_completion(backend.as_ref(), &profile, None, "test")
+        .await;
     assert!(res2.is_err());
     assert!(!mythrax_core::llm::is_hibernating());
 
     let start = std::time::Instant::now();
-    let res3 = client.routed_completion(backend.as_ref(), &profile, None, "test").await;
+    let res3 = client
+        .routed_completion(backend.as_ref(), &profile, None, "test")
+        .await;
     assert!(res3.is_err());
     assert!(start.elapsed() >= std::time::Duration::from_secs(1));
 

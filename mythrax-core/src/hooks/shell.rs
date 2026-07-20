@@ -1,6 +1,6 @@
+use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use serde::Deserialize;
 
 pub const SAVE_INTERVAL: usize = 15;
 
@@ -81,9 +81,15 @@ pub fn count_human_messages(path: &str) -> usize {
     for line in reader.lines() {
         if let Ok(line_str) = line {
             if let Ok(msg) = serde_json::from_str::<SimpleMessage>(&line_str) {
-                let role = msg.role.clone().or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
-                let content = msg.content.clone().or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
-                
+                let role = msg
+                    .role
+                    .clone()
+                    .or_else(|| msg.message.as_ref().and_then(|m| m.role.clone()));
+                let content = msg
+                    .content
+                    .clone()
+                    .or_else(|| msg.message.as_ref().and_then(|m| m.content.clone()));
+
                 if let (Some(r), Some(c)) = (role, content) {
                     let text = extract_text(&c);
                     if r == "user" && !text.contains("<command-message>") {

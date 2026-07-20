@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use std::sync::Arc;
 
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

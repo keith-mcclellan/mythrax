@@ -1,10 +1,10 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::{WikiNode, Episode};
-use mythrax_core::store::MarkdownStore;
 use mythrax_core::cognitive::synthesis::{backpropagate_directions, promote_insight_to_direction};
+use mythrax_core::contracts::{Episode, WikiNode};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use mythrax_core::store::MarkdownStore;
+use std::fs;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_backpropagation() -> Result<()> {
@@ -37,16 +37,25 @@ async fn test_backpropagation() -> Result<()> {
     };
     let child_id = backend.save_wiki_node(&child_insight).await?;
 
-    let rel = backend.relate_nodes(&dir_id, &child_id, None, None, None).await?;
+    let rel = backend
+        .relate_nodes(&dir_id, &child_id, None, None, None)
+        .await?;
     println!("Related edge: {:?}", rel);
 
     backpropagate_directions(&backend, &store).await?;
 
     let nodes = backend.get_all_wiki_nodes().await?;
-    let updated_dir = nodes.iter().find(|n| n.id.as_deref() == Some(&dir_id)).unwrap();
+    let updated_dir = nodes
+        .iter()
+        .find(|n| n.id.as_deref() == Some(&dir_id))
+        .unwrap();
     println!("Updated dir content: {}", updated_dir.content);
-    
-    assert!(updated_dir.content.contains("Child Insight") || updated_dir.content.contains("architectural compaction"), "Content should be synthesized");
+
+    assert!(
+        updated_dir.content.contains("Child Insight")
+            || updated_dir.content.contains("architectural compaction"),
+        "Content should be synthesized"
+    );
 
     Ok(())
 }
@@ -71,8 +80,17 @@ async fn test_direction_promotion() -> Result<()> {
         embedding: None,
         ..Default::default()
     };
-    let initial_id = backend.save_wiki_node(&node).await.expect("Failed to save initial node");
-    let node_with_id = backend.get_all_wiki_nodes().await.unwrap().into_iter().find(|n| n.id.as_deref() == Some(&initial_id)).unwrap();
+    let initial_id = backend
+        .save_wiki_node(&node)
+        .await
+        .expect("Failed to save initial node");
+    let node_with_id = backend
+        .get_all_wiki_nodes()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|n| n.id.as_deref() == Some(&initial_id))
+        .unwrap();
 
     let mut episodes = Vec::new();
     for i in 0..16 {
@@ -85,10 +103,15 @@ async fn test_direction_promotion() -> Result<()> {
         });
     }
 
-    promote_insight_to_direction(&backend, &store, &node_with_id, &episodes).await.expect("Promotion failed");
-    
+    promote_insight_to_direction(&backend, &store, &node_with_id, &episodes)
+        .await
+        .expect("Promotion failed");
+
     let nodes = backend.get_all_wiki_nodes().await.unwrap();
-    let promoted = nodes.iter().find(|n| n.name == "Completely Unique Name").unwrap();
+    let promoted = nodes
+        .iter()
+        .find(|n| n.name == "Completely Unique Name")
+        .unwrap();
     assert_eq!(promoted.node_type.as_deref(), Some("direction"));
 
     Ok(())

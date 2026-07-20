@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use tempfile::tempdir;
-use serde_json::json;
-use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use mythrax_core::api::ApiState;
+use mythrax_core::contracts::{Tier, WisdomRule};
+use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
+use mythrax_core::mcp_routes::manage_handlers::handle_pre_invocation_hook;
 use mythrax_core::store::MarkdownStore;
 use mythrax_core::vault::watcher::WatchIgnoreList;
-use mythrax_core::contracts::{WisdomRule, Tier};
-use mythrax_core::mcp_routes::manage_handlers::handle_pre_invocation_hook;
+use serde_json::json;
+use std::sync::Arc;
+use tempfile::tempdir;
 
 fn setup_env_vars() {
     unsafe {
@@ -18,7 +18,15 @@ fn setup_env_vars() {
 
 async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiState> {
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
+    let backend = SurrealBackend::new(
+        &format!("surrealkv://{}", db_path.to_string_lossy()),
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -39,7 +47,11 @@ async fn test_policy_section_rendered_first() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     let rule = WisdomRule {
         id: Some("wisdom:policy1".to_string()),
@@ -83,7 +95,10 @@ async fn test_policy_section_rendered_first() -> anyhow::Result<()> {
 
     let policy_idx = content.find("UNIQUE_POLICY_XYZ").unwrap();
     let advisory_idx = content.find("UNIQUE_ADVISORY_ABC").unwrap();
-    assert!(policy_idx < advisory_idx, "Policy must be rendered before Advisory");
+    assert!(
+        policy_idx < advisory_idx,
+        "Policy must be rendered before Advisory"
+    );
     Ok(())
 }
 
@@ -135,7 +150,11 @@ async fn test_advisory_uses_tip_format() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     let sql = "INSERT INTO episode { title: 'ADVISORY_FORMAT_TEST', content: 'Advisory content', scope: 'general', node_type: 'experience' };";
     surreal_backend.db.query(sql).await?;
@@ -160,10 +179,14 @@ async fn test_policy_never_truncated() -> anyhow::Result<()> {
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
         std::env::set_var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET", "500");
     }
-    
+
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     for i in 1..=3 {
         let rule = WisdomRule {
@@ -192,7 +215,11 @@ async fn test_policy_never_truncated() -> anyhow::Result<()> {
     }
 
     for i in 1..=10 {
-        let sql = format!("INSERT INTO episode {{ title: 'ADVISORY_TRUNC_TEST_{}', content: '{}', scope: 'general', node_type: 'experience' }};", i, "Some long content to trigger truncation. ".repeat(50));
+        let sql = format!(
+            "INSERT INTO episode {{ title: 'ADVISORY_TRUNC_TEST_{}', content: '{}', scope: 'general', node_type: 'experience' }};",
+            i,
+            "Some long content to trigger truncation. ".repeat(50)
+        );
         surreal_backend.db.query(&sql).await?;
     }
 
@@ -207,9 +234,13 @@ async fn test_policy_never_truncated() -> anyhow::Result<()> {
     assert!(content.contains("POLICY_TRUNC_TEST_1"));
     assert!(content.contains("POLICY_TRUNC_TEST_2"));
     assert!(content.contains("POLICY_TRUNC_TEST_3"));
-    
-    let has_all_advisory = (1..=10).all(|i| content.contains(&format!("ADVISORY_TRUNC_TEST_{}", i)));
-    assert!(!has_all_advisory, "Advisory section must be truncated under token pressure");
-    
+
+    let has_all_advisory =
+        (1..=10).all(|i| content.contains(&format!("ADVISORY_TRUNC_TEST_{}", i)));
+    assert!(
+        !has_all_advisory,
+        "Advisory section must be truncated under token pressure"
+    );
+
     Ok(())
 }

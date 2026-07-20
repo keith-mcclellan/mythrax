@@ -41,8 +41,22 @@ async fn test_cross_scope_graduation_similarity() {
         ..Default::default()
     };
 
-    backend.save_wiki_node(&node1).await.map_err(|e| { println!("Err saving node1: {:?}", e); e }).unwrap();
-    backend.save_wiki_node(&node2).await.map_err(|e| { println!("Err saving node2: {:?}", e); e }).unwrap();
+    backend
+        .save_wiki_node(&node1)
+        .await
+        .map_err(|e| {
+            println!("Err saving node1: {:?}", e);
+            e
+        })
+        .unwrap();
+    backend
+        .save_wiki_node(&node2)
+        .await
+        .map_err(|e| {
+            println!("Err saving node2: {:?}", e);
+            e
+        })
+        .unwrap();
 
     // No conflict nodes
     graduate_wisdom(&backend, &store).await.unwrap();
@@ -50,7 +64,10 @@ async fn test_cross_scope_graduation_similarity() {
     let rules = backend.get_all_wisdom_rules().await.unwrap();
     assert_eq!(rules.len(), 1, "Should graduate one wisdom rule");
     assert_eq!(rules[0].tier, Tier::Wisdom);
-    assert!(rules[0].rule_type == Some("system_constraint".into()) || rules[0].rule_type == Some("procedural_heuristic".into()));
+    assert!(
+        rules[0].rule_type == Some("system_constraint".into())
+            || rules[0].rule_type == Some("procedural_heuristic".into())
+    );
 }
 
 #[tokio::test]
@@ -99,15 +116,43 @@ async fn test_graduation_blocked_by_conflict() {
         ..Default::default()
     };
 
-    backend.save_wiki_node(&node1).await.map_err(|e| { println!("Err saving node1: {:?}", e); e }).unwrap();
-    let id_2 = backend.save_wiki_node(&node2).await.map_err(|e| { println!("Err saving node2: {:?}", e); e }).unwrap();
-    let id_conflict = backend.save_wiki_node(&conflict_node).await.map_err(|e| { println!("Err saving conflict: {:?}", e); e }).unwrap();
+    backend
+        .save_wiki_node(&node1)
+        .await
+        .map_err(|e| {
+            println!("Err saving node1: {:?}", e);
+            e
+        })
+        .unwrap();
+    let id_2 = backend
+        .save_wiki_node(&node2)
+        .await
+        .map_err(|e| {
+            println!("Err saving node2: {:?}", e);
+            e
+        })
+        .unwrap();
+    let id_conflict = backend
+        .save_wiki_node(&conflict_node)
+        .await
+        .map_err(|e| {
+            println!("Err saving conflict: {:?}", e);
+            e
+        })
+        .unwrap();
 
     // Relate conflict node to node2
-    backend.relate_nodes(&id_2, &id_conflict, None, None, None).await.unwrap();
+    backend
+        .relate_nodes(&id_2, &id_conflict, None, None, None)
+        .await
+        .unwrap();
 
     graduate_wisdom(&backend, &store).await.unwrap();
 
     let rules = backend.get_all_wisdom_rules().await.unwrap();
-    assert_eq!(rules.len(), 0, "Graduation should be blocked by conflict node");
+    assert_eq!(
+        rules.len(),
+        0,
+        "Graduation should be blocked by conflict node"
+    );
 }

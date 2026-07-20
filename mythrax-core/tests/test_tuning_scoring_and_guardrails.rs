@@ -45,11 +45,7 @@ fn compute_ndcg_at_k(retrieved: &[String], gold: &[String], k: usize) -> f32 {
         idcg += 1.0 / ((i + 2) as f64).log2();
     }
 
-    if idcg > 0.0 {
-        (dcg / idcg) as f32
-    } else {
-        0.0
-    }
+    if idcg > 0.0 { (dcg / idcg) as f32 } else { 0.0 }
 }
 
 fn compute_mrr_penalty_recall3(retrieved: &[String], gold: &[String]) -> (f32, f32, f32) {
@@ -90,8 +86,12 @@ struct FineScoreMetrics {
     pub avg_penalty: f32,
 }
 
-fn compute_fine_score_for_category(records: &[DummyRecord], category: &str) -> Option<FineScoreMetrics> {
-    let cat_records: Vec<&DummyRecord> = records.iter().filter(|r| r.category == category).collect();
+fn compute_fine_score_for_category(
+    records: &[DummyRecord],
+    category: &str,
+) -> Option<FineScoreMetrics> {
+    let cat_records: Vec<&DummyRecord> =
+        records.iter().filter(|r| r.category == category).collect();
     if cat_records.is_empty() {
         return None;
     }
@@ -103,7 +103,8 @@ fn compute_fine_score_for_category(records: &[DummyRecord], category: &str) -> O
 
     for r in &cat_records {
         sum_ndcg3 += compute_ndcg_at_k(&r.retrieved_corpus_ids, &r.gold_corpus_ids, 3);
-        let (mrr, penalty, recall3) = compute_mrr_penalty_recall3(&r.retrieved_corpus_ids, &r.gold_corpus_ids);
+        let (mrr, penalty, recall3) =
+            compute_mrr_penalty_recall3(&r.retrieved_corpus_ids, &r.gold_corpus_ids);
         sum_mrr += mrr;
         sum_penalty += penalty;
         sum_recall3 += recall3;
@@ -115,7 +116,8 @@ fn compute_fine_score_for_category(records: &[DummyRecord], category: &str) -> O
     let avg_recall_at3 = sum_recall3 / count;
     let avg_penalty = sum_penalty / count;
 
-    let fine_score = 0.50 * avg_ndcg_at3 + 0.30 * avg_mrr + 0.20 * avg_recall_at3 - 0.10 * avg_penalty;
+    let fine_score =
+        0.50 * avg_ndcg_at3 + 0.30 * avg_mrr + 0.20 * avg_recall_at3 - 0.10 * avg_penalty;
 
     Some(FineScoreMetrics {
         fine_score,
@@ -166,7 +168,11 @@ mod tests {
         // avg_r_any = (1.0 + 1.0) / 2 = 1.00
         // Expected score = 0.50 * 0.70 + 0.40 * 0.50 + 0.10 * 1.00 = 0.35 + 0.20 + 0.10 = 0.65
         let score = compute_coarse_score(&records);
-        assert!((score - 0.65).abs() < 1e-5, "Expected coarse score 0.65, got {}", score);
+        assert!(
+            (score - 0.65).abs() < 1e-5,
+            "Expected coarse score 0.65, got {}",
+            score
+        );
     }
 
     #[test]
@@ -233,7 +239,11 @@ mod tests {
         assert_eq!(metrics.avg_mrr, 0.60);
         assert_eq!(metrics.avg_recall_at3, 0.50);
         assert_eq!(metrics.avg_penalty, 0.50);
-        assert!((metrics.fine_score - 0.48).abs() < 1e-5, "Expected 0.48, got {}", metrics.fine_score);
+        assert!(
+            (metrics.fine_score - 0.48).abs() < 1e-5,
+            "Expected 0.48, got {}",
+            metrics.fine_score
+        );
     }
 
     #[test]

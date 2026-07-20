@@ -1,15 +1,23 @@
+use crate::contracts::{
+    Episode, EpisodeSave, ForgedSectionBatch, GetMemoryNodesResponse, HandoffSave,
+    LlmConfigRequest, LlmConfigResponse, SearchResponse, SearchResult, Tier, WikiNode, WisdomRule,
+    WisdomSearchResponse,
+};
+pub use crate::db::query_classification::{
+    QueryCategory, classify_query, expand_synonyms, get_decay_factor, normalize_spelling,
+    split_temporal_query,
+};
+use anyhow::{Context, Result};
 use axum::async_trait;
-use surrealdb_types::SurrealValue;
-use crate::contracts::{EpisodeSave, SearchResult, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode, SearchResponse, WisdomSearchResponse, GetMemoryNodesResponse, ForgedSectionBatch, Tier};
-use anyhow::{Result, Context};
-use surrealdb::engine::local::{Db, Mem, SurrealKv};
-use surrealdb::Surreal;
 use std::sync::Arc;
+use surrealdb::Surreal;
+use surrealdb::engine::local::{Db, Mem, SurrealKv};
+use surrealdb_types::SurrealValue;
 use uuid::Uuid;
-pub use crate::db::query_classification::{QueryCategory, get_decay_factor, split_temporal_query, normalize_spelling, expand_synonyms, classify_query};
 
 pub static GLOBAL_BACKEND: std::sync::OnceLock<Arc<SurrealBackend>> = std::sync::OnceLock::new();
-pub static GLOBAL_RERANKER: tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>> = tokio::sync::Mutex::const_new(None);
+pub static GLOBAL_RERANKER: tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>> =
+    tokio::sync::Mutex::const_new(None);
 
 pub fn unescape_id_part(part: &str) -> String {
     let mut s = part.trim();
@@ -25,7 +33,7 @@ pub fn unescape_id_part(part: &str) -> String {
     while s.ends_with('`') {
         s = &s[..s.len() - '`'.len_utf8()];
     }
-    
+
     let mut result = String::new();
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -78,11 +86,15 @@ pub trait StorageBackend: Send + Sync {
     async fn init(&self) -> Result<()>;
     async fn save_episode(&self, episode: &EpisodeSave) -> Result<String>;
     async fn save_wisdom_rule(&self, rule: &WisdomRule) -> Result<String>;
-    async fn search(
+    async fn search(&self, params: crate::contracts::SearchParams) -> Result<SearchResponse>;
+    async fn get_wisdom(
         &self,
-        params: crate::contracts::SearchParams,
-    ) -> Result<SearchResponse>;
-    async fn get_wisdom(&self, query: &str, tier: Option<Tier>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse>;
+        query: &str,
+        tier: Option<Tier>,
+        limit: usize,
+        offset: usize,
+        threshold: f32,
+    ) -> Result<WisdomSearchResponse>;
     async fn record_feedback(&self, id: &str, success: bool) -> Result<()>;
 
     async fn get_llm_config(&self) -> Result<LlmConfigResponse>;
@@ -108,14 +120,27 @@ pub trait StorageBackend: Send + Sync {
         confidence: Option<f32>,
     ) -> Result<()>;
     async fn relate_followed_by(&self, from_id: &str, to_id: &str) -> Result<()>;
-    async fn invalidate_edge(&self, from_id: &str, to_id: &str, ended: Option<chrono::DateTime<chrono::Utc>>) -> Result<()>;
-    async fn query_edges_as_of(&self, node_id: &str, as_of: chrono::DateTime<chrono::Utc>) -> Result<Vec<String>>;
+    async fn invalidate_edge(
+        &self,
+        from_id: &str,
+        to_id: &str,
+        ended: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()>;
+    async fn query_edges_as_of(
+        &self,
+        node_id: &str,
+        as_of: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>>;
     async fn get_related_node_ids(&self, from_id: &str) -> Result<Vec<String>>;
     async fn get_wiki_node_id_by_vault_path(&self, vault_path: &str) -> Result<Option<String>>;
     async fn get_active_scopes(&self) -> Result<Vec<String>>;
     async fn delete_by_vault_path(&self, vault_path: &str) -> Result<()>;
     async fn save_stm(&self, session_id: &str, key: &str, value: &str) -> Result<()>;
-    async fn get_stm(&self, session_id: &str, key: Option<&str>) -> Result<std::collections::HashMap<String, String>>;
+    async fn get_stm(
+        &self,
+        session_id: &str,
+        key: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, String>>;
     async fn clear_stm(&self, session_id: &str) -> Result<()>;
     /// Reserved: external handoff status updates (deferred pending MCP handoff tool).
     async fn update_handoff_status(&self, id: &str, status: &str) -> Result<()>;
@@ -127,11 +152,24 @@ pub trait StorageBackend: Send + Sync {
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
     async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>>;
     async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()>;
-    async fn diagnose_error_internal(&self, stderr: &str, stdout: &str) -> Result<Option<(String, String)>>;
+    async fn diagnose_error_internal(
+        &self,
+        stderr: &str,
+        stdout: &str,
+    ) -> Result<Option<(String, String)>>;
     async fn reinforce_episode(&self, id: &str) -> Result<()>;
-    async fn journal_state(&self, vault_root: &std::path::Path, session_id: Option<&str>) -> Result<()>;
+    async fn journal_state(
+        &self,
+        vault_root: &std::path::Path,
+        session_id: Option<&str>,
+    ) -> Result<()>;
     async fn get_checkpoints(&self) -> Result<Vec<serde_json::Value>>;
-    async fn query_symbolic(&self, node_id: &str, relation: Option<&str>, max_depth: Option<usize>) -> Result<Vec<String>>;
+    async fn query_symbolic(
+        &self,
+        node_id: &str,
+        relation: Option<&str>,
+        max_depth: Option<usize>,
+    ) -> Result<Vec<String>>;
     async fn query_symbolic_scored(
         &self,
         node_id: &str,
@@ -153,7 +191,10 @@ pub trait StorageBackend: Send + Sync {
         files: &[String],
     ) -> Result<SearchResponse>;
     async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>>;
-    async fn get_session_last_activity(&self, session_id: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>>;
+    async fn get_session_last_activity(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>>;
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
@@ -174,13 +215,22 @@ pub struct SurrealBackend {
     pub max_concurrent_embeddings: Arc<std::sync::atomic::AtomicUsize>,
     pub indexing_writes: Arc<tokio::sync::Mutex<std::collections::HashMap<String, usize>>>,
     pub embedding_semaphore: Arc<tokio::sync::Mutex<Option<(usize, Arc<tokio::sync::Semaphore>)>>>,
-    pub term_counts_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Arc<tokio::sync::RwLock<std::collections::HashMap<String, CacheEntry>>>>>>,
+    pub term_counts_cache: Arc<
+        tokio::sync::RwLock<
+            std::collections::HashMap<
+                String,
+                Arc<tokio::sync::RwLock<std::collections::HashMap<String, CacheEntry>>>,
+            >,
+        >,
+    >,
     pub global_cache_size: Arc<std::sync::atomic::AtomicUsize>,
-    pub avg_dl_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, (f32, std::time::Instant)>>>,
+    pub avg_dl_cache:
+        Arc<tokio::sync::RwLock<std::collections::HashMap<String, (f32, std::time::Instant)>>>,
     pub search_mode: Arc<tokio::sync::Mutex<String>>,
     pub reranker: Arc<tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>>>,
     pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
-    pub(crate) blackboard_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
+    pub(crate) blackboard_tx:
+        std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
 }
 
 pub struct BackendConfig {
@@ -200,7 +250,12 @@ impl Default for BackendConfig {
 }
 
 impl SurrealBackend {
-    pub async fn get_category_profile_key(&self, category: QueryCategory, suffix: &str, global_default: &str) -> String {
+    pub async fn get_category_profile_key(
+        &self,
+        category: QueryCategory,
+        suffix: &str,
+        global_default: &str,
+    ) -> String {
         if category != QueryCategory::Default {
             let cat_key = format!("search.{}.{}", category.as_str(), suffix);
             if let Ok(Some(val)) = self.get_profile_key(&cat_key).await {
@@ -233,9 +288,13 @@ impl SurrealBackend {
             session_id: Option<String>,
         }
         let sql = "SELECT title, content, session_id FROM episode WHERE (node_type = 'user_input' OR node_type = 'user_feedback') AND session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $prefix);";
-        let mut response = self.db.query(sql)
+        let mut response = self
+            .db
+            .query(sql)
             .bind(("prefix", user_session_prefix.as_str()))
-            .await?.check().context("SELECT episodes for compile_user_profile failed")?;
+            .await?
+            .check()
+            .context("SELECT episodes for compile_user_profile failed")?;
         let filtered_records: Vec<EpisodeRecord> = response.take(0)?;
 
         // 3. Parse the turn index (Y) from title "Session X - Turn Y" in Rust and sort numerically
@@ -249,7 +308,8 @@ impl SurrealBackend {
             }
         };
 
-        let mut turns: Vec<(u32, String)> = filtered_records.into_iter()
+        let mut turns: Vec<(u32, String)> = filtered_records
+            .into_iter()
             .map(|r| {
                 let turn_idx = parse_turn_index(&r.title).unwrap_or(0);
                 (turn_idx, r.content)
@@ -259,9 +319,13 @@ impl SurrealBackend {
 
         // 4. Query active STM key-values (cross-session based on user prefix)
         let stm_sql = "SELECT key, value, session_id FROM short_term_memory WHERE session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $prefix);";
-        let mut stm_res = self.db.query(stm_sql)
+        let mut stm_res = self
+            .db
+            .query(stm_sql)
             .bind(("prefix", user_session_prefix.as_str()))
-            .await?.check().context("SELECT stm failed in compile_user_profile")?;
+            .await?
+            .check()
+            .context("SELECT stm failed in compile_user_profile")?;
         #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
         struct StmRecord {
             key: String,
@@ -269,7 +333,8 @@ impl SurrealBackend {
             session_id: String,
         }
         let stm_records: Vec<StmRecord> = stm_res.take(0)?;
-        let mut stm_facts: Vec<String> = stm_records.into_iter()
+        let mut stm_facts: Vec<String> = stm_records
+            .into_iter()
             .filter(|r| !r.key.starts_with('_'))
             .map(|r| format!("{}: {}", r.key, r.value))
             .collect();
@@ -344,12 +409,15 @@ impl SurrealBackend {
             .open(file_path)
         {
             use std::io::Write;
-            let _ = writeln!(file, "=== PROFILE FOR session_id = {} ===\n{}\n====================================\n", session_id, res_str);
+            let _ = writeln!(
+                file,
+                "=== PROFILE FOR session_id = {} ===\n{}\n====================================\n",
+                session_id, res_str
+            );
         }
 
         Ok(res_str)
     }
-
 
     /// Saves a batch of episodes in a single transaction.
     pub async fn save_episodes_batch(&self, episodes: &[EpisodeSave]) -> Result<()> {
@@ -361,11 +429,12 @@ impl SurrealBackend {
         let unique_tokens: std::collections::HashSet<String> = tokens.into_iter().collect();
         let now = std::time::Instant::now();
         let mut outer_write = self.term_counts_cache.write().await;
-        let inner_lock = outer_write.entry(scope.to_string())
+        let inner_lock = outer_write
+            .entry(scope.to_string())
             .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
             .clone();
         drop(outer_write);
-        
+
         let mut inner_write = inner_lock.write().await;
         for token in unique_tokens {
             let entry = inner_write.entry(token).or_insert_with(|| CacheEntry {
@@ -374,28 +443,36 @@ impl SurrealBackend {
             });
             entry.count += 1;
         }
-        
-        let entry = inner_write.entry("__total_n__".to_string()).or_insert_with(|| CacheEntry {
-            count: 0,
-            expires_at: now + std::time::Duration::from_secs(3600),
-        });
+
+        let entry = inner_write
+            .entry("__total_n__".to_string())
+            .or_insert_with(|| CacheEntry {
+                count: 0,
+                expires_at: now + std::time::Duration::from_secs(3600),
+            });
         entry.count += 1;
     }
 
     pub async fn record_episodes_batch_tokens_for_cache(&self, episodes: &[EpisodeSave]) {
-        let mut scope_tokens: std::collections::HashMap<String, Vec<std::collections::HashSet<String>>> = std::collections::HashMap::new();
+        let mut scope_tokens: std::collections::HashMap<
+            String,
+            Vec<std::collections::HashSet<String>>,
+        > = std::collections::HashMap::new();
         for ep in episodes {
             let scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
             let tokens = crate::retrieval::bm25::tokenize(&ep.content);
             let unique_tokens: std::collections::HashSet<String> = tokens.into_iter().collect();
             scope_tokens.entry(scope).or_default().push(unique_tokens);
         }
-        
+
         let now = std::time::Instant::now();
         let mut outer_write = self.term_counts_cache.write().await;
         for (scope, list) in scope_tokens {
-            let inner_lock = outer_write.entry(scope)
-                .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
+            let inner_lock = outer_write
+                .entry(scope)
+                .or_insert_with(|| {
+                    Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()))
+                })
                 .clone();
             let mut inner_write = inner_lock.write().await;
             for unique_tokens in list {
@@ -406,10 +483,12 @@ impl SurrealBackend {
                     });
                     entry.count += 1;
                 }
-                let entry = inner_write.entry("__total_n__".to_string()).or_insert_with(|| CacheEntry {
-                    count: 0,
-                    expires_at: now + std::time::Duration::from_secs(3600),
-                });
+                let entry = inner_write
+                    .entry("__total_n__".to_string())
+                    .or_insert_with(|| CacheEntry {
+                        count: 0,
+                        expires_at: now + std::time::Duration::from_secs(3600),
+                    });
                 entry.count += 1;
             }
         }
@@ -427,8 +506,10 @@ impl SurrealBackend {
         let is_daemon_available = if config.check_daemon {
             match tokio::time::timeout(
                 std::time::Duration::from_millis(50),
-                tokio::net::TcpStream::connect(format!("127.0.0.1:{}", daemon_port))
-            ).await {
+                tokio::net::TcpStream::connect(format!("127.0.0.1:{}", daemon_port)),
+            )
+            .await
+            {
                 Ok(Ok(_)) => true,
                 _ => false,
             }
@@ -441,9 +522,10 @@ impl SurrealBackend {
             // Client Mode: Connect to running daemon
             // We use an in-memory DB struct as a placeholder because the actual
             // operations will be routed via HTTP to the daemon.
-            let db = Surreal::new::<Mem>(()).await
+            let db = Surreal::new::<Mem>(())
+                .await
                 .context("Failed to initialize in-memory store for client mode")?;
-            
+
             // Initialize namespace/database context as required by the SDK structure
             db.use_ns("mythrax").use_db("memory").await?;
 
@@ -459,14 +541,16 @@ impl SurrealBackend {
                 if let Some(parent) = std::path::Path::new(path).parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                
+
                 let mut attempt = 0;
                 loop {
                     match Surreal::new::<SurrealKv>(path).await {
                         Ok(conn) => break conn,
                         Err(e) => {
                             let err_str = e.to_string();
-                            if (err_str.contains("locked") || err_str.contains("LOCK")) && attempt < 10 {
+                            if (err_str.contains("locked") || err_str.contains("LOCK"))
+                                && attempt < 10
+                            {
                                 attempt += 1;
                                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                             } else {
@@ -479,7 +563,8 @@ impl SurrealBackend {
                     }
                 }
             } else {
-                Surreal::new::<Mem>(()).await
+                Surreal::new::<Mem>(())
+                    .await
                     .context("Failed to initialize SurrealDB with in-memory store")?
             };
             db.use_ns("mythrax").use_db("memory").await?;
@@ -551,7 +636,10 @@ impl SurrealBackend {
         self.client_port.is_some()
     }
 
-    pub fn set_blackboard_sender(&self, tx: tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>) {
+    pub fn set_blackboard_sender(
+        &self,
+        tx: tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>,
+    ) {
         if let Err(_) = self.blackboard_tx.set(tx) {
             tracing::warn!("blackboard_tx already initialized");
         }
@@ -575,7 +663,10 @@ impl SurrealBackend {
         if !vault_path.is_empty() {
             let mut writes = self.indexing_writes.lock().await;
             *writes.entry(vault_path.to_string()).or_insert(0) += 1;
-            if let Some(filename) = std::path::Path::new(vault_path).file_name().and_then(|s| s.to_str()) {
+            if let Some(filename) = std::path::Path::new(vault_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+            {
                 if filename != vault_path {
                     *writes.entry(filename.to_string()).or_insert(0) += 1;
                 }
@@ -610,8 +701,9 @@ impl SurrealBackend {
     fn get_auth_token() -> String {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let token_path = std::path::PathBuf::from(home).join(".mythrax/token");
-        
-        crate::auth::get_or_create_token(&token_path).unwrap_or_else(|_| "fallback-err-token".to_string())
+
+        crate::auth::get_or_create_token(&token_path)
+            .unwrap_or_else(|_| "fallback-err-token".to_string())
     }
 
     pub async fn resolve_query_anchors(
@@ -649,7 +741,12 @@ impl SurrealBackend {
         if anchors.len() < 5 {
             if let Some(emb) = query_emb {
                 let sql_knn_entities = "SELECT id, vector::similarity::cosine(embedding, $emb) AS similarity FROM entity WHERE embedding <|5, 100|> $emb LIMIT 5;";
-                if let Ok(response) = self.db.query(sql_knn_entities).bind(("emb", emb.clone())).await {
+                if let Ok(response) = self
+                    .db
+                    .query(sql_knn_entities)
+                    .bind(("emb", emb.clone()))
+                    .await
+                {
                     if let Ok(mut response) = response.check() {
                         if let Ok(rows) = response.take::<Vec<KnnRow>>(0) {
                             for r in rows {
@@ -669,7 +766,9 @@ impl SurrealBackend {
 
                 if anchors.len() < 5 {
                     let sql_knn_wiki = "SELECT id, vector::similarity::cosine(embedding, $emb) AS similarity FROM wiki_node WHERE embedding <|5, 100|> $emb LIMIT 5;";
-                    if let Ok(response) = self.db.query(sql_knn_wiki).bind(("emb", emb.clone())).await {
+                    if let Ok(response) =
+                        self.db.query(sql_knn_wiki).bind(("emb", emb.clone())).await
+                    {
                         if let Ok(mut response) = response.check() {
                             if let Ok(rows) = response.take::<Vec<KnnRow>>(0) {
                                 for r in rows {
@@ -700,9 +799,9 @@ impl SurrealBackend {
         path: &str,
         payload: &Req,
     ) -> Result<Resp> {
-        let port = self.client_port.ok_or_else(|| {
-            anyhow::anyhow!("Not in client mode, cannot route to daemon")
-        })?;
+        let port = self
+            .client_port
+            .ok_or_else(|| anyhow::anyhow!("Not in client mode, cannot route to daemon"))?;
 
         let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
         let token = Self::get_auth_token();
@@ -717,10 +816,17 @@ impl SurrealBackend {
             .context(format!("Failed to send request to daemon at {}", url))?;
 
         let status = res.status();
-        let body = res.text().await.context("Failed to read daemon response body")?;
+        let body = res
+            .text()
+            .await
+            .context("Failed to read daemon response body")?;
 
         if !status.is_success() {
-            return Err(anyhow::anyhow!("Daemon returned error {}: {}", status, body));
+            return Err(anyhow::anyhow!(
+                "Daemon returned error {}: {}",
+                status,
+                body
+            ));
         }
 
         let resp: Resp = serde_json::from_str(&body)
@@ -730,13 +836,10 @@ impl SurrealBackend {
     }
 
     /// Get a request from the running daemon
-    pub async fn daemon_get<Resp: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<Resp> {
-        let port = self.client_port.ok_or_else(|| {
-            anyhow::anyhow!("Not in client mode, cannot route to daemon")
-        })?;
+    pub async fn daemon_get<Resp: serde::de::DeserializeOwned>(&self, path: &str) -> Result<Resp> {
+        let port = self
+            .client_port
+            .ok_or_else(|| anyhow::anyhow!("Not in client mode, cannot route to daemon"))?;
 
         let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
         let token = Self::get_auth_token();
@@ -750,10 +853,17 @@ impl SurrealBackend {
             .context(format!("Failed to send request to daemon at {}", url))?;
 
         let status = res.status();
-        let body = res.text().await.context("Failed to read daemon response body")?;
+        let body = res
+            .text()
+            .await
+            .context("Failed to read daemon response body")?;
 
         if !status.is_success() {
-            return Err(anyhow::anyhow!("Daemon returned error {}: {}", status, body));
+            return Err(anyhow::anyhow!(
+                "Daemon returned error {}: {}",
+                status,
+                body
+            ));
         }
 
         let resp: Resp = serde_json::from_str(&body)
@@ -789,7 +899,11 @@ impl SurrealBackend {
         Ok(backend)
     }
 
-    pub(crate) fn compact_search_result(&self, item: &mut SearchResult, remaining_budget: usize) -> bool {
+    pub(crate) fn compact_search_result(
+        &self,
+        item: &mut SearchResult,
+        remaining_budget: usize,
+    ) -> bool {
         let title_tokens = self.count_text_tokens(&format!("{}\n", item.title));
         if title_tokens >= remaining_budget {
             return false;
@@ -835,7 +949,10 @@ impl SurrealBackend {
         while low <= high {
             let mid = (low + high) / 2;
             let candidate_content = if mid < original_content.len() {
-                format!("{}... [Truncated (Inner-Node Compaction)]", &original_content[..mid])
+                format!(
+                    "{}... [Truncated (Inner-Node Compaction)]",
+                    &original_content[..mid]
+                )
             } else {
                 original_content.clone()
             };
@@ -955,8 +1072,6 @@ impl WisdomRaw {
     }
 }
 
-
-
 #[derive(serde::Deserialize, serde::Serialize, Debug, SurrealValue, Clone)]
 pub struct EpisodeRaw {
     pub id: surrealdb::types::RecordId,
@@ -1024,7 +1139,6 @@ impl From<EpisodeRaw> for Episode {
         }
     }
 }
-
 
 /// Full hydrated Handoff contract — returned by queries; construction deferred pending
 /// the agent-tracking dashboard feature. Suppressed until then.
@@ -1103,9 +1217,9 @@ pub struct MetricAccess {
     pub access_count: i64,
 }
 
-
-
-pub(crate) static PROFILE_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, Option<String>>>> = std::sync::OnceLock::new();
+pub(crate) static PROFILE_CACHE: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, Option<String>>>,
+> = std::sync::OnceLock::new();
 
 #[async_trait]
 impl StorageBackend for SurrealBackend {
@@ -1122,13 +1236,24 @@ impl StorageBackend for SurrealBackend {
             value: String,
         }
         let records: Vec<StmRecord> = response.take(0)?;
-        let res = records.into_iter().map(|r| (r.session_id, r.value)).collect();
+        let res = records
+            .into_iter()
+            .map(|r| (r.session_id, r.value))
+            .collect();
         Ok(res)
     }
 
-    async fn get_session_last_activity(&self, session_id: &str) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    async fn get_session_last_activity(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
         let sql = "SELECT VALUE updated_at FROM short_term_memory WHERE session_id = $session_id ORDER BY updated_at DESC LIMIT 1;";
-        let mut response = self.db.query(sql).bind(("session_id", session_id)).await?.check()?;
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("session_id", session_id))
+            .await?
+            .check()?;
         let last_activity: Option<chrono::DateTime<chrono::Utc>> = response.take(0)?;
         Ok(last_activity)
     }
@@ -1143,8 +1268,8 @@ impl StorageBackend for SurrealBackend {
         files: &[String],
     ) -> Result<SearchResponse> {
         // Call the regular search. Since we are filtering, we over-fetch (limit * 3) to ensure we don't drop below the limit.
-        let unfiltered = self.search(
-            crate::contracts::SearchParams::from_positional(
+        let unfiltered = self
+            .search(crate::contracts::SearchParams::from_positional(
                 query,
                 scope,
                 false,
@@ -1158,10 +1283,12 @@ impl StorageBackend for SurrealBackend {
                 None,
                 true,
                 None,
-            )
-        ).await?;
+            ))
+            .await?;
 
-        let ep_ids: Vec<String> = unfiltered.results.iter()
+        let ep_ids: Vec<String> = unfiltered
+            .results
+            .iter()
             .filter(|r| r.id.starts_with("episode:"))
             .map(|r| r.id.clone())
             .collect();
@@ -1177,7 +1304,9 @@ impl StorageBackend for SurrealBackend {
         };
 
         use std::collections::HashMap;
-        let ep_map: HashMap<String, crate::contracts::Episode> = hydrated.episodes.into_iter()
+        let ep_map: HashMap<String, crate::contracts::Episode> = hydrated
+            .episodes
+            .into_iter()
             .filter_map(|ep| ep.id.clone().map(|id| (id, ep)))
             .collect();
 
@@ -1246,14 +1375,18 @@ impl StorageBackend for SurrealBackend {
         self.save_wisdom_rule_db(rule).await
     }
 
-    async fn search(
-        &self,
-        params: crate::contracts::SearchParams,
-    ) -> Result<SearchResponse> {
+    async fn search(&self, params: crate::contracts::SearchParams) -> Result<SearchResponse> {
         self.search_pipeline(params).await
     }
 
-    async fn get_wisdom(&self, query: &str, tier: Option<Tier>, limit: usize, offset: usize, threshold: f32) -> Result<WisdomSearchResponse> {
+    async fn get_wisdom(
+        &self,
+        query: &str,
+        tier: Option<Tier>,
+        limit: usize,
+        offset: usize,
+        threshold: f32,
+    ) -> Result<WisdomSearchResponse> {
         let active_scope = self.resolve_active_scope();
 
         let is_mock_embedder = self.embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
@@ -1339,16 +1472,18 @@ impl StorageBackend for SurrealBackend {
 
         for mut w in wisdom {
             if let Some(ref id_str) = w.id
-                && let Ok(thing) = parse_record_id(id_str) {
-                    w.id = Some(format_record_id(&thing));
-                }
+                && let Ok(thing) = parse_record_id(id_str)
+            {
+                w.id = Some(format_record_id(&thing));
+            }
 
-            let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), w.embedding.as_ref()) {
-                let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
-                dot
-            } else {
-                1.0
-            };
+            let similarity =
+                if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), w.embedding.as_ref()) {
+                    let dot: f32 = q_vec.iter().zip(e_vec.iter()).map(|(a, b)| a * b).sum();
+                    dot
+                } else {
+                    1.0
+                };
 
             let utility = w.utility.unwrap_or(1.0);
             let blended_score = similarity * (0.7 + 0.3 * utility);
@@ -1364,7 +1499,9 @@ impl StorageBackend for SurrealBackend {
         candidates.sort_by(|a, b| {
             let score_a = a.similarity.unwrap_or(1.0) * (0.7 + 0.3 * a.utility.unwrap_or(1.0));
             let score_b = b.similarity.unwrap_or(1.0) * (0.7 + 0.3 * b.utility.unwrap_or(1.0));
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let total_matches = candidates.len();
@@ -1390,7 +1527,6 @@ impl StorageBackend for SurrealBackend {
         self.record_feedback_db(id, success).await
     }
 
-
     async fn get_llm_config(&self) -> Result<LlmConfigResponse> {
         self.get_llm_config_db().await
     }
@@ -1406,7 +1542,7 @@ impl StorageBackend for SurrealBackend {
     async fn mark_episode_processed(&self, id: &str) -> Result<()> {
         self.mark_episode_processed_db(id).await
     }
-    
+
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()> {
         self.update_episode_metadata_db(id, title, summary).await
     }
@@ -1441,7 +1577,9 @@ impl StorageBackend for SurrealBackend {
             tx.send(crate::db::blackboard::EventMessage {
                 event: crate::db::blackboard::WikiNodeEvent::Insert(node.clone()),
                 respond_to,
-            }).await.map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
             rx.await?
         } else {
             self.save_wiki_node_db(node).await
@@ -1457,7 +1595,9 @@ impl StorageBackend for SurrealBackend {
                     scope: scope.to_string(),
                 },
                 respond_to,
-            }).await.map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
             rx.await?.map(|_| ())
         } else {
             self.delete_wiki_node_db(name, scope).await
@@ -1472,7 +1612,8 @@ impl StorageBackend for SurrealBackend {
         valid_to: Option<chrono::DateTime<chrono::Utc>>,
         confidence: Option<f32>,
     ) -> Result<()> {
-        self.relate_nodes_db(from_id, to_id, valid_from, valid_to, confidence).await
+        self.relate_nodes_db(from_id, to_id, valid_from, valid_to, confidence)
+            .await
     }
 
     async fn relate_followed_by(&self, from_id: &str, to_id: &str) -> Result<()> {
@@ -1523,10 +1664,16 @@ impl StorageBackend for SurrealBackend {
         max_depth: Option<usize>,
         as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<crate::contracts::SymbolicHit>> {
-        self.query_symbolic_scored_db(node_id, relation, max_depth, as_of).await
+        self.query_symbolic_scored_db(node_id, relation, max_depth, as_of)
+            .await
     }
 
-    async fn query_symbolic(&self, node_id: &str, relation: Option<&str>, max_depth: Option<usize>) -> Result<Vec<String>> {
+    async fn query_symbolic(
+        &self,
+        node_id: &str,
+        relation: Option<&str>,
+        max_depth: Option<usize>,
+    ) -> Result<Vec<String>> {
         self.query_symbolic_db(node_id, relation, max_depth).await
     }
 
@@ -1534,7 +1681,11 @@ impl StorageBackend for SurrealBackend {
         self.save_thought_node_db(thought).await
     }
 
-    async fn get_stm(&self, session_id: &str, key: Option<&str>) -> Result<std::collections::HashMap<String, String>> {
+    async fn get_stm(
+        &self,
+        session_id: &str,
+        key: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, String>> {
         self.get_stm_db(session_id, key).await
     }
 
@@ -1568,10 +1719,18 @@ impl StorageBackend for SurrealBackend {
         }
 
         let sem = self.get_embedding_semaphore().await;
-        let _permit = sem.acquire().await.context("Failed to acquire embedding permit")?;
-        
-        let active = self.active_embeddings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let mut max = self.max_concurrent_embeddings.load(std::sync::atomic::Ordering::SeqCst);
+        let _permit = sem
+            .acquire()
+            .await
+            .context("Failed to acquire embedding permit")?;
+
+        let active = self
+            .active_embeddings
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let mut max = self
+            .max_concurrent_embeddings
+            .load(std::sync::atomic::Ordering::SeqCst);
         while active > max {
             match self.max_concurrent_embeddings.compare_exchange_weak(
                 max,
@@ -1590,11 +1749,13 @@ impl StorageBackend for SurrealBackend {
             if let Some(ref emp) = embedder {
                 emp.embed(&text_str)
             } else {
-                    anyhow::bail!("No embedder configured")
+                anyhow::bail!("No embedder configured")
             }
-        }).await?;
+        })
+        .await?;
 
-        self.active_embeddings.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.active_embeddings
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         let vec = res?;
         crate::embeddings::cache_embedding(text.to_string(), vec.clone());
         Ok(vec)
@@ -1616,10 +1777,18 @@ impl StorageBackend for SurrealBackend {
 
         if !missing_texts.is_empty() {
             let sem = self.get_embedding_semaphore().await;
-            let _permit = sem.acquire().await.context("Failed to acquire embedding permit")?;
-            
-            let active = self.active_embeddings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-            let mut max = self.max_concurrent_embeddings.load(std::sync::atomic::Ordering::SeqCst);
+            let _permit = sem
+                .acquire()
+                .await
+                .context("Failed to acquire embedding permit")?;
+
+            let active = self
+                .active_embeddings
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            let mut max = self
+                .max_concurrent_embeddings
+                .load(std::sync::atomic::Ordering::SeqCst);
             while active > max {
                 match self.max_concurrent_embeddings.compare_exchange_weak(
                     max,
@@ -1640,10 +1809,12 @@ impl StorageBackend for SurrealBackend {
                 } else {
                     Err(anyhow::anyhow!("No embedding model loaded"))
                 }
-            }).await?;
+            })
+            .await?;
 
-            self.active_embeddings.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-            
+            self.active_embeddings
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+
             let embedded = res?;
             for (idx, emb) in missing_indices.into_iter().zip(embedded) {
                 crate::embeddings::cache_embedding(texts[idx].clone(), emb.clone());
@@ -1654,7 +1825,9 @@ impl StorageBackend for SurrealBackend {
         for opt in results {
             match opt {
                 Some(vec) => final_results.push(vec),
-                None => anyhow::bail!("Embedding batch returned mismatched results or missing embedding"),
+                None => anyhow::bail!(
+                    "Embedding batch returned mismatched results or missing embedding"
+                ),
             }
         }
         Ok(final_results)
@@ -1668,11 +1841,19 @@ impl StorageBackend for SurrealBackend {
         self.get_all_wiki_nodes_db().await
     }
 
-    async fn diagnose_error_internal(&self, stderr: &str, stdout: &str) -> Result<Option<(String, String)>> {
+    async fn diagnose_error_internal(
+        &self,
+        stderr: &str,
+        stdout: &str,
+    ) -> Result<Option<(String, String)>> {
         self.diagnose_error_internal_db(stderr, stdout).await
     }
 
-    async fn journal_state(&self, vault_root: &std::path::Path, session_id: Option<&str>) -> Result<()> {
+    async fn journal_state(
+        &self,
+        vault_root: &std::path::Path,
+        session_id: Option<&str>,
+    ) -> Result<()> {
         self.journal_state_db(vault_root, session_id).await
     }
 
@@ -1681,7 +1862,10 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_checkpoints(&self) -> Result<Vec<serde_json::Value>> {
-        let mut response = self.db.query("SELECT * FROM checkpoint_node ORDER BY timestamp DESC;").await?;
+        let mut response = self
+            .db
+            .query("SELECT * FROM checkpoint_node ORDER BY timestamp DESC;")
+            .await?;
         let records: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
         Ok(records)
     }
@@ -1691,7 +1875,10 @@ impl StorageBackend for SurrealBackend {
         if let Some(&count) = writes.get(vault_path) {
             Ok(count)
         } else {
-            if let Some(filename) = std::path::Path::new(vault_path).file_name().and_then(|s| s.to_str()) {
+            if let Some(filename) = std::path::Path::new(vault_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+            {
                 Ok(*writes.get(filename).unwrap_or(&0))
             } else {
                 Ok(0)
@@ -1700,21 +1887,24 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_max_concurrent_background_embeddings(&self) -> Result<usize> {
-        Ok(self.max_concurrent_embeddings.load(std::sync::atomic::Ordering::SeqCst))
+        Ok(self
+            .max_concurrent_embeddings
+            .load(std::sync::atomic::Ordering::SeqCst))
     }
 }
-
 
 pub(crate) fn load_api_key(provider: &str) -> Option<String> {
     if let Ok(home) = std::env::var("HOME") {
         let keys_path = std::path::PathBuf::from(&home).join(".mythrax/keys.json");
         if keys_path.exists()
             && let Ok(content) = std::fs::read_to_string(&keys_path)
-                && let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
-                    && let Some(val) = map.get(provider)
-                        && let Some(s) = val.as_str() {
-                            return Some(s.to_string());
-                        }
+            && let Ok(map) =
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
+            && let Some(val) = map.get(provider)
+            && let Some(s) = val.as_str()
+        {
+            return Some(s.to_string());
+        }
     }
     None
 }
@@ -1726,17 +1916,21 @@ pub(crate) fn save_api_key(provider: &str, key: &str) -> Result<()> {
         let keys_path = mythrax_dir.join("keys.json");
         let mut map = if keys_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&keys_path) {
-                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content).unwrap_or_default()
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&content)
+                    .unwrap_or_default()
             } else {
                 serde_json::Map::new()
             }
         } else {
             serde_json::Map::new()
         };
-        map.insert(provider.to_string(), serde_json::Value::String(key.to_string()));
+        map.insert(
+            provider.to_string(),
+            serde_json::Value::String(key.to_string()),
+        );
         let content = serde_json::to_string_pretty(&map)?;
         std::fs::write(&keys_path, &content)?;
-        
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1745,7 +1939,6 @@ pub(crate) fn save_api_key(provider: &str, key: &str) -> Result<()> {
     }
     Ok(())
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TemporalCueType {
@@ -1757,25 +1950,41 @@ pub enum TemporalCueType {
 
 pub fn parse_temporal_cues(query: &str) -> Option<(TemporalCueType, f32)> {
     let query_lower = query.to_lowercase();
-    
+
     // 1. Procedural Check (e.g. "what did we do...")
-    let mut words = query_lower.split_whitespace().map(|w| w.trim_matches(|c| c == '?' || c == '.' || c == ','));
+    let mut words = query_lower
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c| c == '?' || c == '.' || c == ','));
     if let Some(first_word) = words.next() {
-        let question_words = ["what", "how", "why", "which", "where", "when", "did", "have"];
+        let question_words = [
+            "what", "how", "why", "which", "where", "when", "did", "have",
+        ];
         if question_words.contains(&first_word) {
-            let action_words = ["do", "done", "took", "take", "taken", "happen", "run", "execute", "call", "step", "try", "attempt"];
+            let action_words = [
+                "do", "done", "took", "take", "taken", "happen", "run", "execute", "call", "step",
+                "try", "attempt",
+            ];
             if words.any(|w| action_words.contains(&w)) {
                 return Some((TemporalCueType::Procedural, 3.0));
             }
         }
     }
 
-    let words_vec: Vec<String> = query_lower.split_whitespace()
+    let words_vec: Vec<String> = query_lower
+        .split_whitespace()
         .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect())
         .collect();
-    
+
     let deep_modifiers = ["long", "far", "much", "way"];
-    let preceding = ["before", "preceding", "previously", "prior", "earlier", "ago", "last"];
+    let preceding = [
+        "before",
+        "preceding",
+        "previously",
+        "prior",
+        "earlier",
+        "ago",
+        "last",
+    ];
     let succeeding = ["after", "following", "subsequently", "later", "next"];
     let relative = ["recent", "recently", "latest", "newest", "today", "now"];
 
@@ -1815,7 +2024,7 @@ pub fn calculate_temporal_decay(
     let delta_t_secs = (anchor.timestamp() - created_at.timestamp()) as f64;
     let delta_t_days = delta_t_secs.max(0.0) / 86400.0;
     let clamped_lambda = lambda.max(0.0) as f64;
-    
+
     ((-clamped_lambda * delta_t_days).exp()) as f32
 }
 
@@ -1826,7 +2035,8 @@ pub fn sentence_cosine_similarity_opt(
     norm_query_sqrt: f64,
     sentence_trimmed: &str,
 ) -> f32 {
-    let mut sentence_freq: std::collections::HashMap<String, f32> = std::collections::HashMap::with_capacity(32);
+    let mut sentence_freq: std::collections::HashMap<String, f32> =
+        std::collections::HashMap::with_capacity(32);
     for word in sentence_trimmed.split(|c: char| !c.is_alphanumeric() && c != '-') {
         let trimmed = word.trim();
         if trimmed.is_empty() || crate::retrieval::bm25::is_stop_word(trimmed) {
@@ -1847,7 +2057,7 @@ pub fn sentence_cosine_similarity_opt(
         let idf = global_idf.get(t).copied().unwrap_or(0.0) as f64;
         let tf = *sentence_freq.get(t).unwrap_or(&0.0) as f64;
         dot_product += tf * (idf * idf);
-        
+
         let sentence_component = tf * idf;
         norm_sentence += sentence_component * sentence_component;
     }
@@ -1881,9 +2091,16 @@ pub fn sentence_cosine_similarity(
     if norm_query_sqrt < 1e-9 {
         return 0.0;
     }
-    let query_tokens_set: std::collections::HashSet<&str> = query_tokens.iter().map(|s| s.as_str()).collect();
+    let query_tokens_set: std::collections::HashSet<&str> =
+        query_tokens.iter().map(|s| s.as_str()).collect();
     let sentence_trimmed = sentence.trim();
-    sentence_cosine_similarity_opt(query_tokens, &query_tokens_set, global_idf, norm_query_sqrt, sentence_trimmed)
+    sentence_cosine_similarity_opt(
+        query_tokens,
+        &query_tokens_set,
+        global_idf,
+        norm_query_sqrt,
+        sentence_trimmed,
+    )
 }
 
 pub(crate) fn get_user_prefix(session_id: &str) -> &str {
@@ -1891,7 +2108,8 @@ pub(crate) fn get_user_prefix(session_id: &str) -> &str {
         let mut s = session_id;
         if let Some(last_underscore_idx) = s.rfind('_') {
             let suffix = &s[last_underscore_idx + 1..];
-            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3 {
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3
+            {
                 s = &s[..last_underscore_idx];
             }
         }
@@ -1899,7 +2117,8 @@ pub(crate) fn get_user_prefix(session_id: &str) -> &str {
     } else {
         if let Some(last_underscore_idx) = session_id.rfind('_') {
             let suffix = &session_id[last_underscore_idx + 1..];
-            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3 {
+            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) && suffix.len() <= 3
+            {
                 &session_id[..last_underscore_idx]
             } else {
                 session_id
@@ -1939,16 +2158,46 @@ mod tests {
         let backend = SurrealBackend::new_in_memory().await.unwrap();
         backend.init().await.unwrap();
 
-        assert_eq!(backend.classify_query_db("my next mtg").await, QueryCategory::Temporal);
-        assert_eq!(backend.classify_query_db("our appts next week").await, QueryCategory::Temporal);
-        assert_eq!(backend.classify_query_db("show next meeting").await, QueryCategory::Temporal);
-        assert_eq!(backend.classify_query_db("my favourite lodging").await, QueryCategory::Preference);
-        assert_eq!(backend.classify_query_db("my profile").await, QueryCategory::User);
-        assert_eq!(backend.classify_query_db("our job description").await, QueryCategory::User);
-        assert_eq!(backend.classify_query_db("who am i?").await, QueryCategory::User);
-        assert_eq!(backend.classify_query_db("tell me about me").await, QueryCategory::User);
-        assert_eq!(backend.classify_query_db("about our friend").await, QueryCategory::User);
-        assert_eq!(backend.classify_query_db("what is job salary").await, QueryCategory::User);
+        assert_eq!(
+            backend.classify_query_db("my next mtg").await,
+            QueryCategory::Temporal
+        );
+        assert_eq!(
+            backend.classify_query_db("our appts next week").await,
+            QueryCategory::Temporal
+        );
+        assert_eq!(
+            backend.classify_query_db("show next meeting").await,
+            QueryCategory::Temporal
+        );
+        assert_eq!(
+            backend.classify_query_db("my favourite lodging").await,
+            QueryCategory::Preference
+        );
+        assert_eq!(
+            backend.classify_query_db("my profile").await,
+            QueryCategory::User
+        );
+        assert_eq!(
+            backend.classify_query_db("our job description").await,
+            QueryCategory::User
+        );
+        assert_eq!(
+            backend.classify_query_db("who am i?").await,
+            QueryCategory::User
+        );
+        assert_eq!(
+            backend.classify_query_db("tell me about me").await,
+            QueryCategory::User
+        );
+        assert_eq!(
+            backend.classify_query_db("about our friend").await,
+            QueryCategory::User
+        );
+        assert_eq!(
+            backend.classify_query_db("what is job salary").await,
+            QueryCategory::User
+        );
     }
 
     #[tokio::test]
@@ -1957,7 +2206,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let episode = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "Test caching failure".to_string(),
             content: "Observed cache mismatch in redis client.".to_string(),
             entities: vec![Entity {
@@ -1994,21 +2243,24 @@ mod tests {
         let all_eps: Vec<serde_json::Value> = backend.db.select("episode").await.unwrap();
         println!("DEBUG: All episodes in DB: {:?}", all_eps);
 
-        let search_results = backend.search(crate::contracts::SearchParams::from_positional(
-        "redis",
-        Some("testing"),
-        false,
-        2,
-        0,
-        0.55,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let search_results = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "redis",
+                Some("testing"),
+                false,
+                2,
+                0,
+                0.55,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(search_results.results.len(), 1);
         assert!(search_results.results[0].content.contains("redis"));
 
@@ -2022,7 +2274,7 @@ mod tests {
 
         let episodes = vec![
             EpisodeSave {
-        created_at: None,
+                created_at: None,
                 title: "Batch episode 1".to_string(),
                 content: "First batch item content for testing.".to_string(),
                 scope: Some("batch-test".to_string()),
@@ -2031,7 +2283,7 @@ mod tests {
                 ..Default::default()
             },
             EpisodeSave {
-        created_at: None,
+                created_at: None,
                 title: "Batch episode 2".to_string(),
                 content: "Second batch item content for testing.".to_string(),
                 scope: Some("batch-test".to_string()),
@@ -2048,10 +2300,22 @@ mod tests {
         assert_eq!(all_eps.len(), 2);
 
         // Verify the fields on the inserted episodes
-        let ep1 = all_eps.iter().find(|e| e.get("title").and_then(|v| v.as_str()) == Some("Batch episode 1")).unwrap();
-        assert_eq!(ep1.get("scope").and_then(|v| v.as_str()), Some("batch-test"));
-        assert_eq!(ep1.get("vault_path").and_then(|v| v.as_str()), Some("batch_1.md"));
-        assert_eq!(ep1.get("session_id").and_then(|v| v.as_str()), Some("session_123"));
+        let ep1 = all_eps
+            .iter()
+            .find(|e| e.get("title").and_then(|v| v.as_str()) == Some("Batch episode 1"))
+            .unwrap();
+        assert_eq!(
+            ep1.get("scope").and_then(|v| v.as_str()),
+            Some("batch-test")
+        );
+        assert_eq!(
+            ep1.get("vault_path").and_then(|v| v.as_str()),
+            Some("batch_1.md")
+        );
+        assert_eq!(
+            ep1.get("session_id").and_then(|v| v.as_str()),
+            Some("session_123")
+        );
 
         // Verify that metrics were inserted
         let all_metrics: Vec<serde_json::Value> = backend.db.select("metrics").await.unwrap();
@@ -2064,7 +2328,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let episode = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "Redis pool connection failure".to_string(),
             content: "Redis clients are dropping connections under load.".to_string(),
             entities: vec![],
@@ -2087,13 +2351,21 @@ mod tests {
         let ep_thing = parse_record_id(&ep_id).unwrap();
 
         // Create a wiki_node
-        let _ = backend.db.query("
+        let _ = backend
+            .db
+            .query(
+                "
             CREATE type::record('wiki_node', 'pool_size') CONTENT {
                 name: 'Redis Connection Pooling Guidelines',
                 content: 'Set max connections to 50 under high concurrency environments.',
                 scope: 'deep-test'
             };
-        ").await.unwrap().check().unwrap();
+        ",
+            )
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
 
         let wiki_thing = surrealdb::types::RecordId {
             table: "wiki_node".into(),
@@ -2101,52 +2373,82 @@ mod tests {
         };
 
         // Relate the episode to the wiki_node
-        let _ = backend.db.query("RELATE $from -> relates_to -> $to;")
+        let _ = backend
+            .db
+            .query("RELATE $from -> relates_to -> $to;")
             .bind(("from", ep_thing.clone()))
             .bind(("to", wiki_thing.clone()))
-            .await.unwrap()
-            .check().unwrap();
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
 
         // Perform search WITH deep_insight = true
-        let results_deep = backend.search(crate::contracts::SearchParams::from_positional(
-        "Redis",
-        Some("deep-test"),
-        true,
-        10,
-        0,
-        0.55,
-        None,
-        true,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let results_deep = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Redis",
+                Some("deep-test"),
+                true,
+                10,
+                0,
+                0.55,
+                None,
+                true,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(results_deep.results.len(), 1);
-        assert!(results_deep.results[0].content.contains("dropping connections"));
-        assert!(results_deep.results[0].content.contains("Redis Connection Pooling Guidelines"));
-        assert!(results_deep.results[0].content.contains("Set max connections to 50"));
+        assert!(
+            results_deep.results[0]
+                .content
+                .contains("dropping connections")
+        );
+        assert!(
+            results_deep.results[0]
+                .content
+                .contains("Redis Connection Pooling Guidelines")
+        );
+        assert!(
+            results_deep.results[0]
+                .content
+                .contains("Set max connections to 50")
+        );
 
         // Perform search WITHOUT deep_insight = true
-        let results_normal = backend.search(crate::contracts::SearchParams::from_positional(
-        "failure",
-        Some("deep-test"),
-        false,
-        10,
-        0,
-        0.55,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let results_normal = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "failure",
+                Some("deep-test"),
+                false,
+                10,
+                0,
+                0.55,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(results_normal.results.len(), 1);
-        assert!(results_normal.results[0].content.contains("dropping connections"));
-        assert!(!results_normal.results[0].content.contains("Redis Connection Pooling Guidelines"));
+        assert!(
+            results_normal.results[0]
+                .content
+                .contains("dropping connections")
+        );
+        assert!(
+            !results_normal.results[0]
+                .content
+                .contains("Redis Connection Pooling Guidelines")
+        );
     }
 
     #[tokio::test]
@@ -2156,7 +2458,7 @@ mod tests {
 
         // 1. Seed an episode
         let episode = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "Hydration Episode".to_string(),
             content: "Testing node hydration capabilities.".to_string(),
             entities: vec![],
@@ -2212,11 +2514,14 @@ mod tests {
         let wiki_id = backend.save_wiki_node(&node).await.unwrap();
 
         // Query get_memory_nodes
-        let response = backend.get_memory_nodes(&[ep_id.clone(), rule_id.clone(), wiki_id.clone()]).await.unwrap();
-        
+        let response = backend
+            .get_memory_nodes(&[ep_id.clone(), rule_id.clone(), wiki_id.clone()])
+            .await
+            .unwrap();
+
         assert_eq!(response.episodes.len(), 1);
         assert_eq!(response.episodes[0].title, "Hydration Episode");
-        
+
         assert_eq!(response.wisdom_rules.len(), 1);
         assert_eq!(response.wisdom_rules[0].target_pattern, "hydration-pattern");
 
@@ -2229,15 +2534,30 @@ mod tests {
         let mut backend = SurrealBackend::new_in_memory().await.unwrap();
         backend.init().await.unwrap();
         backend.embedder = None;
-        backend.save_profile_key("retrieval.boost.person_name", "false").await.unwrap();
-        backend.save_profile_key("retrieval.boost.exact_quote", "false").await.unwrap();
-        backend.save_profile_key("retrieval.boost.temporal_proximity", "false").await.unwrap();
-        backend.save_profile_key("retrieval.boost.keyword_overlap", "false").await.unwrap();
-        backend.save_profile_key("retrieval.hybrid", "false").await.unwrap();
+        backend
+            .save_profile_key("retrieval.boost.person_name", "false")
+            .await
+            .unwrap();
+        backend
+            .save_profile_key("retrieval.boost.exact_quote", "false")
+            .await
+            .unwrap();
+        backend
+            .save_profile_key("retrieval.boost.temporal_proximity", "false")
+            .await
+            .unwrap();
+        backend
+            .save_profile_key("retrieval.boost.keyword_overlap", "false")
+            .await
+            .unwrap();
+        backend
+            .save_profile_key("retrieval.hybrid", "false")
+            .await
+            .unwrap();
 
         // 1. Seed an episode containing 'concurrency'
         let episode = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "Concurrency Episode".to_string(),
             content: "Concurrency is hard.".to_string(),
             entities: vec![],
@@ -2287,25 +2607,28 @@ mod tests {
         let _ = backend.save_wiki_node(&node).await.unwrap();
 
         // Execute text search (query_emb will be None, similarity defaults to 1.0)
-        let response = backend.search(crate::contracts::SearchParams::from_positional(
-        "Concurrency",
-        Some("ranking-test"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let response = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Concurrency",
+                Some("ranking-test"),
+                false,
+                10,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
 
         println!("DEBUG RESULTS: {:?}", response.results);
         assert_eq!(response.results.len(), 3);
-        
+
         // Assert sorting order based on tier boosts: skills (1.2) > wiki/insight (1.1) > episode (1.0)
         assert_eq!(response.results[0].tier, Tier::Wisdom);
         assert_eq!(response.results[0].title, "Concurrency pattern");
@@ -2325,28 +2648,38 @@ mod tests {
         // 1. Seed distilled context nodes in STM
         let parent_id = "conv_parent";
         let subagent_id = "conv_subagent";
-        
-        let ep_id = backend.save_episode(&EpisodeSave {
-        created_at: None,
-            title: "Context Episode".to_string(),
-            content: "Some context info".to_string(),
-            entities: vec![],
-            scope: Some("testing".to_string()),
-            vault_path: None,
-            source_episode: None,
-            session_id: None,
-            task_id: None,
-            discovery_tokens: None,
-            facts: None,
-            concepts: None,
-            files_read: None,
-            files_modified: None,
-            node_type: None,
-            confidence: None,
-            ..Default::default()
-        }).await.unwrap();
 
-        backend.save_stm(parent_id, "distilled_context_nodes", &format!("[\"{}\"]", ep_id)).await.unwrap();
+        let ep_id = backend
+            .save_episode(&EpisodeSave {
+                created_at: None,
+                title: "Context Episode".to_string(),
+                content: "Some context info".to_string(),
+                entities: vec![],
+                scope: Some("testing".to_string()),
+                vault_path: None,
+                source_episode: None,
+                session_id: None,
+                task_id: None,
+                discovery_tokens: None,
+                facts: None,
+                concepts: None,
+                files_read: None,
+                files_modified: None,
+                node_type: None,
+                confidence: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        backend
+            .save_stm(
+                parent_id,
+                "distilled_context_nodes",
+                &format!("[\"{}\"]", ep_id),
+            )
+            .await
+            .unwrap();
 
         // 2. Save handoff
         let handoff = HandoffSave {
@@ -2361,7 +2694,12 @@ mod tests {
 
         // 3. Verify relationships
         let sql = "SELECT VALUE out FROM relates_to WHERE in = $handoff_id;";
-        let mut response = backend.db.query(sql).bind(("handoff_id", parse_record_id(&handoff_id).unwrap())).await.unwrap();
+        let mut response = backend
+            .db
+            .query(sql)
+            .bind(("handoff_id", parse_record_id(&handoff_id).unwrap()))
+            .await
+            .unwrap();
         let related_outs: Vec<surrealdb::types::RecordId> = response.take(0).unwrap();
         assert_eq!(related_outs.len(), 1);
         assert_eq!(format_record_id(&related_outs[0]), ep_id);
@@ -2373,19 +2711,22 @@ mod tests {
         backend.init().await.unwrap();
 
         // 1. Create Episode and WikiNode (Insight)
-        let ep_id = backend.save_episode(&EpisodeSave {
-        created_at: None,
-            title: "Child Episode".to_string(),
-            content: "Contains info".to_string(),
-            entities: vec![],
-            scope: Some("directional-test".to_string()),
-            vault_path: None,
-            source_episode: None,
-            session_id: None,
-            task_id: None,
-            node_type: None,
-            ..Default::default()
-        }).await.unwrap();
+        let ep_id = backend
+            .save_episode(&EpisodeSave {
+                created_at: None,
+                title: "Child Episode".to_string(),
+                content: "Contains info".to_string(),
+                entities: vec![],
+                scope: Some("directional-test".to_string()),
+                vault_path: None,
+                source_episode: None,
+                session_id: None,
+                task_id: None,
+                node_type: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let node = WikiNode {
             id: None,
@@ -2399,44 +2740,53 @@ mod tests {
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
         // Relate Episode -> relates_to -> WikiNode (Upward)
-        backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
+        backend
+            .relate_nodes(&ep_id, &node_id, None, None, None)
+            .await
+            .unwrap();
 
-        let results_upward = backend.search(crate::contracts::SearchParams::from_positional(
-        "Parent Insight",
-        Some("directional-test"),
-        true,
-        10,
-        0,
-        0.85,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let results_upward = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Parent Insight",
+                Some("directional-test"),
+                true,
+                10,
+                0,
+                0.85,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         println!("DEBUG: results_upward: {:#?}", results_upward.results);
         assert_eq!(results_upward.results.len(), 1);
         let content_upward = &results_upward.results[0].content;
         assert!(!content_upward.contains("Child Episode"));
 
         // 3. Search with allow_downward = true
-        let results_downward = backend.search(crate::contracts::SearchParams::from_positional(
-        "Parent Insight",
-        Some("directional-test"),
-        true,
-        10,
-        0,
-        0.85,
-        None,
-        true,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let results_downward = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Parent Insight",
+                Some("directional-test"),
+                true,
+                10,
+                0,
+                0.85,
+                None,
+                true,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(results_downward.results.len(), 1);
         let content_downward = &results_downward.results[0].content;
         assert!(content_downward.contains("Child Episode"));
@@ -2472,7 +2822,7 @@ mod tests {
 
         // 2. Create an Episode (Priority 4)
         let ep = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "Episode Title with Pattern".to_string(),
             content: "Episode body content".to_string(),
             entities: vec![],
@@ -2493,26 +2843,29 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // 3. Search with a tight token budget
-        let response = backend.search(crate::contracts::SearchParams::from_positional(
-        "Pattern",
-        Some("budget-test"),
-        true,
-        10,
-        0,
-        0.0,
-        Some(20),
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
-        
+        let response = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Pattern",
+                Some("budget-test"),
+                true,
+                10,
+                0,
+                0.0,
+                Some(20),
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
+
         // Skill rule is kept, Episode is omitted
         assert_eq!(response.results.len(), 1);
         assert_eq!(response.results[0].tier, Tier::Wisdom);
-        
+
         // Check omitted_ids
         assert!(response.omitted_ids.is_some());
         let omitted = response.omitted_ids.unwrap();
@@ -2573,49 +2926,65 @@ mod tests {
         backend.save_wisdom_rule(&skill_rule).await.unwrap();
 
         // Search with large budget - full content should include the "Why" explanation
-        let res_large = backend.search(crate::contracts::SearchParams::from_positional(
-        "Avoid",
-        Some("compaction-test"),
-        false,
-        10,
-        0,
-        0.0,
-        Some(1000),
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_large = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Avoid",
+                Some("compaction-test"),
+                false,
+                10,
+                0,
+                0.0,
+                Some(1000),
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("**Why**:"));
 
         // Dynamically compute the budget needed for compacted content
-        let text_compacted = format!("{}\n**Action to Avoid**: {}\n**Prescribed Remedy**: {}", 
-            skill_rule.target_pattern, skill_rule.action_to_avoid, skill_rule.prescribed_remedy);
+        let text_compacted = format!(
+            "{}\n**Action to Avoid**: {}\n**Prescribed Remedy**: {}",
+            skill_rule.target_pattern, skill_rule.action_to_avoid, skill_rule.prescribed_remedy
+        );
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with tight budget - should strip "**Why**:" and fit under budget
-        let res_small = backend.search(crate::contracts::SearchParams::from_positional(
-        "Avoid",
-        Some("compaction-test"),
-        false,
-        10,
-        0,
-        0.0,
-        Some(tokens_compacted + 5),
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_small = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Avoid",
+                Some("compaction-test"),
+                false,
+                10,
+                0,
+                0.0,
+                Some(tokens_compacted + 5),
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_small.results.len(), 1);
         assert!(!res_small.results[0].content.contains("**Why**:"));
-        assert!(res_small.results[0].content.contains("**Action to Avoid**:"));
-        assert!(res_small.results[0].content.contains("**Prescribed Remedy**:"));
+        assert!(
+            res_small.results[0]
+                .content
+                .contains("**Action to Avoid**:")
+        );
+        assert!(
+            res_small.results[0]
+                .content
+                .contains("**Prescribed Remedy**:")
+        );
     }
 
     #[tokio::test]
@@ -2636,49 +3005,64 @@ mod tests {
         backend.save_wiki_node(&node1).await.unwrap();
 
         // Search with large budget - full content
-        let res_large = backend.search(crate::contracts::SearchParams::from_positional(
-        "Multi-Paragraph",
-        Some("compaction-test"),
-        false,
-        10,
-        0,
-        0.0,
-        Some(1000),
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_large = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Multi-Paragraph",
+                Some("compaction-test"),
+                false,
+                10,
+                0,
+                0.0,
+                Some(1000),
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_large.results.len(), 1);
         assert!(res_large.results[0].content.contains("Second paragraph"));
 
         // Dynamically compute the budget needed for compacted content
-        let compacted_content = format!("First paragraph here.\n\n... [Truncated (Inner-Node Compaction)]");
+        let compacted_content =
+            format!("First paragraph here.\n\n... [Truncated (Inner-Node Compaction)]");
         let text_compacted = format!("{}\n{}", node1.name, compacted_content);
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with small budget -> first paragraph + suffix
-        let res_small = backend.search(crate::contracts::SearchParams::from_positional(
-        "Multi-Paragraph",
-        Some("compaction-test"),
-        false,
-        10,
-        0,
-        0.0,
-        Some(tokens_compacted + 5),
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_small = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Multi-Paragraph",
+                Some("compaction-test"),
+                false,
+                10,
+                0,
+                0.0,
+                Some(tokens_compacted + 5),
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_small.results.len(), 1);
-        assert!(res_small.results[0].content.contains("First paragraph here."));
+        assert!(
+            res_small.results[0]
+                .content
+                .contains("First paragraph here.")
+        );
         assert!(!res_small.results[0].content.contains("Second paragraph"));
-        assert!(res_small.results[0].content.contains("... [Truncated (Inner-Node Compaction)]"));
+        assert!(
+            res_small.results[0]
+                .content
+                .contains("... [Truncated (Inner-Node Compaction)]")
+        );
 
         // Save a single long paragraph WikiNode
         let node2 = WikiNode {
@@ -2694,28 +3078,38 @@ mod tests {
 
         // Dynamically compute the budget for a truncated version (e.g. half the content length)
         let half_len = node2.content.len() / 2;
-        let truncated_content = format!("{}... [Truncated (Inner-Node Compaction)]", &node2.content[..half_len]);
+        let truncated_content = format!(
+            "{}... [Truncated (Inner-Node Compaction)]",
+            &node2.content[..half_len]
+        );
         let text_truncated = format!("{}\n{}", node2.name, truncated_content);
         let tokens_truncated = backend.count_text_tokens(&text_truncated);
 
         // Search with tight budget -> character-truncated
-        let res_trunc = backend.search(crate::contracts::SearchParams::from_positional(
-        "Single-Paragraph",
-        Some("compaction-test-single-para"),
-        false,
-        10,
-        0,
-        0.0,
-        Some(tokens_truncated + 5),
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_trunc = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Single-Paragraph",
+                Some("compaction-test-single-para"),
+                false,
+                10,
+                0,
+                0.0,
+                Some(tokens_truncated + 5),
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_trunc.results.len(), 1);
-        assert!(res_trunc.results[0].content.contains("... [Truncated (Inner-Node Compaction)]"));
+        assert!(
+            res_trunc.results[0]
+                .content
+                .contains("... [Truncated (Inner-Node Compaction)]")
+        );
         assert!(res_trunc.results[0].content.len() < node2.content.len());
     }
 
@@ -2726,7 +3120,7 @@ mod tests {
 
         // Save an Episode
         let ep = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "Test Episode".to_string(),
             content: "Secret content in the episode".to_string(),
             entities: vec![],
@@ -2741,39 +3135,45 @@ mod tests {
         backend.save_episode(&ep).await.unwrap();
 
         // Search with include_episodes = false (default behavior) -> should NOT find the episode
-        let res_default = backend.search(crate::contracts::SearchParams::from_positional(
-        "Secret",
-        Some("exclusion-test"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        false,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_default = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Secret",
+                Some("exclusion-test"),
+                false,
+                10,
+                0,
+                0.0,
+                None,
+                false,
+                false,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_default.results.len(), 0);
 
         // Search with include_episodes = true -> should find the episode
-        let res_include = backend.search(crate::contracts::SearchParams::from_positional(
-        "Secret",
-        Some("exclusion-test"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_include = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Secret",
+                Some("exclusion-test"),
+                false,
+                10,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert_eq!(res_include.results[0].title, "Test Episode");
     }
@@ -2784,25 +3184,28 @@ mod tests {
         backend.init().await.unwrap();
 
         // Create an Episode and a WikiNode
-        let ep_id = backend.save_episode(&EpisodeSave {
-        created_at: None,
-            title: "Child Episode".to_string(),
-            content: "Contains info".to_string(),
-            entities: vec![],
-            scope: Some("graph-exclusion-test".to_string()),
-            vault_path: None,
-            source_episode: None,
-            session_id: None,
-            task_id: None,
-            discovery_tokens: None,
-            facts: None,
-            concepts: None,
-            files_read: None,
-            files_modified: None,
-            node_type: None,
-            confidence: None,
-            ..Default::default()
-        }).await.unwrap();
+        let ep_id = backend
+            .save_episode(&EpisodeSave {
+                created_at: None,
+                title: "Child Episode".to_string(),
+                content: "Contains info".to_string(),
+                entities: vec![],
+                scope: Some("graph-exclusion-test".to_string()),
+                vault_path: None,
+                source_episode: None,
+                session_id: None,
+                task_id: None,
+                discovery_tokens: None,
+                facts: None,
+                concepts: None,
+                files_read: None,
+                files_modified: None,
+                node_type: None,
+                confidence: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let node = WikiNode {
             id: None,
@@ -2816,43 +3219,52 @@ mod tests {
         let node_id = backend.save_wiki_node(&node).await.unwrap();
 
         // Relate Episode -> relates_to -> WikiNode (Upward)
-        backend.relate_nodes(&ep_id, &node_id, None, None, None).await.unwrap();
+        backend
+            .relate_nodes(&ep_id, &node_id, None, None, None)
+            .await
+            .unwrap();
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = true -> child episode should be traversed and included
-        let res_include = backend.search(crate::contracts::SearchParams::from_positional(
-        "Parent Insight",
-        Some("graph-exclusion-test"),
-        true,
-        10,
-        0,
-        0.85,
-        None,
-        true,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_include = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Parent Insight",
+                Some("graph-exclusion-test"),
+                true,
+                10,
+                0,
+                0.85,
+                None,
+                true,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_include.results.len(), 1);
         assert!(res_include.results[0].content.contains("Child Episode"));
 
         // Search with deep_insight = true, allow_downward = true and include_episodes = false -> child episode should NOT be traversed
-        let res_exclude = backend.search(crate::contracts::SearchParams::from_positional(
-        "Parent Insight",
-        Some("graph-exclusion-test"),
-        true,
-        10,
-        0,
-        0.85,
-        None,
-        true,
-        false,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_exclude = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "Parent Insight",
+                Some("graph-exclusion-test"),
+                true,
+                10,
+                0,
+                0.85,
+                None,
+                true,
+                false,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_exclude.results.len(), 1);
         assert!(!res_exclude.results[0].content.contains("Child Episode"));
     }
@@ -2887,43 +3299,53 @@ mod tests {
         backend.save_wiki_node(&normal_node).await.unwrap();
 
         // 3. Search with include_artifacts = false -> should find only Normal Node
-        let res_default = backend.search(crate::contracts::SearchParams::from_positional(
-        "secret",
-        Some("artifact-exclusion-test"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        false,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_default = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "secret",
+                Some("artifact-exclusion-test"),
+                false,
+                10,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                false,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_default.results.len(), 1);
         assert_eq!(res_default.results[0].title, "Normal Node");
 
         // 4. Search with include_artifacts = true -> should find both
-        let res_include = backend.search(crate::contracts::SearchParams::from_positional(
-        "secret",
-        Some("artifact-exclusion-test"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await.unwrap();
+        let res_include = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "secret",
+                Some("artifact-exclusion-test"),
+                false,
+                10,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
         assert_eq!(res_include.results.len(), 2);
-        
-        let titles: Vec<String> = res_include.results.iter().map(|r| r.title.clone()).collect();
+
+        let titles: Vec<String> = res_include
+            .results
+            .iter()
+            .map(|r| r.title.clone())
+            .collect();
         assert!(titles.contains(&"Normal Node".to_string()));
         assert!(titles.contains(&"Artifact Node".to_string()));
     }
@@ -2952,7 +3374,8 @@ mod tests {
         let result_which_steps = parse_temporal_cues("Which steps did we take?");
         assert_eq!(result_which_steps, Some((TemporalCueType::Procedural, 3.0)));
 
-        let result_taken = parse_temporal_cues("What troubleshooting steps have already been taken?");
+        let result_taken =
+            parse_temporal_cues("What troubleshooting steps have already been taken?");
         assert_eq!(result_taken, Some((TemporalCueType::Procedural, 3.0)));
 
         let result_done = parse_temporal_cues("What did we have done?");
@@ -2979,7 +3402,10 @@ mod tests {
         let decay_recent = calculate_temporal_decay(one_minute_ago, now, lambda);
         let decay_old = calculate_temporal_decay(one_day_ago, now, lambda);
 
-        assert!(decay_recent > decay_old, "Recent timestamp should decay less than older timestamp");
+        assert!(
+            decay_recent > decay_old,
+            "Recent timestamp should decay less than older timestamp"
+        );
         assert!(decay_recent > 0.0, "Decay values must be positive");
         assert!(decay_old > 0.0, "Decay values must be positive");
     }
@@ -2993,13 +3419,23 @@ mod tests {
 
         let query_tokens_exact = crate::retrieval::bm25::tokenize("redis crash");
         let sentence_exact = "redis server did crash";
-        let sim_exact = sentence_cosine_similarity(&query_tokens_exact, sentence_exact, &global_idf);
-        assert!(sim_exact > 0.8, "Exact match similarity should be high, got {}", sim_exact);
+        let sim_exact =
+            sentence_cosine_similarity(&query_tokens_exact, sentence_exact, &global_idf);
+        assert!(
+            sim_exact > 0.8,
+            "Exact match similarity should be high, got {}",
+            sim_exact
+        );
 
         let query_tokens_unrelated = crate::retrieval::bm25::tokenize("quantum physics");
         let sentence_unrelated = "redis server did crash";
-        let sim_unrelated = sentence_cosine_similarity(&query_tokens_unrelated, sentence_unrelated, &global_idf);
-        assert!(sim_unrelated < 0.1, "Unrelated match similarity should be low, got {}", sim_unrelated);
+        let sim_unrelated =
+            sentence_cosine_similarity(&query_tokens_unrelated, sentence_unrelated, &global_idf);
+        assert!(
+            sim_unrelated < 0.1,
+            "Unrelated match similarity should be low, got {}",
+            sim_unrelated
+        );
     }
 
     #[tokio::test]
@@ -3008,7 +3444,7 @@ mod tests {
         backend.init().await.unwrap();
 
         let ep1 = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "first step".to_string(),
             content: "This is the first step of the build".to_string(),
             entities: vec![],
@@ -3029,7 +3465,7 @@ mod tests {
         let ep1_id = backend.save_episode(&ep1).await.unwrap();
 
         let ep2 = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "second step".to_string(),
             content: "This is the second step of the build".to_string(),
             entities: vec![],
@@ -3051,13 +3487,18 @@ mod tests {
 
         let ep1_rec = parse_record_id(&ep1_id).unwrap();
         let ep2_rec = parse_record_id(&ep2_id).unwrap();
-        backend.db.query("RELATE $from -> followed_by -> $to;")
+        backend
+            .db
+            .query("RELATE $from -> followed_by -> $to;")
             .bind(("from", ep1_rec))
             .bind(("to", ep2_rec))
-            .await.unwrap().check().unwrap();
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
 
         let ep3 = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: "unrelated user step".to_string(),
             content: "Third step of build from a completely separate session".to_string(),
             entities: vec![],
@@ -3077,37 +3518,52 @@ mod tests {
         };
         let ep3_id = backend.save_episode(&ep3).await.unwrap();
 
-        let response = backend.search(crate::contracts::SearchParams::from_positional(
-        "second step before",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        false,
-        Some("session-1"),
-        true,
-        None,
-    )).await.unwrap();
+        let response = backend
+            .search(crate::contracts::SearchParams::from_positional(
+                "second step before",
+                Some("general"),
+                false,
+                10,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                false,
+                Some("session-1"),
+                true,
+                None,
+            ))
+            .await
+            .unwrap();
 
         let results = response.results;
-        
+
         println!("DEBUG SEARCH RESULTS:");
         for r in &results {
-            println!("  id={}, title='{}', content='{}', similarity={}", r.id, r.title, r.content, r.similarity);
+            println!(
+                "  id={}, title='{}', content='{}', similarity={}",
+                r.id, r.title, r.content, r.similarity
+            );
         }
 
         let ep2_found = results.iter().any(|ep| ep.id == ep2_id);
-        assert!(ep2_found, "Primary candidate Episode 2 should be in results");
+        assert!(
+            ep2_found,
+            "Primary candidate Episode 2 should be in results"
+        );
 
         let ep1_found = results.iter().any(|ep| ep.id == ep1_id);
-        assert!(ep1_found, "Neighbor candidate Episode 1 should be fetched via neighbor turn expansion");
+        assert!(
+            ep1_found,
+            "Neighbor candidate Episode 1 should be fetched via neighbor turn expansion"
+        );
 
         let ep3_found = results.iter().any(|ep| ep.id == ep3_id);
-        assert!(!ep3_found, "Episode 3 from different session must not be returned");
+        assert!(
+            !ep3_found,
+            "Episode 3 from different session must not be returned"
+        );
     }
 
     #[tokio::test]
@@ -3119,46 +3575,49 @@ mod tests {
         let mut response = backend.db.query(check_sql).await.unwrap();
         let info_opt: Option<serde_json::Value> = response.take(0).unwrap();
         let info_str = info_opt.unwrap().to_string();
-        
+
         assert!(info_str.contains("HNSW DIMENSION 768"));
-        
+
         let check_sql = "INFO FOR TABLE episode;";
         let mut response = backend.db.query(check_sql).await.unwrap();
         let info_opt: Option<serde_json::Value> = response.take(0).unwrap();
         let info_str = info_opt.unwrap().to_string();
-        
+
         assert!(info_str.contains("HNSW DIMENSION 768"));
     }
 }
 
 // BPE Tokenizer support functions
 
-static GLOBAL_TOKENIZER: std::sync::OnceLock<Option<tokenizers::Tokenizer>> = std::sync::OnceLock::new();
+static GLOBAL_TOKENIZER: std::sync::OnceLock<Option<tokenizers::Tokenizer>> =
+    std::sync::OnceLock::new();
 
 fn get_global_tokenizer() -> Option<&'static tokenizers::Tokenizer> {
-    GLOBAL_TOKENIZER.get_or_init(|| {
-        if let Ok(home) = std::env::var("HOME") {
-            let base_path = std::path::PathBuf::from(home).join(".mythrax/models");
-            let paths = vec![
-                base_path.join("llm_tokenizer.json"),
-                base_path.join("tokenizer.json"),
-            ];
-            for path in paths {
-                if path.exists() {
-                    if let Ok(tok) = tokenizers::Tokenizer::from_file(&path) {
-                        return Some(tok);
+    GLOBAL_TOKENIZER
+        .get_or_init(|| {
+            if let Ok(home) = std::env::var("HOME") {
+                let base_path = std::path::PathBuf::from(home).join(".mythrax/models");
+                let paths = vec![
+                    base_path.join("llm_tokenizer.json"),
+                    base_path.join("tokenizer.json"),
+                ];
+                for path in paths {
+                    if path.exists() {
+                        if let Ok(tok) = tokenizers::Tokenizer::from_file(&path) {
+                            return Some(tok);
+                        }
                     }
                 }
             }
-        }
-        None
-    }).as_ref()
+            None
+        })
+        .as_ref()
 }
 
 fn estimate_bpe_tokens(text: &str) -> usize {
     let mut count = 0;
     let mut chars = text.chars().peekable();
-    
+
     while let Some(c) = chars.next() {
         if c.is_whitespace() {
             if c == '\n' {
@@ -3202,7 +3661,7 @@ fn estimate_word_tokens(word: &str) -> usize {
     if word.is_empty() {
         return 0;
     }
-    
+
     if word.contains('_') {
         let parts: Vec<&str> = word.split('_').collect();
         let mut part_tokens = 0;
@@ -3212,11 +3671,11 @@ fn estimate_word_tokens(word: &str) -> usize {
         let underscores = word.chars().filter(|&c| c == '_').count();
         return part_tokens + underscores;
     }
-    
+
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut prev_is_lower = false;
-    
+
     for c in word.chars() {
         if c.is_uppercase() && prev_is_lower {
             if !current.is_empty() {
@@ -3234,7 +3693,7 @@ fn estimate_word_tokens(word: &str) -> usize {
     if !current.is_empty() {
         parts.push(current);
     }
-    
+
     if parts.len() > 1 {
         let mut part_tokens = 0;
         for part in parts {
@@ -3242,6 +3701,6 @@ fn estimate_word_tokens(word: &str) -> usize {
         }
         return part_tokens;
     }
-    
+
     ((word.len() + 2) / 3).max(1)
 }

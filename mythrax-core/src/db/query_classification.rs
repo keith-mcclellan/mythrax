@@ -1,6 +1,6 @@
 use crate::db::backend::SurrealBackend;
-use std::sync::OnceLock;
 use regex::Regex;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QueryCategory {
@@ -21,7 +21,12 @@ impl QueryCategory {
     }
 }
 
-pub fn get_decay_factor(category: QueryCategory, delta_t_secs: f64, sigma_hours: f64, decay_floor: f32) -> f32 {
+pub fn get_decay_factor(
+    category: QueryCategory,
+    delta_t_secs: f64,
+    sigma_hours: f64,
+    decay_floor: f32,
+) -> f32 {
     if category == QueryCategory::Preference || category == QueryCategory::User {
         1.0f32
     } else {
@@ -73,16 +78,67 @@ pub fn expand_synonyms(word: &str) -> &str {
 
 pub fn classify_query(query: &str) -> QueryCategory {
     let lower = query.to_lowercase();
-    let words: Vec<&str> = lower.split_whitespace().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric())).collect();
-    
-    let preference = ["prefer", "favorite", "favourite", "like", "dislike", "love", "hate", "choice", "opinion", "preferred", "choose", "chose", "select", "book", "vendor", "hotel", "restaurant", "flight", "airline", "stay"];
-    let user = ["my", "me", "i", "myself", "profile", "age", "name", "career", "degree", "spouse", "husband", "wife", "work", "job", "employer", "friend"];
-    let temporal = ["before", "after", "previously", "prior", "earlier", "ago", "last", "later", "next", "recent", "recently", "today", "now", "yesterday", "tomorrow", "appt", "appts", "mtg", "mtgs", "meeting", "meetings", "appointment", "appointments"];
+    let words: Vec<&str> = lower
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .collect();
+
+    let preference = [
+        "prefer",
+        "favorite",
+        "favourite",
+        "like",
+        "dislike",
+        "love",
+        "hate",
+        "choice",
+        "opinion",
+        "preferred",
+        "choose",
+        "chose",
+        "select",
+        "book",
+        "vendor",
+        "hotel",
+        "restaurant",
+        "flight",
+        "airline",
+        "stay",
+    ];
+    let user = [
+        "my", "me", "i", "myself", "profile", "age", "name", "career", "degree", "spouse",
+        "husband", "wife", "work", "job", "employer", "friend",
+    ];
+    let temporal = [
+        "before",
+        "after",
+        "previously",
+        "prior",
+        "earlier",
+        "ago",
+        "last",
+        "later",
+        "next",
+        "recent",
+        "recently",
+        "today",
+        "now",
+        "yesterday",
+        "tomorrow",
+        "appt",
+        "appts",
+        "mtg",
+        "mtgs",
+        "meeting",
+        "meetings",
+        "appointment",
+        "appointments",
+    ];
 
     let has_temporal = words.iter().any(|w| temporal.contains(w));
     let has_preference = words.iter().any(|w| preference.contains(w));
-    let has_user = words.iter().any(|w| user.contains(w)) 
-        || lower.contains("who am i") 
+    let has_user = words.iter().any(|w| user.contains(w))
+        || lower.contains("who am i")
         || lower.contains("about me");
 
     if has_temporal {

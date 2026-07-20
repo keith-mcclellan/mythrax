@@ -1,9 +1,9 @@
-use mythrax_core::contracts::{ModelTier, TaskArchetype, TaskProfile};
-use mythrax_core::llm::router::route_task;
-use mythrax_core::db::{StorageBackend, SurrealBackend};
 use anyhow::Result;
-use tempfile::tempdir;
+use mythrax_core::contracts::{ModelTier, TaskArchetype, TaskProfile};
+use mythrax_core::db::{StorageBackend, SurrealBackend};
+use mythrax_core::llm::router::route_task;
 use std::sync::Mutex;
+use tempfile::tempdir;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -61,11 +61,12 @@ async fn test_routing_heuristics() {
     }
 }
 
-
 #[test]
 fn test_embedding_cache_lru_eviction() {
     // Set explicit capacity so tuned_params.json doesn't override
-    unsafe { std::env::set_var("MYTHRAX_EMBEDDING_CACHE_CAPACITY", "10000"); }
+    unsafe {
+        std::env::set_var("MYTHRAX_EMBEDDING_CACHE_CAPACITY", "10000");
+    }
     // Clear the cache first to ensure a clean state
     mythrax_core::embeddings::clear_embedding_cache();
 
@@ -90,7 +91,7 @@ fn test_embedding_cache_lru_eviction() {
     assert_eq!(mythrax_core::embeddings::get_embedding_cache_len(), 10000);
     assert!(mythrax_core::embeddings::get_cached_embedding("key_1").is_none());
     assert!(mythrax_core::embeddings::get_cached_embedding("key_0").is_some());
-    
+
     // Insert 10,005 items in total, verifying size stays capped at 10,000
     for i in 10001..10005 {
         let text = format!("key_{}", i);
@@ -105,19 +106,25 @@ async fn test_tokio_spawn_semaphore_cap() -> Result<()> {
     let backend = SurrealBackend::new_in_memory().await?;
     // The semaphore should start with 10 permits.
     assert_eq!(backend.reinforcement_semaphore.available_permits(), 10);
-    
+
     // Acquire 10 permits
     let mut permits = Vec::new();
     for _ in 0..10 {
-        permits.push(backend.reinforcement_semaphore.clone().acquire_owned().await?);
+        permits.push(
+            backend
+                .reinforcement_semaphore
+                .clone()
+                .acquire_owned()
+                .await?,
+        );
     }
-    
+
     // Now there are 0 permits available.
     assert_eq!(backend.reinforcement_semaphore.available_permits(), 0);
-    
+
     // If we try to acquire another, it blocks/fails.
     assert!(backend.reinforcement_semaphore.try_acquire().is_err());
-    
+
     Ok(())
 }
 
@@ -130,7 +137,7 @@ async fn test_vram_eviction_timeout() -> Result<()> {
 
     // Load Tier 1 model
     let tier1_engine = broker.acquire_llm(ModelTier::Tier1).await?;
-    
+
     // Hold a strong reference to Tier 1 model to simulate it blocking/failing to deallocate
     let _strong_ref = tier1_engine.clone();
 
@@ -149,10 +156,10 @@ async fn test_vram_eviction_timeout() -> Result<()> {
 
 #[test]
 fn test_episode_raw_conversion() {
-    use mythrax_core::db::EpisodeRaw;
-    use mythrax_core::contracts::Episode;
-    use surrealdb::types::{RecordId, RecordIdKey};
     use chrono::Utc;
+    use mythrax_core::contracts::Episode;
+    use mythrax_core::db::EpisodeRaw;
+    use surrealdb::types::{RecordId, RecordIdKey};
 
     let raw = EpisodeRaw {
         id: RecordId {
@@ -174,7 +181,11 @@ fn test_episode_raw_conversion() {
         last_retrieved_at: Some("2026-07-11T20:00:00Z".to_string()),
         utility: Some(42.5),
         archived: Some(false),
-        archived_at: Some(chrono::DateTime::parse_from_rfc3339("2026-07-11T20:00:00Z").unwrap().with_timezone(&Utc)),
+        archived_at: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-07-11T20:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        ),
         discovery_tokens: Some(10),
         facts: Some(vec!["fact1".to_string()]),
         concepts: Some(vec!["concept1".to_string()]),
@@ -202,11 +213,20 @@ fn test_episode_raw_conversion() {
     assert_eq!(episode.vault_path, Some("test_vault_path".to_string()));
     assert_eq!(episode.embedding, Some(vec![1.0, 2.0, 3.0]));
     assert_eq!(episode.processed_in_dream, Some(true));
-    assert_eq!(episode.source_episode, Some("episode:parent_id".to_string()));
-    assert_eq!(episode.last_retrieved_at, Some("2026-07-11T20:00:00Z".to_string()));
+    assert_eq!(
+        episode.source_episode,
+        Some("episode:parent_id".to_string())
+    );
+    assert_eq!(
+        episode.last_retrieved_at,
+        Some("2026-07-11T20:00:00Z".to_string())
+    );
     assert_eq!(episode.utility, Some(42.5));
     assert_eq!(episode.archived, Some(false));
-    assert_eq!(episode.archived_at, Some("2026-07-11T20:00:00+00:00".to_string()));
+    assert_eq!(
+        episode.archived_at,
+        Some("2026-07-11T20:00:00+00:00".to_string())
+    );
     assert_eq!(episode.discovery_tokens, Some(10));
     assert_eq!(episode.facts, Some(vec!["fact1".to_string()]));
     assert_eq!(episode.concepts, Some(vec!["concept1".to_string()]));
@@ -221,7 +241,7 @@ fn test_episode_raw_conversion() {
 
 #[test]
 fn test_episode_save_builder() {
-    use mythrax_core::contracts::{EpisodeSave, Entity};
+    use mythrax_core::contracts::{Entity, EpisodeSave};
 
     let entity = Entity {
         name: "TestEntity".to_string(),
@@ -278,10 +298,18 @@ async fn test_spreading_activation_batch_set_equivalence() -> Result<()> {
     backend.init().await?;
 
     backend.set_search_mode("keyword").await;
-    backend.save_profile_key("search.enable_calibrated_confidence", "false").await?;
-    backend.save_profile_key("search.enable_gaussian_temporal", "false").await?;
-    backend.save_profile_key("search.enable_spreading_activation", "true").await?;
-    backend.save_profile_key("search.spreading_activation_attenuation", "0.7").await?;
+    backend
+        .save_profile_key("search.enable_calibrated_confidence", "false")
+        .await?;
+    backend
+        .save_profile_key("search.enable_gaussian_temporal", "false")
+        .await?;
+    backend
+        .save_profile_key("search.enable_spreading_activation", "true")
+        .await?;
+    backend
+        .save_profile_key("search.spreading_activation_attenuation", "0.7")
+        .await?;
 
     // Insert an Entity
     let entity_uuid = uuid::Uuid::new_v4().to_string();
@@ -302,29 +330,43 @@ async fn test_spreading_activation_batch_set_equivalence() -> Result<()> {
     let ep2_id = backend.save_episode(&save2).await?;
 
     // Relate Entity to Episodes
-    backend.relate_nodes(&entity_id, &ep1_id, None, None, Some(0.8)).await?;
-    backend.relate_nodes(&entity_id, &ep2_id, None, None, Some(0.6)).await?;
+    backend
+        .relate_nodes(&entity_id, &ep1_id, None, None, Some(0.8))
+        .await?;
+    backend
+        .relate_nodes(&entity_id, &ep2_id, None, None, Some(0.6))
+        .await?;
 
     // Run the batch query version by searching
-    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "RustDB",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
+    let resp = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "RustDB",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await?;
 
     // Find our episodes in the search results
-    let r1 = resp.results.iter().find(|r| r.id == ep1_id).expect("ep1 should be found");
-    let r2 = resp.results.iter().find(|r| r.id == ep2_id).expect("ep2 should be found");
+    let r1 = resp
+        .results
+        .iter()
+        .find(|r| r.id == ep1_id)
+        .expect("ep1 should be found");
+    let r2 = resp
+        .results
+        .iter()
+        .find(|r| r.id == ep2_id)
+        .expect("ep2 should be found");
 
     // Manually compute/simulate:
     // Similarity = 1.0 * confidence * attenuation
@@ -420,19 +462,25 @@ fn test_strip_code_fences_all_variants() {
 
     // Normal fences with language suffix
     assert_eq!(strip_code_fences("```json\n{\"a\": 1}\n```"), "{\"a\": 1}");
-    
+
     // Normal fences without language suffix
     assert_eq!(strip_code_fences("```\n{\"a\": 1}\n```"), "{\"a\": 1}");
-    
+
     // Multi-line fences
-    assert_eq!(strip_code_fences("```json\n{\n  \"a\": 1\n}\n```"), "{\n  \"a\": 1\n}");
+    assert_eq!(
+        strip_code_fences("```json\n{\n  \"a\": 1\n}\n```"),
+        "{\n  \"a\": 1\n}"
+    );
 
     // Fences without newlines
     assert_eq!(strip_code_fences("```json{\"a\": 1}```"), "{\"a\": 1}");
     assert_eq!(strip_code_fences("```{\"a\": 1}```"), "{\"a\": 1}");
 
     // Fences with leading/trailing whitespace
-    assert_eq!(strip_code_fences("  \n  ```json\n{\"a\": 1}\n```  \n "), "{\"a\": 1}");
+    assert_eq!(
+        strip_code_fences("  \n  ```json\n{\"a\": 1}\n```  \n "),
+        "{\"a\": 1}"
+    );
 
     // Bare strings (returns unchanged)
     assert_eq!(strip_code_fences("{\"a\": 1}"), "{\"a\": 1}");
@@ -463,7 +511,7 @@ fn test_normalized_embedding_invariant() {
     // Magnitude within 1% of 1.0
     let valid_vec_high = vec![0.6 * 1.009, 0.8 * 1.009];
     assert!(NormalizedEmbedding::try_new(valid_vec_high).is_ok());
-    
+
     let valid_vec_low = vec![0.6 * 0.991, 0.8 * 0.991];
     assert!(NormalizedEmbedding::try_new(valid_vec_low).is_ok());
 
@@ -517,7 +565,13 @@ fn test_tier_enum_roundtrip() {
     assert_eq!(Tier::Working.to_string(), "working");
 
     // Check Serde serialization/deserialization roundtrip
-    for variant in [Tier::Wisdom, Tier::Project, Tier::User, Tier::Session, Tier::Working] {
+    for variant in [
+        Tier::Wisdom,
+        Tier::Project,
+        Tier::User,
+        Tier::Session,
+        Tier::Working,
+    ] {
         let serialized = serde_json::to_string(&variant).unwrap();
         assert_eq!(serialized, format!("\"{}\"", variant));
         let deserialized: Tier = serde_json::from_str(&serialized).unwrap();
@@ -525,7 +579,16 @@ fn test_tier_enum_roundtrip() {
     }
 
     // Verify raw db strings deserializing correctly to the corresponding Tier enum
-    assert_eq!(serde_json::from_str::<Tier>("\"permanent\"").unwrap(), Tier::Wisdom);
-    assert_eq!(serde_json::from_str::<Tier>("\"dynamic\"").unwrap(), Tier::Project);
-    assert_eq!(serde_json::from_str::<Tier>("\"stm\"").unwrap(), Tier::Working);
+    assert_eq!(
+        serde_json::from_str::<Tier>("\"permanent\"").unwrap(),
+        Tier::Wisdom
+    );
+    assert_eq!(
+        serde_json::from_str::<Tier>("\"dynamic\"").unwrap(),
+        Tier::Project
+    );
+    assert_eq!(
+        serde_json::from_str::<Tier>("\"stm\"").unwrap(),
+        Tier::Working
+    );
 }

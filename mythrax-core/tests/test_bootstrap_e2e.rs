@@ -1,11 +1,11 @@
-use std::fs;
 use anyhow::Result;
-use tempfile::tempdir;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::cognitive::synthesis::DreamCoordinator;
+use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::store::MarkdownStore;
+use std::fs;
 use std::sync::Mutex;
+use tempfile::tempdir;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -26,7 +26,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
 
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
-    
+
     unsafe {
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
         std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
@@ -48,13 +48,16 @@ async fn test_bootstrap_e2e() -> Result<()> {
     for i in 0..6 {
         let ep = EpisodeSave {
             title: format!("Antigravity Episode A{}", i),
-            content: format!("Database migration patterns discuss how we run schema changes and upgrade SQLite/SurrealDB databases safely. Step {}.", i),
+            content: format!(
+                "Database migration patterns discuss how we run schema changes and upgrade SQLite/SurrealDB databases safely. Step {}.",
+                i
+            ),
             scope: Some("test_scope_a".to_string()),
             confidence: Some(5.0),
             ..Default::default()
         };
         let ep_id = backend.save_episode(&ep).await?;
-        
+
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
         let mut mock_embedding = vec![0.0; 768];
         mock_embedding[0] = 1.0;
@@ -69,13 +72,16 @@ async fn test_bootstrap_e2e() -> Result<()> {
     for i in 0..4 {
         let ep = EpisodeSave {
             title: format!("Antigravity Episode B{}", i),
-            content: format!("Database migration patterns discuss how we run schema changes and upgrade SQLite/SurrealDB databases safely. Cross scope step {}.", i),
+            content: format!(
+                "Database migration patterns discuss how we run schema changes and upgrade SQLite/SurrealDB databases safely. Cross scope step {}.",
+                i
+            ),
             scope: Some("test_scope_b".to_string()),
             confidence: Some(5.0),
             ..Default::default()
         };
         let ep_id = backend.save_episode(&ep).await?;
-        
+
         let thing_id = mythrax_core::db::parse_record_id(&ep_id)?;
         let mut mock_embedding = vec![0.0; 768];
         mock_embedding[0] = 1.0;
@@ -138,11 +144,15 @@ async fn test_bootstrap_e2e() -> Result<()> {
         .await?.take(0)?;
 
     // Enable cross-scope graduation profile config
-    backend.save_profile_key("compactor.enable_cross_scope_graduation", "true").await?;
+    backend
+        .save_profile_key("compactor.enable_cross_scope_graduation", "true")
+        .await?;
 
     // 2. Run run_dream(mode="deep") synchronously
     // In deep dreaming mode, all scopes are processed.
-    coordinator.run_dream(&backend, &store, Some("deep"), None).await?;
+    coordinator
+        .run_dream(&backend, &store, Some("deep"), None)
+        .await?;
 
     // 3. Assertions
     // ✅ Episodes: 13 exist, all marked processed_in_dream=true
@@ -150,7 +160,13 @@ async fn test_bootstrap_e2e() -> Result<()> {
     assert_eq!(eps.len(), 13);
     for ep in &eps {
         assert_eq!(ep.processed_in_dream, Some(true));
-        println!("DEBUG - Episode {} title={:?} created_at={:?} temporal_range_start={:?}", ep.id.as_ref().unwrap(), ep.title, ep.created_at, ep.temporal_range_start);
+        println!(
+            "DEBUG - Episode {} title={:?} created_at={:?} temporal_range_start={:?}",
+            ep.id.as_ref().unwrap(),
+            ep.title,
+            ep.created_at,
+            ep.temporal_range_start
+        );
     }
 
     // ✅ Episode Titles: All 13 episodes have non-placeholder titles (not "antigravity_*")
@@ -167,7 +183,10 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // ✅ Episode Wiki Pages: `wiki/{scope}/episodes/*.md` files exist with Summary sections
     // ✅ Summary WikiNodes: 13 WikiNodes with node_type="episode_summary" exist in DB
     let wiki_nodes = backend.get_all_wiki_nodes().await?;
-    let episode_summaries: Vec<_> = wiki_nodes.iter().filter(|n| n.node_type.as_deref() == Some("episode_summary")).collect();
+    let episode_summaries: Vec<_> = wiki_nodes
+        .iter()
+        .filter(|n| n.node_type.as_deref() == Some("episode_summary"))
+        .collect();
     assert_eq!(episode_summaries.len(), 13);
 
     for node in &episode_summaries {
@@ -180,12 +199,24 @@ async fn test_bootstrap_e2e() -> Result<()> {
 
     // ✅ Clusters: DBSCAN produced ≥1 cluster
     // ✅ Insights: ≥1 WikiNode with node_type="insight"
-    let insights: Vec<_> = wiki_nodes.iter().filter(|n| n.node_type.as_deref() == Some("insight")).collect();
-    assert!(!insights.is_empty(), "DBSCAN should produce at least one insight cluster");
+    let insights: Vec<_> = wiki_nodes
+        .iter()
+        .filter(|n| n.node_type.as_deref() == Some("insight"))
+        .collect();
+    assert!(
+        !insights.is_empty(),
+        "DBSCAN should produce at least one insight cluster"
+    );
 
     // ✅ Directions: ≥1 WikiNode with node_type="direction" (from promote_insight_to_direction)
-    let directions: Vec<_> = wiki_nodes.iter().filter(|n| n.node_type.as_deref() == Some("direction")).collect();
-    assert!(!directions.is_empty(), "Should promote at least one insight to direction");
+    let directions: Vec<_> = wiki_nodes
+        .iter()
+        .filter(|n| n.node_type.as_deref() == Some("direction"))
+        .collect();
+    assert!(
+        !directions.is_empty(),
+        "Should promote at least one insight to direction"
+    );
 
     // ✅ Direction Backprop: Direction content updated after backpropagate_directions ran
     // Check if the promoted direction is modified/appended with backpropagation trace
@@ -195,17 +226,28 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // ✅ Insight→Direction Edge: relates_to edge from at least one insight to a direction exists
     let mut found_dir_edge = false;
     for ins in &insights {
-        let rel_insights = backend.get_related_node_ids(ins.id.as_ref().unwrap()).await?;
-        if rel_insights.iter().any(|id| directions.iter().any(|d| d.id.as_ref() == Some(id))) {
+        let rel_insights = backend
+            .get_related_node_ids(ins.id.as_ref().unwrap())
+            .await?;
+        if rel_insights
+            .iter()
+            .any(|id| directions.iter().any(|d| d.id.as_ref() == Some(id)))
+        {
             found_dir_edge = true;
             break;
         }
     }
-    assert!(found_dir_edge, "At least one insight must relate to a direction");
+    assert!(
+        found_dir_edge,
+        "At least one insight must relate to a direction"
+    );
 
     // ✅ Wisdom: ≥1 WisdomRule (from cross-scope graduation)
     let wisdom_rules = backend.get_all_wisdom_rules().await?;
-    assert!(!wisdom_rules.is_empty(), "Should graduate cross-scope direction to wisdom");
+    assert!(
+        !wisdom_rules.is_empty(),
+        "Should graduate cross-scope direction to wisdom"
+    );
 
     // ✅ Wisdom Provenance: WisdomRule.source_episodes is non-empty
     let wisdom_rule = &wisdom_rules[0];
@@ -214,21 +256,35 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // ✅ Wisdom Graph Edge: relates_to edge from at least one insight → wisdom rule exists
     let mut found_wisdom_edge = false;
     for ins in &insights {
-        let rel_insight_to_wisdom = backend.get_related_node_ids(ins.id.as_ref().unwrap()).await?;
+        let rel_insight_to_wisdom = backend
+            .get_related_node_ids(ins.id.as_ref().unwrap())
+            .await?;
         if rel_insight_to_wisdom.contains(wisdom_rule.id.as_ref().unwrap()) {
             found_wisdom_edge = true;
             break;
         }
     }
-    assert!(found_wisdom_edge, "At least one insight must relate to the wisdom rule");
+    assert!(
+        found_wisdom_edge,
+        "At least one insight must relate to the wisdom rule"
+    );
 
     // ✅ Conflicts: ≥1 WikiNode with node_type="conflict" preserving both positions
-    let conflicts: Vec<_> = wiki_nodes.iter().filter(|n| n.node_type.as_deref() == Some("conflict")).collect();
+    let conflicts: Vec<_> = wiki_nodes
+        .iter()
+        .filter(|n| n.node_type.as_deref() == Some("conflict"))
+        .collect();
     println!("DEBUG - Conflicts count: {}", conflicts.len());
     for (c_idx, c) in conflicts.iter().enumerate() {
-        println!("DEBUG - Conflict {}: id={:?}, name={:?}, vault_path={:?}, content={:?}", c_idx, c.id, c.name, c.vault_path, c.content);
+        println!(
+            "DEBUG - Conflict {}: id={:?}, name={:?}, vault_path={:?}, content={:?}",
+            c_idx, c.id, c.name, c.vault_path, c.content
+        );
     }
-    assert!(!conflicts.is_empty(), "ORM contradiction should produce a conflict node");
+    assert!(
+        !conflicts.is_empty(),
+        "ORM contradiction should produce a conflict node"
+    );
     assert!(conflicts[0].content.contains("Conflicting Positions"));
 
     // ✅ Conflict Edges: relates_to edges from both conflicting nodes → conflict node
@@ -236,7 +292,10 @@ async fn test_bootstrap_e2e() -> Result<()> {
     println!("DEBUG - rel_orm for {} (ORM): {:?}", ep_orm_id, rel_orm);
     assert!(rel_orm.contains(conflicts[0].id.as_ref().unwrap()));
     let rel_no_orm = backend.get_related_node_ids(&ep_no_orm_id).await?;
-    println!("DEBUG - rel_no_orm for {} (No ORM): {:?}", ep_no_orm_id, rel_no_orm);
+    println!(
+        "DEBUG - rel_no_orm for {} (No ORM): {:?}",
+        ep_no_orm_id, rel_no_orm
+    );
     assert!(rel_no_orm.contains(conflicts[0].id.as_ref().unwrap()));
 
     // ✅ Conflict Vault: wiki/{scope}/conflicts/*.md files exist
@@ -246,9 +305,15 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // ✅ Pruned Leaves: Hebbian weight decay executed (relates_to weights < 1.0)
     // Verify that at least one relates_to edge has confidence < 1.0
     // We query relates_to content or similar in surrealdb
-    let edges_resp = backend.db.query("SELECT confidence FROM relates_to WHERE confidence < 1.0;").await?;
+    let edges_resp = backend
+        .db
+        .query("SELECT confidence FROM relates_to WHERE confidence < 1.0;")
+        .await?;
     let low_conf_edges: Vec<serde_json::Value> = edges_resp.check()?.take(0)?;
-    assert!(!low_conf_edges.is_empty(), "Should decay relates_to weights < 1.0");
+    assert!(
+        !low_conf_edges.is_empty(),
+        "Should decay relates_to weights < 1.0"
+    );
 
     // ✅ Graph Provenance: relates_to edges from episodes → episode_summaries with valid_from set
     // ✅ Graph Provenance: relates_to edges from episodes → insights with valid_from set
@@ -257,18 +322,21 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // Verify relates_to edge properties
     let sql_edges = "SELECT * FROM relates_to;";
     let mut response_edges = backend.db.query(sql_edges).await?.check()?;
-    
+
     // We check raw values since surreal deserialization of record ID in "in" is custom
     let edges: Vec<serde_json::Value> = response_edges.take(0)?;
     assert!(!edges.is_empty());
-    
+
     let mut has_valid_from = false;
     for edge in &edges {
         if edge.get("valid_from").is_some() && !edge.get("valid_from").unwrap().is_null() {
             has_valid_from = true;
         }
     }
-    assert!(has_valid_from, "Edges must be temporally anchored (valid_from not null)");
+    assert!(
+        has_valid_from,
+        "Edges must be temporally anchored (valid_from not null)"
+    );
 
     // Clean up env
     unsafe {

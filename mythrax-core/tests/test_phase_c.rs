@@ -1,16 +1,20 @@
 #![cfg(feature = "bench")]
 
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_t7_session_diversity_promotion() -> Result<()> {
-    unsafe { std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false"); }
+    unsafe {
+        std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false");
+    }
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
 
-    backend.save_profile_key("search.bypass_sigmoid_gating", "true").await?;
+    backend
+        .save_profile_key("search.bypass_sigmoid_gating", "true")
+        .await?;
 
     // Ingest 1 high similarity Episode for Session A (under-represented) to get it into top-10
     let ep_a_top = EpisodeSave {
@@ -59,26 +63,36 @@ async fn test_t7_session_diversity_promotion() -> Result<()> {
     }
 
     // Search for "Rust database locks"
-    let resp = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Rust database locks",
-        Some("general"),
-        false,
-        10, // limit
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
+    let resp = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Rust database locks",
+            Some("general"),
+            false,
+            10, // limit
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await?;
 
     let results = resp.results;
     // Assert: under-represented Session A gets promoted to at least 3 turns in top-10
-    let session_a_count = results.iter().take(10).filter(|r| r.session_id.as_deref() == Some("session_a")).count();
-    assert!(session_a_count >= 3, "Session A should be promoted to at least 3 turns in top-10, found: {}", session_a_count);
+    let session_a_count = results
+        .iter()
+        .take(10)
+        .filter(|r| r.session_id.as_deref() == Some("session_a"))
+        .count();
+    assert!(
+        session_a_count >= 3,
+        "Session A should be promoted to at least 3 turns in top-10, found: {}",
+        session_a_count
+    );
 
     Ok(())
 }

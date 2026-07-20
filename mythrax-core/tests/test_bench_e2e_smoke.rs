@@ -34,7 +34,7 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
     ];
     for (corpus_id, title, content) in &fixtures {
         let ep = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: title.to_string(),
             content: content.to_string(),
             scope: Some("general".to_string()),
@@ -48,20 +48,20 @@ async fn test_bench_e2e_smoke_vault_path_mapping() -> anyhow::Result<()> {
     // The runner's exact search call signature.
     let response = backend
         .search(mythrax_core::contracts::SearchParams::from_positional(
-        "advanced memory bitemporal",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    ))
+            "advanced memory bitemporal",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
         .await?;
 
     assert!(response.total_matches > 0);

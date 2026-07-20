@@ -11,7 +11,7 @@ async fn test_hierarchical_dbscan_clustering() -> Result<()> {
         source_episodes: vec![],
         vault_path: "wiki/scope1/insights/insight_2026-07-01.md".to_string(),
     };
-    
+
     let ins2 = InsightNote {
         title: "July Insight 2".to_string(),
         content: "Content 2".to_string(),
@@ -61,7 +61,7 @@ async fn test_hierarchical_dbscan_clustering() -> Result<()> {
     let result = compact_hierarchical_dbscan(&valid_insights, 0.10, 2);
 
     assert!(!result.is_empty(), "Clusters should not be empty");
-    
+
     let has_july_cluster = result.iter().any(|cluster| {
         cluster.iter().any(|(ins, _)| ins.title == "July Insight 1")
             && cluster.iter().any(|(ins, _)| ins.title == "July Insight 2")
@@ -69,8 +69,12 @@ async fn test_hierarchical_dbscan_clustering() -> Result<()> {
     assert!(has_july_cluster, "Should cluster July Insight 1 and 2");
 
     let has_august_cluster = result.iter().any(|cluster| {
-        cluster.iter().any(|(ins, _)| ins.title == "August Insight 1")
-            && cluster.iter().any(|(ins, _)| ins.title == "August Insight 2")
+        cluster
+            .iter()
+            .any(|(ins, _)| ins.title == "August Insight 1")
+            && cluster
+                .iter()
+                .any(|(ins, _)| ins.title == "August Insight 2")
     });
     assert!(has_august_cluster, "Should cluster August Insight 1 and 2");
 

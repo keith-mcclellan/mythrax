@@ -4,15 +4,24 @@ use tempfile::tempdir;
 
 #[test]
 fn sanitize_session_id_strips_unsafe() {
-    assert_eq!(mythrax_core::hooks::shell::sanitize_session_id("a/b c.d"), "abcd");
-    assert_eq!(mythrax_core::hooks::shell::sanitize_session_id("session_123-abc"), "session_123-abc");
-    assert_eq!(mythrax_core::hooks::shell::sanitize_session_id(""), "unknown");
+    assert_eq!(
+        mythrax_core::hooks::shell::sanitize_session_id("a/b c.d"),
+        "abcd"
+    );
+    assert_eq!(
+        mythrax_core::hooks::shell::sanitize_session_id("session_123-abc"),
+        "session_123-abc"
+    );
+    assert_eq!(
+        mythrax_core::hooks::shell::sanitize_session_id(""),
+        "unknown"
+    );
 }
 
 #[test]
 fn normalize_path_preserves_windows_drive() {
     let p = mythrax_core::hooks::shell::normalize_transcript_path("C:\\Users\\me\\s.jsonl");
-    assert_eq!(p, "C:/Users/me/s.jsonl");                 // backslashes->slashes, colon kept
+    assert_eq!(p, "C:/Users/me/s.jsonl"); // backslashes->slashes, colon kept
 }
 
 #[test]

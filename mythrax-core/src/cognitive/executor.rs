@@ -1,7 +1,7 @@
+use crate::db::StorageBackend;
+use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use anyhow::{Result, anyhow};
-use crate::db::StorageBackend;
 
 fn get_jitter() -> u64 {
     use std::time::SystemTime;
@@ -20,10 +20,7 @@ fn run_git_command_with_retry(args: &[&str], dir: &Path) -> Result<std::process:
 
     loop {
         attempts += 1;
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .status();
+        let status = Command::new("git").args(args).current_dir(dir).status();
 
         match status {
             Ok(s) if s.success() => return Ok(s),
@@ -71,10 +68,14 @@ impl ArborExecutor {
         }
 
         let branch_name = format!("htr_branch_{}", node_id);
-        
+
         // Check if branch exists
         let branch_exists = Command::new("git")
-            .args(["show-ref", "--verify", &format!("refs/heads/{}", branch_name)])
+            .args([
+                "show-ref",
+                "--verify",
+                &format!("refs/heads/{}", branch_name),
+            ])
             .current_dir(&self.repo_path)
             .status()
             .map(|s| s.success())
@@ -82,12 +83,7 @@ impl ArborExecutor {
 
         let status = if branch_exists {
             run_git_command_with_retry(
-                &[
-                    "worktree",
-                    "add",
-                    &worktree_dir,
-                    &branch_name,
-                ],
+                &["worktree", "add", &worktree_dir, &branch_name],
                 &self.repo_path,
             )?
         } else {
@@ -102,17 +98,11 @@ impl ArborExecutor {
                 ],
                 &self.repo_path,
             );
-            
+
             if res.is_err() || !res.as_ref().unwrap().success() {
                 // Fallback: try checking it out as a detached head
                 run_git_command_with_retry(
-                    &[
-                        "worktree",
-                        "add",
-                        "--detach",
-                        &worktree_dir,
-                        commit_sha,
-                    ],
+                    &["worktree", "add", "--detach", &worktree_dir, commit_sha],
                     &self.repo_path,
                 )?
             } else {
@@ -121,7 +111,11 @@ impl ArborExecutor {
         };
 
         if !status.success() {
-            return Err(anyhow!("Failed to add git worktree at {} for branch/commit {}", worktree_dir, commit_sha));
+            return Err(anyhow!(
+                "Failed to add git worktree at {} for branch/commit {}",
+                worktree_dir,
+                commit_sha
+            ));
         }
 
         // Apply code changes if present
@@ -133,7 +127,7 @@ impl ArborExecutor {
                     std::fs::create_dir_all(parent)?;
                 }
                 std::fs::write(&file_path, content)?;
-                
+
                 let add_status = Command::new("git")
                     .args(["add", rel_path])
                     .current_dir(&worktree_path)
@@ -146,13 +140,21 @@ impl ArborExecutor {
             }
             if has_changes {
                 let _ = Command::new("git")
-                    .args(["commit", "-m", &format!("HTR Auto-Commit for node {}", node_id)])
+                    .args([
+                        "commit",
+                        "-m",
+                        &format!("HTR Auto-Commit for node {}", node_id),
+                    ])
                     .current_dir(&worktree_path)
                     .status();
             }
         }
 
-        let has_shell_operators = test_command.contains('&') || test_command.contains('|') || test_command.contains('>') || test_command.contains('<') || test_command.contains(';');
+        let has_shell_operators = test_command.contains('&')
+            || test_command.contains('|')
+            || test_command.contains('>')
+            || test_command.contains('<')
+            || test_command.contains(';');
 
         let mut cmd = if has_shell_operators {
             let mut c = Command::new("sh");
@@ -218,7 +220,9 @@ impl ArborExecutor {
         let mut combined_logs = format!("{}\n{}", stdout, stderr);
 
         if !success {
-            if let Ok(Some((explanation, remedy))) = backend.diagnose_error_internal(&stderr, &stdout).await {
+            if let Ok(Some((explanation, remedy))) =
+                backend.diagnose_error_internal(&stderr, &stdout).await
+            {
                 combined_logs.push_str(&format!(
                     "\n---\n[MYTHRAX AUTO-DIAGNOSTIC]: A matching failure was resolved in the database.\n- Causal Explanation: {}\n- Prescribed Remedy: {}\n---\n",
                     explanation, remedy

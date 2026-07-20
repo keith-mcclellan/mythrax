@@ -432,4 +432,3 @@ pub const INIT_SCHEMA: &str = "
     DEFINE TABLE IF NOT EXISTS bootstrap_state SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS distilled_conversation SCHEMALESS;
 ";
-

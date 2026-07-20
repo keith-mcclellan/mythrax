@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use anyhow::Result;
 use crate::contracts::WikiNode;
 use crate::db::SurrealBackend;
+use anyhow::Result;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum WikiNodeEvent {
@@ -22,7 +22,10 @@ pub struct MaterializerActor {
 }
 
 impl MaterializerActor {
-    pub fn new(backend: Arc<SurrealBackend>, receiver: tokio::sync::mpsc::Receiver<EventMessage>) -> Self {
+    pub fn new(
+        backend: Arc<SurrealBackend>,
+        receiver: tokio::sync::mpsc::Receiver<EventMessage>,
+    ) -> Self {
         Self { backend, receiver }
     }
 
@@ -35,19 +38,26 @@ impl MaterializerActor {
                     WikiNodeEvent::Insert(ref node) | WikiNodeEvent::Update(ref node) => {
                         backend.save_wiki_node_db(node).await
                     }
-                    WikiNodeEvent::Delete { ref name, ref scope } => {
+                    WikiNodeEvent::Delete {
+                        ref name,
+                        ref scope,
+                    } => {
                         backend.delete_wiki_node_db(name, scope).await?;
-                        Ok(format!("Deleted wiki_node with name {} in scope {}", name, scope))
+                        Ok(format!(
+                            "Deleted wiki_node with name {} in scope {}",
+                            name, scope
+                        ))
                     }
-                    WikiNodeEvent::Shutdown => {
-                        Ok("Shutdown".to_string())
-                    }
+                    WikiNodeEvent::Shutdown => Ok("Shutdown".to_string()),
                 }
-            }).await;
+            })
+            .await;
 
             let result = match res {
                 Ok(inner_res) => inner_res,
-                Err(_) => Err(anyhow::anyhow!("Database operation timed out after 5 seconds")),
+                Err(_) => Err(anyhow::anyhow!(
+                    "Database operation timed out after 5 seconds"
+                )),
             };
 
             let _ = msg.respond_to.send(result);
@@ -84,13 +94,15 @@ mod tests {
         tx.try_send(EventMessage {
             event: WikiNodeEvent::Insert(node1.clone()),
             respond_to: r1,
-        }).expect("First send should succeed");
+        })
+        .expect("First send should succeed");
 
         let (r2, _) = oneshot::channel();
         tx.try_send(EventMessage {
             event: WikiNodeEvent::Insert(node1.clone()),
             respond_to: r2,
-        }).expect("Second send should succeed");
+        })
+        .expect("Second send should succeed");
 
         // The third try_send should fail because capacity is 2 and actor is not reading.
         let (r3, _) = oneshot::channel();
@@ -100,7 +112,10 @@ mod tests {
         });
 
         assert!(send_res.is_err());
-        assert!(matches!(send_res.unwrap_err(), mpsc::error::TrySendError::Full(_)));
+        assert!(matches!(
+            send_res.unwrap_err(),
+            mpsc::error::TrySendError::Full(_)
+        ));
     }
 
     #[tokio::test]
@@ -127,10 +142,13 @@ mod tests {
                     ..Default::default()
                 };
                 let (respond_to, rx_resp) = oneshot::channel();
-                tx_clone.send(EventMessage {
-                    event: WikiNodeEvent::Insert(node),
-                    respond_to,
-                }).await.unwrap();
+                tx_clone
+                    .send(EventMessage {
+                        event: WikiNodeEvent::Insert(node),
+                        respond_to,
+                    })
+                    .await
+                    .unwrap();
                 let res = rx_resp.await.unwrap();
                 assert!(res.is_ok());
 
@@ -145,10 +163,13 @@ mod tests {
                     ..Default::default()
                 };
                 let (respond_to2, rx_resp2) = oneshot::channel();
-                tx_clone.send(EventMessage {
-                    event: WikiNodeEvent::Update(updated_node),
-                    respond_to: respond_to2,
-                }).await.unwrap();
+                tx_clone
+                    .send(EventMessage {
+                        event: WikiNodeEvent::Update(updated_node),
+                        respond_to: respond_to2,
+                    })
+                    .await
+                    .unwrap();
                 let res2 = rx_resp2.await.unwrap();
                 assert!(res2.is_ok());
             });

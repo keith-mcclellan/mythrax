@@ -1,10 +1,10 @@
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use anyhow::Result;
-use surrealdb::engine::local::{Db, Mem};
 use surrealdb::Surreal;
+use surrealdb::engine::local::{Db, Mem};
 use tempfile::TempDir;
 
 use mythrax_core::cognitive::arbor::{ArborCoordinator, ArborLlmClient};
@@ -44,14 +44,24 @@ impl ArborLlmClient for StmMockLlmClient {
                     "prime_calc.py": "def is_prime(n): return True"
                 }
             }
-        ]"#.to_string())
+        ]"#
+        .to_string())
     }
 
-    async fn evaluate_run(&self, _db: &dyn mythrax_core::db::StorageBackend, _run_logs: &str) -> Result<String> {
+    async fn evaluate_run(
+        &self,
+        _db: &dyn mythrax_core::db::StorageBackend,
+        _run_logs: &str,
+    ) -> Result<String> {
         Ok(r#"{"success": true, "score": 99.0, "insight": "success"}"#.to_string())
     }
 
-    async fn abstract_insights(&self, _db: &dyn mythrax_core::db::StorageBackend, _parent_insight: Option<&str>, _child_insight: &str) -> Result<String> {
+    async fn abstract_insights(
+        &self,
+        _db: &dyn mythrax_core::db::StorageBackend,
+        _parent_insight: Option<&str>,
+        _child_insight: &str,
+    ) -> Result<String> {
         Ok("insight".to_string())
     }
 }
@@ -75,7 +85,10 @@ fn setup_mock_git_repo(repo_dir: &Path) -> Result<()> {
         .status()?;
     assert!(status.success());
 
-    fs::write(repo_dir.join("prime_calc.py"), "def is_prime(n): return True")?;
+    fs::write(
+        repo_dir.join("prime_calc.py"),
+        "def is_prime(n): return True",
+    )?;
 
     let status = Command::new("git")
         .args(["add", "prime_calc.py"])
@@ -131,9 +144,12 @@ async fn test_arbor_stm_grounded_ideation() -> Result<()> {
         "stm-testing".to_string(),
         "python3 prime_calc.py".to_string(),
         vec!["prime_calc.py".to_string()],
-    ).await;
+    )
+    .await;
 
-    coordinator.init_root("Base hypothesis".to_string(), None).await?;
+    coordinator
+        .init_root("Base hypothesis".to_string(), None)
+        .await?;
     coordinator.trigger_ideation("ROOT").await?;
 
     // Verify that the mock client received the STM anchors from the JSON file

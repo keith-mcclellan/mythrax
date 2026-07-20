@@ -1,18 +1,22 @@
-use std::collections::HashMap;
-use anyhow::{Result, Context};
-use mlx_rs::{Array, Dtype};
-use mlx_rs::builder::Builder;
-use mlx_rs::nn::{
-    Linear, LinearBuilder, RmsNorm, RmsNormBuilder, LayerNorm, LayerNormBuilder,
-    QuantizedLinear, build_quantized_linear, QuantizedLinearBuilder,
-    Embedding, QuantizedEmbedding
-};
-use mlx_rs::module::Param;
 use crate::llm::qwen2_mlx::QwenEmbedding;
+use anyhow::{Context, Result};
+use mlx_rs::builder::Builder;
+use mlx_rs::module::Param;
+use mlx_rs::nn::{
+    Embedding, LayerNorm, LayerNormBuilder, Linear, LinearBuilder, QuantizedEmbedding,
+    QuantizedLinear, QuantizedLinearBuilder, RmsNorm, RmsNormBuilder, build_quantized_linear,
+};
+use mlx_rs::{Array, Dtype};
+use std::collections::HashMap;
 
-pub fn get_linear(weights: &HashMap<String, Array>, prefix: &str, has_bias: bool) -> Result<Linear> {
+pub fn get_linear(
+    weights: &HashMap<String, Array>,
+    prefix: &str,
+    has_bias: bool,
+) -> Result<Linear> {
     let weight_key = format!("{}.weight", prefix);
-    let weight = weights.get(&weight_key)
+    let weight = weights
+        .get(&weight_key)
         .with_context(|| format!("Weight key {} not found", weight_key))?
         .clone();
     let sh = weight.shape();
@@ -21,7 +25,8 @@ pub fn get_linear(weights: &HashMap<String, Array>, prefix: &str, has_bias: bool
 
     let bias = if has_bias {
         let bias_key = format!("{}.bias", prefix);
-        let b = weights.get(&bias_key)
+        let b = weights
+            .get(&bias_key)
             .with_context(|| format!("Bias key {} not found", bias_key))?
             .clone();
         Some(b)
@@ -39,7 +44,8 @@ pub fn get_linear(weights: &HashMap<String, Array>, prefix: &str, has_bias: bool
 }
 
 pub fn get_rms_norm(weights: &HashMap<String, Array>, key: &str, eps: f32) -> Result<RmsNorm> {
-    let weight = weights.get(key)
+    let weight = weights
+        .get(key)
         .with_context(|| format!("RmsNorm weight key {} not found", key))?
         .clone();
     let dims = weight.shape()[0];
@@ -51,13 +57,19 @@ pub fn get_rms_norm(weights: &HashMap<String, Array>, key: &str, eps: f32) -> Re
     Ok(norm)
 }
 
-pub fn get_layer_norm(weights: &HashMap<String, Array>, prefix: &str, eps: f32) -> Result<LayerNorm> {
+pub fn get_layer_norm(
+    weights: &HashMap<String, Array>,
+    prefix: &str,
+    eps: f32,
+) -> Result<LayerNorm> {
     let weight_key = format!("{}.weight", prefix);
     let bias_key = format!("{}.bias", prefix);
-    let weight = weights.get(&weight_key)
+    let weight = weights
+        .get(&weight_key)
         .with_context(|| format!("LayerNorm weight key {} not found", weight_key))?
         .clone();
-    let bias = weights.get(&bias_key)
+    let bias = weights
+        .get(&bias_key)
         .with_context(|| format!("LayerNorm bias key {} not found", bias_key))?
         .clone();
     let dims = weight.shape()[0];
@@ -82,13 +94,16 @@ pub fn get_quantized_linear(
     let scales_key = format!("{}.scales", prefix);
     let biases_key = format!("{}.biases", prefix);
 
-    let weight = weights.get(&weight_key)
+    let weight = weights
+        .get(&weight_key)
         .with_context(|| format!("Quantized weight key {} not found", weight_key))?
         .clone();
-    let scales = weights.get(&scales_key)
+    let scales = weights
+        .get(&scales_key)
         .with_context(|| format!("Quantized scales key {} not found", scales_key))?
         .clone();
-    let biases = weights.get(&biases_key)
+    let biases = weights
+        .get(&biases_key)
         .with_context(|| format!("Quantized biases key {} not found", biases_key))?
         .clone();
 
@@ -98,7 +113,8 @@ pub fn get_quantized_linear(
 
     let bias = if has_bias {
         let bias_key = format!("{}.bias", prefix);
-        let b = weights.get(&bias_key)
+        let b = weights
+            .get(&bias_key)
             .with_context(|| format!("Bias key {} not found", bias_key))?
             .clone();
         Some(b)
@@ -110,7 +126,7 @@ pub fn get_quantized_linear(
         .group_size(group_size)
         .bits(bits)
         .bias(has_bias);
-    
+
     let mut ql = build_quantized_linear(builder)
         .map_err(|e| anyhow::anyhow!("Failed to build quantized linear: {:?}", e))?;
 
@@ -128,7 +144,8 @@ pub fn get_embedding(
     bits: i32,
 ) -> Result<QwenEmbedding> {
     let weight_key = format!("{}.weight", prefix);
-    let weight = weights.get(&weight_key)
+    let weight = weights
+        .get(&weight_key)
         .with_context(|| format!("Embedding weight key {} not found", weight_key))?
         .clone();
 
@@ -136,18 +153,22 @@ pub fn get_embedding(
     if let Some(scales) = weights.get(&scales_key) {
         // Quantized Embedding path
         let biases_key = format!("{}.biases", prefix);
-        let biases = weights.get(&biases_key)
+        let biases = weights
+            .get(&biases_key)
             .with_context(|| format!("Quantized biases key {} not found", biases_key))?
             .clone();
 
         let zero_u32 = Array::from_slice(&[0u32], &[]);
-        let clean_weight = weight.add(&zero_u32)
+        let clean_weight = weight
+            .add(&zero_u32)
             .map_err(|e| anyhow::anyhow!("Embed weight contiguity failed: {:?}", e))?;
-        let clean_scales = scales.add(&Array::from(0.0f32))
+        let clean_scales = scales
+            .add(&Array::from(0.0f32))
             .map_err(|e| anyhow::anyhow!("Embed scales contiguity failed: {:?}", e))?;
-        let clean_biases = biases.add(&Array::from(0.0f32))
+        let clean_biases = biases
+            .add(&Array::from(0.0f32))
             .map_err(|e| anyhow::anyhow!("Embed biases contiguity failed: {:?}", e))?;
-        
+
         clean_weight.eval().unwrap();
         clean_scales.eval().unwrap();
         clean_biases.eval().unwrap();
@@ -178,8 +199,12 @@ pub fn load_model_weights(model_dir: &std::path::Path) -> Result<HashMap<String,
     if index_path.exists() {
         let content = std::fs::read_to_string(&index_path)?;
         let index: serde_json::Value = serde_json::from_str(&content)?;
-        let weight_map = index.get("weight_map").context("weight_map not found in index")?;
-        let weight_map = weight_map.as_object().context("weight_map is not a JSON object")?;
+        let weight_map = index
+            .get("weight_map")
+            .context("weight_map not found in index")?;
+        let weight_map = weight_map
+            .as_object()
+            .context("weight_map is not a JSON object")?;
 
         let mut shard_files = std::collections::HashSet::new();
         for shard_val in weight_map.values() {
@@ -191,8 +216,9 @@ pub fn load_model_weights(model_dir: &std::path::Path) -> Result<HashMap<String,
         let mut all_weights = HashMap::new();
         for shard in shard_files {
             let shard_path = model_dir.join(shard);
-            let weights = Array::load_safetensors(&shard_path)
-                .map_err(|e| anyhow::anyhow!("Failed to load shard {}: {:?}", shard_path.display(), e))?;
+            let weights = Array::load_safetensors(&shard_path).map_err(|e| {
+                anyhow::anyhow!("Failed to load shard {}: {:?}", shard_path.display(), e)
+            })?;
             for (k, v) in weights {
                 let cast_v = if v.dtype() == Dtype::Bfloat16 || v.dtype() == Dtype::Float32 {
                     v.as_dtype(Dtype::Float16)?

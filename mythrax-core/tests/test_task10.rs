@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use tempfile::tempdir;
-use serde_json::json;
-use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use mythrax_core::api::ApiState;
+use mythrax_core::contracts::{EpisodeSave, Tier, WisdomRule};
+use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
+use mythrax_core::mcp_routes::manage_handlers::handle_pre_invocation_hook;
 use mythrax_core::store::MarkdownStore;
 use mythrax_core::vault::watcher::WatchIgnoreList;
-use mythrax_core::contracts::{WisdomRule, Tier, EpisodeSave};
-use mythrax_core::mcp_routes::manage_handlers::handle_pre_invocation_hook;
+use serde_json::json;
+use std::sync::Arc;
+use tempfile::tempdir;
 
 fn setup_env_vars() {
     unsafe {
@@ -18,7 +18,15 @@ fn setup_env_vars() {
 
 async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiState> {
     let db_path = temp_dir.path().join("db");
-    let backend = SurrealBackend::new(&format!("surrealkv://{}", db_path.to_string_lossy()), mythrax_core::db::BackendConfig { check_daemon: false, embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)), llm: Some(mythrax_core::llm::LLMClient::new_mock()) }).await?;
+    let backend = SurrealBackend::new(
+        &format!("surrealkv://{}", db_path.to_string_lossy()),
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await?;
     backend.init().await?;
 
     let store = Arc::new(MarkdownStore::new(temp_dir.path())?);
@@ -39,7 +47,11 @@ async fn test_task10_injection_and_truncation() -> anyhow::Result<()> {
     setup_env_vars();
     let temp_dir = tempdir()?;
     let state = create_test_state(&temp_dir).await?;
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
+        .unwrap();
 
     let session_id = "test_session_10";
 
@@ -69,17 +81,27 @@ async fn test_task10_injection_and_truncation() -> anyhow::Result<()> {
     state.backend.save_wisdom_rule(&pruned).await?;
 
     // 2. Setup Conflict Node
-    let conflict_ep = EpisodeSave::builder("Knowledge Conflict".to_string(), "Conflicting info here".to_string())
-        .node_type(Some("conflict".to_string()))
-        .scope(Some("general".to_string()))
-        .build();
+    let conflict_ep = EpisodeSave::builder(
+        "Knowledge Conflict".to_string(),
+        "Conflicting info here".to_string(),
+    )
+    .node_type(Some("conflict".to_string()))
+    .scope(Some("general".to_string()))
+    .build();
     state.backend.save_episode(&conflict_ep).await?;
 
     // 3. Populate P3 (Belief State), P2 (STM), P1 (Wisdom - capabilities) to trigger truncation
     let sql = "INSERT INTO belief_state { session_id: $session_id, confidence_score: 0.5, tasks_todo: ['Long task description to consume tokens'], hypotheses_tested: [], uncertainty_areas: [], updated_at: time::now() };";
-    surreal_backend.db.query(sql).bind(("session_id", session_id)).await?;
+    surreal_backend
+        .db
+        .query(sql)
+        .bind(("session_id", session_id))
+        .await?;
 
-    state.backend.save_stm(session_id, "big_key", &"A ".repeat(500)).await?;
+    state
+        .backend
+        .save_stm(session_id, "big_key", &"A ".repeat(500))
+        .await?;
 
     let payload = json!({
         "session_id": session_id,
@@ -91,8 +113,7 @@ async fn test_task10_injection_and_truncation() -> anyhow::Result<()> {
 
     assert!(content.contains("### 🚫 Policy (Non-Negotiable Rules)"));
     assert!(content.contains("PRUNED: Failed path: some hypothesis"));
-    
-    
+
     assert!(content.contains("Knowledge Conflict"));
 
     // Check budget truncation (we set budget to 100 tokens, which is very small, so P3/P2 might be truncated)

@@ -1,10 +1,10 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
-use std::collections::{HashSet, HashMap};
-use mythrax_core::db::{SurrealBackend, StorageBackend};
-use mythrax_core::contracts::EpisodeSave;
 use surrealdb_types::SurrealValue;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -38,8 +38,12 @@ fn extract_entities(content: &str) -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    unsafe { std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false"); }
-    let _ = mythrax_core::embeddings::load_embedding_cache_from_disk(std::path::Path::new("bench_data/embedding_cache.bin"));
+    unsafe {
+        std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false");
+    }
+    let _ = mythrax_core::embeddings::load_embedding_cache_from_disk(std::path::Path::new(
+        "bench_data/embedding_cache.bin",
+    ));
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         println!("Usage: cargo run --bin inspect_failed_query <question_id>");
@@ -53,7 +57,9 @@ async fn main() -> Result<()> {
     file.read_to_string(&mut contents)?;
     let questions: Vec<QuestionEntry> = serde_json::from_str(&contents)?;
 
-    let q = questions.iter().find(|qe| &qe.question_id == target_id)
+    let q = questions
+        .iter()
+        .find(|qe| &qe.question_id == target_id)
         .context(format!("Question ID {} not found", target_id))?;
 
     println!("\n========================================================");
@@ -61,13 +67,19 @@ async fn main() -> Result<()> {
     println!("Question:      \"{}\"", q.question);
     println!("Type:          {}", q.question_type);
     println!("Category:      {:?}", q.category);
-    println!("Classified As: {:?}", mythrax_core::db::backend::classify_query(&q.question));
+    println!(
+        "Classified As: {:?}",
+        mythrax_core::db::backend::classify_query(&q.question)
+    );
     println!("========================================================\n");
 
     let backend = SurrealBackend::new_in_memory()
         .await
         .context("Failed to create in-memory backend")?;
-    backend.init().await.context("Failed to initialize database schema")?;
+    backend
+        .init()
+        .await
+        .context("Failed to initialize database schema")?;
     backend.set_search_mode("hybrid").await;
 
     // Load tuned parameters
@@ -94,7 +106,7 @@ async fn main() -> Result<()> {
             for (turn_idx, turn) in session_turns.iter().enumerate() {
                 let corpus_id = format!("{}_turn_{}", session_id, turn_idx);
                 let role_lower = turn.role.to_lowercase();
-                
+
                 if role_lower == "user" {
                     let norm_content = turn.content.to_lowercase().replace("favourite", "favorite");
                     let clean_stm_value = |val: &str| -> String {
@@ -112,21 +124,29 @@ async fn main() -> Result<()> {
 
                     for sentence in norm_content.split('.') {
                         let sentence = sentence.trim();
-                        if sentence.is_empty() { continue; }
+                        if sentence.is_empty() {
+                            continue;
+                        }
 
                         if let Some(idx) = sentence.find("degree in") {
                             let val = clean_stm_value(&sentence[idx + "degree in".len()..]);
-                            if !val.is_empty() { let _ = backend.save_stm(session_id, "degree", &val).await; }
+                            if !val.is_empty() {
+                                let _ = backend.save_stm(session_id, "degree", &val).await;
+                            }
                         } else if let Some(idx) = sentence.find("majored in") {
                             let val = clean_stm_value(&sentence[idx + "majored in".len()..]);
-                            if !val.is_empty() { let _ = backend.save_stm(session_id, "degree", &val).await; }
+                            if !val.is_empty() {
+                                let _ = backend.save_stm(session_id, "degree", &val).await;
+                            }
                         }
 
                         if let Some(fav_idx) = sentence.find("favorite ") {
                             let remaining = &sentence[fav_idx + "favorite ".len()..];
                             if let Some(is_idx) = remaining.find(" is ") {
                                 let word = remaining[..is_idx].trim();
-                                if !word.is_empty() && word.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                if !word.is_empty()
+                                    && word.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                {
                                     let val = clean_stm_value(&remaining[is_idx + " is ".len()..]);
                                     if !val.is_empty() {
                                         let key = format!("favorite_{}", word);
@@ -138,31 +158,46 @@ async fn main() -> Result<()> {
 
                         if let Some(idx) = sentence.find("prefer") {
                             let val = clean_stm_value(&sentence[idx + "prefer".len()..]);
-                            if !val.is_empty() { let _ = backend.save_stm(session_id, "preference", &val).await; }
+                            if !val.is_empty() {
+                                let _ = backend.save_stm(session_id, "preference", &val).await;
+                            }
                         }
 
                         let mut booked_idx = None;
-                        if let Some(idx) = sentence.find("chose") { booked_idx = Some((idx, "chose".len())); }
-                        else if let Some(idx) = sentence.find("selected") { booked_idx = Some((idx, "selected".len())); }
-                        else if let Some(idx) = sentence.find("booked") { booked_idx = Some((idx, "booked".len())); }
+                        if let Some(idx) = sentence.find("chose") {
+                            booked_idx = Some((idx, "chose".len()));
+                        } else if let Some(idx) = sentence.find("selected") {
+                            booked_idx = Some((idx, "selected".len()));
+                        } else if let Some(idx) = sentence.find("booked") {
+                            booked_idx = Some((idx, "booked".len()));
+                        }
                         if let Some((idx, len)) = booked_idx {
                             let val = clean_stm_value(&sentence[idx + len..]);
-                            if !val.is_empty() { let _ = backend.save_stm(session_id, "booked", &val).await; }
+                            if !val.is_empty() {
+                                let _ = backend.save_stm(session_id, "booked", &val).await;
+                            }
                         }
 
                         let mut occ_idx = None;
-                        if let Some(idx) = sentence.find("work as a") { occ_idx = Some((idx, "work as a".len())); }
-                        else if let Some(idx) = sentence.find("work at") { occ_idx = Some((idx, "work at".len())); }
+                        if let Some(idx) = sentence.find("work as a") {
+                            occ_idx = Some((idx, "work as a".len()));
+                        } else if let Some(idx) = sentence.find("work at") {
+                            occ_idx = Some((idx, "work at".len()));
+                        }
                         if let Some((idx, len)) = occ_idx {
                             let val = clean_stm_value(&sentence[idx + len..]);
-                            if !val.is_empty() { let _ = backend.save_stm(session_id, "occupation", &val).await; }
+                            if !val.is_empty() {
+                                let _ = backend.save_stm(session_id, "occupation", &val).await;
+                            }
                         }
                     }
                 }
 
                 let ents = extract_entities(&turn.content);
                 if !ents.is_empty() {
-                    for ent in &ents { all_entities_set.insert(ent.clone()); }
+                    for ent in &ents {
+                        all_entities_set.insert(ent.clone());
+                    }
                     turn_entities.insert(corpus_id.clone(), ents);
                 }
 
@@ -178,7 +213,7 @@ async fn main() -> Result<()> {
                     _ => "agent_thought".to_string(),
                 };
                 let ep = EpisodeSave {
-        created_at: None,
+                    created_at: None,
                     title: format!("Session {} - Turn {}", session_id, turn_idx),
                     content: format!("{}: {}", turn.role, turn.content),
                     scope: Some("general".to_string()),
@@ -254,7 +289,10 @@ async fn main() -> Result<()> {
                     };
                     let has_intersection = ents_a.iter().any(|e| ents_b.contains(e));
                     if has_intersection {
-                        if let (Some(ep_a), Some(ep_b)) = (corpus_to_ep_id.get(&corpus_id_a), corpus_to_ep_id.get(&corpus_id_b)) {
+                        if let (Some(ep_a), Some(ep_b)) = (
+                            corpus_to_ep_id.get(&corpus_id_a),
+                            corpus_to_ep_id.get(&corpus_id_b),
+                        ) {
                             let ep_a_uuid = ep_a.strip_prefix("episode:").unwrap_or(ep_a);
                             let ep_b_uuid = ep_b.strip_prefix("episode:").unwrap_or(ep_b);
                             transaction_sql.push_str(&format!(
@@ -290,22 +328,27 @@ async fn main() -> Result<()> {
 
     // Execute Search
     let last_sess_id = q.answer_session_ids.first().cloned();
-    println!("Executing search for query with active session: {:?}", last_sess_id);
-    let results = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        &q.question,
-        Some("general"),
-        false,
-        50,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        false,
-        last_sess_id.as_deref(),
-        false,
-        None,
-    )).await?;
+    println!(
+        "Executing search for query with active session: {:?}",
+        last_sess_id
+    );
+    let results = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            &q.question,
+            Some("general"),
+            false,
+            50,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            false,
+            last_sess_id.as_deref(),
+            false,
+            None,
+        ))
+        .await?;
 
     println!("\n--- Retrieved Results (Top 50) ---");
     for (idx, r) in results.results.iter().enumerate() {
@@ -318,8 +361,10 @@ async fn main() -> Result<()> {
             idx + 1,
             id_str,
             r.similarity,
-            r.raw_vector_sim.map_or("N/A".to_string(), |v| format!("{:.4}", v)),
-            r.bm25_score.map_or("N/A".to_string(), |v| format!("{:.2}", v)),
+            r.raw_vector_sim
+                .map_or("N/A".to_string(), |v| format!("{:.4}", v)),
+            r.bm25_score
+                .map_or("N/A".to_string(), |v| format!("{:.2}", v)),
             r.session_id
         );
         println!("     Content: \"{}\"\n", r.content);
@@ -327,18 +372,25 @@ async fn main() -> Result<()> {
 
     println!("--- Gold Documents Status ---");
     for gold_id in &gold_corpus_ids {
-        if let Some(r) = results.results.iter().find(|res| res.vault_path.as_ref() == Some(gold_id)) {
+        if let Some(r) = results
+            .results
+            .iter()
+            .find(|res| res.vault_path.as_ref() == Some(gold_id))
+        {
             println!(
                 "FOUND:     ID: {:<30} | Score: {:.4} | VecSim: {:<6} | BM25: {:<6} | Session: {:?}",
                 gold_id,
                 r.similarity,
-                r.raw_vector_sim.map_or("N/A".to_string(), |v| format!("{:.4}", v)),
-                r.bm25_score.map_or("N/A".to_string(), |v| format!("{:.2}", v)),
+                r.raw_vector_sim
+                    .map_or("N/A".to_string(), |v| format!("{:.4}", v)),
+                r.bm25_score
+                    .map_or("N/A".to_string(), |v| format!("{:.2}", v)),
                 r.session_id
             );
         } else {
             println!("MISSING:   ID: {:<30}", gold_id);
-            let select_sql = "SELECT id, content, session_id, vault_path FROM episode WHERE vault_path = $vp;";
+            let select_sql =
+                "SELECT id, content, session_id, vault_path FROM episode WHERE vault_path = $vp;";
             let mut select_res = db.query(select_sql).bind(("vp", gold_id.clone())).await?;
             #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
             struct DbEp {

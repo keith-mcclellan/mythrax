@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use mythrax_core::embeddings::LocalEmbedder;
+use std::sync::Mutex;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -22,7 +22,12 @@ fn test_batch_embedding_equivalence() {
     };
 
     let texts: Vec<String> = (0..35)
-        .map(|i| format!("This is test sentence number {} for batch embedding equivalence testing.", i))
+        .map(|i| {
+            format!(
+                "This is test sentence number {} for batch embedding equivalence testing.",
+                i
+            )
+        })
         .collect();
 
     let sequential_embeddings: Vec<Vec<f32>> = texts
@@ -41,7 +46,11 @@ fn test_batch_embedding_equivalence() {
     );
 
     let delta = 1e-4;
-    for (i, (seq_emb, batch_emb)) in sequential_embeddings.iter().zip(batch_embeddings.iter()).enumerate() {
+    for (i, (seq_emb, batch_emb)) in sequential_embeddings
+        .iter()
+        .zip(batch_embeddings.iter())
+        .enumerate()
+    {
         assert_eq!(
             seq_emb.len(),
             batch_emb.len(),

@@ -48,17 +48,23 @@ async fn precompact_persists_raw_tool_output() -> anyhow::Result<()> {
         backend.as_ref(),
         &store,
         &ignore,
-    ).await?;
+    )
+    .await?;
 
     // 4. Assert returned count >= 2
     assert!(count >= 2);
 
     // 5. Query the backend directly to verify the raw tool payload was indexed verbatim (since tool_execution is excluded from standard search results)
-    let mut db_res = backend.db.query("SELECT VALUE content FROM episode WHERE string::contains(content, $payload);")
+    let mut db_res = backend
+        .db
+        .query("SELECT VALUE content FROM episode WHERE string::contains(content, $payload);")
         .bind(("payload", "RAW_TOOL_PAYLOAD_XYZ"))
         .await?;
     let matching_contents: Vec<String> = db_res.take(0)?;
-    assert!(!matching_contents.is_empty(), "Verbatim tool output was not found in the database");
+    assert!(
+        !matching_contents.is_empty(),
+        "Verbatim tool output was not found in the database"
+    );
 
     Ok(())
 }
@@ -99,27 +105,38 @@ async fn precompact_persists_array_form_tool_result_blocks() -> anyhow::Result<(
         backend.as_ref(),
         store.as_ref(),
         &ignore,
-    ).await?;
-    assert!(count >= 2, "expected both array-form turns mined, got {}", count);
+    )
+    .await?;
+    assert!(
+        count >= 2,
+        "expected both array-form turns mined, got {}",
+        count
+    );
 
     for payload in ["BLOCK_TOOL_PAYLOAD_ABC", "NESTED_TOOL_PAYLOAD_DEF"] {
-        let response = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        payload,
-        Some("general"),
-        false,
-        5,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
+        let response = backend
+            .search(mythrax_core::contracts::SearchParams::from_positional(
+                payload,
+                Some("general"),
+                false,
+                5,
+                0,
+                0.0,
+                None,
+                false,
+                true,
+                true,
+                None,
+                true,
+                None,
+            ))
+            .await?;
         let found = response.results.iter().any(|r| r.content.contains(payload));
-        assert!(found, "verbatim tool output {} was dropped from array-form content", payload);
+        assert!(
+            found,
+            "verbatim tool output {} was dropped from array-form content",
+            payload
+        );
     }
 
     Ok(())
@@ -153,27 +170,36 @@ async fn precompact_mines_assistant_turns() -> anyhow::Result<()> {
         backend.as_ref(),
         store.as_ref(),
         &ignore,
-    ).await?;
+    )
+    .await?;
 
     assert_eq!(count, 1, "expected 1 assistant turn mined, got {}", count);
 
-    let response = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "troubleshooting process",
-        None,
-        false,
-        5,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
-    let found = response.results.iter().any(|r| r.content.contains("troubleshooting process"));
-    assert!(found, "assistant turn content was not found in search results");
+    let response = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "troubleshooting process",
+            None,
+            false,
+            5,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await?;
+    let found = response
+        .results
+        .iter()
+        .any(|r| r.content.contains("troubleshooting process"));
+    assert!(
+        found,
+        "assistant turn content was not found in search results"
+    );
 
     Ok(())
 }
@@ -209,47 +235,50 @@ async fn precompact_filters_short_assistant_turns() -> anyhow::Result<()> {
         backend.as_ref(),
         store.as_ref(),
         &ignore,
-    ).await?;
+    )
+    .await?;
 
     // Only the 21-char turn should be mined, the 20-char one should be skipped
-    assert_eq!(count, 1, "expected exactly 1 turn mined (length > 20), got {}", count);
+    assert_eq!(
+        count, 1,
+        "expected exactly 1 turn mined (length > 20), got {}",
+        count
+    );
 
     // Verify the short one is NOT in search results
-    let response_short = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Sure, OK",
-        None,
-        false,
-        5,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
-    let found_short = response_short.results.iter().any(|r| r.content.contains("Sure, OK"));
+    let response_short = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Sure, OK", None, false, 5, 0, 0.0, None, false, true, true, None, true, None,
+        ))
+        .await?;
+    let found_short = response_short
+        .results
+        .iter()
+        .any(|r| r.content.contains("Sure, OK"));
     assert!(!found_short, "short assistant turn was incorrectly indexed");
 
     // Verify the long one IS in search results
-    let response_long = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "Sure thing",
-        None,
-        false,
-        5,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
-    let found_long = response_long.results.iter().any(|r| r.content.contains("Sure thing"));
+    let response_long = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "Sure thing",
+            None,
+            false,
+            5,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await?;
+    let found_long = response_long
+        .results
+        .iter()
+        .any(|r| r.content.contains("Sure thing"));
     assert!(found_long, "long assistant turn was not indexed");
 
     Ok(())
@@ -288,7 +317,8 @@ async fn precompact_mixed_roles_all_mined() -> anyhow::Result<()> {
         backend.as_ref(),
         store.as_ref(),
         &ignore,
-    ).await?;
+    )
+    .await?;
 
     // user, assistant (>20), tool, computer, and system should be mined. short assistant should be skipped.
     // Total mined should be 5.

@@ -1,5 +1,5 @@
-use crate::db::backend::{SurrealBackend, record_key_to_string, unescape_id_part, StorageBackend};
 use crate::contracts::ForgedSectionBatch;
+use crate::db::backend::{StorageBackend, SurrealBackend, record_key_to_string, unescape_id_part};
 use anyhow::Result;
 use uuid::Uuid;
 
@@ -9,18 +9,25 @@ impl SurrealBackend {
             let _res: serde_json::Value = self.daemon_post("/v1/forge/save", batch).await?;
             return Ok(());
         }
-        
+
         // Calculate SHA-256 hash
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(batch.chunk_text.as_bytes());
         let hash_str = hex::encode(hasher.finalize());
 
         let check_query = "SELECT VALUE hash FROM forged_section_hash WHERE hash = $hash LIMIT 1;";
-        let mut check_resp = self.db.query(check_query).bind(("hash", hash_str.clone())).await?;
+        let mut check_resp = self
+            .db
+            .query(check_query)
+            .bind(("hash", hash_str.clone()))
+            .await?;
         let existing_hash: Option<String> = check_resp.take(0)?;
         if existing_hash.is_some() {
-            tracing::info!("Forged section with hash {} already exists. Skipping save.", hash_str);
+            tracing::info!(
+                "Forged section with hash {} already exists. Skipping save.",
+                hash_str
+            );
             return Ok(());
         }
 
@@ -56,7 +63,11 @@ impl SurrealBackend {
         let mut concept_is_update = Vec::new();
         for concept in &batch.concepts {
             let check_query = "SELECT VALUE id FROM wiki_node WHERE name = $name LIMIT 1;";
-            let mut response = self.db.query(check_query).bind(("name", concept.name.as_str())).await?;
+            let mut response = self
+                .db
+                .query(check_query)
+                .bind(("name", concept.name.as_str()))
+                .await?;
             let id_opt: Option<surrealdb::types::RecordId> = response.take(0)?;
             if let Some(thing) = id_opt {
                 let uuid_str = match &thing.key {
@@ -98,7 +109,10 @@ impl SurrealBackend {
             for concept in &batch.concepts {
                 let concept_slug = slugify(&concept.name);
                 let uuid_suffix = &Uuid::new_v4().to_string()[..8];
-                let rel_path = format!("wiki/forge/{}/concept_{}_{}.md", doc_slug, concept_slug, uuid_suffix);
+                let rel_path = format!(
+                    "wiki/forge/{}/concept_{}_{}.md",
+                    doc_slug, concept_slug, uuid_suffix
+                );
                 let abs_path = vault_root.join(&rel_path);
 
                 if let Some(parent) = abs_path.parent() {
@@ -107,7 +121,10 @@ impl SurrealBackend {
 
                 let concept_md = format!(
                     "---\nname: \"{}\"\nscope: \"{}\"\ngenerator_name: \"ForgePipeline\"\n---\n\n# {}\n\n{}",
-                    concept.name.replace('"', "\\\""), batch.scope, concept.name, concept.content
+                    concept.name.replace('"', "\\\""),
+                    batch.scope,
+                    concept.name,
+                    concept.content
                 );
                 let sanitized_c = crate::secret_filter::SecretFilter::clean(&concept_md);
                 std::fs::write(&abs_path, sanitized_c)?;
@@ -119,7 +136,10 @@ impl SurrealBackend {
             for rule in &batch.rules {
                 let rule_slug = slugify(&rule.target_pattern);
                 let uuid_suffix = &Uuid::new_v4().to_string()[..8];
-                let rel_path = format!("wisdom/forge/{}/rule_{}_{}.md", doc_slug, rule_slug, uuid_suffix);
+                let rel_path = format!(
+                    "wisdom/forge/{}/rule_{}_{}.md",
+                    doc_slug, rule_slug, uuid_suffix
+                );
                 let abs_path = vault_root.join(&rel_path);
 
                 if let Some(parent) = abs_path.parent() {
@@ -151,7 +171,11 @@ impl SurrealBackend {
         if let Err(e) = write_res {
             for path in &written_files {
                 if let Err(err) = std::fs::remove_file(path) {
-                    tracing::warn!("Failed to remove file {:?} during rollback: {:?}", path, err);
+                    tracing::warn!(
+                        "Failed to remove file {:?} during rollback: {:?}",
+                        path,
+                        err
+                    );
                 }
             }
             return Err(e);
@@ -159,46 +183,64 @@ impl SurrealBackend {
 
         // 2. Generate embeddings for all inserted records using embed_batch
         let mut texts_to_embed = Vec::new();
-        
+
         let ep_text = format!("{}: {}", ep_title, batch.chunk_text);
         texts_to_embed.push(ep_text);
-        
+
         for concept in &batch.concepts {
             texts_to_embed.push(format!("{}: {}", concept.name, concept.content));
         }
-        
+
         for rule in &batch.rules {
             texts_to_embed.push(format!(
                 "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                rule.target_pattern,
+                rule.action_to_avoid,
+                rule.causal_explanation,
+                rule.prescribed_remedy
             ));
         }
-        
+
         let all_embeddings = if self.embedder.is_some() {
             match self.embed_batch(&texts_to_embed).await {
                 Ok(embs) => embs,
                 Err(e) => {
-                    tracing::warn!("Batch embedding generation failed in save_forged_section: {}", e);
+                    tracing::warn!(
+                        "Batch embedding generation failed in save_forged_section: {}",
+                        e
+                    );
                     vec![vec![]; texts_to_embed.len()]
                 }
             }
         } else {
             vec![vec![]; texts_to_embed.len()]
         };
-        
-        let ep_embedding = if all_embeddings[0].is_empty() { None } else { Some(all_embeddings[0].clone()) };
-        
+
+        let ep_embedding = if all_embeddings[0].is_empty() {
+            None
+        } else {
+            Some(all_embeddings[0].clone())
+        };
+
         let mut concept_embeddings = Vec::new();
         let mut idx = 1;
         for _ in &batch.concepts {
-            let emb = if all_embeddings[idx].is_empty() { None } else { Some(all_embeddings[idx].clone()) };
+            let emb = if all_embeddings[idx].is_empty() {
+                None
+            } else {
+                Some(all_embeddings[idx].clone())
+            };
             concept_embeddings.push(emb);
             idx += 1;
         }
-        
+
         let mut rule_embeddings = Vec::new();
         for _ in &batch.rules {
-            let emb = if all_embeddings[idx].is_empty() { None } else { Some(all_embeddings[idx].clone()) };
+            let emb = if all_embeddings[idx].is_empty() {
+                None
+            } else {
+                Some(all_embeddings[idx].clone())
+            };
             rule_embeddings.push(emb);
             idx += 1;
         }
@@ -215,7 +257,10 @@ impl SurrealBackend {
         bindings.insert("ep_title".to_string(), serde_json::json!(ep_title));
         bindings.insert("ep_content".to_string(), serde_json::json!(sanitized_ep));
         bindings.insert("scope".to_string(), serde_json::json!(batch.scope));
-        bindings.insert("ep_vault_path".to_string(), serde_json::json!(chunk_rel_path));
+        bindings.insert(
+            "ep_vault_path".to_string(),
+            serde_json::json!(chunk_rel_path),
+        );
         bindings.insert("ep_embedding".to_string(), serde_json::json!(ep_embedding));
 
         query.push_str(&format!(
@@ -248,7 +293,10 @@ impl SurrealBackend {
             let emb_var = format!("concept_emb_{}", idx);
 
             bindings.insert(name_var.clone(), serde_json::json!(concept.name));
-            bindings.insert(content_var.clone(), serde_json::json!(crate::secret_filter::SecretFilter::clean(&concept.content)));
+            bindings.insert(
+                content_var.clone(),
+                serde_json::json!(crate::secret_filter::SecretFilter::clean(&concept.content)),
+            );
             bindings.insert(path_var.clone(), serde_json::json!(concept_paths[idx]));
             bindings.insert(emb_var.clone(), serde_json::json!(concept_embeddings[idx]));
 
@@ -299,13 +347,36 @@ impl SurrealBackend {
             let emb_var = format!("rule_emb_{}", idx);
             let source_episodes_var = format!("rule_source_episodes_{}", idx);
 
-            bindings.insert(pattern_var.clone(), serde_json::json!(crate::secret_filter::SecretFilter::clean(&rule.target_pattern)));
-            bindings.insert(avoid_var.clone(), serde_json::json!(crate::secret_filter::SecretFilter::clean(&rule.action_to_avoid)));
-            bindings.insert(explanation_var.clone(), serde_json::json!(crate::secret_filter::SecretFilter::clean(&rule.causal_explanation)));
-            bindings.insert(remedy_var.clone(), serde_json::json!(crate::secret_filter::SecretFilter::clean(&rule.prescribed_remedy)));
+            bindings.insert(
+                pattern_var.clone(),
+                serde_json::json!(crate::secret_filter::SecretFilter::clean(
+                    &rule.target_pattern
+                )),
+            );
+            bindings.insert(
+                avoid_var.clone(),
+                serde_json::json!(crate::secret_filter::SecretFilter::clean(
+                    &rule.action_to_avoid
+                )),
+            );
+            bindings.insert(
+                explanation_var.clone(),
+                serde_json::json!(crate::secret_filter::SecretFilter::clean(
+                    &rule.causal_explanation
+                )),
+            );
+            bindings.insert(
+                remedy_var.clone(),
+                serde_json::json!(crate::secret_filter::SecretFilter::clean(
+                    &rule.prescribed_remedy
+                )),
+            );
             bindings.insert(path_var.clone(), serde_json::json!(rule_paths[idx]));
             bindings.insert(emb_var.clone(), serde_json::json!(rule_embeddings[idx]));
-            bindings.insert(source_episodes_var.clone(), serde_json::json!(vec![format!("episode:{}", episode_uuid)]));
+            bindings.insert(
+                source_episodes_var.clone(),
+                serde_json::json!(vec![format!("episode:{}", episode_uuid)]),
+            );
 
             query.push_str(&format!(
                 "LET $rule_{} = type::record('wisdom', '{}');\n\
@@ -327,10 +398,20 @@ impl SurrealBackend {
                      utility_score: 1.0,\n\
                      access_count: 0\n\
                  }};\n",
-                idx, rule_uuid,
-                idx, pattern_var, avoid_var, explanation_var, remedy_var, path_var, source_episodes_var, emb_var,
-                idx, rule_metrics_uuid,
-                idx, idx
+                idx,
+                rule_uuid,
+                idx,
+                pattern_var,
+                avoid_var,
+                explanation_var,
+                remedy_var,
+                path_var,
+                source_episodes_var,
+                emb_var,
+                idx,
+                rule_metrics_uuid,
+                idx,
+                idx
             ));
 
             for (c_idx, _) in batch.concepts.iter().enumerate() {
@@ -363,7 +444,9 @@ impl SurrealBackend {
                         Ok(_) => {}
                         Err(err) => {
                             let err_str = err.to_string();
-                            if !err_str.contains("out of bounds") && !err_str.contains("no query at index") {
+                            if !err_str.contains("out of bounds")
+                                && !err_str.contains("no query at index")
+                            {
                                 if first_err.is_none() {
                                     first_err = Some(err.clone());
                                 } else if let Some(ref current_err) = first_err {
@@ -379,17 +462,28 @@ impl SurrealBackend {
                     // Rollback files on database transaction error
                     for path in &written_files {
                         if let Err(err) = std::fs::remove_file(path) {
-                            tracing::warn!("Failed to remove file {:?} during transaction error rollback: {:?}", path, err);
+                            tracing::warn!(
+                                "Failed to remove file {:?} during transaction error rollback: {:?}",
+                                path,
+                                err
+                            );
                         }
                     }
-                    return Err(anyhow::anyhow!("SurrealDB transaction execution failed: {}", e));
+                    return Err(anyhow::anyhow!(
+                        "SurrealDB transaction execution failed: {}",
+                        e
+                    ));
                 }
             }
             Err(e) => {
                 // Rollback files on database query/connection error
                 for path in &written_files {
                     if let Err(err) = std::fs::remove_file(path) {
-                        tracing::warn!("Failed to remove file {:?} during query error rollback: {:?}", path, err);
+                        tracing::warn!(
+                            "Failed to remove file {:?} during query error rollback: {:?}",
+                            path,
+                            err
+                        );
                     }
                 }
                 return Err(e.into());
@@ -402,7 +496,11 @@ impl SurrealBackend {
                 created_at: time::now()
             };
         ";
-        let _ = self.db.query(save_hash_query).bind(("hash", hash_str)).await?;
+        let _ = self
+            .db
+            .query(save_hash_query)
+            .bind(("hash", hash_str))
+            .await?;
 
         Ok(())
     }

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use mythrax_core::db::{SurrealBackend, StorageBackend};
 use mythrax_core::contracts::EpisodeSave;
+use mythrax_core::db::{StorageBackend, SurrealBackend};
 
 #[tokio::test]
 async fn test_fts_cap_behavior() -> Result<()> {
@@ -9,7 +9,8 @@ async fn test_fts_cap_behavior() -> Result<()> {
     backend.set_search_mode("hybrid").await;
 
     // We insert 3 documents with the keyword "architecture"
-    let content_arch = "This is a document about microservice architecture and service mesh design.";
+    let content_arch =
+        "This is a document about microservice architecture and service mesh design.";
     let titles_arch = vec![
         "Microservice Node Alpha",
         "Microservice Node Beta",
@@ -18,7 +19,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
 
     for title in &titles_arch {
         let ep = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: title.to_string(),
             content: content_arch.to_string(),
             scope: Some("general".to_string()),
@@ -29,14 +30,11 @@ async fn test_fts_cap_behavior() -> Result<()> {
 
     // We insert 2 documents WITHOUT "architecture" (to ensure DF < N, yielding non-zero IDF)
     let content_other = "This is a recipe for baking delicious homemade pizza with cheese.";
-    let titles_other = vec![
-        "Pizza Node Delta",
-        "Pizza Node Epsilon",
-    ];
+    let titles_other = vec!["Pizza Node Delta", "Pizza Node Epsilon"];
 
     for title in &titles_other {
         let ep = EpisodeSave {
-        created_at: None,
+            created_at: None,
             title: title.to_string(),
             content: content_other.to_string(),
             scope: Some("general".to_string()),
@@ -49,7 +47,10 @@ async fn test_fts_cap_behavior() -> Result<()> {
     tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
     // Query all episodes to verify what's in the DB
-    let mut raw_eps_resp = backend.db.query("SELECT id, title, embedding FROM episode;").await?;
+    let mut raw_eps_resp = backend
+        .db
+        .query("SELECT id, title, embedding FROM episode;")
+        .await?;
     let raw_eps: Vec<serde_json::Value> = raw_eps_resp.take(0)?;
     println!("Total episodes in DB: {}", raw_eps.len());
     for ep in &raw_eps {
@@ -61,25 +62,30 @@ async fn test_fts_cap_behavior() -> Result<()> {
         std::env::set_var("MYTHRAX_FTS_CAP", "2");
     }
 
-    let resp_cap_2 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "architecture",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
+    let resp_cap_2 = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "architecture",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await?;
 
     println!("Search Results count (Cap 2): {}", resp_cap_2.results.len());
     for (i, r) in resp_cap_2.results.iter().enumerate() {
-        println!(" [{}] Title: '{}', Sim: {}, BM25: {:?}", i, r.title, r.similarity, r.bm25_score);
+        println!(
+            " [{}] Title: '{}', Sim: {}, BM25: {:?}",
+            i, r.title, r.similarity, r.bm25_score
+        );
     }
 
     // Since cap = 2, only 2 keyword candidates should be returned (as vector search returns 0)
@@ -109,25 +115,30 @@ async fn test_fts_cap_behavior() -> Result<()> {
     // Allow SurrealDB FTS to index
     tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
 
-    let resp_cap_3 = backend.search(mythrax_core::contracts::SearchParams::from_positional(
-        "architecture",
-        Some("general"),
-        false,
-        10,
-        0,
-        0.0,
-        None,
-        false,
-        true,
-        true,
-        None,
-        true,
-        None,
-    )).await?;
+    let resp_cap_3 = backend
+        .search(mythrax_core::contracts::SearchParams::from_positional(
+            "architecture",
+            Some("general"),
+            false,
+            10,
+            0,
+            0.0,
+            None,
+            false,
+            true,
+            true,
+            None,
+            true,
+            None,
+        ))
+        .await?;
 
     println!("Search Results count (Cap 3): {}", resp_cap_3.results.len());
     for (i, r) in resp_cap_3.results.iter().enumerate() {
-        println!(" [{}] Title: '{}', Sim: {}, BM25: {:?}", i, r.title, r.similarity, r.bm25_score);
+        println!(
+            " [{}] Title: '{}', Sim: {}, BM25: {:?}",
+            i, r.title, r.similarity, r.bm25_score
+        );
     }
 
     // Since cap = 3, only 3 keyword candidates should be returned

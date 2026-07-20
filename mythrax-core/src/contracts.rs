@@ -391,7 +391,6 @@ impl EpisodeSave {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResult {
     pub id: String,
@@ -538,8 +537,6 @@ pub struct ContractField {
     #[serde(rename = "enum")]
     pub enum_values: Option<Vec<String>>,
 }
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct WikiNode {
@@ -743,18 +740,54 @@ impl SearchParams {
         }
     }
     // Builder methods
-    pub fn scope(mut self, scope: impl Into<String>) -> Self { self.scope = Some(scope.into()); self }
-    pub fn deep_insight(mut self, val: bool) -> Self { self.deep_insight = val; self }
-    pub fn limit(mut self, val: usize) -> Self { self.limit = val; self }
-    pub fn offset(mut self, val: usize) -> Self { self.offset = val; self }
-    pub fn threshold(mut self, val: f32) -> Self { self.threshold = val; self }
-    pub fn token_budget(mut self, val: usize) -> Self { self.token_budget = Some(val); self }
-    pub fn allow_downward(mut self, val: bool) -> Self { self.allow_downward = val; self }
-    pub fn include_episodes(mut self, val: bool) -> Self { self.include_episodes = val; self }
-    pub fn include_artifacts(mut self, val: bool) -> Self { self.include_artifacts = val; self }
-    pub fn session_id(mut self, id: impl Into<String>) -> Self { self.session_id = Some(id.into()); self }
-    pub fn include_archived(mut self, val: bool) -> Self { self.include_archived = val; self }
-    pub fn temporal_anchor(mut self, anchor: impl Into<String>) -> Self { self.temporal_anchor = Some(anchor.into()); self }
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = Some(scope.into());
+        self
+    }
+    pub fn deep_insight(mut self, val: bool) -> Self {
+        self.deep_insight = val;
+        self
+    }
+    pub fn limit(mut self, val: usize) -> Self {
+        self.limit = val;
+        self
+    }
+    pub fn offset(mut self, val: usize) -> Self {
+        self.offset = val;
+        self
+    }
+    pub fn threshold(mut self, val: f32) -> Self {
+        self.threshold = val;
+        self
+    }
+    pub fn token_budget(mut self, val: usize) -> Self {
+        self.token_budget = Some(val);
+        self
+    }
+    pub fn allow_downward(mut self, val: bool) -> Self {
+        self.allow_downward = val;
+        self
+    }
+    pub fn include_episodes(mut self, val: bool) -> Self {
+        self.include_episodes = val;
+        self
+    }
+    pub fn include_artifacts(mut self, val: bool) -> Self {
+        self.include_artifacts = val;
+        self
+    }
+    pub fn session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
+        self
+    }
+    pub fn include_archived(mut self, val: bool) -> Self {
+        self.include_archived = val;
+        self
+    }
+    pub fn temporal_anchor(mut self, anchor: impl Into<String>) -> Self {
+        self.temporal_anchor = Some(anchor.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -802,4 +835,3 @@ impl TaskProfile {
         self
     }
 }
-
