@@ -215,12 +215,23 @@ pub async fn mine_transcript(
                         current_offset = next_offset;
                         continue;
                     }
+                    let mut is_correction = false;
                     let type_val = match normalized_role.as_str() {
                         "user" => {
                             if !has_previous_user_input {
                                 has_previous_user_input = true;
                                 "user_input".to_string()
                             } else {
+                                let lower = extracted.to_lowercase();
+                                is_correction = lower.contains("wrong")
+                                    || lower.contains("forgot")
+                                    || lower.contains("incorrect")
+                                    || lower.contains("mistake")
+                                    || lower.contains("should have")
+                                    || lower.contains("actually")
+                                    || lower.contains("not right")
+                                    || lower.contains("that was a mistake")
+                                    || lower.contains("that's wrong");
                                 "user_feedback".to_string()
                             }
                         }
@@ -230,7 +241,7 @@ pub async fn mine_transcript(
                         _ => "agent_thought".to_string(),
                     };
                     let title = format!("Verbatim {} Turn ({})", r, session);
-                    let ep = EpisodeSave::builder(title, extracted)
+                    let ep = EpisodeSave::builder(title, extracted.clone())
                         .scope(Some("general".to_string()))
                         .session_id(Some(session.to_string()))
                         .node_type(Some(type_val))
@@ -246,7 +257,49 @@ pub async fn mine_transcript(
                         if let Err(e) = backend.relate_followed_by(prev_id, &saved_id).await {
                             tracing::warn!("Failed to link mined sequential episodes: {:?}", e);
                         }
+                        
+                        if is_correction {
+                            if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                                if let (Ok(from_thing), Ok(to_thing)) = (
+                                    crate::db::parse_record_id(&saved_id),
+                                    crate::db::parse_record_id(prev_id)
+                                ) {
+                                    let relate_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                                        relation: 'corrects',
+                                        created_at: time::now(),
+                                        confidence: 1.0
+                                    };";
+                                    let _ = surreal.db.query(relate_sql)
+                                        .bind(("from", from_thing))
+                                        .bind(("to", to_thing))
+                                        .await;
+                                }
+                            }
+                        }
                     }
+
+                    if is_correction {
+                        if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                            let backend_clone = Arc::new(surreal.clone());
+                            let store_clone = store_arc.clone();
+                            let content_clone = extracted.clone();
+                            let scope_clone = Some("general".to_string());
+                            let ep_id_clone = Some(saved_id.clone());
+                            
+                            tokio::spawn(async move {
+                                if let Err(e) = crate::mcp_routes::write_handlers::run_llm_critic(
+                                    backend_clone,
+                                    store_clone,
+                                    content_clone,
+                                    scope_clone,
+                                    ep_id_clone,
+                                ).await {
+                                    tracing::error!("Error running LLM critic in precompact: {:?}", e);
+                                }
+                            });
+                        }
+                    }
+
                     prev_saved_id = Some(saved_id);
                     saved_count += 1;
                 }

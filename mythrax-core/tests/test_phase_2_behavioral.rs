@@ -55,7 +55,7 @@ async fn test_zero_touch_correction_and_critic_extraction() -> Result<()> {
     assert!(result.to_string().contains("Episode saved successfully"));
 
     // Call run_llm_critic directly to diagnose any errors synchronously
-    mythrax_core::mcp::run_llm_critic(backend.clone(), store.clone(), "Wait, that was a mistake! You forgot to run the tests first.".to_string(), Some("test-project".to_string())).await?;
+    mythrax_core::mcp::run_llm_critic(backend.clone(), store.clone(), "Wait, that was a mistake! You forgot to run the tests first.".to_string(), Some("test-project".to_string()), None).await?;
 
     // Verify wisdom rule was written to dynamic wisdom directory
     let wisdom_dynamic_dir = vault_root.join("wisdom/dynamic/test-project");

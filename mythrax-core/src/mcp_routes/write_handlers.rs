@@ -147,8 +147,9 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
                     let store_clone = state.store.clone();
                     let content_clone = content.clone();
                     let scope_clone = scope.clone();
+                    let source_ep_id = Some(id.clone());
                     tokio::spawn(async move {
-                        if let Err(e) = run_llm_critic(backend_clone, store_clone, content_clone, scope_clone).await {
+                        if let Err(e) = run_llm_critic(backend_clone, store_clone, content_clone, scope_clone, source_ep_id).await {
                             tracing::error!("Error running LLM critic: {:?}", e);
                         }
                     });
@@ -225,6 +226,7 @@ pub async fn run_llm_critic(
     store: Arc<crate::store::MarkdownStore>,
     content: String,
     scope: Option<String>,
+    source_episode_id: Option<String>,
 ) -> Result<()> {
     let allow_cloud_fallback = match backend.db.query("SELECT allow_cloud_fallback FROM config:settings;").await {
         Ok(mut resp) => {
@@ -317,7 +319,7 @@ pub async fn run_llm_critic(
         scope: active_scope,
         vault_path: Some(rule_path.clone()),
         embedding: None,
-        source_episodes: vec![],
+        source_episodes: source_episode_id.clone().into_iter().collect(),
         generator_name: "LlmCritic".to_string(),
         similarity: None,
         utility: Some(50.0),
@@ -331,7 +333,11 @@ pub async fn run_llm_critic(
 
     let markdown = crate::vault::watcher::format_wisdom_markdown(&rule_save);
     store.write_file(&rule_path, &markdown)?;
-    backend.save_wisdom_rule(&rule_save).await?;
+    let rule_id = backend.save_wisdom_rule(&rule_save).await?;
+    
+    if let Some(ref src_id) = source_episode_id {
+        let _ = backend.relate_nodes(src_id, &rule_id, None, None, Some(1.0)).await;
+    }
 
     Ok(())
 }
