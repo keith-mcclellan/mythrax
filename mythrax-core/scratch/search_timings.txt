@@ -3426,3 +3426,11 @@ query: "Bulk Content 19", profile: 1us, embed: 10606us, terms: 6822us, db: 14571
 query: "Bulk Content 19", profile: 3us, embed: 3634us, terms: 970us, db: 10355us, rerank_start: 629us, total: 15625us
 query: "SWEEP_TEST_VERIFICATION_TOKEN", profile: 4us, embed: 16981us, terms: 2475us, db: 14139us, rerank_start: 2074us, total: 36122us
 query: "ADDITIONAL_TEST_TOKEN", profile: 0us, embed: 3308us, terms: 53us, db: 5532us, rerank_start: 667us, total: 9627us
+query: "second step before", profile: 14402us, embed: 56588us, terms: 8867us, db: 20237us, rerank_start: 35832us, total: 136131us
+query: "Redis", profile: 4us, embed: 10692us, terms: 82us, db: 27001us, rerank_start: 2996us, total: 41419us
+query: "failure", profile: 1us, embed: 10624us, terms: 75us, db: 17234us, rerank_start: 2873us, total: 30958us
+query: "Parent Insight", profile: 4us, embed: 27254us, terms: 2141us, db: 22484us, rerank_start: 4128us, total: 56149us
+query: "Parent Insight", profile: 4us, embed: 12780us, terms: 90us, db: 29793us, rerank_start: 3284us, total: 46434us
+query: "Parent Insight", profile: 5us, embed: 12677us, terms: 137us, db: 28998us, rerank_start: 3601us, total: 45774us
+query: "Parent Insight", profile: 2us, embed: 13655us, terms: 91us, db: 15853us, rerank_start: 3300us, total: 33062us
+query: "Pattern", profile: 5us, embed: 36457us, terms: 7152us, db: 21199us, rerank_start: 7817us, total: 72923us
