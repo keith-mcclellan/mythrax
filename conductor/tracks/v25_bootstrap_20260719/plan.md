@@ -14,8 +14,8 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md). (949cf28)
 
 ## Phase 2: Feedback Loop Hardening & Configuration
-- [~] Task: Add Positional Correction Detection to Bulk Ingestion (`ingestion.rs`).
-- [ ] Task: Harden Live Session Feedback Loop (`precompact.rs`).
+- [x] Task: Add Positional Correction Detection to Bulk Ingestion (`ingestion.rs`). (4214a41)
+- [~] Task: Harden Live Session Feedback Loop (`precompact.rs`).
 - [ ] Task: Fix Agent-Driven Wisdom Provenance (`write_handlers.rs`).
 - [ ] Task: Increase Cognitive Task TTL for Bootstrap to 30 mins (`llm/mod.rs`, `distillation.rs`).
 - [ ] Task: Fix Graduation Decay No-Op computing actual age (`graduation_pipeline.rs`).
