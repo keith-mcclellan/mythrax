@@ -11,126 +11,111 @@ The **Mythrax** MCP server provides semantic memory storage, retrieval, reinforc
 
 ## MCP Tools Reference & Detailed Guide
 
-Granular legacy tools are consolidated into 4 action-based tools to reduce context schema bloat.
+Granular legacy tools are consolidated into 4 action-based tools to reduce context schema bloat. You invoke them via the MCP server under names: `read`, `write`, `manage`, and `agent`.
 
 ### 1. `read` (Read-Only Operations)
 
-- **`view_file`**: Reads text or source files.
-  - *Parameters*: `path: String`, `start_line: Option<u32>`, `end_line: Option<u32>`
-  - *Behavior*: Automatically pages out large blocks into virtual placeholders (`[Paged Symbol: ...]`) to save tokens. Does not modify disk files.
-  - *Usage*: Use to inspect files before editing.
-- **`search_memory`**: Search episodic memories using 6-Signal Unified Retrieval.
-  - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<u32>`
-  - *Usage*: Use to locate past tasks, solutions, and decisions.
-- **`search_wisdom`**: Query active wisdom rules.
+Call the `read` tool with the `action` parameter set to one of the following:
+
+- **`action="view"`**: Reads a text or source file (paging large blocks into virtual placeholders to save tokens).
+  - *Parameters*: `path: String`, `start_line: Option<integer>`, `end_line: Option<integer>`, `is_skill_file: Option<boolean>`, `token_budget: Option<integer>`
+- **`action="search"`**: Search episodic memories using 6-Signal Unified Retrieval.
+  - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<integer>`, `threshold: Option<number>`, `include_artifacts: Option<boolean>`, `include_episodes: Option<boolean>`
+- **`action="rules"`**: Query active wisdom rules.
   - *Parameters*: `query: String`, `scope: Option<String>`
-  - *Usage*: Use to research directory-specific constraints or coding style policies.
-- **`get_memory_nodes`**: Hydrate specific node IDs.
+- **`action="nodes"`**: Hydrate specific node IDs.
   - *Parameters*: `node_ids: Vec<String>`
-  - *Usage*: Use to retrieve full data structures of nodes passed in handoffs or STM.
-- **`get_vault_root`**: Get absolute vault root path.
+- **`action="root"`**: Get the absolute vault root path.
   - *Parameters*: None
-  - *Usage*: Use to locate handoffs, compactions, and wiki directories.
-- **`get_short_term`**: Read stashed STM variables.
+- **`action="get"`**: Read stashed STM variables.
   - *Parameters*: `session_id: String`, `key: Option<String>`
-  - *Usage*: Use during boot to read context nodes or session variables.
-- **`get_config`**: Fetch system settings.
-  - *Parameters*: None
-  - *Usage*: Use to inspect models, thresholds, or API keys.
-- **`query_symbolic`**: Query relation graphs.
-  - *Parameters*: `node_id: String`, `relation: Option<String>`, `max_depth: Option<u32>`
-  - *Usage*: Use to traverse concept maps or task sequences.
-- **`search_index`**: Fast index search.
-  - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<u32>`
-  - *Usage*: Use to find file lists or node IDs while conserving tokens.
-- **`timeline`**: Chronological event query.
-  - *Parameters*: `session_id: Option<String>`, `limit: Option<u32>`
-  - *Usage*: Use to review historical task sequences.
-- **`get_full`**: Read raw, unpaged file contents.
+- **`action="query_symbolic"`**: Query relation graphs.
+  - *Parameters*: `node_id: String`, `relation: Option<String>`, `max_depth: Option<integer>`
+- **`action="search_index"`**: Fast index search for file lists or node IDs.
+  - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<integer>`
+- **`action="timeline"`**: Chronological event query.
+  - *Parameters*: `session_id: Option<String>`, `limit: Option<integer>`
+- **`action="get_full"`**: Read raw, unpaged file contents.
   - *Parameters*: `path: String`
-  - *Usage*: Use only for small config files or headers. Avoid on large source code.
+- **`action="search_by_concept"`**: Retrieve memories matching a specific concept.
+  - *Parameters*: `concept: String`
+- **`action="diff_sessions"`**: Compare STM state between two sessions.
+  - *Parameters*: `session_a: String`, `session_b: String`
 
 ---
 
 ### 2. `write` (Write & Mutation Operations)
 
-- **`edit_file`**: Surgically edit a single contiguous block.
-  - *Parameters*: `path: String`, `target_content: String`, `replacement_content: String`, `instruction: String`, `description: String`
-  - *Behavior*: Reconstructs paged symbol placeholders in memory, applies modifications, and writes to disk.
-  - *Usage*: Use for targeted single-block fixes.
-- **`multi_edit_file`**: Apply non-contiguous edits.
-  - *Parameters*: `path: String`, `chunks: Vec<ReplacementChunk>`, `instruction: String`, `description: String`
-  - *Usage*: Use to modify multiple independent methods or blocks in one file.
-- **`save_episode`**: Save a new episodic memory.
-  - *Parameters*: `title: String`, `content: String`, `scope: Option<String>`
-  - *Usage*: Use to log completed tasks, findings, and decisions.
-- **`record_feedback`**: Record reinforcement feedback.
-  - *Parameters*: `episode_id: String`, `success: bool`
-  - *Usage*: Use after tests pass/fail to reinforce the memory pathway.
-- **`put_short_term`**: Write temporary variable to STM.
+Call the `write` tool with the `action` parameter set to one of the following:
+
+- **`action="replace"`**: Surgically edit a single contiguous block in a file.
+  - *Parameters*: `path: String` or `TargetFile: String`, `target_content: String` or `TargetContent: String`, `replacement_content: String` or `ReplacementContent: String`, `instruction: String`, `description: String`, `start_line: Option<integer>`, `end_line: Option<integer>`, `allow_multiple: Option<boolean>`
+- **`action="multi_replace"`**: Apply non-contiguous edits across a file.
+  - *Parameters*: `path: String` or `TargetFile: String`, `chunks: Vec<ReplacementChunk>`, `instruction: String`, `description: String`
+- **`action="save"`**: Save a new episodic memory.
+  - *Parameters*: `title: String`, `content: String`, `scope: Option<String>`, `node_type: Option<String>`, `session_id: Option<String>`, `duration: Option<String>`
+- **`action="feedback"`**: Record reinforcement feedback for an episode.
+  - *Parameters*: `episode_id: String`, `success: boolean`
+- **`action="put"`**: Write a temporary variable to session STM.
   - *Parameters*: `session_id: String`, `key: String`, `value: String`
-  - *Usage*: Use to share context or node IDs before spawning subagents.
-- **`clear_short_term`**: Clear session STM.
+- **`action="clear"`**: Clear session STM.
   - *Parameters*: `session_id: String`
-  - *Usage*: Use during teardown to clean up temporary state.
-- **`save_forged_assets`**: Bulk write rule documents and compactions.
-  - *Parameters*: `scope: String`, `chunks: Vec<Value>`
-  - *Usage*: Internal compactor pipeline writes.
-- **`ingest_bulk`**: Bulk ingest directories or files.
-  - *Parameters*: `paths: Vec<String>`, `scope: String`, `limit: Option<u32>`, `offset: Option<u32>`
-  - *Usage*: Use to index new vault or code directories incrementally in chronological batches.
-- **`ingest_forge`**: Ingest candidate wisdom rules.
-  - *Parameters*: `path: String`, `scope: String`
-  - *Usage*: Use to graduate rules.
-- **`set_config`**: Set daemon configuration.
-  - *Parameters*: `key: String`, `value: String`
-  - *Usage*: Use to adjust thresholds or API keys.
+- **`action="handoff"`**: Register subagent delegation handoff contract.
+  - *Parameters*: `parent_conversation_id: String`, `subagent_conversation_id: String`, `summary: String`, `handoff_file_path: String`, `scope: Option<String>`
+- **`action="set"`**: Set daemon configuration.
+  - *Parameters*: `provider: String`, `model: String`, `cloud_provider: String`, `api_key: Option<String>`
 
 ---
 
 ### 3. `manage` (Workspace & Verification Tasks)
 
-- **`pre_invocation`**: Load context and belief states.
-  - *Parameters*: `session_id: String`
-  - *Usage*: Executed automatically. Manually call to refresh state.
-- **`precompact`**: Compact active transcripts.
-  - *Parameters*: `session_id: String`, `transcript_path: String`
-  - *Usage*: Use to compress conversation logs before rule distillation.
-- **`verify_vault`**: Verify link integrity and sync schemas.
-  - *Parameters*: `fix: Option<bool>`
-  - *Usage*: Use to self-heal link mappings and update DB tables.
-- **`organize_vault`**: Re-align directory structures.
+Call the `manage` tool with the `action` parameter set to one of the following:
+
+- **`action="verify"`**: Verify link integrity and sync schemas.
+  - *Parameters*: `fix: Option<boolean>`
+- **`action="organize"`**: Re-align directory structures.
   - *Parameters*: None
-  - *Usage*: Use to clean up folder structures.
-- **`reprocess_vault`**: Re-index all vault nodes.
+- **`action="reprocess"`**: Re-index all vault nodes (regenerates embeddings & re-chunks).
   - *Parameters*: None
-  - *Usage*: Use to regenerate embeddings and re-chunk files.
-- **`summarize_vault`**: Trigger compactions.
+- **`action="summarize"`**: Trigger manual compactions.
   - *Parameters*: `scope: String`
-  - *Usage*: Use to manually start background dreaming loops. *CAUTION*: On macOS, to prevent Metal GPU Hang/Timeout crashes, always call this synchronously and sequentially (one scope at a time) rather than concurrently.
-- **`audit_compliance`**: Scan codebase against rules.
+  - *Note*: On macOS, to prevent Metal GPU timeout crashes, always run synchronously and sequentially rather than concurrently.
+- **`action="ingest_bulk"`**: Bulk ingest vault directories.
+  - *Parameters*: `paths: Option<Vec<String>>` or `source_path: Option<String>`, `scope: String`, `limit: Option<integer>`, `offset: Option<integer>`
+- **`action="ingest_forge"`**: Ingest candidate wisdom rules.
+  - *Parameters*: `path: Option<String>` or `source_path: Option<String>`, `scope: String`
+- **`action="save_forged_assets"`**: Save rule documents and compactions.
+  - *Parameters*: `scope: String`, `chunks: Vec<Value>`
+- **`action="pre_invocation"`**: Load belief states and hydrate context.
+  - *Parameters*: `session_id: String`, `workspace_path: Option<String>`
+- **`action="precompact"`**: Compact active transcripts.
+  - *Parameters*: `session_id: String`, `transcript_path: String`
+- **`action="audit_compliance"`**: Scan files against rules.
   - *Parameters*: `files: Vec<String>`
-  - *Usage*: Use to identify compliance violations.
-- **HTR Actions (`init_htr`, `ideate_htr`, `execute_htr`, `backprop_htr`, `merge_htr`, `run_htr`)**:
-  - *Parameters*: `hypothesis: String`, `test_command: String`, `max_steps: Option<u32>`, etc.
-  - *Usage*: Use to execute Hypothesize-Test-Refine cognitive loops.
+- **`action="clean"`**: Clean temporary build files.
+  - *Parameters*: `scope: Option<String>`
+- **`action="bootstrap"`**: Run system bootstrapping.
+  - *Parameters*: `scope: Option<String>`
+- **`action="prune"`**: Prune stale memories.
+  - *Parameters*: `scope: Option<String>`
+- **`action="init"`, `action="ideate"`, `action="execute"`, `action="backprop"`, `action="merge"`, `action="run"`**:
+  - *Usage*: Execute HTR (Hypothesize-Test-Refine) loop stages.
+  - *Parameters*: `hypothesis: Option<String>`, `test_command: Option<String>`, `max_steps: Option<integer>`, `node_id: Option<String>`
 
 ---
 
-### 4. `agent` (Agent Orchestration & Handoffs)
+### 4. `agent` (Autonomous Agent Orchestration)
 
-- **`complete_task`**: Spawn an autonomous subagent loop.
-  - *Parameters*: `prompt: String`, `files: Vec<String>`, `model: Option<String>`, `system_instruction: Option<String>`
-  - *Usage*: Use to delegate self-contained tasks asynchronously.
-- **`save_handoff`**: Register delegation handoff.
-  - *Parameters*: `parent_conversation_id: String`, `subagent_conversation_id: String`, `summary: String`, `handoff_file_path: String`
-  - *Usage*: Use when spawning subagents to link parent-child context nodes in the graph.
+Call the `agent` tool with the `action` parameter set to:
+
+- **`action="complete_code_task"`**: Spawn an autonomous subagent loop to complete a coding chore.
+  - *Parameters*: `prompt: String`, `system_instruction: Option<String>`, `model: Option<String>`, `enable_thinking: Option<boolean>`
 
 ---
 
 ## Pre-Invocation Hook & Verification Compliance
 
-1. **Automatic Context Injection**: The system runs `pre_invocation_hook` before your first turn. It injects the active POMDP belief state, stashed STM variables, handoff tasks, and three-tier hybrid hydration memory nodes:
+1. **Automatic Context Injection**: The system runs `pre_invocation` automatically before your first turn. It injects active POMDP belief states, stashed STM variables, handoff tasks, and three-tier hybrid hydration memory nodes:
    - **Similarity >= 0.80**: Hydrated fully.
    - **Similarity [0.60, 0.80)**: Listed in summary tables.
    - **Similarity < 0.60**: Discarded.
@@ -139,24 +124,24 @@ Granular legacy tools are consolidated into 4 action-based tools to reduce conte
    - **Advisory Section**: Rendered second, using tip callouts (`> [!TIP]`) for optional guidance and performance suggestions.
 3. **Boot Verification**: You **MUST** output compliance verification on the first line of your first response:
    `Execution Check: [Karpathy Rules applied? Yes/No] [Local Model verified? Yes/No/Fallback]`
-4. **Enforced Memory Search**: If the pre-invocation context is empty, manually run `read(action="search_memory", query="...")` before editing code.
-5. **Reinforcement**: Run `write(action="save_episode")` to log results and `write(action="record_feedback")` to reinforce the pathway.
+4. **Enforced Memory Search**: If the pre-invocation context is empty, manually run `read(action="search", query="...")` before editing code.
+5. **Reinforcement**: Run `write(action="save")` to log results and `write(action="feedback")` to reinforce the pathway.
 
 ### 6-Signal Unified Retrieval Pipeline
-The system scores memory candidate retrieval using six signals: vector similarity, BM25, concept spreading activation, active STM memory injection (using `embed_batch` to avoid sequential embedding calls), temporal neighbors, and Gaussian time decay.
+The retrieval pipeline scores candidate memories using six signals: vector similarity, BM25, concept spreading activation, active STM memory injection (using `embed_batch` to avoid sequential embedding calls), temporal neighbors, and Gaussian time decay.
 
 ---
 
 ## Agent Handoff Protocol
 
 When delegating tasks:
-1. Discover the vault root via `read(action="get_vault_root")`.
+1. Discover the vault root via `read(action="root")`.
 2. Write the contract file to `<vault_root>/.handoffs/handoff_<task_id>.md`.
 3. **Typed I/O Contracts**: The handoff system enforces strict YAML-based contract validation on boundaries:
-   - **`save_handoff`**: Parses the handoff contract's input parameters, validating types, requirements, and allowed enum values before spawning the subagent. Input values are safely logged to the subagent's STM.
+   - **`write(action="handoff")`**: Parses the handoff contract's input parameters, validating types, requirements, and allowed enum values before spawning the subagent. Input values are safely logged to the subagent's STM.
    - **`complete_handoff`**: Validates the subagent's final output outputs, formats status strings using regex filters, and promotes output values to the parent session's STM.
 4. Save the distilled context node IDs in STM under key `"distilled_context_nodes"`.
-5. Call `agent(action="save_handoff", ...)` to link nodes in SurrealDB.
+5. Call `write(action="handoff", ...)` to link parent and child nodes in SurrealDB.
 6. Spawn the subagent pointing to the contract path:
    > *"Read and execute the handoff at `file:///<vault_root>/.handoffs/handoff_<task_id>.md` and rules at `file:///Users/keith/.gemini/AGENT.md`. Output first: `Execution Check: [Karpathy Rules applied? Yes/No] [Local Model verified? Yes/No/Fallback]`"*
 
@@ -165,8 +150,8 @@ When delegating tasks:
 ## Virtual Paging & Editing
 
 To fit large codebases into context windows:
-1. **Virtual Skeletons**: `read(action="view_file")` returns code with placeholders (e.g. `[Paged Symbol: ...]`) instead of full bodies. Disk files remain untouched.
-2. **Paging-Aware Edits**: `write(action="edit_file")` and `write(action="multi_edit_file")` parse placeholders, query `symbol_archive` to restore bodies in memory, apply the replacement, and write back to disk. Target placeholders exactly as they appear in the skeleton.
+1. **Virtual Skeletons**: `read(action="view")` returns code with placeholders (e.g. `[Paged Symbol: ...]`) instead of full bodies. Disk files remain untouched.
+2. **Paging-Aware Edits**: `write(action="replace")` and `write(action="multi_replace")` parse placeholders, query `symbol_archive` to restore bodies in memory, apply the replacement, and write back to disk. Target placeholders exactly as they appear in the skeleton.
 3. **LRU Eviction**: Unused memories are evicted from RAM. Wisdom rules, high importance nodes ($\ge 8.0$), active handoffs, and active STM are pinned.
 
 ---
