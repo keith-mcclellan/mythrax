@@ -17,8 +17,8 @@
 - [x] Task: Add Positional Correction Detection to Bulk Ingestion (`ingestion.rs`). (4214a41)
 - [x] Task: Harden Live Session Feedback Loop (`precompact.rs`). (41d20ed)
 - [x] Task: Fix Agent-Driven Wisdom Provenance (`write_handlers.rs`). (41d20ed)
-- [~] Task: Increase Cognitive Task TTL for Bootstrap to 30 mins (`llm/mod.rs`, `distillation.rs`).
-- [ ] Task: Fix Graduation Decay No-Op computing actual age (`graduation_pipeline.rs`).
+- [x] Task: Increase Cognitive Task TTL for Bootstrap to 30 mins (`llm/mod.rs`, `distillation.rs`). (2869574)
+- [~] Task: Fix Graduation Decay No-Op computing actual age (`graduation_pipeline.rs`).
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
 
 ## Phase 3: Tech Debt Cleanups & Empirical Testing
