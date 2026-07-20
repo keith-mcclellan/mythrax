@@ -1011,7 +1011,6 @@ async fn main() -> Result<()> {
             ensure_daemon_active_for_cli(&auth_token, &daemon_url).await?;
             
             let client = reqwest::Client::builder()
-                .timeout(None)
                 .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
                 .build()
                 .context("Failed to build HTTP client")?;
