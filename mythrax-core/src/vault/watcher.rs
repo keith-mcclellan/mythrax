@@ -941,7 +941,6 @@ pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
     format!("---\n{}---\n{}", yaml_str.trim(), episode.content)
 }
 
-#[allow(dead_code)]
 pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     let mut yaml_val = serde_json::Map::new();
     yaml_val.insert("target_pattern".to_string(), serde_json::json!(rule.target_pattern));
