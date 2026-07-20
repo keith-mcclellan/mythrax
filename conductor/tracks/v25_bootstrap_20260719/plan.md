@@ -18,8 +18,8 @@
 - [x] Task: Harden Live Session Feedback Loop (`precompact.rs`). (41d20ed)
 - [x] Task: Fix Agent-Driven Wisdom Provenance (`write_handlers.rs`). (41d20ed)
 - [x] Task: Increase Cognitive Task TTL for Bootstrap to 30 mins (`llm/mod.rs`, `distillation.rs`). (2869574)
-- [~] Task: Fix Graduation Decay No-Op computing actual age (`graduation_pipeline.rs`).
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
+- [x] Task: Fix Graduation Decay No-Op computing actual age (`graduation_pipeline.rs`). (94854c5)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md). (94854c5)
 
 ## Phase 3: Tech Debt Cleanups & Empirical Testing
 - [ ] Task: Delete redundant E2E tests (`test_distillation.rs`, `test_schema_upgrades.rs`, etc.).
