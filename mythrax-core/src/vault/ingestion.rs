@@ -73,11 +73,16 @@ fn ingest_hermes(path: &Path) -> Result<String> {
     Ok(result)
 }
 
-fn parse_antigravity_log(path: &Path) -> Result<String> {
+async fn parse_antigravity_log(
+    path: &Path,
+    db: &dyn StorageBackend,
+    session_id: &str,
+) -> Result<String> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
     use std::io::BufRead;
     let mut markdown = String::new();
+    let mut user_turn_count = 0;
     for line_res in reader.lines() {
         let line = line_res?;
         if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
@@ -85,6 +90,42 @@ fn parse_antigravity_log(path: &Path) -> Result<String> {
             if step_type == "USER_INPUT" {
                 if let Some(content) = obj["content"].as_str() {
                     markdown.push_str(&format!("## User Request\n{}\n\n", content));
+                    
+                    user_turn_count += 1;
+                    if user_turn_count > 1 {
+                        let lower = content.to_lowercase();
+                        let is_correction = lower.contains("wrong")
+                            || lower.contains("forgot")
+                            || lower.contains("incorrect")
+                            || lower.contains("mistake")
+                            || lower.contains("should have")
+                            || lower.contains("actually")
+                            || lower.contains("not right")
+                            || lower.contains("that was a mistake")
+                            || lower.contains("that's wrong");
+                            
+                        if is_correction {
+                            if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                                let task = crate::db::cognitive_tasks::CognitiveTask {
+                                    id: format!("cognitive_task:{}", uuid::Uuid::new_v4()),
+                                    task_type: "Extraction".to_string(),
+                                    prompt: content.to_string(),
+                                    system_instruction: "Analyze this user correction and extract a WisdomRule if applicable.".to_string(),
+                                    expected_format: "Json".to_string(),
+                                    priority: "Normal".to_string(),
+                                    created_at: chrono::Utc::now(),
+                                    status: "Pending".to_string(),
+                                    result: None,
+                                    ttl_minutes: 30,
+                                    injected_at: None,
+                                    session_id: Some(session_id.to_string()),
+                                };
+                                if let Err(e) = surreal.create_cognitive_task(&task).await {
+                                    tracing::error!("Failed to create cognitive task during bulk ingestion: {:?}", e);
+                                }
+                            }
+                        }
+                    }
                 }
             } else if step_type == "PLANNER_RESPONSE"
                 && let Some(content) = obj["content"].as_str() {
@@ -665,7 +706,7 @@ pub async fn bulk_ingest_vault(
                 }
                 
                 let parsed_content = if log_path.exists() {
-                    match parse_antigravity_log(&log_path) {
+                    match parse_antigravity_log(&log_path, db, &dir_name).await {
                         Ok(content) => content,
                         Err(e) => {
                             let err_msg = quarantine_file(&log_path, source_dir, &e.to_string());
