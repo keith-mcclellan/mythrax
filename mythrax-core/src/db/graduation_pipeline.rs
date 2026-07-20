@@ -2,6 +2,7 @@ use anyhow::Result;
 use crate::db::StorageBackend;
 use crate::contracts::{WisdomRule, Tier, WikiNode};
 use crate::math::cosine_similarity;
+use surrealdb_types::SurrealValue;
 
 pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &str) -> Result<()> {
     let surreal_backend = db.as_any().downcast_ref::<crate::db::SurrealBackend>()
@@ -77,21 +78,31 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
     }
 
     // 2. 365-day half-life decay and 500-node LRU cap on global wisdom rules
-    let sql_wisdom = "SELECT * FROM wisdom WHERE tier = 'Wisdom' OR scope = 'global';";
+    #[derive(serde::Deserialize, SurrealValue, Debug)]
+    struct WisdomRuleDecayInfo {
+        id: Option<String>,
+        utility: Option<f32>,
+        #[serde(default)]
+        created_at: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    let sql_wisdom = "SELECT type::string(id) as id, created_at, (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility FROM wisdom WHERE tier = 'Wisdom' OR scope = 'global';";
     let mut resp_wisdom = surreal_backend.db.query(sql_wisdom).await?.check()?;
-    let mut rules: Vec<WisdomRule> = resp_wisdom.take(0)?;
+    let mut rules: Vec<WisdomRuleDecayInfo> = resp_wisdom.take(0)?;
 
     let ln2 = 2.0f64.ln();
     let half_life_days = 365.0f64;
 
     for rule in &mut rules {
         let util = rule.utility.unwrap_or(1.0) as f64;
-        let age_days = 0.0f64; // default to 0 for decay calculation or parse rule age
+        let age_days = rule.created_at
+            .map(|dt| (chrono::Utc::now() - dt).num_hours() as f64 / 24.0)
+            .unwrap_or(0.0);
         let decayed_util = util * (-age_days * ln2 / half_life_days).exp();
         rule.utility = Some(decayed_util as f32);
 
         let id_raw = rule.id.as_ref().unwrap().split(':').nth(1).unwrap_or(rule.id.as_ref().unwrap()).to_string();
-        let _ = surreal_backend.db.query("UPDATE type::record('wisdom', $id) MERGE { utility: $utility };")
+        let _ = surreal_backend.db.query("UPDATE metrics SET utility_score = $utility WHERE target_id = type::record('wisdom', $id);")
             .bind(("id", id_raw))
             .bind(("utility", decayed_util as f32))
             .await;
