@@ -166,7 +166,10 @@ pub async fn run_summarization_task(
                 created_at: Utc::now(),
                 status: "Pending".to_string(),
                 result: None,
-                ttl_minutes: 10,
+                ttl_minutes: std::env::var("MYTHRAX_CALLBACK_TTL_MINUTES")
+                    .ok()
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .unwrap_or(30),
                 injected_at: None,
                 session_id: None,
             };
@@ -314,7 +317,10 @@ pub async fn distill_transcript_file(
                     created_at: Utc::now(),
                     status: "Pending".to_string(),
                     result: None,
-                    ttl_minutes: 10,
+                    ttl_minutes: std::env::var("MYTHRAX_CALLBACK_TTL_MINUTES")
+                        .ok()
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(30),
                     injected_at: None,
                     session_id: Some(conversation_id.to_string()),
                 };
@@ -624,7 +630,10 @@ pub async fn seed_wisdom_from_rules(
                         created_at: Utc::now(),
                         status: "Pending".to_string(),
                         result: None,
-                        ttl_minutes: 10,
+                        ttl_minutes: std::env::var("MYTHRAX_CALLBACK_TTL_MINUTES")
+                            .ok()
+                            .and_then(|v| v.parse::<i64>().ok())
+                            .unwrap_or(30),
                         injected_at: None,
                         session_id: None,
                     };

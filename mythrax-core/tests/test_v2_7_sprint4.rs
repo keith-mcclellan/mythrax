@@ -426,3 +426,29 @@ async fn test_ttl_sweep_fallback() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_cognitive_task_ttl_env_var() -> anyhow::Result<()> {
+    unsafe {
+        std::env::remove_var("MYTHRAX_CALLBACK_TTL_MINUTES");
+    }
+    let ttl = std::env::var("MYTHRAX_CALLBACK_TTL_MINUTES")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(30);
+    assert_eq!(ttl, 30);
+
+    unsafe {
+        std::env::set_var("MYTHRAX_CALLBACK_TTL_MINUTES", "45");
+    }
+    let ttl_override = std::env::var("MYTHRAX_CALLBACK_TTL_MINUTES")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(30);
+    assert_eq!(ttl_override, 45);
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_CALLBACK_TTL_MINUTES");
+    }
+    Ok(())
+}

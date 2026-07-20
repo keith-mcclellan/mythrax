@@ -248,7 +248,10 @@ impl RealLlmProvider {
                     created_at: chrono::Utc::now(),
                     status: "Pending".to_string(),
                     result: None,
-                    ttl_minutes: 10,
+                    ttl_minutes: std::env::var("MYTHRAX_CALLBACK_TTL_MINUTES")
+                        .ok()
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(30),
                     injected_at: None,
                     session_id: None,
                 };
