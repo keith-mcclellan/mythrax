@@ -336,7 +336,20 @@ pub async fn run_llm_critic(
     let rule_id = backend.save_wisdom_rule(&rule_save).await?;
     
     if let Some(ref src_id) = source_episode_id {
-        let _ = backend.relate_nodes(src_id, &rule_id, None, None, Some(1.0)).await;
+        if let (Ok(from_thing), Ok(to_thing)) = (
+            crate::db::parse_record_id(src_id),
+            crate::db::parse_record_id(&rule_id)
+        ) {
+            let relate_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                relation: 'corrects',
+                created_at: time::now(),
+                confidence: 1.0
+            };";
+            let _ = backend.db.query(relate_sql)
+                .bind(("from", from_thing))
+                .bind(("to", to_thing))
+                .await;
+        }
     }
 
     Ok(())

@@ -81,11 +81,14 @@ Call the `manage` tool with the `action` parameter set to one of the following:
   - *Parameters*: `scope: String`
   - *Note*: On macOS, to prevent Metal GPU timeout crashes, always run synchronously and sequentially rather than concurrently.
 - **`action="ingest_bulk"`**: Bulk ingest vault directories.
-  - *Parameters*: `paths: Option<Vec<String>>` or `source_path: Option<String>`, `scope: String`, `limit: Option<integer>`, `offset: Option<integer>`
+  - *Parameters*: `source: String` (logs directory path), `harness: String` (harness path name), `scope: Option<String>`
 - **`action="ingest_forge"`**: Ingest candidate wisdom rules.
-  - *Parameters*: `path: Option<String>` or `source_path: Option<String>`, `scope: String`
+  - *Parameters*: `source: String` or `source_path: String` (source vault path to parse/ingest), `scope: Option<String>`
 - **`action="save_forged_assets"`**: Save rule documents and compactions.
-  - *Parameters*: `scope: String`, `chunks: Vec<Value>`
+  - *Parameters*: `doc_title: String`, `scope: String`, `chunk_index: integer`, `chunk_text: String`, `concepts: Vec<ForgedConcept>`, `rules: Vec<ForgedRule>`
+  - *Data Types*:
+    - `ForgedConcept`: `{ name: String, content: String }`
+    - `ForgedRule`: `{ target_pattern: String, action_to_avoid: String, causal_explanation: String, prescribed_remedy: String }`
 - **`action="pre_invocation"`**: Load belief states and hydrate context.
   - *Parameters*: `session_id: String`, `workspace_path: Option<String>`
 - **`action="precompact"`**: Compact active transcripts.

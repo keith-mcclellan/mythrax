@@ -1382,6 +1382,15 @@ impl SurrealBackend {
 
     pub async fn update_handoff_status_db(&self, id: &str, status: &str) -> Result<()> {
         let thing_id = parse_record_id(id)?;
+        let select_sql = "SELECT * FROM type::record('handoff', $id);";
+        let mut response = self.db.query(select_sql)
+            .bind(("id", record_key_to_string(&thing_id.key)))
+            .await?.check()?;
+        let handoff_opt: Option<HandoffRaw> = response.take(0)?;
+        if handoff_opt.is_none() {
+            anyhow::bail!("Handoff record not found: {}", id);
+        }
+
         let sql = "UPDATE $id SET status = $status;";
         self.db.query(sql)
             .bind(("id", thing_id))

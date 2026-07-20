@@ -138,6 +138,8 @@ pub struct Episode {
     pub archived_at: Option<String>,
     #[serde(default)]
     pub node_type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

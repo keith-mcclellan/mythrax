@@ -188,9 +188,11 @@ fn test_episode_raw_conversion() {
         temporal_range_start: None,
         temporal_range_end: None,
         created_at: None,
+        status: Some("active".to_string()),
     };
 
     let episode = Episode::from(raw);
+    assert_eq!(episode.status, Some("active".to_string()));
     assert_eq!(episode.id, Some("episode:foo_id".to_string()));
     assert_eq!(episode.title, "Test Title");
     assert_eq!(episode.content, "Test Content");

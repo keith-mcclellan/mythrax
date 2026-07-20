@@ -459,11 +459,13 @@ impl Compactor {
                                             .await;
                                     }
 
-                                    let newer_raw_id = newer.id.as_ref().unwrap().split(':').nth(1).unwrap_or(newer.id.as_ref().unwrap()).to_string();
-                                    let delete_ep_sql = "DELETE type::record('episode', $id);";
-                                    let _ = surreal_backend.db.query(delete_ep_sql)
-                                        .bind(("id", newer_raw_id))
-                                        .await;
+                                     let newer_raw_id = newer.id.as_ref().unwrap().split(':').nth(1).unwrap_or(newer.id.as_ref().unwrap()).to_string();
+                                     let update_ep_sql = "UPDATE type::record('episode', $id) SET archived = true, status = 'superseded';";
+                                     if let Err(e) = surreal_backend.db.query(update_ep_sql)
+                                         .bind(("id", newer_raw_id))
+                                         .await.and_then(|r| r.check()) {
+                                         tracing::error!("Failed to update superseded episode in DB: {:?}", e);
+                                     }
                                 }
 
                                 if let Some(ref vp) = older.vault_path {

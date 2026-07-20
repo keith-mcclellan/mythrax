@@ -98,6 +98,11 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             
             let re = regex::Regex::new(r"(?m)^status:\s*.*$").unwrap();
             content = re.replace(&content, format!("status: \"{}\"", final_status)).to_string();
+
+            // Update database handoff status
+            let db_status = if failed { "FAILED" } else { "COMPLETED" };
+            let handoff_db_id = format!("handoff:{}", task_id);
+            let _ = state.backend.update_handoff_status(&handoff_db_id, db_status).await;
             
             if failed {
                 if let Some(reason) = &computed_fail_reason {

@@ -102,12 +102,16 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
     // Run compact_scope
     compactor.compact_scope(&backend, &store, "test_scope", None).await?;
 
-    // Verify newer episode is deleted
+    // Verify newer episode is updated to superseded
     let mut resp = backend.db.query("SELECT * FROM type::record('episode', $id);")
         .bind(("id", newer_raw_id.clone()))
         .await?;
     let rows: Vec<serde_json::Value> = resp.take(0)?;
-    assert!(rows.is_empty(), "Newer episode should be deleted from DB");
+    assert!(!rows.is_empty(), "Newer episode should still exist in DB");
+    let status = rows[0].get("status").and_then(|v| v.as_str()).unwrap_or_default();
+    assert_eq!(status, "superseded");
+    let archived = rows[0].get("archived").and_then(|v| v.as_bool()).unwrap_or_default();
+    assert!(archived);
 
     // Verify newer physical file is deleted
     let newer_file = vault_root.join("episodes/newer.md");

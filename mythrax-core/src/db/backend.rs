@@ -118,7 +118,6 @@ pub trait StorageBackend: Send + Sync {
     async fn get_stm(&self, session_id: &str, key: Option<&str>) -> Result<std::collections::HashMap<String, String>>;
     async fn clear_stm(&self, session_id: &str) -> Result<()>;
     /// Reserved: external handoff status updates (deferred pending MCP handoff tool).
-    #[allow(dead_code)]
     async fn update_handoff_status(&self, id: &str, status: &str) -> Result<()>;
     async fn delete_stale_handoffs(&self, pruning_days: i64) -> Result<()>;
     async fn get_memory_nodes(&self, node_ids: &[String]) -> Result<GetMemoryNodesResponse>;
@@ -974,6 +973,7 @@ pub struct EpisodeRaw {
     pub utility: Option<f32>,
     pub archived: Option<bool>,
     pub archived_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub status: Option<String>,
     pub discovery_tokens: Option<u32>,
     pub facts: Option<Vec<String>>,
     pub concepts: Option<Vec<String>>,
@@ -1014,6 +1014,7 @@ impl From<EpisodeRaw> for Episode {
             session_id: raw.session_id,
             word_count: raw.word_count,
             node_type: raw.node_type,
+            status: raw.status,
             confidence: raw.confidence,
             importance: raw.importance,
             created_at: raw.created_at.map(|t| t.to_rfc3339()),
@@ -1027,7 +1028,6 @@ impl From<EpisodeRaw> for Episode {
 
 /// Full hydrated Handoff contract — returned by queries; construction deferred pending
 /// the agent-tracking dashboard feature. Suppressed until then.
-#[allow(dead_code)]
 #[derive(serde::Deserialize, Debug, SurrealValue)]
 pub(crate) struct HandoffRaw {
     pub(crate) id: surrealdb::types::RecordId,
