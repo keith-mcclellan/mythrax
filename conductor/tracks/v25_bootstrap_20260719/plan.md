@@ -23,8 +23,8 @@
 
 ## Phase 3: Tech Debt Cleanups & Empirical Testing
 - [x] Task: Delete redundant E2E tests (`test_distillation.rs`, `test_schema_upgrades.rs`, etc.). (46b3ce6)
-- [~] Task: Remove `socket2` dependency from `Cargo.toml`.
-- [ ] Task: Integrate dead code (`#[allow(dead_code)]`) into the pipeline properly rather than eliminating it.
+- [x] Task: Remove `socket2` dependency from `Cargo.toml`. (2cb499a)
+- [~] Task: Integrate dead code (`#[allow(dead_code)]`) into the pipeline properly rather than eliminating it.
 - [ ] Task: Align `SKILL.md` with MCP schemas.
 - [ ] Task: Run `DEVELOPER_DIR` empirical runtime risk test.
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
