@@ -1,0 +1,32 @@
+name: Sanitation Scanner
+
+on:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  scan-and-report:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 10 # ensure we have history to compare 5 commits
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Create Dummy Clippy Config
+        run: echo 'cognitive-complexity-threshold = 15' > mythrax-core/clippy.toml
+
+      - name: Run Sanitation Scanner
+        run: |
+          python3 scripts/sanitation_scanner.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
