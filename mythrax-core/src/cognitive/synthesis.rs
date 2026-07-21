@@ -82,12 +82,18 @@ pub fn dbscan(
     let mut labels = vec![None; n];
     let mut cluster_id = 0;
 
+    // ⚡ Bolt: Precompute norms to avoid O(N^2) latency bottleneck
+    let norms: Vec<f32> = embeddings
+        .iter()
+        .map(|emb| emb.iter().map(|&x| x * x).sum::<f32>().sqrt())
+        .collect();
+
     for i in 0..n {
         if labels[i].is_some() {
             continue;
         }
 
-        let mut neighbors = find_neighbors(i, embeddings, eps);
+        let mut neighbors = find_neighbors(i, embeddings, &norms, eps);
         if neighbors.len() < min_samples {
             continue;
         }
@@ -98,7 +104,7 @@ pub fn dbscan(
             let neighbor_idx = neighbors[j];
             if labels[neighbor_idx].is_none() {
                 labels[neighbor_idx] = Some(cluster_id);
-                let neighbor_neighbors = find_neighbors(neighbor_idx, embeddings, eps);
+                let neighbor_neighbors = find_neighbors(neighbor_idx, embeddings, &norms, eps);
                 if neighbor_neighbors.len() >= min_samples {
                     for &nn in &neighbor_neighbors {
                         if !neighbors.contains(&nn) {
@@ -144,11 +150,33 @@ pub fn find_elbow_point(k_distances: &[f32]) -> f32 {
 }
 
 
-fn find_neighbors(i: usize, embeddings: &[&[f32]], eps: f32) -> Vec<usize> {
+fn find_neighbors(i: usize, embeddings: &[&[f32]], norms: &[f32], eps: f32) -> Vec<usize> {
     let mut neighbors = Vec::new();
     let target = embeddings[i];
+    let target_norm = norms[i];
+
     for (idx, &emb) in embeddings.iter().enumerate() {
-        if cosine_distance(target, emb) <= eps {
+        if target.len() != emb.len() || target.is_empty() {
+            if 1.0 <= eps {
+                neighbors.push(idx);
+            }
+            continue;
+        }
+
+        if target_norm == 0.0 || norms[idx] == 0.0 {
+            if 1.0 <= eps {
+                neighbors.push(idx);
+            }
+            continue;
+        }
+
+        let mut dot = 0.0;
+        for k in 0..target.len() {
+            dot += target[k] * emb[k];
+        }
+
+        let sim = dot / (target_norm * norms[idx]);
+        if 1.0 - sim <= eps {
             neighbors.push(idx);
         }
     }
