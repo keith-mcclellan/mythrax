@@ -1542,7 +1542,7 @@ let mut insights_parts = Vec::new();
     if has_discovery {
         let savings = (total_discovery as i32) - (total_read as i32);
         let savings_percent = if total_discovery > 0 {
-            ((savings as f64 / total_discovery as f64) * 100.0).round() as u32
+            ((savings as f64 / total_discovery as f64) * 100.0).round() as i32
         } else {
             0
         };
