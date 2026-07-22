@@ -6,6 +6,24 @@
 /// If either vector has a norm of zero, returns 0.0.
 ///
 /// For pre-normalized vectors, use `NormalizedEmbedding::dot_product()` instead.
+
+
+/// Computes the cosine similarity using precomputed norms.
+/// This prevents O(N^2) redundant norm recalculations during clustering operations.
+pub fn cosine_similarity_precomputed(a: &[f32], norm_a: f32, b: &[f32], norm_b: f32) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+    }
+    dot / (norm_a * norm_b)
+}
+
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
