@@ -1,0 +1,41 @@
+name: Security Audit
+
+on:
+  push:
+  schedule:
+    - cron: '0 0 * * *' # Nightly at midnight UTC
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for git history scan
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run Security Audit Script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/security_audit.py
+
+      - name: Upload Security Audit Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: security_audit_report.md
