@@ -82,12 +82,23 @@ pub fn dbscan(
     let mut labels = vec![None; n];
     let mut cluster_id = 0;
 
+    // Precompute norms for all embeddings to prevent O(N^2) recalculations
+    // during the nested find_neighbors loops.
+    let mut norms = Vec::with_capacity(n);
+    for emb in embeddings {
+        let mut norm = 0.0;
+        for val in *emb {
+            norm += val * val;
+        }
+        norms.push(norm.sqrt());
+    }
+
     for i in 0..n {
         if labels[i].is_some() {
             continue;
         }
 
-        let mut neighbors = find_neighbors(i, embeddings, eps);
+        let mut neighbors = find_neighbors(i, embeddings, &norms, eps);
         if neighbors.len() < min_samples {
             continue;
         }
@@ -98,7 +109,7 @@ pub fn dbscan(
             let neighbor_idx = neighbors[j];
             if labels[neighbor_idx].is_none() {
                 labels[neighbor_idx] = Some(cluster_id);
-                let neighbor_neighbors = find_neighbors(neighbor_idx, embeddings, eps);
+                let neighbor_neighbors = find_neighbors(neighbor_idx, embeddings, &norms, eps);
                 if neighbor_neighbors.len() >= min_samples {
                     for &nn in &neighbor_neighbors {
                         if !neighbors.contains(&nn) {
@@ -144,11 +155,13 @@ pub fn find_elbow_point(k_distances: &[f32]) -> f32 {
 }
 
 
-fn find_neighbors(i: usize, embeddings: &[&[f32]], eps: f32) -> Vec<usize> {
+fn find_neighbors(i: usize, embeddings: &[&[f32]], norms: &[f32], eps: f32) -> Vec<usize> {
     let mut neighbors = Vec::new();
     let target = embeddings[i];
+    let norm_target = norms[i];
     for (idx, &emb) in embeddings.iter().enumerate() {
-        if cosine_distance(target, emb) <= eps {
+        let dist = 1.0 - crate::math::cosine_similarity_precomputed(target, norm_target, emb, norms[idx]);
+        if dist <= eps {
             neighbors.push(idx);
         }
     }
