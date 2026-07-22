@@ -30,7 +30,7 @@ def issue_exists(title):
         )
         issues = json.loads(result.stdout)
         return len(issues) > 0
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+    except (subprocess.CalledProcessError, json.JSONDecodeError, FileNotFoundError):
         return False
 
 def create_github_issue(title, body):
@@ -44,6 +44,8 @@ def create_github_issue(title, body):
         subprocess.run(command, text=True, capture_output=True, check=True)
     except subprocess.CalledProcessError as e:
         print(f"Failed to create issue: {e.stderr}")
+    except FileNotFoundError:
+        print(f"gh CLI not found, skipping issue creation for local test.")
 
 def get_hash(text):
     return hashlib.md5(text.encode('utf-8')).hexdigest()[:8]
@@ -155,7 +157,7 @@ def scan_codebase():
                             "type": f"Dependency Warning ({w['kind']}): {w['package']['name']}",
                             "file": "Cargo.lock",
                             "line": 0,
-                            "desc": f"{w.get('advisory', {}).get('title', 'Yanked or Unmaintained crate')}",
+                            "desc": f"{(w.get('advisory') or {}).get('title', 'Yanked or Unmaintained crate')}",
                             "remediation": "Consider replacing or updating the crate.",
                             "effort": "Medium"
                           }
