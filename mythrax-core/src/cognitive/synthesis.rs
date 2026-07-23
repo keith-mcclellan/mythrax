@@ -374,11 +374,11 @@ impl DreamCoordinator {
 
         let mut candidates = Vec::new();
         if let Some(ref new_emb) = node.embedding {
+            let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
             for existing in same_scope_nodes {
                 if let Some(ref ext_emb) = existing.embedding {
                     let sim = {
                         let dot: f32 = new_emb.iter().zip(ext_emb.iter()).map(|(a, b)| a * b).sum();
-                        let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         let norm_v: f32 = ext_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         if norm_u == 0.0 || norm_v == 0.0 {
                             0.0
@@ -1285,6 +1285,7 @@ impl DreamCoordinator {
                 content: String,
                 embedding: Vec<f32>,
                 is_procedural: bool,
+                norm: f32,
             }
 
             let mut candidates = Vec::new();
@@ -1293,6 +1294,7 @@ impl DreamCoordinator {
             if let Ok(wiki_nodes) = db.get_all_wiki_nodes().await {
                 for node in wiki_nodes {
                     if let Some(ref emb) = node.embedding {
+                        let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         candidates.push(GradCandidate {
                             id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
@@ -1300,6 +1302,7 @@ impl DreamCoordinator {
                             content: node.content,
                             embedding: emb.clone(),
                             is_procedural: false,
+                            norm,
                         });
                     }
                 }
@@ -1310,6 +1313,7 @@ impl DreamCoordinator {
                 for ep in episodes {
                     if !ep.archived.unwrap_or(false) {
                         if let Some(ref emb) = ep.embedding {
+                            let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                             candidates.push(GradCandidate {
                                 id: ep.id.unwrap_or_default().replace("`", ""),
                                 scope: ep.scope.unwrap_or_else(|| "general".to_string()),
@@ -1317,6 +1321,7 @@ impl DreamCoordinator {
                                 content: ep.content,
                                 embedding: emb.clone(),
                                 is_procedural: true,
+                                norm,
                             });
                         }
                     }
@@ -1383,12 +1388,10 @@ impl DreamCoordinator {
                         if !other.is_procedural && other.scope != cand.scope {
                             let sim = {
                                 let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
-                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                if norm_u == 0.0 || norm_v == 0.0 {
+                                if cand.norm == 0.0 || other.norm == 0.0 {
                                     0.0
                                 } else {
-                                    dot / (norm_u * norm_v)
+                                    dot / (cand.norm * other.norm)
                                 }
                             };
                             if sim >= 0.85 {
@@ -1398,13 +1401,16 @@ impl DreamCoordinator {
                     }
                 } else {
                     for node in matches_wiki {
+                        let embedding = node.embedding.unwrap_or_default();
+                        let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                         cluster.push(GradCandidate {
                             id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
-                            embedding: node.embedding.unwrap_or_default(),
+                            embedding,
                             is_procedural: false,
+                            norm,
                         });
                     }
                 }
@@ -1414,12 +1420,10 @@ impl DreamCoordinator {
                         if other.is_procedural && other.scope != cand.scope {
                             let sim = {
                                 let dot: f32 = cand.embedding.iter().zip(other.embedding.iter()).map(|(a, b)| a * b).sum();
-                                let norm_u: f32 = cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 = other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                if norm_u == 0.0 || norm_v == 0.0 {
+                                if cand.norm == 0.0 || other.norm == 0.0 {
                                     0.0
                                 } else {
-                                    dot / (norm_u * norm_v)
+                                    dot / (cand.norm * other.norm)
                                 }
                             };
                             if sim >= 0.85 {
@@ -1432,13 +1436,16 @@ impl DreamCoordinator {
                 } else {
                     for ep in matches_ep {
                         let ep_scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                        let embedding = ep.embedding.unwrap_or_default();
+                        let norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                         cluster.push(GradCandidate {
                             id: ep.id.unwrap_or_default().replace("`", ""),
                             scope: ep_scope,
                             name: ep.title,
                             content: ep.content,
-                            embedding: ep.embedding.unwrap_or_default(),
+                            embedding,
                             is_procedural: true,
+                            norm,
                         });
                     }
                 }
