@@ -1,0 +1,26 @@
+1. **Modify `mythrax-core/src/cognitive/synthesis.rs` in `check_for_contradictions_and_merge` to hoist `norm_u` calculation:**
+   - Extract `let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();` to immediately before the `for existing in same_scope_nodes {` loop.
+   - Use the pre-computed `norm_u` inside the loop.
+
+2. **Modify `GradCandidate` struct and its initialization in `mythrax-core/src/cognitive/synthesis.rs` to pre-compute norms:**
+   - Add a `norm: f32` field to the `GradCandidate` struct (around line 1281).
+   - In the struct initializations (around lines 1290-1320), compute the norm (e.g., `let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt();`) and pass it to the struct initializer.
+   - In the fallback loop (around line 1395) and the other fallback loop (around line 1435), pass the `norm` when constructing new `GradCandidate`s.
+
+3. **Modify fallback loops in `mythrax-core/src/cognitive/synthesis.rs` to use pre-computed norms:**
+   - In the inner loops over `&candidates` (around lines 1381-1392 and 1412-1423), remove the recalculations of `norm_u` and `norm_v` (`let norm_u = ...; let norm_v = ...;`).
+   - Use `cand.norm` and `other.norm` in the similarity calculation: `if cand.norm == 0.0 || other.norm == 0.0 { 0.0 } else { dot / (cand.norm * other.norm) }`.
+
+4. **Run verification steps to ensure compilation and correctness:**
+   - Navigate to the `mythrax-core` directory.
+   - Run `cargo check --lib` to ensure the library compiles successfully.
+   - Run `MYTHRAX_TEST_MOCK=1 cargo test --lib cognitive::synthesis -- --test-threads=1` to ensure tests in `cognitive::synthesis` pass without timing out.
+
+5. **Generate a mock Markdown file for the PR:**
+   - Create a mock PR file (e.g., in `issues/bolt_pr_norm_optimization.md`) containing the PR title (`⚡ Bolt: [performance improvement] Hoist embedding norm computations`) and a description detailing the optimization, why it was needed, impact, and measurement.
+   - Verify the file's creation using `cat issues/bolt_pr_norm_optimization.md`.
+
+6. **Complete pre-commit steps to ensure proper testing, verification, review, and reflection are done.**
+
+7. **Submit the changes:**
+   - Use the `submit` tool to finalize the code changes.
