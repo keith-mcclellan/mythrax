@@ -154,6 +154,7 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 
 | Artifact | Destination | Rationale |
 |----------|-------------|-----------|
+| Unprocessed episode chunks | Vault md (`vault/episodes/*.md`) | Human-readable, written during ingestion before cognitive processing |
 | Episode summaries | Vault md (`wiki/<scope>/episodes/*.md`) | Human-readable, version-controlled |
 | DBSCAN cluster assignments | SurrealDB `pipeline_cluster` table | Ephemeral machine state, needs transaction safety, avoids FS watcher re-ingestion |
 | Synthesized insights | Vault md (`wiki/<scope>/insights/*.md`) | Human-readable, version-controlled |
@@ -179,6 +180,12 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
   - [ ] Write test: Verify `pipeline_cluster` records can be inserted, queried by run_id, and bulk-deleted after synthesis
   - [ ] Add `pipeline_cluster` table definition to INIT_SCHEMA (fields: run_id, cluster_id, episode_id, scope, created_at)
   - [ ] Add `save_cluster_assignment`, `get_cluster_members(run_id, cluster_id)`, and `delete_pipeline_run(run_id)` to CRUD layer
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Stream unprocessed episode chunks to vault during ingestion
+  - [ ] Write test: Verify episode chunks are written to `vault/episodes/*.md` incrementally during ingestion, not accumulated in `Vec<Episode>` across the full batch
+  - [ ] Write test: Verify ingestion of 1000+ episodes does not exceed bounded memory (≤50 episodes in memory at any time)
+  - [ ] Refactor `vault/ingestion.rs` bulk ingestion loop: write each episode chunk to vault md file immediately after parsing, then save to DB, then drop before processing next chunk
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Stream episode summaries to vault during dreaming
@@ -284,6 +291,25 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [ ] Pass token to all 5 `tokio::spawn` loops (daemon.rs L228, L238, L249, L261, L268)
   - [ ] Replace bare `loop {}` with `loop { tokio::select! { _ = token.cancelled() => break, ... } }`
   - [ ] Wire token cancellation into the graceful shutdown sequence
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Audit and categorize blocking inference/generation functions
+  - [ ] Audit all blocking inference functions (text generation, completion loops, reranking) across `llm/` modules
+  - [ ] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
+  - [ ] Document the categorized caller list in a scratch note before proceeding
+  - [ ] Run tests and confirm pass (no code changes, audit only)
+
+- [ ] Task: Add async inference functions (strangler pattern) and migrate all callers
+  - [ ] Add async variants of blocking inference/generation functions alongside existing synchronous versions
+  - [ ] Migrate all category (a) callers (async context) to the new async variants
+  - [ ] For category (b) callers: bubble `async` up the call stack. If structurally impossible, use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** bare `block_on()`
+  - [ ] Update any trait signatures identified in category (c) if needed
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Remove deprecated synchronous inference functions
+  - [ ] Delete the old synchronous inference/generation functions
+  - [ ] Rename async variants to drop `_async` suffix
+  - [ ] Update all callers to use the renamed functions
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
