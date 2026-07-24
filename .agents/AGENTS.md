@@ -3,6 +3,7 @@
 ## Parallel Test Execution
 - **Mandate**: Always run test suites in parallel using `cargo nextest run` or the `cargo t` alias.
 - **Why**: The default `cargo test` runs test suites sequentially which triggers database lock contentions and significantly slows down the E2E verification loop.
+- **Isolation Mandate**: When running parallel subagents or concurrent test suites, each subagent MUST execute in a separate git worktree or specify a unique `CARGO_TARGET_DIR` (e.g., `CARGO_TARGET_DIR=target/track_a`) and isolated temp DB directory (e.g., `/tmp/track_a`) to prevent cargo target lock contention and database lock conflicts.
 - **Fast Mocking**: Always specify the `MYTHRAX_TEST_MOCK=1` environment variable when running unit and integration tests (e.g., `MYTHRAX_TEST_MOCK=1 cargo nextest run`). Do NOT specify `--features mlx` for mock tests, to avoid heavy Metal compiler/JIT loading and compilation overhead. If JIT compile errors or startup hangs occur on macOS, ensure `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` is exported.
 
 ## Core System Goals & Objectives

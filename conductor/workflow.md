@@ -11,6 +11,12 @@
 5.  **User Experience First:** Every decision should prioritize user experience
 6.  **Non-Interactive & CI-Aware:** Prefer non-interactive commands. Use
     `CI=true` for watch-mode tools (tests, linters) to ensure single execution.
+7.  **Parallel Execution Worktree/Target Isolation:** When running parallel
+    subagents or concurrent test suites, each subagent MUST execute in an
+    isolated git worktree or specify a unique `CARGO_TARGET_DIR` (e.g.,
+    `CARGO_TARGET_DIR=target/<track_id>`) and isolated temp DB directory
+    (e.g., `/tmp/<track_id>`) to eliminate build target lock contention and
+    database lock conflicts.
 
 ## Task Workflow
 
