@@ -116,7 +116,7 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
 - [ ] Task: Backfill `content_hash` for existing episodes and wisdom rules
   - [ ] Write test: Verify backfill computes correct SHA-256 hash for a known set of existing records
   - [ ] Write test: Verify backfill is idempotent (running twice does not corrupt hashes)
-  - [ ] Implement `backfill_content_hashes()` function that uses `LIMIT 50` loops **without** `OFFSET` (query `WHERE content_hash IS NONE LIMIT 50`, hash batch, repeat until 0 results)
+  - [ ] Implement `backfill_content_hashes()` function that uses `LIMIT 50` loops **without** `OFFSET` (query `WHERE content_hash IS NONE LIMIT 50`, compute SHA-256 hashes, **save the updated records back to the database**, repeat until 0 results)
   - [ ] Wire backfill into daemon startup: run once if records with null `content_hash` exist, log progress
   - [ ] Run tests and confirm pass
 
@@ -127,9 +127,9 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_episodes()` callers — internal pipelines (2 files)
-  - [ ] Write test: Verify `blackboard` and `ingestion` correctly accumulate all paginated results without truncation
-  - [ ] Refactor `vault/ingestion.rs` L606
-  - [ ] Refactor `blackboard.rs` L189
+  - [ ] Write test: Verify `blackboard` and `ingestion` process paginated results one chunk at a time without accumulating all episodes into memory
+  - [ ] Refactor `vault/ingestion.rs` L606 to process episodes in bounded chunks (process chunk, drop, fetch next) — do NOT accumulate into a single `Vec`
+  - [ ] Refactor `blackboard.rs` L189 to process episodes in bounded chunks. If full accumulation is strictly required by the logic, fetch only lightweight projections (e.g., `id` and `content_hash`, excluding the large `content` payload)
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate standalone `get_all_wiki_nodes()` callers (2 files)
@@ -180,7 +180,9 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 
 - [ ] Task: Create `pipeline_cluster` temporary table for DBSCAN state
   - [ ] Write test: Verify `pipeline_cluster` records can be inserted, queried by run_id, and bulk-deleted after synthesis
+  - [ ] Write test: Verify orphaned `pipeline_cluster` records are purged on daemon startup
   - [ ] Add `pipeline_cluster` table definition to INIT_SCHEMA (fields: run_id, cluster_id, episode_id, scope, created_at)
+  - [ ] Add startup cleanup query `DELETE pipeline_cluster;` in `surreal_init.rs` to purge orphaned ephemeral state from previous terminated runs
   - [ ] Add `save_cluster_assignment`, `get_cluster_members(run_id, cluster_id)`, and `delete_pipeline_run(run_id)` to CRUD layer
   - [ ] Run tests and confirm pass
 
