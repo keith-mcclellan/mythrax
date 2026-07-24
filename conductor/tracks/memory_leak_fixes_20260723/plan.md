@@ -1,8 +1,10 @@
 # Implementation Plan: Memory Leak Remediation & OOM Crash Prevention
 
-## Phase 1: Critical MLX Graph Fixes (FR-1, FR-4)
+> **Phase ordering rationale:** Memory leaks are fixed before async throughput improvements. Unlocking concurrency while memory bombs exist would accelerate OOM crashes.
 
-These are the primary OOM crash triggers. Surgical fixes with immediate impact.
+## Phase 1: Critical MLX Graph Fixes (FR-1)
+
+Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency chain.
 
 - [ ] Task: Add `.eval()` to KV cache concatenation in `Qwen2Attention::forward`
   - [ ] Write test: Verify KV cache tensors are evaluated after concatenation (mock MLX arrays)
@@ -12,6 +14,12 @@ These are the primary OOM crash triggers. Surgical fixes with immediate impact.
 - [ ] Task: Add `.eval()` to weight dtype casts in `load_model_weights`
   - [ ] Write test: Verify weight HashMap contains evaluated (non-lazy) arrays after loading
   - [ ] Add `cast_v.eval().unwrap()` after `as_dtype` in `llm/mlx_weights.rs` at both shard path (L224) and single-file path (L239)
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Add joint eval to mxbai cross-encoder logit access
+  - [ ] Write test: Verify cross-encoder score function evaluates logits jointly (single forward pass)
+  - [ ] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L446-449
+  - [ ] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L492-493
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate embedding cache from binary to SQLite-only
@@ -24,9 +32,143 @@ These are the primary OOM crash triggers. Surgical fixes with immediate impact.
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
-## Phase 2: Async Runtime Safety (FR-3, FR-5)
+## Phase 2: Search Pipeline Memory Safety (FR-2)
 
-Eliminate deadlock risk and enable clean daemon lifecycle.
+The TF-IDF cache-miss bomb is the largest single memory allocation in the codebase. Must be fixed before any concurrency improvements.
+
+- [ ] Task: Build incremental IDF index for BM25/FTS
+  - [ ] Write test: Verify IDF term counts are updated incrementally on episode insert without loading all content
+  - [ ] Write test: Verify FTS search uses pre-computed IDF index on cache miss (no `SELECT VALUE content FROM episode`)
+  - [ ] Create `idf_index` table in SurrealDB schema (term → document_frequency, total_docs)
+  - [ ] Add `update_idf_index(episode_id)` function that incrementally updates term counts on episode save
+  - [ ] Wire `update_idf_index` into `save_episode` and `save_episodes_batch` code paths
+  - [ ] Refactor `search_pipeline.rs` L1927 to read from `idf_index` table instead of loading all episode content
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Add LIMIT constraints to temporal neighbor graph traversals
+  - [ ] Write test: Verify temporal expansion returns at most N results per hop level
+  - [ ] Write test: Verify depth-3 traversal on dense graph does not exceed memory bounds
+  - [ ] Add `LIMIT 50` to each hop level in `search_pipeline.rs` L2323-2346
+  - [ ] Add `LIMIT 50` to the secondary temporal expansion query at L2341-2346
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+
+## Phase 3: Complete Pagination Migration (FR-3, FR-8)
+
+Exhaustive sweep of ALL unpaginated bulk-load call sites.
+
+- [ ] Task: Implement paginated query variants in CRUD layer
+  - [ ] Write test: Verify `get_episodes_paginated(limit, offset)` returns correct subset with proper offset/limit
+  - [ ] Write test: Verify `get_wiki_nodes_paginated(limit, offset)` returns correct subset
+  - [ ] Write test: Verify `get_wisdom_rules_paginated(limit, offset)` returns correct subset
+  - [ ] Write test: Verify `get_episodes_by_node_type_paginated(type, limit, offset)` returns correct subset
+  - [ ] Add paginated variants to `crud_operations.rs` and `backend.rs` trait
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate ALL `get_all_episodes()` callers (12 sites)
+  - [ ] Refactor `compactor.rs` L252, L1211
+  - [ ] Refactor `synthesis.rs` L891, L917, L2987
+  - [ ] Refactor `precompact.rs` L127
+  - [ ] Refactor `vault_handlers.rs` L41, L72
+  - [ ] Refactor `manage_handlers.rs` L338, L1214
+  - [ ] Refactor `vault/ingestion.rs` L606
+  - [ ] Refactor `blackboard.rs` L189
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate ALL `get_all_wiki_nodes()` callers (7 sites)
+  - [ ] Refactor `synthesis.rs` L504, L1949, L2440, L3199
+  - [ ] Refactor `harvest.rs` L297
+  - [ ] Refactor `meta_skill.rs` L127
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate ALL `get_all_wisdom_rules()` callers
+  - [ ] Refactor `harvest.rs` L342
+  - [ ] Refactor `synthesis.rs` L2440 (wisdom deduplication)
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate `get_episodes_by_node_type()` callers
+  - [ ] Refactor `compactor.rs` L180
+  - [ ] Refactor `synthesis.rs` L1967
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate `get_all_registered_transcripts()` callers
+  - [ ] Refactor `synthesis.rs` L781
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate `get_all_episodes()` / `meta_skill.rs` L126 callers
+  - [ ] Refactor `meta_skill.rs` L126
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Paginate startup missing-embedding backfill
+  - [ ] Write test: Verify startup backfill processes records in bounded batches
+  - [ ] Refactor daemon.rs L126, L152, L178 to use `LIMIT`/`OFFSET` loops
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+
+## Phase 4: Streaming-to-Disk Cognitive Pipeline (FR-4)
+
+Convert the cognitive pipeline from in-memory accumulation to incremental vault writes. Each stage writes its output to md files as produced, drops the in-memory data, then the next stage reads from disk.
+
+- [ ] Task: Stream episode summaries to vault during dreaming
+  - [ ] Write test: Verify episode summaries are flushed to `wiki/<scope>/episodes/*.md` immediately after LLM generation, not held in batch Vec
+  - [ ] Refactor `synthesis.rs` dreaming loop (L869-883): process unprocessed episodes in bounded chunks, write each summary to vault md file before processing next chunk
+  - [ ] Drop `all_episodes` cache (L891) — replace with paginated DB queries for centroid calculation using running mean
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Stream DBSCAN cluster assignments to disk manifest
+  - [ ] Write test: Verify cluster assignments are serialized to `wiki/<scope>/.clusters/<timestamp>.json` and individual members read back during synthesis
+  - [ ] Refactor `synthesis.rs` DBSCAN flow (L1256-1258): write cluster manifest to vault, then read cluster members back one-at-a-time during insight synthesis
+  - [ ] Refactor `compactor.rs` hierarchical DBSCAN (L848-856): serialize cluster map to temp json, process clusters sequentially from disk
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Stream insight synthesis to vault incrementally
+  - [ ] Write test: Verify each synthesized insight is written to `wiki/<scope>/insights/*.md` immediately and dropped from memory before next cluster
+  - [ ] Write test: Verify no more than 50 insights are held in memory simultaneously
+  - [ ] Refactor cluster-to-insight synthesis loop in `synthesis.rs` (L1258-1400): write insight md, drop from memory, proceed to next cluster
+  - [ ] Refactor scope insights loading (L977-978, L1505): use paginated vault reads instead of `load_insights()` loading all files
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Stream direction promotion to vault incrementally
+  - [ ] Write test: Verify direction nodes are written to `wiki/<scope>/directions/*.md` immediately after promotion evaluation
+  - [ ] Refactor direction backpropagation (synthesis.rs L2988-3002): load directions paginated, process one-at-a-time, write result to vault, drop, next
+  - [ ] Refactor direction promotion drift metrics (L3060-3155): evaluate and write one candidate at a time
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Stream wisdom graduation to vault incrementally
+  - [ ] Write test: Verify graduated wisdom rules are written to `wisdom/*.md` immediately after cross-scope matching
+  - [ ] Refactor graduation candidates (synthesis.rs L1946): load candidates paginated instead of `get_all_wiki_nodes()`
+  - [ ] Refactor graduation clusters (L2168-2182): process one cluster at a time, write wisdom rule to vault, drop, next
+  - [ ] Refactor wisdom deduplication (L2440): stream existing rules from DB paginated for comparison
+  - [ ] Refactor direction-to-wisdom graduation (L3203-3246): process one direction pair at a time
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Stream pruned/archived nodes to vault immediately
+  - [ ] Write test: Verify pruned nodes are moved to `vault/archive/` and dropped from memory immediately, not batched
+  - [ ] Refactor GC candidates (compactor.rs L140): process one node at a time — archive file, delete from DB, drop reference
+  - [ ] Refactor procedural episode trimming (compactor.rs L180): paginate active procs, archive excess one-at-a-time
+  - [ ] Refactor near-duplicate merging (compactor.rs L253): compare pairs using paginated iteration, merge+archive immediately per pair
+  - [ ] Refactor decayed episode archival (compactor.rs L1195-1211): paginate episodes, compute decay per batch, archive immediately
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Stream compaction summaries one cluster at a time
+  - [ ] Write test: Verify compaction loop writes each cluster summary to `wiki/<scope>/compactions/*.md` and releases prompt buffer before next cluster
+  - [ ] Write test: Verify outlier insights are written individually, not accumulated in batch Vec
+  - [ ] Refactor compaction loop (compactor.rs L861-1013): flush prompt_content and LLM response after each cluster write
+  - [ ] Refactor outlier handling (compactor.rs L1018-1090): write each outlier insight individually
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Cap synthesis cluster prompt concatenation
+  - [ ] Write test: Verify `insights_with_scope_labels` string is truncated at 32K token budget
+  - [ ] Add token-budget truncation to synthesis.rs L2204-2210
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+
+## Phase 5: Async Runtime Safety (FR-5, FR-7)
+
+Now safe to unlock concurrency — all memory bombs are fixed.
 
 - [ ] Task: Replace blocking semaphore spin-loops with async semaphores
   - [ ] Write test: Verify embedding semaphore acquisition is non-blocking and yields to tokio runtime
@@ -53,45 +195,9 @@ Eliminate deadlock risk and enable clean daemon lifecycle.
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
-## Phase 3: Database Query Pagination (FR-2, FR-6)
+## Phase 6: Proportional Growth Mitigations (FR-9)
 
-Eliminate unbounded bulk data loads.
-
-- [ ] Task: Implement paginated `get_episodes_paginated(limit, offset)` in CRUD layer
-  - [ ] Write test: Verify paginated query returns correct subset with proper offset/limit
-  - [ ] Write test: Verify paginated iteration covers all records when iterated to exhaustion
-  - [ ] Add `get_episodes_paginated` to `crud_operations.rs` and `backend.rs` trait
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Implement paginated variants for wiki_nodes and wisdom_rules
-  - [ ] Write test: Verify `get_wiki_nodes_paginated` and `get_wisdom_rules_paginated` return correct subsets
-  - [ ] Add paginated queries to CRUD layer and backend trait
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Migrate compactor callers to paginated queries
-  - [ ] Write test: Verify compactor processes episodes in bounded batches
-  - [ ] Refactor `compactor.rs` L252 and L1211 to use paginated iteration
-  - [ ] Refactor `synthesis.rs` L504 (wiki_nodes) and L891 (episodes) to use paginated iteration
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Migrate precompact, vault, and MCP handler callers
-  - [ ] Write test: Verify precompact hook processes episodes in bounded batches
-  - [ ] Refactor `precompact.rs` L127 to use paginated query
-  - [ ] Refactor `vault_handlers.rs` L41 and L72 to use paginated query
-  - [ ] Refactor `manage_handlers.rs` L1214 to use paginated query
-  - [ ] Refactor `vault/ingestion.rs` L606 to use paginated query
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Paginate startup missing-embedding backfill
-  - [ ] Write test: Verify startup backfill processes records in bounded batches
-  - [ ] Refactor daemon.rs L126, L152, L178 to use `LIMIT`/`OFFSET` loops
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
-
-## Phase 4: Proportional Growth Mitigations (FR-7)
-
-Address medium-severity memory scaling issues.
+Address remaining medium-severity memory scaling issues.
 
 - [ ] Task: Add sliding window to transcript mining tool sequence
   - [ ] Write test: Verify `mine_transcript` tool_sequence Vec does not exceed window size
@@ -100,7 +206,7 @@ Address medium-severity memory scaling issues.
 
 - [ ] Task: Add payload size limits to API batch endpoint
   - [ ] Write test: Verify `save_episodes_batch_handler` rejects payloads exceeding limit
-  - [ ] Add `axum::extract::ContentLengthLimit` or manual size check to api.rs L120
+  - [ ] Add size check to api.rs L120
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Switch vault bulk ingestion to batch inserts
