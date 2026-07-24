@@ -1,6 +1,8 @@
 # Implementation Plan: Memory Leak Remediation & OOM Crash Prevention
 
 > **Phase ordering rationale:** Memory leaks are fixed before async throughput improvements. Unlocking concurrency while memory bombs exist would accelerate OOM crashes.
+>
+> **Phase gate protocol:** Every phase ends with unit tests (`cargo nextest run`), the `verify_dev50.sh` regression benchmark, and a git commit. Work is only committed if both gates pass. If dev50 regresses, the phase must be debugged before proceeding.
 
 ## Phase 1: Critical MLX Graph Fixes (FR-1)
 
@@ -30,7 +32,12 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
   - [ ] Add migration: convert existing `embedding_cache.bin` to SQLite on first run
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [ ] Task: Phase Verification & Checkpoint
+  - [ ] Run unit tests: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+  - [ ] Run dev50 regression gate: `bash scripts/verify_dev50.sh`
+  - [ ] Verify dev50 status is PASS (Recall@5, nDCG@10, latency within baseline tolerance)
+  - [ ] If PASS: commit all phase changes with `git commit -m "fix(memory): Phase 1 — MLX graph eval fixes and embedding cache migration"`
+  - [ ] If REJECT: debug regression before proceeding
 
 ## Phase 2: Search Pipeline Memory Safety (FR-2)
 
@@ -52,7 +59,12 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
   - [ ] Add `LIMIT 50` to the secondary temporal expansion query at L2341-2346
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [ ] Task: Phase Verification & Checkpoint
+  - [ ] Run unit tests: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+  - [ ] Run dev50 regression gate: `bash scripts/verify_dev50.sh`
+  - [ ] Verify dev50 status is PASS
+  - [ ] If PASS: commit all phase changes with `git commit -m "fix(memory): Phase 2 — Search pipeline IDF indexer and graph traversal bounds"`
+  - [ ] If REJECT: debug regression before proceeding
 
 ## Phase 3: Complete Pagination Migration (FR-3, FR-8)
 
@@ -105,7 +117,12 @@ Exhaustive sweep of ALL unpaginated bulk-load call sites.
   - [ ] Refactor daemon.rs L126, L152, L178 to use `LIMIT`/`OFFSET` loops
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [ ] Task: Phase Verification & Checkpoint
+  - [ ] Run unit tests: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+  - [ ] Run dev50 regression gate: `bash scripts/verify_dev50.sh`
+  - [ ] Verify dev50 status is PASS
+  - [ ] If PASS: commit all phase changes with `git commit -m "fix(memory): Phase 3 — Complete pagination migration (24+ callers)"`
+  - [ ] If REJECT: debug regression before proceeding
 
 ## Phase 4: Streaming-to-Disk Cognitive Pipeline (FR-4)
 
@@ -164,7 +181,12 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
   - [ ] Add token-budget truncation to synthesis.rs L2204-2210
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [ ] Task: Phase Verification & Checkpoint
+  - [ ] Run unit tests: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+  - [ ] Run dev50 regression gate: `bash scripts/verify_dev50.sh`
+  - [ ] Verify dev50 status is PASS
+  - [ ] If PASS: commit all phase changes with `git commit -m "fix(memory): Phase 4 — Streaming-to-disk cognitive pipeline"`
+  - [ ] If REJECT: debug regression before proceeding
 
 ## Phase 5: Async Runtime Safety (FR-5, FR-7)
 
@@ -193,7 +215,12 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [ ] Wire token cancellation into the graceful shutdown sequence
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [ ] Task: Phase Verification & Checkpoint
+  - [ ] Run unit tests: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+  - [ ] Run dev50 regression gate: `bash scripts/verify_dev50.sh`
+  - [ ] Verify dev50 status is PASS
+  - [ ] If PASS: commit all phase changes with `git commit -m "fix(memory): Phase 5 — Async runtime safety (semaphores, cancellation tokens)"`
+  - [ ] If REJECT: debug regression before proceeding
 
 ## Phase 6: Proportional Growth Mitigations (FR-9)
 
@@ -224,4 +251,33 @@ Address remaining medium-severity memory scaling issues.
   - [ ] Add truncation logic to `completions_proxy_handler` in api.rs L613-622
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [ ] Task: Phase Verification & Checkpoint
+  - [ ] Run unit tests: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+  - [ ] Run dev50 regression gate: `bash scripts/verify_dev50.sh`
+  - [ ] Verify dev50 status is PASS
+  - [ ] If PASS: commit all phase changes with `git commit -m "fix(memory): Phase 6 — Proportional growth mitigations"`
+  - [ ] If REJECT: debug regression before proceeding
+
+## Phase 7: Architecture & Data Flow Documentation Update
+
+Update project documentation to reflect all architectural changes made in Phases 1-6.
+
+- [ ] Task: Update ARCHITECTURE.md
+  - [ ] Update Section 2 (Dual-Engine Storage): document SQLite embedding cache migration, incremental IDF indexer
+  - [ ] Update Section 3 (Three-Tiered Model Broker): document MLX `.eval()` requirements for KV caches, weight casts, and cross-encoder logits
+  - [ ] Update Section 4 (Cognitive Scheduling): document streaming-to-disk pipeline architecture (each stage writes to vault md files incrementally), bounded pagination for all DB queries, temporal traversal LIMIT constraints
+  - [ ] Update Section 5 (Graceful Shutdown): document CancellationToken lifecycle for background tasks, async semaphore model
+  - [ ] Update Section 6 (End-to-End Data Flow): update data flow diagram to reflect streaming pipeline, IDF indexer, and bounded graph traversals
+  - [ ] Add new Section: Memory Safety Invariants (pipeline stage memory cap ≤50 items, no `get_all_*` unbounded queries, all MLX operations evaluated before caching)
+
+- [ ] Task: Update inline code documentation
+  - [ ] Add doc comments to all new paginated query functions in `crud_operations.rs` and `backend.rs`
+  - [ ] Add doc comments to `update_idf_index` and streaming pipeline functions
+  - [ ] Add safety comments at all `.eval()` call sites explaining the lazy graph accumulation risk
+
+- [ ] Task: Phase Verification & Checkpoint
+  - [ ] Run unit tests: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+  - [ ] Run dev50 regression gate: `bash scripts/verify_dev50.sh`
+  - [ ] Verify dev50 status is PASS
+  - [ ] If PASS: commit all phase changes with `git commit -m "docs(architecture): Update ARCHITECTURE.md and data flow for memory safety changes"`
+  - [ ] If REJECT: debug regression before proceeding
