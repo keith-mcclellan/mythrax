@@ -40,10 +40,11 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
 
 - [ ] Task: Migrate embedding cache from binary to SQLite-only
   - [ ] Write test: Verify `flush_dirty` with SQLite path correctly persists and retrieves dirty entries without loading entire cache
-  - [ ] Write test: Verify cache capacity is enforced during flush
+  - [ ] Write test: Verify cache capacity is enforced during flush via LRU eviction
   - [ ] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
   - [ ] Remove binary `flush_dirty` **write/flush** code path (embeddings.rs L303-375). **Retain** the legacy binary deserialization structs and read logic solely for the one-time migration
   - [ ] Update `flush_dirty_default()` to always use SQLite path
+  - [ ] Implement LRU eviction in the SQLite flush path: enforce max cache capacity by deleting least-recently-used entries before writing new ones
   - [ ] Add migration: on first run, detect `embedding_cache.bin`, deserialize using retained legacy structs, write all entries to SQLite, then rename/delete the binary file
   - [ ] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
   - [ ] Run tests and confirm pass
@@ -52,7 +53,16 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
 
 ## Phase 2: Search Pipeline Memory Safety (FR-2)
 
-The TF-IDF cache-miss bomb is the largest single memory allocation in the codebase. Must be fixed before any concurrency improvements.
+The TF-IDF cache-miss bomb is the largest single memory allocation in the codebase. Must be fixed before any concurrency improvements. Paginated CRUD primitives are built first since backfill tasks depend on them.
+
+- [ ] Task: Implement paginated query variants in CRUD layer
+  - [ ] Write test: Verify `get_episodes_paginated(limit, offset)` returns correct subset with proper offset/limit
+  - [ ] Write test: Verify `get_wiki_nodes_paginated(limit, offset)` returns correct subset
+  - [ ] Write test: Verify `get_wisdom_rules_paginated(limit, offset)` returns correct subset
+  - [ ] Write test: Verify `get_episodes_by_node_type_paginated(type, limit, offset)` returns correct subset
+  - [ ] Write test: Verify `get_registered_transcripts_paginated(limit, offset)` returns correct subset
+  - [ ] Add paginated variants to `crud_operations.rs` and `backend.rs` trait
+  - [ ] Run tests and confirm pass
 
 - [ ] Task: Create `idf_index` table and initialization logic
   - [ ] Write test: Verify `idf_index` table is created during daemon startup INIT_SCHEMA step
@@ -87,18 +97,9 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
-## Phase 3: Complete Pagination Migration (FR-3, FR-8)
+## Phase 3: Pagination Migration — Standalone Callers (FR-3, FR-8)
 
-Exhaustive sweep of ALL unpaginated bulk-load call sites.
-
-- [ ] Task: Implement paginated query variants in CRUD layer
-  - [ ] Write test: Verify `get_episodes_paginated(limit, offset)` returns correct subset with proper offset/limit
-  - [ ] Write test: Verify `get_wiki_nodes_paginated(limit, offset)` returns correct subset
-  - [ ] Write test: Verify `get_wisdom_rules_paginated(limit, offset)` returns correct subset
-  - [ ] Write test: Verify `get_episodes_by_node_type_paginated(type, limit, offset)` returns correct subset
-  - [ ] Write test: Verify `get_registered_transcripts_paginated(limit, offset)` returns correct subset
-  - [ ] Add paginated variants to `crud_operations.rs` and `backend.rs` trait
-  - [ ] Run tests and confirm pass
+Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline callers (`synthesis.rs`, `compactor.rs`, `precompact.rs`) are deferred to Phase 4 where they are structurally rewritten for streaming-to-disk, avoiding double-touch.
 
 - [ ] Task: Add `content_hash` field and hash-based deduplication queries
   - [ ] Write test: Verify `content_hash` is computed (SHA-256 of normalized content) and stored on episode and wisdom_rule save
@@ -114,17 +115,6 @@ Exhaustive sweep of ALL unpaginated bulk-load call sites.
   - [ ] Wire backfill into daemon startup: run once if records with null `content_hash` exist, log progress
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Migrate deduplication logic to hash-based lookups
-  - [ ] Refactor wisdom deduplication in `synthesis.rs` L2440 to use `find_duplicate_by_content_hash` instead of paginated comparison
-  - [ ] Refactor near-duplicate detection in `compactor.rs` L253 to use hash pre-filter before embedding comparison
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Migrate `get_all_episodes()` callers — cognitive pipeline (3 files)
-  - [ ] Refactor `compactor.rs` L252, L1211
-  - [ ] Refactor `synthesis.rs` L891, L917, L2987
-  - [ ] Refactor `precompact.rs` L127
-  - [ ] Run tests and confirm pass
-
 - [ ] Task: Migrate `get_all_episodes()` callers — HTTP handlers (2 files)
   - [ ] Refactor `vault_handlers.rs` L41, L72
   - [ ] Refactor `manage_handlers.rs` L338, L1214
@@ -135,24 +125,17 @@ Exhaustive sweep of ALL unpaginated bulk-load call sites.
   - [ ] Refactor `blackboard.rs` L189
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Migrate ALL `get_all_wiki_nodes()` callers (3 files)
-  - [ ] Refactor `synthesis.rs` L504, L1949, L2440, L3199
+- [ ] Task: Migrate standalone `get_all_wiki_nodes()` callers (2 files)
   - [ ] Refactor `harvest.rs` L297
   - [ ] Refactor `meta_skill.rs` L127
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Migrate ALL `get_all_wisdom_rules()` callers (2 files)
+- [ ] Task: Migrate standalone `get_all_wisdom_rules()` callers (1 file)
   - [ ] Refactor `harvest.rs` L342
-  - [ ] Refactor `synthesis.rs` L2440 (wisdom deduplication — now uses hash-based, but paginated fallback)
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Migrate `get_episodes_by_node_type()` callers (2 files)
-  - [ ] Refactor `compactor.rs` L180
-  - [ ] Refactor `synthesis.rs` L1967
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_registered_transcripts()` and `get_all_episodes()` in meta_skill (2 files)
-  - [ ] Refactor `synthesis.rs` L781
+  - [ ] Refactor `synthesis.rs` L781 (standalone transcript query, not cognitive pipeline rewrite)
   - [ ] Refactor `meta_skill.rs` L126
   - [ ] Run tests and confirm pass
 
@@ -165,7 +148,7 @@ Exhaustive sweep of ALL unpaginated bulk-load call sites.
 
 ## Phase 4: Streaming-to-Disk Cognitive Pipeline (FR-4)
 
-Convert the cognitive pipeline from in-memory accumulation to incremental vault writes. Each stage writes its output to vault markdown files (for human-readable artifacts) or SurrealDB temporary records (for machine-only intermediate state) as produced, drops the in-memory data, then the next stage reads from the persisted store.
+Convert the cognitive pipeline from in-memory accumulation to incremental vault writes. This phase also migrates all cognitive pipeline callers (`synthesis.rs`, `compactor.rs`, `precompact.rs`) to paginated queries as part of the structural rewrite, plus hash-based deduplication — avoiding double-touch from Phase 3.
 
 ### Storage Routing
 
@@ -178,6 +161,19 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 | Wisdom rules | Vault md (`wisdom/*.md`) + DB `wisdom_rule` | Human-readable + queryable |
 | Pruned/archived nodes | Vault `archive/` | Human-readable audit trail |
 | Compaction summaries | Vault md (`wiki/<scope>/compactions/*.md`) | Human-readable, version-controlled |
+
+- [ ] Task: Migrate cognitive pipeline `get_all_*` callers to paginated queries (deferred from Phase 3)
+  - [ ] Refactor `compactor.rs` L252, L1211 (`get_all_episodes`)
+  - [ ] Refactor `synthesis.rs` L891, L917, L2987 (`get_all_episodes`)
+  - [ ] Refactor `synthesis.rs` L504, L1949, L2440, L3199 (`get_all_wiki_nodes`)
+  - [ ] Refactor `synthesis.rs` L2440, `compactor.rs` L180, `synthesis.rs` L1967 (`get_episodes_by_node_type`)
+  - [ ] Refactor `precompact.rs` L127 (`get_all_episodes`)
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate cognitive pipeline deduplication to hash-based lookups (deferred from Phase 3)
+  - [ ] Refactor wisdom deduplication in `synthesis.rs` L2440 to use `find_duplicate_by_content_hash` instead of paginated comparison
+  - [ ] Refactor near-duplicate detection in `compactor.rs` L253 to use hash pre-filter before embedding comparison
+  - [ ] Run tests and confirm pass
 
 - [ ] Task: Create `pipeline_cluster` temporary table for DBSCAN state
   - [ ] Write test: Verify `pipeline_cluster` records can be inserted, queried by run_id, and bulk-deleted after synthesis
@@ -252,7 +248,7 @@ Now safe to unlock concurrency — all memory bombs are fixed.
 
 - [ ] Task: Identify and categorize all callers of blocking embed functions
   - [ ] Audit all callers of `embed()`, `embed_batch()`, `embed_sub_batch()` across the codebase
-  - [ ] Categorize each caller as: (a) already in async context, (b) in sync context requiring `block_on` bridge, or (c) in trait impl requiring signature change
+  - [ ] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
   - [ ] Document the categorized caller list in a scratch note before proceeding
   - [ ] Run tests and confirm pass (no code changes, audit only)
 
@@ -267,7 +263,7 @@ Now safe to unlock concurrency — all memory bombs are fixed.
 - [ ] Task: Add new async embed functions (strangler pattern) and migrate all callers
   - [ ] Add `embed_async()`, `embed_batch_async()`, `embed_sub_batch_async()` as new async functions alongside the existing synchronous versions
   - [ ] Migrate all category (a) callers (async context) to call the new `*_async()` functions
-  - [ ] Migrate all category (b) callers (sync context) to call the new `*_async()` functions via `tokio::runtime::Handle::current().block_on()`
+  - [ ] For category (b) callers (sync context called from within tokio runtime): bubble `async` up the call stack to the nearest async context. If bubbling is structurally impossible (e.g., restricted by external sync trait), use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** use bare `block_on()` which panics inside a tokio runtime
   - [ ] Update any trait signatures identified in category (c) if needed, or add async trait variants
   - [ ] Run tests and confirm pass
 
