@@ -190,11 +190,34 @@ that also concludes a phase in `plan.md`.
     -   **PAUSE** and await the user's response. Do not proceed without an
         explicit yes or confirmation.
 
-7.  **Run Adversarial CTO Code Review:**
+7.  **Run Conductor Code Review (Principal Engineer):**
 
-    -   **Action:** Immediately after the user provides confirmation, invoke a
-        `cto_reviewer` subagent to perform an adversarial code review of the
+    -   **Action:** Immediately after the user provides confirmation, execute
+        the `conductor-review` skill to perform a standard code review of the
         phase's implementation.
+    -   **Persona:** The Conductor Reviewer acts as a meticulous **Principal
+        Software Engineer** and **Code Review Architect**. It is helpful but
+        firm in its standards.
+    -   **Scope:** The reviewer must:
+        -   Verify the code implements what `plan.md` and `spec.md` asked for
+            (intent verification).
+        -   Check strict compliance with `product-guidelines.md` and any
+            `conductor/code_styleguides/*.md` files.
+        -   Scan for bugs, race conditions, null pointer risks, hardcoded
+            secrets, PII leaks, and unsafe input handling.
+        -   Verify new tests exist and cover the changes.
+        -   Run the test suite automatically and analyze results.
+    -   **Gate:** If the Conductor Reviewer identifies issues, they must be
+        resolved before proceeding to the CTO review. The reviewer may
+        auto-apply fixes with user approval, or the user may fix manually.
+    -   **Commit Fixes:** If fixes are applied, they must be committed and
+        tracked in `plan.md` under a "Review Fixes" phase before proceeding.
+
+8.  **Run Adversarial CTO Code Review:**
+
+    -   **Action:** After the Conductor Review passes, invoke a `cto_reviewer`
+        subagent to perform an adversarial code review of the phase's
+        implementation. This is the final, most hostile gate.
     -   **Persona:** The CTO Reviewer acts as a hostile, skeptical Principal
         Software Engineer. It thinks from first principles, challenges every
         assumption, and prioritizes correctness and safety over speed.
@@ -218,49 +241,51 @@ that also concludes a phase in `plan.md`.
         *before* proceeding to the checkpoint step. The phase cannot be
         checkpointed without CTO Reviewer approval.
 
-8.  **Conditional Commit — All Gates Must Pass:**
+9.  **Conditional Commit — All Gates Must Pass:**
 
     -   **Precondition:** The phase may only be committed if ALL of the
         following gates have passed:
         -   Unit tests (Step 3): PASS
         -   dev50 regression benchmark (Step 4): PASS
         -   User manual verification (Step 6): Confirmed
-        -   Adversarial CTO Review (Step 7): No Critical/High findings remaining
+        -   Conductor Review (Step 7): No unresolved issues
+        -   Adversarial CTO Review (Step 8): No Critical/High findings remaining
     -   **If all gates pass:** Stage all code changes and commit with a scoped
         message (e.g., `fix(memory): Phase N — <description>`).
     -   **If any gate fails:** Do NOT commit. Debug, fix, and re-run the
         failing gate(s) until all pass.
 
-9.  **Identify Target Commit for Report:**
+10. **Identify Target Commit for Report:**
 
-    -   The target commit is the commit created in Step 8.
+    -   The target commit is the commit created in Step 9.
     -   Obtain its hash via `git log -1 --format="%H"`.
 
-10. **Attach Auditable Verification Report using Git Notes:**
+11. **Attach Auditable Verification Report using Git Notes:**
 
-    -   **Step 10.1: Draft Note Content:** Create a detailed verification report
+    -   **Step 11.1: Draft Note Content:** Create a detailed verification report
         including: the automated test command and result, the dev50 benchmark
         metrics (Recall@5, nDCG@10, latency), the manual verification steps,
-        the user's confirmation, and the CTO Review summary.
-    -   **Step 10.2: Attach Note:** Use the `git notes` command to attach the
-        full report to the target commit identified in Step 9.
+        the user's confirmation, the Conductor Review summary, and the CTO
+        Review summary.
+    -   **Step 11.2: Attach Note:** Use the `git notes` command to attach the
+        full report to the target commit identified in Step 10.
 
-11. **Get and Record Phase Checkpoint SHA:**
+12. **Get and Record Phase Checkpoint SHA:**
 
-    -   **Step 11.1: Get Commit Hash:** Obtain the hash of the commit from
-        Step 8 (`git log -1 --format="%H"`).
-    -   **Step 11.2: Update Plan:** Read `plan.md`, find the heading for the
+    -   **Step 12.1: Get Commit Hash:** Obtain the hash of the commit from
+        Step 9 (`git log -1 --format="%H"`).
+    -   **Step 12.2: Update Plan:** Read `plan.md`, find the heading for the
         completed phase, and append the first 7 characters of the commit hash in
         the format `[checkpoint: <sha>]`.
-    -   **Step 11.3: Write Plan:** Write the updated content back to `plan.md`.
+    -   **Step 12.3: Write Plan:** Write the updated content back to `plan.md`.
 
-12. **Commit Plan Update:**
+13. **Commit Plan Update:**
 
     -   **Action:** Stage the modified `plan.md` file.
     -   **Action:** Commit this change with a descriptive message following the
         format `conductor(plan): Mark phase '<PHASE NAME>' as complete`.
 
-13. **Announce Completion:** Inform the user that the phase is complete and the
+14. **Announce Completion:** Inform the user that the phase is complete and the
     checkpoint has been created, with the detailed verification report attached
     as a git note. Include the dev50 metrics delta from baseline in the
     announcement.
