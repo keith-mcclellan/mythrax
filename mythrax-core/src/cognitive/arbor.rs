@@ -31,12 +31,11 @@ pub struct TestCommandEvaluator {
 
 impl HeldOutEvaluator for TestCommandEvaluator {
     fn evaluate(&self, _branch_name: &str, temp_worktree_path: &Path) -> Result<f32> {
-        let has_shell_operators = self.test_command.contains('&') || self.test_command.contains('|') || self.test_command.contains('>') || self.test_command.contains('<') || self.test_command.contains(';');
-        let mut cmd = if has_shell_operators {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(&self.test_command);
-            c
-        } else {
+        // SECURITY FIX: Never use `sh -c` to execute dynamic test commands. It creates a critical
+        // shell injection vulnerability where untrusted input breaks agent isolation.
+        // We now enforce strict argument parsing.
+
+        let mut cmd = {
             let mut args = Vec::new();
             let mut current_arg = String::new();
             let mut in_quotes = false;
