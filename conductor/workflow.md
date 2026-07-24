@@ -143,15 +143,34 @@ that also concludes a phase in `plan.md`.
 
     -   Before execution, you **must** announce the exact shell command you will
         use to run the tests.
-    -   **Example Announcement:** "I will now run the automated test suite to
-        verify the phase. **Command:** `CI=true npm test`"
+    -   **Primary Command:** `MYTHRAX_TEST_MOCK=1 cargo nextest run`
     -   Execute the announced command.
     -   If tests fail, you **must** inform the user and begin debugging. You may
         attempt to propose a fix a **maximum of two times**. If the tests still
         fail after your second proposed fix, you **must stop**, report the
         persistent failure, and ask the user for guidance.
 
-4.  **Propose a Detailed, Actionable Manual Verification Plan:**
+4.  **Execute dev50 Regression Benchmark Gate:**
+
+    -   **CRITICAL:** This step is mandatory for every phase completion. It
+        verifies that the phase's changes did not regress the memory engine's
+        retrieval quality or latency.
+    -   **Command:** `bash scripts/verify_dev50.sh`
+    -   This runs the dev50 benchmark split in hybrid mode against the baseline
+        (`bench_data/BASELINE_DEV50.json`), checking:
+        -   **Recall_Any@5** — must not regress below baseline
+        -   **Recall_All@5** — must not regress below baseline
+        -   **nDCG@10** — must not regress below baseline
+        -   **Avg Latency** — must not exceed 115% of baseline
+    -   Results are logged to `bench_data/dev50_history.jsonl` and
+        `bench_data/dev50_state.json`.
+    -   **Gate:** If the script exits with status `REJECT`, the phase **cannot**
+        be committed or checkpointed. You must debug the regression, fix it, re-run
+        the unit tests (Step 3), and re-run dev50 until it passes.
+    -   **Announce Result:** Report the dev50 metrics and PASS/REJECT status to
+        the user before proceeding.
+
+5.  **Propose a Detailed, Actionable Manual Verification Plan:**
 
     -   **CRITICAL:** To generate the plan, first analyze `product.md`,
         `product-guidelines.md`, and `plan.md` to determine the user-facing
@@ -159,25 +178,11 @@ that also concludes a phase in `plan.md`.
     -   You **must** generate a step-by-step plan that walks the user through
         the verification process, including any necessary commands and specific,
         expected outcomes.
-    -   The plan you present to the user **must** follow this format:
+    -   For backend/engine changes, include commands to monitor daemon RSS via
+        `footprint` or `ps aux`, and verify VRAM usage stability during model
+        inference.
 
-        **For a Frontend Change:** ``` The automated tests have passed. For
-        manual verification, please follow these steps:
-
-        **Manual Verification Steps:** 1. **Start the development server with
-        the command:** `npm run dev` 2. **Open your browser to:**
-        `http://localhost:3000` 3. **Confirm that you see:** The new user
-        profile page, with the user's name and email displayed correctly. ```
-
-        **For a Backend Change:** ``` The automated tests have passed. For
-        manual verification, please follow these steps:
-
-        **Manual Verification Steps:** 1. **Ensure the server is running.** 2.
-        **Execute the following command in your terminal:** `curl -X POST
-        http://localhost:8080/api/v1/users -d '{"name": "test"}'` 3. **Confirm
-        that you receive:** A JSON response with a status of `201 Created`. ```
-
-5.  **Await Explicit User Feedback:**
+6.  **Await Explicit User Feedback:**
 
     -   After presenting the detailed plan, ask the user for confirmation:
         "**Does this meet your expectations? Please confirm with yes or provide
@@ -185,42 +190,80 @@ that also concludes a phase in `plan.md`.
     -   **PAUSE** and await the user's response. Do not proceed without an
         explicit yes or confirmation.
 
-6.  **Run Adversarial CTO Review:**
+7.  **Run Adversarial CTO Code Review:**
 
-    -   **Action:** Immediately after the user provides confirmation, invoke the `cto_reviewer` subagent to audit the phase's implementation against the original plan and specifications.
-    -   **Verification:** The CTO Reviewer must verify that no code/test gaps exist, no edges are missing, and no technical debt was bypassed.
-    -   **Gate:** If the CTO Reviewer identifies critical or major findings, the fixes must be implemented and verified *before* proceeding to the checkpoint step. The phase cannot be checkpointed without CTO Reviewer approval.
+    -   **Action:** Immediately after the user provides confirmation, invoke a
+        `cto_reviewer` subagent to perform an adversarial code review of the
+        phase's implementation.
+    -   **Persona:** The CTO Reviewer acts as a hostile, skeptical Principal
+        Software Engineer. It thinks from first principles, challenges every
+        assumption, and prioritizes correctness and safety over speed.
+    -   **Scope:** The reviewer must:
+        -   Read the phase's `plan.md` tasks and the `spec.md` requirements.
+        -   Independently audit the changed source files (`git diff` from
+            previous checkpoint) for bugs, memory leaks, race conditions,
+            missing edge cases, and incomplete fixes.
+        -   Verify no code/test gaps exist, no edges are missing, and no
+            technical debt was bypassed.
+        -   Check that proposed tests are sufficiently strict to fail if the
+            underlying business logic is stubbed or bypassed.
+        -   Look for systemic patterns the implementer may have missed (e.g.,
+            similar bugs in files not covered by the phase).
+    -   **Output:** The reviewer must produce a structured report with findings
+        categorized as Critical, High, Medium, or Low, with exact file paths,
+        line numbers, and suggested fixes.
+    -   **Gate:** If the CTO Reviewer identifies **Critical** or **High**
+        findings, the fixes must be implemented, tests re-run (Step 3), dev50
+        re-run (Step 4), and the CTO Reviewer re-invoked to verify the fixes
+        *before* proceeding to the checkpoint step. The phase cannot be
+        checkpointed without CTO Reviewer approval.
 
-7.  **Identify Target Commit for Report:**
+8.  **Conditional Commit — All Gates Must Pass:**
 
-    -   Do NOT create a new empty commit for checkpointing.
-    -   Identify the hash of the last functional commit made during this phase. This will be the target for the verification report.
+    -   **Precondition:** The phase may only be committed if ALL of the
+        following gates have passed:
+        -   Unit tests (Step 3): PASS
+        -   dev50 regression benchmark (Step 4): PASS
+        -   User manual verification (Step 6): Confirmed
+        -   Adversarial CTO Review (Step 7): No Critical/High findings remaining
+    -   **If all gates pass:** Stage all code changes and commit with a scoped
+        message (e.g., `fix(memory): Phase N — <description>`).
+    -   **If any gate fails:** Do NOT commit. Debug, fix, and re-run the
+        failing gate(s) until all pass.
 
-8.  **Attach Auditable Verification Report using Git Notes:**
+9.  **Identify Target Commit for Report:**
 
-    -   **Step 8.1: Draft Note Content:** Create a detailed verification report
-        including the automated test command, the manual verification steps, and
-        the user's confirmation.
-    -   **Step 8.2: Attach Note:** Use the `git notes` command to attach the full report to the target commit identified in step 7.
+    -   The target commit is the commit created in Step 8.
+    -   Obtain its hash via `git log -1 --format="%H"`.
 
-9.  **Get and Record Phase Checkpoint SHA:**
+10. **Attach Auditable Verification Report using Git Notes:**
 
-    -   **Step 9.1: Get Commit Hash:** Obtain the hash of the *just-created
-        checkpoint commit* (`git log -1 --format="%H"`).
-    -   **Step 9.2: Update Plan:** Read `plan.md`, find the heading for the
+    -   **Step 10.1: Draft Note Content:** Create a detailed verification report
+        including: the automated test command and result, the dev50 benchmark
+        metrics (Recall@5, nDCG@10, latency), the manual verification steps,
+        the user's confirmation, and the CTO Review summary.
+    -   **Step 10.2: Attach Note:** Use the `git notes` command to attach the
+        full report to the target commit identified in Step 9.
+
+11. **Get and Record Phase Checkpoint SHA:**
+
+    -   **Step 11.1: Get Commit Hash:** Obtain the hash of the commit from
+        Step 8 (`git log -1 --format="%H"`).
+    -   **Step 11.2: Update Plan:** Read `plan.md`, find the heading for the
         completed phase, and append the first 7 characters of the commit hash in
         the format `[checkpoint: <sha>]`.
-    -   **Step 9.3: Write Plan:** Write the updated content back to `plan.md`.
+    -   **Step 11.3: Write Plan:** Write the updated content back to `plan.md`.
 
-10. **Commit Plan Update:**
+12. **Commit Plan Update:**
 
     -   **Action:** Stage the modified `plan.md` file.
     -   **Action:** Commit this change with a descriptive message following the
         format `conductor(plan): Mark phase '<PHASE NAME>' as complete`.
 
-11. **Announce Completion:** Inform the user that the phase is complete and the
+13. **Announce Completion:** Inform the user that the phase is complete and the
     checkpoint has been created, with the detailed verification report attached
-    as a git note.
+    as a git note. Include the dev50 metrics delta from baseline in the
+    announcement.
 
 ### Quality Gates
 
