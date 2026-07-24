@@ -9,7 +9,7 @@
 Update project documentation to reflect the new design before writing any code. This establishes the architectural contract that all subsequent phases implement against.
 
 - [ ] Task: Update ARCHITECTURE.md with new design
-  - [ ] Update Section 2 (Dual-Engine Storage): document planned SQLite embedding cache migration, incremental IDF indexer with `idf_index` table, `pipeline_cluster` temporary table for DBSCAN state, `content_hash` field for hash-based deduplication
+  - [ ] Update Section 2 (Dual-Engine Storage): document planned SQLite embedding cache migration, incremental IDF indexer with `idf_index` table, `pipeline_cluster` temporary table for DBSCAN state, `content_hash` field for hash-based deduplication. **Remove all references to RocksDB** — the SurrealDB backend is SurrealKV exclusively. Rename the section if needed to reflect this.
   - [ ] Update Section 3 (Three-Tiered Model Broker): document MLX `.eval()` requirements for KV caches, weight casts, and cross-encoder logits (joint eval pattern)
   - [ ] Update Section 4 (Cognitive Scheduling): document streaming-to-disk pipeline architecture (vault md for human-readable artifacts, SurrealDB for machine state), bounded pagination for all DB queries, temporal traversal LIMIT constraints
   - [ ] Update Section 5 (Graceful Shutdown): document planned CancellationToken lifecycle for background tasks, async semaphore model replacing blocking spin-loops
@@ -73,7 +73,7 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
   - [ ] Write test: Verify `update_idf_index(episode_id)` correctly increments term document frequencies on episode insert
   - [ ] Write test: Verify `update_idf_index` correctly decrements term document frequencies on episode delete
   - [ ] Add `update_idf_index` to `crud_operations.rs`
-  - [ ] Wire `update_idf_index` into `save_episode` and `save_episodes_batch` code paths in `backend.rs`
+  - [ ] Wire `update_idf_index` into `save_episode`, `save_episodes_batch`, **and `delete_episode`** code paths in `backend.rs`
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Backfill IDF index for existing episodes
@@ -199,6 +199,7 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
   - [ ] Write test: Verify `pipeline_cluster` records are deleted after successful synthesis completion
   - [ ] Refactor `synthesis.rs` DBSCAN flow (L1256-1258): write cluster assignments to `pipeline_cluster` table, then query members per-cluster during insight synthesis
   - [ ] Refactor `compactor.rs` hierarchical DBSCAN (L848-856): write cluster assignments to `pipeline_cluster` table, process clusters sequentially by querying from DB
+  - [ ] Call `delete_pipeline_run(run_id)` at the conclusion of both the synthesis and compaction pipelines to clean up the temporary table
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Stream insight synthesis to vault incrementally
