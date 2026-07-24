@@ -48,7 +48,8 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
 
 - [ ] Task: Implement one-time binary-to-SQLite embedding cache migration
   - [ ] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
-  - [ ] Add migration: on first run, detect `embedding_cache.bin`, deserialize using retained legacy structs, write all entries to SQLite, then rename/delete the binary file
+  - [ ] Write test: Verify migration safely skips deserialization if `embedding_cache.bin` exceeds 1GB size threshold
+  - [ ] Add migration: on first run, detect `embedding_cache.bin`. If file size exceeds 1GB, log a warning, archive/delete the binary file, and start with a fresh SQLite cache (do NOT attempt to deserialize — it will OOM). Otherwise, deserialize using retained legacy structs, write all entries to SQLite, then rename/delete the binary file
   - [ ] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
   - [ ] Run tests and confirm pass
 
@@ -133,20 +134,20 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate standalone `get_all_wiki_nodes()` callers (2 files)
-  - [ ] Write test: Verify `harvest` and `meta_skill` correctly accumulate all paginated wiki nodes without truncation
-  - [ ] Refactor `harvest.rs` L297
-  - [ ] Refactor `meta_skill.rs` L127
+  - [ ] Write test: Verify `harvest` and `meta_skill` process paginated wiki nodes in bounded chunks without accumulating all into memory. If full accumulation is required by the algorithm, fetch only lightweight projections (e.g., `id` and required fields, excluding large `content` payloads)
+  - [ ] Refactor `harvest.rs` L297 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
+  - [ ] Refactor `meta_skill.rs` L127 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate standalone `get_all_wisdom_rules()` callers (1 file)
-  - [ ] Write test: Verify `harvest` correctly accumulates all paginated wisdom rules without truncation
-  - [ ] Refactor `harvest.rs` L342
+  - [ ] Write test: Verify `harvest` processes paginated wisdom rules in bounded chunks without accumulating all into memory
+  - [ ] Refactor `harvest.rs` L342 to process wisdom rules in bounded chunks (process chunk, drop, fetch next)
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_registered_transcripts()` and `get_all_episodes()` in meta_skill (2 files)
-  - [ ] Write test: Verify transcript and episode pagination loops complete without truncation
-  - [ ] Refactor `synthesis.rs` L781 (standalone transcript query, not cognitive pipeline rewrite)
-  - [ ] Refactor `meta_skill.rs` L126
+  - [ ] Write test: Verify transcript and episode pagination loops process in bounded chunks without accumulating all into memory
+  - [ ] Refactor `synthesis.rs` L781 (standalone transcript query, not cognitive pipeline rewrite) to process in bounded chunks
+  - [ ] Refactor `meta_skill.rs` L126 to process in bounded chunks
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Paginate startup missing-embedding backfill
@@ -183,7 +184,7 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
   - [ ] Write test: Verify orphaned `pipeline_cluster` records are purged on daemon startup
   - [ ] Add `pipeline_cluster` table definition to INIT_SCHEMA (fields: run_id, cluster_id, episode_id, scope, created_at)
   - [ ] Add startup cleanup query `DELETE pipeline_cluster;` in `surreal_init.rs` to purge orphaned ephemeral state from previous terminated runs
-  - [ ] Add `save_cluster_assignment`, `get_cluster_members(run_id, cluster_id)`, and `delete_pipeline_run(run_id)` to CRUD layer
+  - [ ] Add `save_cluster_assignment`, `get_cluster_members_paginated(run_id, cluster_id, limit, offset)`, and `delete_pipeline_run(run_id)` to CRUD layer. `get_cluster_members` must be paginated to enforce the ≤50 items in-memory constraint for large clusters
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Stream unprocessed episode chunks to vault with bounded batch inserts
