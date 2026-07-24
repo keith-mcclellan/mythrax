@@ -834,15 +834,22 @@ impl SurrealBackend {
 
         while low <= high {
             let mid = (low + high) / 2;
-            let candidate_content = if mid < original_content.len() {
-                format!("{}... [Truncated (Inner-Node Compaction)]", &original_content[..mid])
+            let mut boundary_mid = mid;
+            while boundary_mid > 0 && !original_content.is_char_boundary(boundary_mid) {
+                boundary_mid -= 1;
+            }
+
+            let candidate_content = if boundary_mid < original_content.len() {
+                format!("{}... [Truncated (Inner-Node Compaction)]", &original_content[..boundary_mid])
             } else {
                 original_content.clone()
             };
+
             let tokens = self.count_text_tokens(&candidate_content);
+
             if tokens <= content_budget {
                 best_fit = candidate_content;
-                low = mid + 1;
+                low = mid + 1; // Advance binary search normally using unadjusted mid
             } else {
                 if mid == 0 {
                     break;
