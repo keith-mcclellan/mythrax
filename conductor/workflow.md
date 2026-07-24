@@ -213,7 +213,7 @@ that also concludes a phase in `plan.md`.
     -   **Commit Fixes:** If fixes are applied, they must be committed and
         tracked in `plan.md` under a "Review Fixes" phase before proceeding.
 
-8.  **Run Adversarial CTO Code Review:**
+8.  **Run Adversarial CTO Code Review (Fix-Resubmit Loop):**
 
     -   **Action:** After the Conductor Review passes, invoke a `cto_reviewer`
         subagent to perform an adversarial code review of the phase's
@@ -232,14 +232,23 @@ that also concludes a phase in `plan.md`.
             underlying business logic is stubbed or bypassed.
         -   Look for systemic patterns the implementer may have missed (e.g.,
             similar bugs in files not covered by the phase).
-    -   **Output:** The reviewer must produce a structured report with findings
-        categorized as Critical, High, Medium, or Low, with exact file paths,
-        line numbers, and suggested fixes.
-    -   **Gate:** If the CTO Reviewer identifies **Critical** or **High**
-        findings, the fixes must be implemented, tests re-run (Step 3), dev50
-        re-run (Step 4), and the CTO Reviewer re-invoked to verify the fixes
-        *before* proceeding to the checkpoint step. The phase cannot be
-        checkpointed without CTO Reviewer approval.
+    -   **Output:** The reviewer must produce a structured report with **ALL**
+        findings categorized as Critical, High, Medium, or Low, with exact file
+        paths, line numbers, and suggested fixes. The report must conclude with
+        an explicit verdict: either `APPROVED` (unconditional) or
+        `CHANGES REQUESTED` (with the full findings list).
+    -   **Fix-Resubmit Loop:** If the CTO Reviewer returns `CHANGES REQUESTED`
+        with **any** findings at **any** severity level (Critical, High,
+        Medium, or Low), the coding agent must:
+        1.  Implement fixes for **every** finding in the report.
+        2.  Re-run unit tests (Step 3).
+        3.  Re-run dev50 regression benchmark (Step 4).
+        4.  Re-invoke the CTO Reviewer subagent with the updated diff.
+        5.  Repeat this loop until the CTO Reviewer returns `APPROVED` with
+            zero findings remaining.
+    -   **Gate:** The phase cannot be committed or checkpointed until the CTO
+        Reviewer grants **unconditional `APPROVED`** status with no outstanding
+        findings. There is no override for this gate.
 
 9.  **Conditional Commit — All Gates Must Pass:**
 
@@ -249,7 +258,7 @@ that also concludes a phase in `plan.md`.
         -   dev50 regression benchmark (Step 4): PASS
         -   User manual verification (Step 6): Confirmed
         -   Conductor Review (Step 7): No unresolved issues
-        -   Adversarial CTO Review (Step 8): No Critical/High findings remaining
+        -   Adversarial CTO Review (Step 8): Unconditional `APPROVED` verdict
     -   **If all gates pass:** Stage all code changes and commit with a scoped
         message (e.g., `fix(memory): Phase N — <description>`).
     -   **If any gate fails:** Do NOT commit. Debug, fix, and re-run the
