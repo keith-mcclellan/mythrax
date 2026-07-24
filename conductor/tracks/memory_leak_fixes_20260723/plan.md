@@ -70,6 +70,7 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
 - [ ] Task: Create `idf_index` table and initialization logic
   - [ ] Write test: Verify `idf_index` table is created during daemon startup INIT_SCHEMA step
   - [ ] Add `idf_index` table definition (term: String, document_frequency: i64, total_docs: i64, scope: String) to `src/db/surreal_init.rs` INIT_SCHEMA
+  - [ ] Add `DEFINE INDEX idx_idf_term ON idf_index FIELDS term, scope UNIQUE` to INIT_SCHEMA for efficient term lookups
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Build incremental IDF update function
@@ -104,9 +105,10 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
 
 Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline callers (`synthesis.rs`, `compactor.rs`, `precompact.rs`) are deferred to Phase 4 where they are structurally rewritten for streaming-to-disk, avoiding double-touch.
 
-- [ ] Task: Add `content_hash` field and hash-based deduplication queries
+- [ ] Task: Add `content_hash` schema, index, and hash-based deduplication queries
   - [ ] Write test: Verify `content_hash` is computed (SHA-256 of normalized content) and stored on episode and wisdom_rule save
   - [ ] Write test: Verify `find_duplicate_by_content_hash(hash)` returns matching record without full table scan
+  - [ ] Add `DEFINE FIELD content_hash` and `DEFINE INDEX idx_content_hash ON episode FIELDS content_hash` (and same for `wisdom_rule`) to INIT_SCHEMA in `src/db/surreal_init.rs`
   - [ ] Add `content_hash` field computation to episode and wisdom_rule save paths in `backend.rs`
   - [ ] Add `find_duplicate_by_content_hash` query to `crud_operations.rs` using DB index lookup
   - [ ] Run tests and confirm pass
@@ -119,9 +121,9 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_episodes()` callers — HTTP handlers (2 files)
-  - [ ] Write test: Verify `vault_handlers` correctly accumulates or streams all paginated results without truncation
-  - [ ] Refactor `vault_handlers.rs` L41, L72
-  - [ ] Refactor `manage_handlers.rs` L338, L1214
+  - [ ] Write test: Verify `vault_handlers` streams all paginated results to the HTTP response without accumulating into a single `Vec` (bounded memory)
+  - [ ] Refactor `vault_handlers.rs` L41, L72 to use chunked JSON stream response directly from paginated DB cursor
+  - [ ] Refactor `manage_handlers.rs` L338, L1214 to use chunked JSON stream response directly from paginated DB cursor
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_episodes()` callers — internal pipelines (2 files)
@@ -156,7 +158,7 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
 
 ## Phase 4: Streaming-to-Disk Cognitive Pipeline (FR-4)
 
-Convert the cognitive pipeline from in-memory accumulation to incremental vault writes. This phase also migrates all cognitive pipeline callers (`synthesis.rs`, `compactor.rs`, `precompact.rs`) to paginated queries as part of the structural rewrite, plus hash-based deduplication — avoiding double-touch from Phase 3.
+Convert the cognitive pipeline from in-memory accumulation to incremental vault writes. Each streaming task below natively replaces `get_all_*` calls with paginated DB queries as part of the structural rewrite — no separate pagination migration needed, avoiding double-touch.
 
 ### Storage Routing
 
@@ -170,24 +172,6 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 | Wisdom rules | Vault md (`wisdom/*.md`) + DB `wisdom_rule` | Human-readable + queryable |
 | Pruned/archived nodes | Vault `archive/` | Human-readable audit trail |
 | Compaction summaries | Vault md (`wiki/<scope>/compactions/*.md`) | Human-readable, version-controlled |
-
-- [ ] Task: Migrate cognitive pipeline `get_all_episodes` callers to paginated queries (deferred from Phase 3)
-  - [ ] Write test: Verify `compactor` and `synthesis` episode pagination loops complete without truncation
-  - [ ] Refactor `compactor.rs` L252, L1211 (`get_all_episodes`)
-  - [ ] Refactor `synthesis.rs` L891, L917, L2987 (`get_all_episodes`)
-  - [ ] Refactor `precompact.rs` L127 (`get_all_episodes`)
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Migrate cognitive pipeline `get_all_wiki_nodes` callers to paginated queries (deferred from Phase 3)
-  - [ ] Write test: Verify `synthesis` wiki node pagination loops complete without truncation
-  - [ ] Refactor `synthesis.rs` L504, L1949, L2440, L3199 (`get_all_wiki_nodes`)
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Migrate cognitive pipeline `get_episodes_by_node_type` callers to paginated queries (deferred from Phase 3)
-  - [ ] Write test: Verify `compactor` and `synthesis` node-type pagination loops complete without truncation
-  - [ ] Refactor `compactor.rs` L180 (`get_episodes_by_node_type`)
-  - [ ] Refactor `synthesis.rs` L1967 (`get_episodes_by_node_type`)
-  - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate cognitive pipeline deduplication to hash-based lookups (deferred from Phase 3)
   - [ ] Refactor wisdom deduplication in `synthesis.rs` L2440 to use `find_duplicate_by_content_hash` instead of paginated comparison
@@ -278,16 +262,11 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [ ] Document the categorized caller list in a scratch note before proceeding
   - [ ] Run tests and confirm pass (no code changes, audit only)
 
-- [ ] Task: Replace blocking semaphore spin-loops with async semaphores
-  - [ ] Write test: Verify embedding semaphore acquisition is non-blocking and yields to tokio runtime
-  - [ ] Replace `std::thread::sleep` + `try_acquire()` with `tokio::sync::Semaphore::acquire().await` in:
-    - `embeddings.rs` L839-843
-    - `embeddings.rs` L992-996
-    - `llm/mxbai_mlx.rs` L405
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Add async embed function variants (strangler pattern)
+- [ ] Task: Add async embed function variants with async semaphores (strangler pattern)
+  - [ ] Write test: Verify new async embed variants return identical results to legacy sync variants
+  - [ ] Write test: Verify embedding semaphore acquisition in async variants is non-blocking and yields to tokio runtime
   - [ ] Add `embed_async()`, `embed_batch_async()`, `embed_sub_batch_async()` as new async functions alongside the existing synchronous versions
+  - [ ] In the new async variants, use `tokio::sync::Semaphore::acquire().await` instead of `try_acquire()` spin-loops (the old sync variants retain `try_acquire` until deleted)
   - [ ] Add async trait variants if needed for category (c) callers
   - [ ] Run tests and confirm pass
 
@@ -324,8 +303,10 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [ ] Document the categorized caller list in a scratch note before proceeding
   - [ ] Run tests and confirm pass (no code changes, audit only)
 
-- [ ] Task: Add async inference function variants (strangler pattern)
+- [ ] Task: Add async inference function variants with async semaphores (strangler pattern)
+  - [ ] Write test: Verify new async inference variants return identical results to legacy sync variants
   - [ ] Add async variants of blocking inference/generation functions alongside existing synchronous versions
+  - [ ] In the new async variants, use async semaphore acquisition where applicable (the old sync variants retain blocking paths until deleted)
   - [ ] Add async trait variants if needed for category (c) callers
   - [ ] Run tests and confirm pass
 
