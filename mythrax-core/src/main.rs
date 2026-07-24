@@ -569,7 +569,7 @@ async fn main() -> Result<()> {
             let mut config_data = serde_json::json!({
                 "vault_root": vault_root.to_string_lossy().to_string(),
                 "auth_token_path": token_path.to_string_lossy().to_string(),
-                "surrealdb_url": format!("rocksdb://{}", db_dir.to_string_lossy())
+                "surrealdb_url": format!("surrealkv://{}", db_dir.to_string_lossy())
             });
 
             // Set skip_scopes
@@ -657,7 +657,7 @@ async fn main() -> Result<()> {
 
             // Always initialize the database in-process for pre-ingestion
             let backend = SurrealBackend::new(
-                &format!("rocksdb://{}", db_dir.to_string_lossy()),
+                &format!("surrealkv://{}", db_dir.to_string_lossy()),
                 crate::db::BackendConfig::default(),
             )
             .await?;

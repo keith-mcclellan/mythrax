@@ -78,6 +78,7 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
                     severity: Some("info".to_string()),
                     blocking: Some(false),
                     importance: Some(6.0),
+                    content_hash: None,
                 };
 
                 let wisdom_id = db.save_wisdom_rule(&global_rule).await?;

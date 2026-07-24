@@ -772,6 +772,7 @@ pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) 
                     severity: None,
                     blocking: None,
                     importance: None,
+                    content_hash: None,
                 };
 
                 db.save_wisdom_rule(&rule).await?;

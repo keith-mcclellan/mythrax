@@ -419,6 +419,7 @@ async fn analyze_tool_calls_ngrams(
                 severity: Some("info".to_string()),
                 blocking: Some(false),
                 importance: Some(5.0),
+                content_hash: None,
             };
 
             let _ = backend.save_wisdom_rule(&rule).await;

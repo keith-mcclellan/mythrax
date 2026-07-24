@@ -123,8 +123,24 @@ impl MetaSkillSynthesizer {
         db: &dyn StorageBackend,
         store: &MarkdownStore,
     ) -> Result<Vec<String>> {
-        let wisdom_rules = db.get_all_wisdom_rules().await?;
-        let wiki_nodes = db.get_all_wiki_nodes().await?;
+        let mut wisdom_rules = Vec::new();
+        let mut w_offset = 0;
+        let limit = 500;
+        loop {
+            let page = db.get_wisdom_rules_paginated(limit, w_offset).await?;
+            if page.is_empty() { break; }
+            wisdom_rules.extend(page);
+            w_offset += limit;
+        }
+
+        let mut wiki_nodes = Vec::new();
+        let mut n_offset = 0;
+        loop {
+            let page = db.get_wiki_nodes_paginated(limit, n_offset).await?;
+            if page.is_empty() { break; }
+            wiki_nodes.extend(page);
+            n_offset += limit;
+        }
         let skills = scan_all_skills(store);
 
         let mut active_scopes = db.get_active_scopes().await?;

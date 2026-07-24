@@ -52,6 +52,25 @@ impl SurrealBackend {
             }
         }
 
+        let hash_check = "SELECT count() AS total FROM episode WHERE content_hash IS NONE GROUP ALL;";
+        if let Ok(mut res) = self.db.query(hash_check).await {
+            let count_val: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
+            let mut missing_count = 0;
+            if let Some(arr) = count_val {
+                if let Some(first) = arr.first() {
+                    if let Some(n) = first.get("total").and_then(|v| v.as_u64()) {
+                        missing_count = n as usize;
+                    }
+                }
+            }
+            if missing_count > 0 {
+                tracing::info!("Found {} episodes missing content_hash. Backfilling...", missing_count);
+                if let Err(e) = self.backfill_content_hashes_db().await {
+                    tracing::error!("Failed to backfill content hashes: {:?}", e);
+                }
+            }
+        }
+
         // Initialize default configuration if config:settings does not exist
         let check_sql = "SELECT * FROM config:settings;";
         let mut response = self
@@ -137,6 +156,13 @@ impl SurrealBackend {
         let mut ep_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
 
+        let content_hash = episode.content_hash.clone().unwrap_or_else(|| {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(episode.content.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
+
         if let Some(ref vp) = episode.vault_path {
             let check_query =
                 "SELECT VALUE id FROM episode WHERE vault_path = $vault_path LIMIT 1;";
@@ -152,6 +178,19 @@ impl SurrealBackend {
                     other => unescape_id_part(&record_key_to_string(other)),
                 };
                 is_update = true;
+            }
+        }
+
+        if !is_update {
+            let check_query = "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
+            let mut response = self.db.query(check_query).bind(("content_hash", content_hash.as_str())).await?;
+            let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
+            if let Some(thing) = ids {
+                let id = match &thing.key {
+                    surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                    other => unescape_id_part(&record_key_to_string(other)),
+                };
+                return Ok(format!("episode:{}", id));
             }
         }
 
@@ -177,8 +216,12 @@ impl SurrealBackend {
                     created_at: type::datetime($created_at),
                     importance: $importance,
                     temporal_range_start: $temporal_range_start,
-                    temporal_range_end: $temporal_range_end
+                    temporal_range_end: $temporal_range_end,
+                    content_hash: $content_hash
                 };
+                IF $processed_in_dream = true THEN
+                    UPDATE $ep MERGE { processed_in_dream: true };
+                END;
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
             "
@@ -188,29 +231,34 @@ impl SurrealBackend {
                 LET $ep = type::record('episode', $ep_uuid);
                 LET $met = type::record('metrics', $metrics_uuid);
 
-                CREATE $ep CONTENT {
-                    title: $title,
-                    content: $content,
-                    scope: $target_scope,
-                    vault_path: $vault_path,
-                    processed_in_dream: false,
-                    embedding: $embedding,
-                    utility: $utility,
-                    last_retrieved_at: $last_retrieved_at,
-                    archived: false,
-                    discovery_tokens: $discovery_tokens,
-                    facts: $facts,
-                    concepts: $concepts,
-                    files_read: $files_read,
-                    files_modified: $files_modified,
-                    session_id: $session_id,
-                    word_count: $word_count,
-                    node_type: $node_type,
-                    created_at: type::datetime($created_at),
-                    importance: $importance,
-                    temporal_range_start: $temporal_range_start,
-                    temporal_range_end: $temporal_range_end
-                };
+                CREATE $ep SET 
+                    title = $title,
+                    content = $content,
+                    scope = $target_scope,
+                    vault_path = $vault_path,
+                    processed_in_dream = false,
+                    embedding = $embedding,
+                    utility = $utility,
+                    last_retrieved_at = $last_retrieved_at,
+                    archived = false,
+                    discovery_tokens = $discovery_tokens,
+                    facts = $facts,
+                    concepts = $concepts,
+                    files_read = $files_read,
+                    files_modified = $files_modified,
+                    session_id = $session_id,
+                    word_count = $word_count,
+                    node_type = $node_type,
+                    created_at = type::datetime($created_at),
+                    importance = $importance,
+                    temporal_range_start = $temporal_range_start,
+                    temporal_range_end = $temporal_range_end,
+                    source_episode = $source_episode,
+                    confidence = $confidence,
+                    outcome = $outcome,
+                    causal_explanation = $causal_explanation,
+                    parent_task_id = $parent_task_id,
+                    content_hash = $content_hash;
 
                 CREATE $met CONTENT {
                     target_id: $ep,
@@ -281,6 +329,12 @@ impl SurrealBackend {
             .bind(("importance", episode.importance.unwrap_or(5.0)))
             .bind(("temporal_range_start", episode.temporal_range_start))
             .bind(("temporal_range_end", episode.temporal_range_end))
+            .bind(("content_hash", content_hash.clone()))
+            .bind(("source_episode", episode.source_episode.clone()))
+            .bind(("confidence", episode.confidence.unwrap_or(1.0)))
+            .bind(("outcome", episode.outcome.clone()))
+            .bind(("causal_explanation", episode.causal_explanation.clone()))
+            .bind(("parent_task_id", episode.parent_task_id.clone()))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
@@ -460,6 +514,13 @@ impl SurrealBackend {
                 .clone()
                 .unwrap_or_else(|| last_retrieved_at.clone());
 
+            let content_hash = ep.content_hash.clone().unwrap_or_else(|| {
+                use sha2::Digest;
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(ep.content.as_bytes());
+                format!("{:x}", hasher.finalize())
+            });
+
             let mut ep_json = serde_json::json!({
                 "id_str": id_str,
                 "metrics_id_str": metrics_id_str,
@@ -470,7 +531,8 @@ impl SurrealBackend {
                 "utility": 50.0f32,
                 "last_retrieved_at": last_retrieved_at,
                 "word_count": word_count,
-                "created_at": created_at_val
+                "created_at": created_at_val,
+                "content_hash": content_hash
             });
 
             let ep_obj = ep_json.as_object_mut().unwrap();
@@ -516,7 +578,8 @@ impl SurrealBackend {
                     session_id: $ep.session_id ?? none,
                     word_count: $ep.word_count,
                     node_type: $ep.node_type,
-                    created_at: type::datetime($ep.created_at)
+                    created_at: type::datetime($ep.created_at),
+                    content_hash: $ep.content_hash
                 };
 
                 CREATE $met_id CONTENT {
@@ -1585,6 +1648,61 @@ impl SurrealBackend {
         for ((term, scope), df) in idf_map {
             let sql = "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $df };";
             self.db.query(sql).bind(("term", term)).bind(("scope", scope)).bind(("df", df)).await?.check()?;
+        }
+        Ok(())
+    }
+
+    pub async fn backfill_content_hashes_db(&self) -> Result<()> {
+        let mut offset = 0;
+        let limit = 1000;
+        loop {
+            let sql = "SELECT id, content FROM episode WHERE content_hash IS NONE LIMIT $limit START $offset;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).bind(("offset", offset)).await?;
+            let batch: Vec<serde_json::Value> = res.take(0)?;
+            if batch.is_empty() {
+                break;
+            }
+            let mut update_sql = String::from("BEGIN TRANSACTION; ");
+            for row in &batch {
+                if let (Some(id), Some(content)) = (row.get("id").and_then(|v| v.as_str()), row.get("content").and_then(|v| v.as_str())) {
+                    use sha2::Digest;
+                    let mut hasher = sha2::Sha256::new();
+                    hasher.update(content.as_bytes());
+                    let hash = format!("{:x}", hasher.finalize());
+                    update_sql.push_str(&format!("UPDATE {} SET content_hash = '{}'; ", id, hash));
+                }
+            }
+            update_sql.push_str("COMMIT TRANSACTION;");
+            self.db.query(update_sql).await?.check()?;
+            offset += limit;
+        }
+
+        let mut w_offset = 0;
+        loop {
+            let sql = "SELECT id, target_pattern, causal_explanation, action_to_avoid, prescribed_remedy FROM wisdom WHERE content_hash IS NONE LIMIT $limit START $offset;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).bind(("offset", w_offset)).await?;
+            let batch: Vec<serde_json::Value> = res.take(0)?;
+            if batch.is_empty() {
+                break;
+            }
+            let mut update_sql = String::from("BEGIN TRANSACTION; ");
+            for row in &batch {
+                if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
+                    let t1 = row.get("target_pattern").and_then(|v| v.as_str()).unwrap_or("");
+                    let t2 = row.get("causal_explanation").and_then(|v| v.as_str()).unwrap_or("");
+                    let t3 = row.get("action_to_avoid").and_then(|v| v.as_str()).unwrap_or("");
+                    let t4 = row.get("prescribed_remedy").and_then(|v| v.as_str()).unwrap_or("");
+                    let full = format!("{}{}{}{}", t1, t2, t3, t4);
+                    use sha2::Digest;
+                    let mut hasher = sha2::Sha256::new();
+                    hasher.update(full.as_bytes());
+                    let hash = format!("{:x}", hasher.finalize());
+                    update_sql.push_str(&format!("UPDATE {} SET content_hash = '{}'; ", id, hash));
+                }
+            }
+            update_sql.push_str("COMMIT TRANSACTION;");
+            self.db.query(update_sql).await?.check()?;
+            w_offset += limit;
         }
         Ok(())
     }

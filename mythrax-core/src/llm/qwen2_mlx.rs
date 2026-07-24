@@ -179,6 +179,8 @@ impl Qwen2Attention {
                     StreamOrDevice::gpu(),
                 )?;
             }
+            k.eval()?;
+            v.eval()?;
             *cached_k = k.clone();
             *cached_v = v.clone();
         }

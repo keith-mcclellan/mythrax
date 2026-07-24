@@ -1143,7 +1143,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             .backend
             .save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string())
             .await;
-        let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(state).await;
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await;
+        });
 
         let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
         let mut selected_tasks = Vec::new();
@@ -1208,21 +1211,29 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         .journal_state(&state.store.vault_root, Some(session_id))
         .await?;
 
-    let all_eps = state.backend.get_all_episodes().await?;
-    for ep in &all_eps {
-        if let Some(ref vp) = ep.vault_path {
-            let path = state.store.vault_root.join(vp);
-            if !path.exists() {
-                let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
-                    .scope(ep.scope.clone())
-                    .vault_path(Some(vp.clone()))
-                    .source_episode(ep.source_episode.clone())
-                    .node_type(ep.node_type.clone())
-                    .build();
-                let markdown = crate::vault::watcher::format_episode_markdown(&save);
-                state.store.write_file(vp, &markdown)?;
+    let mut offset = 0;
+    let limit = 500;
+    loop {
+        let page = state.backend.get_episodes_paginated(limit, offset).await?;
+        if page.is_empty() {
+            break;
+        }
+        for ep in &page {
+            if let Some(ref vp) = ep.vault_path {
+                let path = state.store.vault_root.join(vp);
+                if !path.exists() {
+                    let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                        .scope(ep.scope.clone())
+                        .vault_path(Some(vp.clone()))
+                        .source_episode(ep.source_episode.clone())
+                        .node_type(ep.node_type.clone())
+                        .build();
+                    let markdown = crate::vault::watcher::format_episode_markdown(&save);
+                    state.store.write_file(vp, &markdown)?;
+                }
             }
         }
+        offset += limit;
     }
 
     let surreal_backend = state
@@ -1232,7 +1243,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         .context("SurrealBackend required for pre_invocation_hook")?;
 
     // WU-4.5: TTL Sweep & LargeLocal Fallback
-    let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(state).await;
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await;
+    });
 
     // WU-6.9: PagingManager context window paging
     let token_budget = 8000u32;

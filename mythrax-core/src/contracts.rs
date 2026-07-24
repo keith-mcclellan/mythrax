@@ -156,6 +156,8 @@ pub struct Episode {
     pub causal_explanation: Option<String>,
     #[serde(default)]
     pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -201,6 +203,8 @@ pub struct EpisodeSave {
     pub causal_explanation: Option<String>,
     #[serde(default)]
     pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +231,7 @@ pub struct EpisodeSaveBuilder {
     pub outcome: Option<String>,
     pub causal_explanation: Option<String>,
     pub parent_task_id: Option<String>,
+    pub content_hash: Option<String>,
 }
 
 impl EpisodeSaveBuilder {
@@ -254,6 +259,7 @@ impl EpisodeSaveBuilder {
             outcome: None,
             causal_explanation: None,
             parent_task_id: None,
+            content_hash: None,
         }
     }
 
@@ -381,6 +387,7 @@ impl EpisodeSaveBuilder {
             outcome: self.outcome,
             causal_explanation: self.causal_explanation,
             parent_task_id: self.parent_task_id,
+            content_hash: self.content_hash,
         }
     }
 }
@@ -452,6 +459,8 @@ pub struct WisdomRule {
     pub blocking: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub importance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -480,6 +489,7 @@ pub struct LlmConfigRequest {
     pub cloud_provider: Option<String>,
     pub api_key: Option<String>,
     pub llm_post_inference_delay_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_tier_mappings: Option<std::collections::HashMap<String, String>>,
 }
 

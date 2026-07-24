@@ -1436,6 +1436,90 @@ impl DynamicModelBroker {
             return Err(anyhow::anyhow!("Mock corruption: Failed to acquire model"));
         }
 
+        if crate::is_test_mock() {
+            let model_name = match tier {
+                ModelTier::Tier1 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
+                ModelTier::Tier2 => {
+                    let config_model = self.config_model.lock().unwrap();
+                    config_model
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| "mlx-community/Qwen3.6-35B-A3B-4bit".to_string())
+                }
+                ModelTier::Tier3 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
+            };
+
+            // 1. Identify and evict all other LLM models to free VRAM
+            let mut evict_list = Vec::new();
+            {
+                let mut models = self.models.lock().unwrap();
+                if let Some(model) = models.get(&tier) {
+                    let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                    *last_weak_ref = Some(Arc::downgrade(model));
+                    let mut active_tier = self.active_tier.lock().unwrap();
+                    *active_tier = Some(tier);
+                    return Ok(model.clone());
+                }
+
+                for (t, m) in models.iter() {
+                    if *t != tier {
+                        evict_list.push((*t, Arc::downgrade(m)));
+                    }
+                }
+                for (t, _) in &evict_list {
+                    models.remove(t);
+                }
+            }
+
+            // 1.5. Block until the strong reference count of all evicted mock models drops to 0
+            for (t, weak_ref) in evict_list {
+                let start_wait = tokio::time::Instant::now();
+                while weak_ref.upgrade().is_some() {
+                    if start_wait.elapsed() >= std::time::Duration::from_secs(30) {
+                        tracing::warn!(
+                            "Timeout waiting for evicted mock model tier {:?} to deallocate from VRAM",
+                            t
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+
+            // 2. Load the mock model safely under lock
+            let mut models = self.models.lock().unwrap();
+            let model = if let Some(model) = models.get(&tier) {
+                model.clone()
+            } else {
+                #[cfg(feature = "mlx")]
+                let engine = InProcessMlxEngine::new(
+                    model_name,
+                    true,
+                    vec!["<|eot_id|>".to_string()],
+                    "mock".to_string(),
+                    None,
+                    None,
+                );
+                #[cfg(not(feature = "mlx"))]
+                let engine = InProcessMlxEngine::new(
+                    model_name,
+                    true,
+                    vec!["<|eot_id|>".to_string()],
+                    "mock".to_string(),
+                );
+                let arc = Arc::new(engine) as Arc<dyn InferenceEngine>;
+                models.insert(tier, arc.clone());
+                arc
+            };
+
+            let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+            *last_weak_ref = Some(Arc::downgrade(&model));
+            let mut active_tier = self.active_tier.lock().unwrap();
+            *active_tier = Some(tier);
+
+            return Ok(model);
+        }
+
         // 1. Identify and evict all other LLM models to free VRAM
         let mut evict_list = Vec::new();
         {

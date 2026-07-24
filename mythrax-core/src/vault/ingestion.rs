@@ -602,13 +602,22 @@ pub async fn bulk_ingest_vault(
 
     let store = MarkdownStore::new(vault_root)?;
 
-    let existing_titles: std::collections::HashSet<String> = db
-        .get_all_episodes()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| e.title)
-        .collect();
+    let mut existing_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pg_offset = 0;
+    let pg_limit = 500;
+    loop {
+        if let Ok(page) = db.get_episodes_paginated(pg_limit, pg_offset).await {
+            if page.is_empty() {
+                break;
+            }
+            for ep in page {
+                existing_titles.insert(ep.title);
+            }
+            pg_offset += pg_limit;
+        } else {
+            break;
+        }
+    }
 
     let find_files = |exts: &[&str]| -> Vec<PathBuf> {
         let mut files = Vec::new();

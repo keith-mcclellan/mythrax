@@ -735,6 +735,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                     severity: Some("warning".to_string()),
                     blocking: Some(true),
                     importance: Some(8.0),
+                    content_hash: None,
                 };
 
                 self.backend.save_wisdom_rule(&rule).await?;

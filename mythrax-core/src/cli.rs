@@ -87,7 +87,7 @@ pub enum Commands {
         #[arg(short, long)]
         source: String,
         /// Harness type (e.g. 'antigravity', 'claude', 'cursor', etc.)
-        #[arg(short, long)]
+        #[arg(short = 'H', long)]
         harness: String,
         /// Optional scope (defaults to 'general')
         #[arg(long, default_value = "general")]
@@ -233,7 +233,7 @@ pub enum VaultAction {
         #[arg(short, long)]
         source: String,
         /// Harness type (e.g. 'antigravity', 'claude', 'cursor', etc.)
-        #[arg(short, long)]
+        #[arg(short = 'H', long)]
         harness: String,
         /// Optional scope
         #[arg(long)]

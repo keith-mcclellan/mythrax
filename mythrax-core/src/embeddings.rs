@@ -136,82 +136,61 @@ pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
             }
         }
     }
+    
+    // Check sqlite if not in memory
+    if let Some(path) = get_embedding_cache_path() {
+        let sqlite_path = path.with_extension("db");
+        if sqlite_path.exists() {
+            if let Ok(conn) = rusqlite::Connection::open(&sqlite_path) {
+                if let Ok(mut stmt) = conn.prepare("SELECT embedding FROM embedding_cache WHERE text = ?") {
+                    if let Ok(mut rows) = stmt.query(rusqlite::params![text]) {
+                        if let Ok(Some(row)) = rows.next() {
+                            if let Ok(bytes) = row.get::<_, Vec<u8>>(0) {
+                                let mut embedding = Vec::with_capacity(bytes.len() / 4);
+                                for chunk in bytes.chunks_exact(4) {
+                                    embedding.push(f32::from_le_bytes(chunk.try_into().unwrap()));
+                                }
+                                
+                                // Put back in memory cache
+                                if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+                                    if let Ok(mut cache) = cache_mutex.lock() {
+                                        cache.counter += 1;
+                                        let tick = cache.counter;
+                                        cache.map.insert(text.to_string(), (embedding.clone(), tick, false));
+                                    }
+                                }
+                                
+                                return Some(embedding);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     None
 }
 
 pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
     set_embedding_cache_path(path);
-    if !path.exists() {
-        return Ok(());
-    }
-    let file = std::fs::File::open(path)?;
-    let mut reader = std::io::BufReader::new(file);
+    
+    let sqlite_path = path.with_extension("db");
+    let bin_path = path.with_extension("bin");
 
-    let mut loaded_cache = std::collections::HashMap::new();
-
-    // Read number of entries
-    let mut num_entries_buf = [0u8; 4];
-    reader.read_exact(&mut num_entries_buf)?;
-    let num_entries = u32::from_le_bytes(num_entries_buf) as usize;
-
-    for _ in 0..num_entries {
-        // Read key length
-        let mut key_len_buf = [0u8; 4];
-        reader.read_exact(&mut key_len_buf)?;
-        let key_len = u32::from_le_bytes(key_len_buf) as usize;
-
-        // Read key bytes
-        let mut key_bytes = vec![0u8; key_len];
-        reader.read_exact(&mut key_bytes)?;
-        let key = String::from_utf8(key_bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        // Read number of f32 values
-        let mut num_values_buf = [0u8; 4];
-        reader.read_exact(&mut num_values_buf)?;
-        let num_values = u32::from_le_bytes(num_values_buf) as usize;
-
-        // Read f32 values
-        let mut values = Vec::with_capacity(num_values);
-        for _ in 0..num_values {
-            let mut f32_buf = [0u8; 4];
-            reader.read_exact(&mut f32_buf)?;
-            let val = f32::from_le_bytes(f32_buf);
-            values.push(val);
-        }
-
-        loaded_cache.insert(key, values);
-    }
-
-    let cache_mutex = EMBEDDING_CACHE
-        .get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
-    if let Ok(mut cache) = cache_mutex.lock() {
-        let default_capacity = get_default_capacity();
-        cache.capacity = default_capacity;
-
-        for (key, values) in loaded_cache {
-            cache.counter += 1;
-            let tick = cache.counter;
-            cache.map.insert(key, (values, tick, false));
-        }
-
-        if cache.map.len() > cache.capacity {
-            let overflow = cache.map.len() - cache.capacity;
-            let mut key_ticks: Vec<(String, u64)> = cache
-                .map
-                .iter()
-                .map(|(k, (_, tick, _))| (k.clone(), *tick))
-                .collect();
-            key_ticks.sort_by_key(|&(_, tick)| tick);
-            for i in 0..overflow {
-                cache.map.remove(&key_ticks[i].0);
-            }
+    if bin_path.exists() && !sqlite_path.exists() {
+        // One-time migration
+        migrate_binary_to_sqlite(&bin_path, &sqlite_path)?;
+    } else if path.exists() && !sqlite_path.exists() {
+        // Fallback if path is exactly the binary file
+        if path.extension().map_or(false, |ext| ext == "bin") {
+            migrate_binary_to_sqlite(path, &sqlite_path)?;
         }
     }
 
     Ok(())
 }
 
+#[deprecated(note = "Binary cache format is being replaced by SQLite")]
 pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
     set_embedding_cache_path(path);
     let cache_mutex = EMBEDDING_CACHE
@@ -232,18 +211,14 @@ pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
     writer.write_all(&num_entries.to_le_bytes())?;
 
     for (key, (values, _tick, dirty)) in cache.map.iter_mut() {
-        // Write key length
         let key_bytes = key.as_bytes();
         let key_len = key_bytes.len() as u32;
         writer.write_all(&key_len.to_le_bytes())?;
-        // Write key bytes
         writer.write_all(key_bytes)?;
 
-        // Write number of f32 values
         let num_values = values.len() as u32;
         writer.write_all(&num_values.to_le_bytes())?;
 
-        // Write f32 values
         for val in values.iter() {
             writer.write_all(&val.to_le_bytes())?;
         }
@@ -251,6 +226,82 @@ pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
     }
 
     writer.flush()?;
+    Ok(())
+}
+
+pub fn migrate_binary_to_sqlite(bin_path: &Path, db_path: &Path) -> Result<()> {
+    if !bin_path.exists() {
+        return Ok(());
+    }
+    
+    // Check file size, skip if > 1GB
+    let metadata = std::fs::metadata(bin_path)?;
+    if metadata.len() > 1_073_741_824 {
+        std::fs::rename(bin_path, bin_path.with_extension("bin.archive"))?;
+        return Ok(());
+    }
+
+    let file = std::fs::File::open(bin_path)?;
+    let mut reader = std::io::BufReader::new(file);
+
+    let mut num_entries_buf = [0u8; 4];
+    if reader.read_exact(&mut num_entries_buf).is_err() {
+        return Ok(());
+    }
+    let num_entries = u32::from_le_bytes(num_entries_buf) as usize;
+
+    let mut conn = rusqlite::Connection::open(db_path)?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS embedding_cache (
+            text TEXT PRIMARY KEY,
+            embedding BLOB,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )",
+        [],
+    )?;
+
+    let mut count = 0;
+    let mut tx = conn.transaction()?;
+    
+    for i in 0..num_entries {
+        if count >= 5000 {
+            tx.commit()?;
+            tx = conn.transaction()?;
+            count = 0;
+        }
+
+        let mut key_len_buf = [0u8; 4];
+        if reader.read_exact(&mut key_len_buf).is_err() { break; }
+        let key_len = u32::from_le_bytes(key_len_buf) as usize;
+        
+        let mut key_bytes = vec![0u8; key_len];
+        if reader.read_exact(&mut key_bytes).is_err() { break; }
+        let key = match String::from_utf8(key_bytes) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+
+        let mut num_values_buf = [0u8; 4];
+        if reader.read_exact(&mut num_values_buf).is_err() { break; }
+        let num_values = u32::from_le_bytes(num_values_buf) as usize;
+
+        let mut bytes = Vec::with_capacity(num_values * 4);
+        for _ in 0..num_values {
+            let mut f32_buf = [0u8; 4];
+            if reader.read_exact(&mut f32_buf).is_err() { break; }
+            bytes.extend_from_slice(&f32_buf);
+        }
+
+        tx.execute("INSERT OR IGNORE INTO embedding_cache (text, embedding) VALUES (?1, ?2)", rusqlite::params![key, bytes])?;
+        count += 1;
+    }
+    
+    tx.commit()?;
+    
+    // Archive/delete binary file
+    std::fs::rename(bin_path, bin_path.with_extension("bin.archive")).ok();
+    // To literally delete it: std::fs::remove_file(bin_path).ok(); 
+    // The prompt says "archive/delete", rename to .archive satisfies archive.
 
     Ok(())
 }
@@ -278,100 +329,46 @@ pub fn flush_dirty(path: &Path) -> Result<()> {
     let is_sqlite = path
         .extension()
         .map_or(false, |ext| ext == "db" || ext == "sqlite");
-    if is_sqlite {
-        let conn = rusqlite::Connection::open(path)?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS embedding_cache (
-                text TEXT PRIMARY KEY,
-                embedding BLOB
-            )",
-            [],
-        )?;
+    
+    if !is_sqlite {
+        // If somehow called with non-sqlite path, don't fallback to binary write, just return or error? 
+        // We'll just change the extension to .db
+    }
 
-        let mut stmt =
-            conn.prepare("INSERT OR REPLACE INTO embedding_cache (text, embedding) VALUES (?, ?)")?;
-        for (key, (embedding, _, dirty)) in cache.map.iter_mut() {
-            if *dirty {
-                let mut bytes = Vec::with_capacity(embedding.len() * 4);
-                for &val in embedding.iter() {
-                    bytes.extend_from_slice(&val.to_le_bytes());
-                }
-                stmt.execute(rusqlite::params![key, bytes])?;
-                *dirty = false;
-            }
-        }
-    } else {
-        let mut merged_cache = std::collections::HashMap::new();
-        if path.exists() {
-            if let Ok(file) = std::fs::File::open(path) {
-                let mut reader = std::io::BufReader::new(file);
-                let mut num_entries_buf = [0u8; 4];
-                if reader.read_exact(&mut num_entries_buf).is_ok() {
-                    let num_entries = u32::from_le_bytes(num_entries_buf) as usize;
-                    for _ in 0..num_entries {
-                        let mut key_len_buf = [0u8; 4];
-                        if reader.read_exact(&mut key_len_buf).is_err() {
-                            break;
-                        }
-                        let key_len = u32::from_le_bytes(key_len_buf) as usize;
-                        let mut key_bytes = vec![0u8; key_len];
-                        if reader.read_exact(&mut key_bytes).is_err() {
-                            break;
-                        }
-                        if let Ok(key) = String::from_utf8(key_bytes) {
-                            let mut num_values_buf = [0u8; 4];
-                            if reader.read_exact(&mut num_values_buf).is_err() {
-                                break;
-                            }
-                            let num_values = u32::from_le_bytes(num_values_buf) as usize;
-                            let mut values = Vec::with_capacity(num_values);
-                            let mut ok = true;
-                            for _ in 0..num_values {
-                                let mut f32_buf = [0u8; 4];
-                                if reader.read_exact(&mut f32_buf).is_err() {
-                                    ok = false;
-                                    break;
-                                }
-                                values.push(f32::from_le_bytes(f32_buf));
-                            }
-                            if ok {
-                                merged_cache.insert(key, values);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    let sqlite_path = path.with_extension("db");
+    let conn = rusqlite::Connection::open(&sqlite_path)?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS embedding_cache (
+            text TEXT PRIMARY KEY,
+            embedding BLOB,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )",
+        [],
+    )?;
 
-        for (key, (embedding, _, dirty)) in cache.map.iter_mut() {
-            merged_cache.insert(key.clone(), embedding.clone());
+    let mut stmt =
+        conn.prepare("INSERT OR REPLACE INTO embedding_cache (text, embedding, created_at) VALUES (?1, ?2, coalesce((SELECT created_at FROM embedding_cache WHERE text = ?1), strftime('%s', 'now')))")?;
+    for (key, (embedding, _, dirty)) in cache.map.iter_mut() {
+        if *dirty {
+            let mut bytes = Vec::with_capacity(embedding.len() * 4);
+            for &val in embedding.iter() {
+                bytes.extend_from_slice(&val.to_le_bytes());
+            }
+            stmt.execute(rusqlite::params![key, bytes])?;
             *dirty = false;
         }
-
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(path)?;
-        let mut writer = std::io::BufWriter::new(file);
-
-        let num_entries = merged_cache.len() as u32;
-        writer.write_all(&num_entries.to_le_bytes())?;
-
-        for (key, values) in merged_cache.iter() {
-            let key_bytes = key.as_bytes();
-            let key_len = key_bytes.len() as u32;
-            writer.write_all(&key_len.to_le_bytes())?;
-            writer.write_all(key_bytes)?;
-
-            let num_values = values.len() as u32;
-            writer.write_all(&num_values.to_le_bytes())?;
-            for val in values.iter() {
-                writer.write_all(&val.to_le_bytes())?;
-            }
-        }
-        writer.flush()?;
     }
+
+    // FIFO eviction
+    let capacity = cache.capacity;
+    conn.execute(
+        "DELETE FROM embedding_cache WHERE text NOT IN (
+            SELECT text FROM embedding_cache 
+            ORDER BY created_at DESC 
+            LIMIT ?1
+        )",
+        rusqlite::params![capacity],
+    )?;
 
     Ok(())
 }
@@ -1107,18 +1104,148 @@ mod tests {
             let vec1 = embedder.embed(s1).unwrap();
             let vec2 = embedder.embed(s2).unwrap();
 
-            println!("DEBUG: vec1 first 5 = {:?}", &vec1[0..5]);
-            println!("DEBUG: vec2 first 5 = {:?}", &vec2[0..5]);
-
             let dot_prod: f32 = vec1.iter().zip(vec2.iter()).map(|(&x, &y)| x * y).sum();
-            println!("DEBUG: cosine similarity distinct sentences = {}", dot_prod);
-
             assert_eq!(vec1.len(), 768);
             let sum_sq: f32 = vec1.iter().map(|&x| x * x).sum();
             assert!((sum_sq - 1.0).abs() < 1e-4);
         } else {
             println!("Skipping embeddings test: model files not present in ~/.mythrax/models/");
         }
+    }
+
+    #[test]
+    fn test_sqlite_flush_dirty_persists_retrieves() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("embedding_cache.db");
+        
+        clear_embedding_cache();
+        set_embedding_cache_path(&db_path);
+        
+        // Add a dirty entry
+        cache_embedding("test_key".to_string(), vec![1.0, 2.0, 3.0]);
+        
+        // Flush dirty
+        flush_dirty(&db_path).unwrap();
+        
+        // Clear memory cache to force retrieval from SQLite
+        clear_embedding_cache();
+        
+        // Retrieve
+        let retrieved = get_cached_embedding("test_key");
+        assert_eq!(retrieved, Some(vec![1.0, 2.0, 3.0]));
+    }
+    
+    #[test]
+    fn test_sqlite_fifo_eviction() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("embedding_cache.db");
+        
+        clear_embedding_cache();
+        set_embedding_cache_path(&db_path);
+        
+        // Force capacity to 2 for this test
+        if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+            if let Ok(mut cache) = cache_mutex.lock() {
+                cache.capacity = 2;
+            }
+        }
+        
+        // Add 3 entries
+        cache_embedding("k1".to_string(), vec![1.0]);
+        std::thread::sleep(std::time::Duration::from_millis(100)); // sleep to ensure created_at ordering? actually SQLite created_at is seconds.
+        // Wait, SQLite created_at uses `strftime('%s', 'now')` which is seconds. So they might get the same second!
+        // The test doesn't strictly need sleeping if we manually set or just rely on FIFO of the map maybe?
+        
+        cache_embedding("k2".to_string(), vec![2.0]);
+        cache_embedding("k3".to_string(), vec![3.0]);
+        
+        // Actually, cache_embedding evicts from memory. If we flush, it writes 3 (since cache only has 2 now, wait)
+        // Memory cache eviction evicted k1 before we even flushed!
+        // To test sqlite fifo, we need to bypass memory cache limits or write directly to db?
+        // Wait, the prompt says "capacity enforced via FIFO eviction". If it's enforced on flush, we can write manually to DB and then flush to see if it deletes.
+        
+        // Let's write manually to DB
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS embedding_cache (
+                text TEXT PRIMARY KEY,
+                embedding BLOB,
+                created_at INTEGER
+            )",
+            [],
+        ).unwrap();
+        
+        conn.execute("INSERT INTO embedding_cache (text, embedding, created_at) VALUES ('k1', x'0000803f', 10)", []).unwrap();
+        conn.execute("INSERT INTO embedding_cache (text, embedding, created_at) VALUES ('k2', x'00000040', 20)", []).unwrap();
+        conn.execute("INSERT INTO embedding_cache (text, embedding, created_at) VALUES ('k3', x'00004040', 30)", []).unwrap();
+        
+        // Now flush_dirty, which will enforce the cache capacity
+        if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+            if let Ok(mut cache) = cache_mutex.lock() {
+                cache.capacity = 2;
+            }
+        }
+        flush_dirty(&db_path).unwrap();
+        
+        // K1 should be deleted because it has the oldest created_at (10)
+        let mut stmt = conn.prepare("SELECT text FROM embedding_cache ORDER BY created_at ASC").unwrap();
+        let rows: Vec<String> = stmt.query_map([], |row| row.get(0)).unwrap().filter_map(Result::ok).collect();
+        
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows, vec!["k2".to_string(), "k3".to_string()]);
+    }
+    
+    #[test]
+    fn test_migrate_binary_to_sqlite() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bin_path = temp_dir.path().join("embedding_cache.bin");
+        let db_path = temp_dir.path().join("embedding_cache.db");
+        
+        // Create binary file with 1 entry manually
+        use std::io::Write;
+        let mut file = std::fs::File::create(&bin_path).unwrap();
+        file.write_all(&1u32.to_le_bytes()).unwrap(); // 1 entry
+        
+        let key = "test_key";
+        file.write_all(&(key.len() as u32).to_le_bytes()).unwrap();
+        file.write_all(key.as_bytes()).unwrap();
+        
+        file.write_all(&1u32.to_le_bytes()).unwrap(); // 1 value
+        file.write_all(&1.234f32.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+        
+        // Run migration
+        migrate_binary_to_sqlite(&bin_path, &db_path).unwrap();
+        
+        // Check SQLite
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let mut stmt = conn.prepare("SELECT embedding FROM embedding_cache WHERE text = 'test_key'").unwrap();
+        let bytes: Vec<u8> = stmt.query_row([], |row| row.get(0)).unwrap();
+        
+        assert_eq!(bytes, 1.234f32.to_le_bytes().to_vec());
+        
+        // Check binary file archived
+        assert!(!bin_path.exists());
+        assert!(temp_dir.path().join("embedding_cache.bin.archive").exists());
+    }
+    
+    #[test]
+    fn test_migrate_skips_large_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bin_path = temp_dir.path().join("large_cache.bin");
+        let db_path = temp_dir.path().join("large_cache.db");
+        
+        let mut file = std::fs::File::create(&bin_path).unwrap();
+        // Since we can't easily write 1GB, we'll mock metadata if possible, but actually we can just preallocate or sparse write.
+        // Seek to 1GB + 1 byte
+        file.set_len(1_073_741_825).unwrap();
+        
+        migrate_binary_to_sqlite(&bin_path, &db_path).unwrap();
+        
+        // Should skip deserialization and rename to .archive
+        assert!(!db_path.exists()); // DB should not be created
+        assert!(!bin_path.exists());
+        assert!(temp_dir.path().join("large_cache.bin.archive").exists());
     }
 }
 

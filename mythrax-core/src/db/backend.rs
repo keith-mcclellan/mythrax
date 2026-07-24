@@ -1063,6 +1063,7 @@ pub(crate) struct WisdomRaw {
     pub(crate) severity: Option<String>,
     pub(crate) blocking: Option<bool>,
     pub(crate) importance: Option<f64>,
+    pub(crate) content_hash: Option<String>,
 }
 
 impl WisdomRaw {
@@ -1089,6 +1090,7 @@ impl WisdomRaw {
             severity: self.severity,
             blocking: self.blocking,
             importance: self.importance.map(|v| v as f32),
+            content_hash: self.content_hash,
         }
     }
 }

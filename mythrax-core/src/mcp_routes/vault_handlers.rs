@@ -38,50 +38,70 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             let synced_count =
                 crate::vault::operations::sync_vault_to_db(&state.backend, &state.store).await?;
 
-            let all_eps = state.backend.get_all_episodes().await?;
+            let mut total_episodes = 0;
             let mut missing_count = 0;
-            for ep in &all_eps {
-                if let Some(ref vp) = ep.vault_path {
-                    let path = state.store.vault_root.join(vp);
-                    if !path.exists() {
-                        missing_count += 1;
-                        if fix {
-                            let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
-                                .scope(ep.scope.clone())
-                                .vault_path(Some(vp.clone()))
-                                .source_episode(ep.source_episode.clone())
-                                .node_type(ep.node_type.clone())
-                                .build();
-                            let markdown = crate::vault::watcher::format_episode_markdown(&save);
-                            state.store.write_file(vp, &markdown)?;
+            
+            let mut offset = 0;
+            let limit = 500;
+            loop {
+                let page = state.backend.get_episodes_paginated(limit, offset).await?;
+                if page.is_empty() {
+                    break;
+                }
+                total_episodes += page.len();
+                
+                for ep in &page {
+                    if let Some(ref vp) = ep.vault_path {
+                        let path = state.store.vault_root.join(vp);
+                        if !path.exists() {
+                            missing_count += 1;
+                            if fix {
+                                let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                                    .scope(ep.scope.clone())
+                                    .vault_path(Some(vp.clone()))
+                                    .source_episode(ep.source_episode.clone())
+                                    .node_type(ep.node_type.clone())
+                                    .build();
+                                let markdown = crate::vault::watcher::format_episode_markdown(&save);
+                                state.store.write_file(vp, &markdown)?;
+                            }
                         }
                     }
                 }
+                offset += limit;
             }
 
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("Vault integrity verification complete. Checked {} episodes. Missing files: {}. Fixed: {}. Synced from vault to DB: {} files.", all_eps.len(), missing_count, fix && missing_count > 0, synced_count)
+                        "text": format!("Vault integrity verification complete. Checked {} episodes. Missing files: {}. Fixed: {}. Synced from vault to DB: {} files.", total_episodes, missing_count, fix && missing_count > 0, synced_count)
                     }
                 ]
             }))
         }
         "reprocess" => {
-            let all_eps = state.backend.get_all_episodes().await?;
             let mut count = 0;
-            for ep in all_eps {
-                if ep.embedding.is_none() {
-                    let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
-                        .scope(ep.scope.clone())
-                        .vault_path(ep.vault_path.clone())
-                        .source_episode(ep.source_episode.clone())
-                        .node_type(ep.node_type.clone())
-                        .build();
-                    state.backend.save_episode(&save).await?;
-                    count += 1;
+            let mut offset = 0;
+            let limit = 500;
+            loop {
+                let page = state.backend.get_episodes_paginated(limit, offset).await?;
+                if page.is_empty() {
+                    break;
                 }
+                for ep in page {
+                    if ep.embedding.is_none() {
+                        let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                            .scope(ep.scope.clone())
+                            .vault_path(ep.vault_path.clone())
+                            .source_episode(ep.source_episode.clone())
+                            .node_type(ep.node_type.clone())
+                            .build();
+                        state.backend.save_episode(&save).await?;
+                        count += 1;
+                    }
+                }
+                offset += limit;
             }
             Ok(json!({
                 "content": [

@@ -441,6 +441,8 @@ impl MxbaiReranker {
 
         let null_logit_0 = null_last_hidden.multiply(&w_0)?.sum_axes(&[-1], false)?;
         let null_logit_1 = null_last_hidden.multiply(&w_1)?.sum_axes(&[-1], false)?;
+        null_logit_0.eval()?;
+        null_logit_1.eval()?;
         let nl0 = null_logit_0
             .as_dtype(mlx_rs::Dtype::Float32)?
             .as_slice::<f32>()[0];
@@ -489,6 +491,8 @@ impl MxbaiReranker {
 
             let logit_0 = last_hidden.multiply(&w_0)?.sum_axes(&[-1], false)?;
             let logit_1 = last_hidden.multiply(&w_1)?.sum_axes(&[-1], false)?;
+            logit_0.eval()?;
+            logit_1.eval()?;
             let raw_l0 = logit_0.as_dtype(mlx_rs::Dtype::Float32)?.as_slice::<f32>()[0];
             let raw_l1 = logit_1.as_dtype(mlx_rs::Dtype::Float32)?.as_slice::<f32>()[0];
 

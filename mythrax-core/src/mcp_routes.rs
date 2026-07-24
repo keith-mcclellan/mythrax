@@ -178,7 +178,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["replace", "multi_replace", "save", "feedback", "thought", "put", "clear", "handoff", "set"] },
+                        "action": { "type": "string", "enum": ["replace", "multi_replace", "save", "feedback", "thought", "put", "clear", "handoff", "set", "cognitive_callback"] },
                         "path": { "type": "string" },
                         "AbsolutePath": { "type": "string" },
                         "TargetFile": { "type": "string" },
