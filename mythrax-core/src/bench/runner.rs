@@ -1070,6 +1070,12 @@ async fn run_evaluation(
         std::env::set_var("MYTHRAX_BENCH", "1");
     }
 
+    // Warm up embedding VRAM model and metal buffers before scoring benchmark questions
+    if let Ok(embedder) = mythrax_core::embeddings::LocalEmbedder::get_global() {
+        let _ = embedder.embed("warmup query for metal vram");
+        let _ = embedder.embed_batch(&["warmup batch query for metal vram".to_string()]);
+    }
+
     let total_q = target_questions.len();
     let mut join_set = tokio::task::JoinSet::new();
     let concurrency_limit = if cfg!(feature = "mlx") { 1 } else { 4 };

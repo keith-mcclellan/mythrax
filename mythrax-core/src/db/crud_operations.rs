@@ -23,6 +23,9 @@ impl SurrealBackend {
             .check()
             .context("Applying schemas failed")?;
 
+        // Purge ephemeral pipeline cluster state from previous terminated runs
+        let _ = self.db.query("DELETE pipeline_cluster;").await;
+
         // Migration: Backfill legacy episodes where node_type is None
         let migration_sql =
             "UPDATE episode SET node_type = 'agent_thought' WHERE node_type = NONE;";
@@ -391,15 +394,13 @@ impl SurrealBackend {
                     let to_thing = parse_record_id(&new_ep_id);
                     if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
                         let relate_query = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
-                        if let Err(e) = self
+                        let rel_res = self
                             .db
                             .query(relate_query)
                             .bind(("from", from))
                             .bind(("to", to))
-                            .await
-                        {
-                            tracing::warn!("Failed to relate temporal episodes: {:?}", e);
-                        }
+                            .await;
+                        println!("RELATE RESULT: {:?}", rel_res);
                     }
                 }
             }
@@ -702,7 +703,8 @@ impl SurrealBackend {
                         superseded_by: $superseded_by,
                         severity: $severity,
                         blocking: $blocking,
-                        rule_type: $rule_type
+                        rule_type: $rule_type,
+                        content_hash: $content_hash
                     };
                     UPDATE metrics SET utility_score = $utility_score WHERE target_id = $rule;
                     COMMIT TRANSACTION;
@@ -728,7 +730,8 @@ impl SurrealBackend {
                         superseded_by: $superseded_by,
                         severity: $severity,
                         blocking: $blocking,
-                        rule_type: $rule_type
+                        rule_type: $rule_type,
+                        content_hash: $content_hash
                     };
                     COMMIT TRANSACTION;
                 "
@@ -756,7 +759,8 @@ impl SurrealBackend {
                     superseded_by: $superseded_by,
                     severity: $severity,
                     blocking: $blocking,
-                    rule_type: $rule_type
+                    rule_type: $rule_type,
+                    content_hash: $content_hash
                 };
 
                 CREATE $met CONTENT {
@@ -772,6 +776,13 @@ impl SurrealBackend {
 
         let metrics_uuid = Uuid::new_v4().to_string();
         let vp_val = rule.vault_path.clone().unwrap_or_default();
+        let content_hash = rule.content_hash.clone().unwrap_or_else(|| {
+            let full = format!("{}:{}:{}:{}", rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy);
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(full.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
 
         let embedding_val = if let Some(ref emb) = rule.embedding {
             Some(emb.clone())
@@ -821,6 +832,7 @@ impl SurrealBackend {
                 "rule_type",
                 rule.rule_type.as_deref().unwrap_or("aesthetic"),
             ))
+            .bind(("content_hash", content_hash.as_str()))
             .await?
             .check()
             .context("SurrealDB save_wisdom_rule transaction failed")?;
@@ -1652,58 +1664,186 @@ impl SurrealBackend {
         Ok(())
     }
 
+    fn parse_val_id(&self, v: &serde_json::Value) -> String {
+        if let Some(s) = v.as_str() {
+            s.trim_matches('`').to_string()
+        } else if let Some(obj) = v.as_object() {
+            if let (Some(tb), Some(id)) = (obj.get("tb").and_then(|x| x.as_str()), obj.get("id")) {
+                if let Some(id_str) = id.as_str() {
+                    format!("{}:{}", tb, id_str.trim_matches('`'))
+                } else {
+                    format!("{}:{}", tb, id.to_string().trim_matches('"').trim_matches('`'))
+                }
+            } else {
+                v.to_string().trim_matches('"').trim_matches('`').to_string()
+            }
+        } else {
+            v.to_string().trim_matches('"').trim_matches('`').to_string()
+        }
+    }
+
     pub async fn backfill_content_hashes_db(&self) -> Result<()> {
-        let mut offset = 0;
-        let limit = 1000;
+        let limit = 50;
         loop {
-            let sql = "SELECT id, content FROM episode WHERE content_hash IS NONE LIMIT $limit START $offset;";
-            let mut res = self.db.query(sql).bind(("limit", limit)).bind(("offset", offset)).await?;
+            let sql = "SELECT id, content FROM episode WHERE content_hash IS NONE LIMIT $limit;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).await?;
             let batch: Vec<serde_json::Value> = res.take(0)?;
             if batch.is_empty() {
                 break;
             }
-            let mut update_sql = String::from("BEGIN TRANSACTION; ");
+            let mut updated_any = false;
             for row in &batch {
-                if let (Some(id), Some(content)) = (row.get("id").and_then(|v| v.as_str()), row.get("content").and_then(|v| v.as_str())) {
-                    use sha2::Digest;
-                    let mut hasher = sha2::Sha256::new();
-                    hasher.update(content.as_bytes());
-                    let hash = format!("{:x}", hasher.finalize());
-                    update_sql.push_str(&format!("UPDATE {} SET content_hash = '{}'; ", id, hash));
+                if let (Some(id_val), Some(content)) = (row.get("id"), row.get("content").and_then(|v| v.as_str())) {
+                    let id_str = self.parse_val_id(id_val);
+                    if !id_str.is_empty() {
+                        use sha2::Digest;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(content.as_bytes());
+                        let hash = format!("{:x}", hasher.finalize());
+                        if let Ok(rec_id) = parse_record_id(&id_str) {
+                            if let Ok(mut u_res) = self.db.query("UPDATE $id SET content_hash = $hash;")
+                                .bind(("id", rec_id))
+                                .bind(("hash", hash))
+                                .await {
+                                    if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                        if !updated_rows.is_empty() {
+                                            updated_any = true;
+                                        }
+                                    }
+                                }
+                        }
+                    }
                 }
             }
-            update_sql.push_str("COMMIT TRANSACTION;");
-            self.db.query(update_sql).await?.check()?;
-            offset += limit;
+            if !updated_any {
+                break;
+            }
         }
 
-        let mut w_offset = 0;
         loop {
-            let sql = "SELECT id, target_pattern, causal_explanation, action_to_avoid, prescribed_remedy FROM wisdom WHERE content_hash IS NONE LIMIT $limit START $offset;";
-            let mut res = self.db.query(sql).bind(("limit", limit)).bind(("offset", w_offset)).await?;
+            let sql = "SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy FROM wisdom WHERE content_hash IS NONE LIMIT $limit;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).await?;
             let batch: Vec<serde_json::Value> = res.take(0)?;
             if batch.is_empty() {
                 break;
             }
-            let mut update_sql = String::from("BEGIN TRANSACTION; ");
+            let mut updated_any = false;
             for row in &batch {
-                if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
-                    let t1 = row.get("target_pattern").and_then(|v| v.as_str()).unwrap_or("");
-                    let t2 = row.get("causal_explanation").and_then(|v| v.as_str()).unwrap_or("");
-                    let t3 = row.get("action_to_avoid").and_then(|v| v.as_str()).unwrap_or("");
-                    let t4 = row.get("prescribed_remedy").and_then(|v| v.as_str()).unwrap_or("");
-                    let full = format!("{}{}{}{}", t1, t2, t3, t4);
-                    use sha2::Digest;
-                    let mut hasher = sha2::Sha256::new();
-                    hasher.update(full.as_bytes());
-                    let hash = format!("{:x}", hasher.finalize());
-                    update_sql.push_str(&format!("UPDATE {} SET content_hash = '{}'; ", id, hash));
+                if let Some(id_val) = row.get("id") {
+                    let id_str = self.parse_val_id(id_val);
+                    if !id_str.is_empty() {
+                        let t1 = row.get("target_pattern").and_then(|v| v.as_str()).unwrap_or("");
+                        let t2 = row.get("action_to_avoid").and_then(|v| v.as_str()).unwrap_or("");
+                        let t3 = row.get("causal_explanation").and_then(|v| v.as_str()).unwrap_or("");
+                        let t4 = row.get("prescribed_remedy").and_then(|v| v.as_str()).unwrap_or("");
+                        let full = format!("{}:{}:{}:{}", t1, t2, t3, t4);
+                        use sha2::Digest;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(full.as_bytes());
+                        let hash = format!("{:x}", hasher.finalize());
+                        if let Ok(rec_id) = parse_record_id(&id_str) {
+                            if let Ok(mut u_res) = self.db.query("UPDATE $id SET content_hash = $hash;")
+                                .bind(("id", rec_id))
+                                .bind(("hash", hash))
+                                .await {
+                                    if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                        if !updated_rows.is_empty() {
+                                            updated_any = true;
+                                        }
+                                    }
+                                }
+                        }
+                    }
                 }
             }
-            update_sql.push_str("COMMIT TRANSACTION;");
-            self.db.query(update_sql).await?.check()?;
-            w_offset += limit;
+            if !updated_any {
+                break;
+            }
         }
+        Ok(())
+    }
+
+    pub async fn get_wisdom_tier_db(&self, id: &str) -> Result<Option<crate::contracts::Tier>> {
+        if let Ok(parse_id) = parse_record_id(id) {
+            let check_query = "SELECT VALUE tier FROM $id;";
+            let mut res = self.db.query(check_query).bind(("id", parse_id)).await?.check()?;
+            let raw_tiers: Vec<String> = res.take(0).unwrap_or_default();
+            if let Some(s) = raw_tiers.into_iter().next() {
+                if let Ok(t) = s.parse::<crate::contracts::Tier>() {
+                    return Ok(Some(t));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn find_duplicate_by_content_hash_db(&self, content_hash: &str) -> Result<Option<String>> {
+        let check_query = "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
+        let mut response = self.db.query(check_query).bind(("content_hash", content_hash)).await?;
+        let ep_id: Option<surrealdb::types::RecordId> = response.take(0)?;
+        if let Some(thing) = ep_id {
+            let id = match &thing.key {
+                surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                other => unescape_id_part(&record_key_to_string(other)),
+            };
+            return Ok(Some(format!("episode:{}", id)));
+        }
+
+        let wisdom_query = "SELECT VALUE id FROM wisdom WHERE content_hash = $content_hash LIMIT 1;";
+        let mut response_w = self.db.query(wisdom_query).bind(("content_hash", content_hash)).await?;
+        let w_id: Option<surrealdb::types::RecordId> = response_w.take(0)?;
+        if let Some(thing) = w_id {
+            let id = match &thing.key {
+                surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                other => unescape_id_part(&record_key_to_string(other)),
+            };
+            return Ok(Some(format!("wisdom:{}", id)));
+        }
+
+        Ok(None)
+    }
+
+    pub async fn save_cluster_assignment_db(&self, run_id: &str, cluster_id: i32, entity_id: &str, scope: Option<&str>) -> Result<()> {
+        let ep_thing = if let Ok(rec_id) = parse_record_id(entity_id) {
+            rec_id
+        } else if entity_id.starts_with("wiki") || entity_id.contains(".md") || entity_id.contains("/") {
+            surrealdb::types::RecordId::new("wiki_node", entity_id)
+        } else {
+            surrealdb::types::RecordId::new("episode", entity_id)
+        };
+        let sc = scope.unwrap_or("general");
+        let sql = "CREATE pipeline_cluster CONTENT { run_id: $run_id, cluster_id: $cluster_id, episode_id: $ep, scope: $scope };";
+        self.db.query(sql)
+            .bind(("run_id", run_id))
+            .bind(("cluster_id", cluster_id))
+            .bind(("ep", ep_thing))
+            .bind(("scope", sc))
+            .await?.check()?;
+        Ok(())
+    }
+
+    pub async fn get_cluster_members_paginated_db(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        let sql = "SELECT VALUE episode_id FROM pipeline_cluster WHERE run_id = $run_id AND cluster_id = $cluster_id LIMIT $limit START $offset;";
+        let mut res = self.db.query(sql)
+            .bind(("run_id", run_id))
+            .bind(("cluster_id", cluster_id))
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?.check()?;
+        let ep_ids: Vec<surrealdb::types::RecordId> = res.take(0)?;
+        if ep_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let get_ep_sql = "SELECT * FROM episode WHERE id IN $ep_ids;";
+        let mut ep_res = self.db.query(get_ep_sql).bind(("ep_ids", ep_ids)).await?.check()?;
+        let raw_episodes: Vec<EpisodeRaw> = ep_res.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
+    pub async fn delete_pipeline_run_db(&self, run_id: &str) -> Result<()> {
+        let sql = "DELETE FROM pipeline_cluster WHERE run_id = $run_id;";
+        self.db.query(sql).bind(("run_id", run_id)).await?.check()?;
         Ok(())
     }
 

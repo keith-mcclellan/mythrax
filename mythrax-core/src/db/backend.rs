@@ -120,6 +120,11 @@ pub trait StorageBackend: Send + Sync {
     async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()>;
     async fn delete_episode(&self, id: &str) -> Result<()>;
     async fn update_idf_index(&self, episode_id: &str, is_delete: bool) -> Result<()>;
+    async fn find_duplicate_by_content_hash(&self, content_hash: &str) -> Result<Option<String>>;
+    async fn get_wisdom_tier(&self, id: &str) -> Result<Option<crate::contracts::Tier>>;
+    async fn save_cluster_assignment(&self, run_id: &str, cluster_id: i32, episode_id: &str, scope: Option<&str>) -> Result<()>;
+    async fn get_cluster_members_paginated(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>>;
+    async fn delete_pipeline_run(&self, run_id: &str) -> Result<()>;
     async fn relate_nodes(
         &self,
         from_id: &str,
@@ -1416,6 +1421,26 @@ impl StorageBackend for SurrealBackend {
 
     async fn update_idf_index(&self, episode_id: &str, is_delete: bool) -> Result<()> {
         self.update_idf_index_db(episode_id, is_delete).await
+    }
+
+    async fn find_duplicate_by_content_hash(&self, content_hash: &str) -> Result<Option<String>> {
+        self.find_duplicate_by_content_hash_db(content_hash).await
+    }
+
+    async fn get_wisdom_tier(&self, id: &str) -> Result<Option<crate::contracts::Tier>> {
+        self.get_wisdom_tier_db(id).await
+    }
+
+    async fn save_cluster_assignment(&self, run_id: &str, cluster_id: i32, episode_id: &str, scope: Option<&str>) -> Result<()> {
+        self.save_cluster_assignment_db(run_id, cluster_id, episode_id, scope).await
+    }
+
+    async fn get_cluster_members_paginated(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        self.get_cluster_members_paginated_db(run_id, cluster_id, limit, offset).await
+    }
+
+    async fn delete_pipeline_run(&self, run_id: &str) -> Result<()> {
+        self.delete_pipeline_run_db(run_id).await
     }
 
     async fn save_wisdom_rule(&self, rule: &WisdomRule) -> Result<String> {

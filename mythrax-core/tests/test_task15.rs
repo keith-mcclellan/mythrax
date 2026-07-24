@@ -74,6 +74,7 @@ async fn test_policy_section_rendered_first() -> anyhow::Result<()> {
         severity: Some("warning".to_string()),
         blocking: Some(true),
         importance: Some(8.0),
+        content_hash: None,
     };
     state.backend.save_wisdom_rule(&rule).await?;
 
@@ -129,6 +130,7 @@ async fn test_policy_uses_caution_format() -> anyhow::Result<()> {
         severity: Some("warning".to_string()),
         blocking: Some(true),
         importance: Some(8.0),
+        content_hash: None,
     };
     state.backend.save_wisdom_rule(&rule).await?;
 
@@ -210,6 +212,7 @@ async fn test_policy_never_truncated() -> anyhow::Result<()> {
             severity: Some("warning".to_string()),
             blocking: Some(true),
             importance: Some(8.0),
+            content_hash: None,
         };
         state.backend.save_wisdom_rule(&rule).await?;
     }

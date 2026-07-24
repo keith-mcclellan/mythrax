@@ -77,6 +77,7 @@ async fn test_task10_injection_and_truncation() -> anyhow::Result<()> {
         severity: Some("warning".to_string()),
         blocking: Some(true),
         importance: Some(8.0),
+        content_hash: None,
     };
     state.backend.save_wisdom_rule(&pruned).await?;
 

@@ -144,6 +144,14 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS model_tier_mappings ON config TYPE option<object>;
 
 
+    DEFINE TABLE IF NOT EXISTS pipeline_cluster SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS run_id ON pipeline_cluster TYPE string;
+    DEFINE FIELD IF NOT EXISTS cluster_id ON pipeline_cluster TYPE int;
+    DEFINE FIELD IF NOT EXISTS episode_id ON pipeline_cluster TYPE record;
+    DEFINE FIELD IF NOT EXISTS scope ON pipeline_cluster TYPE string DEFAULT 'general';
+    DEFINE FIELD IF NOT EXISTS created_at ON pipeline_cluster TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS pipeline_cluster_run ON pipeline_cluster FIELDS run_id, cluster_id;
+
     DEFINE TABLE IF NOT EXISTS metrics SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS target_id ON metrics TYPE record;
     DEFINE FIELD IF NOT EXISTS utility_score ON metrics TYPE float DEFAULT 1.0;

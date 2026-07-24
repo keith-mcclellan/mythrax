@@ -24,7 +24,7 @@ async fn test_reflect_queues_cognitive_task() {
     let transcript_path = temp_dir.path().join("transcript.jsonl");
     let mut transcript_content = String::new();
     for i in 0..10 {
-        let role = if i % 2 == 0 { "user" } else { "assistant" };
+        let _role = if i % 2 == 0 { "user" } else { "assistant" };
         let tool_call = if i < 5 {
             r#", "tool_calls": [{"name": "read_file"}]"#
         } else {

@@ -278,11 +278,16 @@ impl Compactor {
                         let same_session = active_eps[i].session_id == active_eps[j].session_id;
                         let same_node_type = active_eps[i].node_type == active_eps[j].node_type;
                         if same_session && same_node_type {
-                            // Check similarity
-                            let sim = cosine_similarity(
-                                active_eps[i].embedding.as_ref().unwrap(),
-                                active_eps[j].embedding.as_ref().unwrap(),
-                            );
+                            let same_content_hash = active_eps[i].content_hash.is_some()
+                                && active_eps[i].content_hash == active_eps[j].content_hash;
+                            let sim = if same_content_hash {
+                                1.0f32
+                            } else {
+                                cosine_similarity(
+                                    active_eps[i].embedding.as_ref().unwrap(),
+                                    active_eps[j].embedding.as_ref().unwrap(),
+                                )
+                            };
 
                             if sim >= dedup_threshold {
                                 // Determine older vs newer
@@ -857,6 +862,15 @@ impl Compactor {
             }
         }
 
+        let run_id = format!("run_compactor_{}", uuid::Uuid::new_v4());
+        for (c_id, member_insights) in &clusters {
+            for (ins, _) in member_insights {
+                if let Err(e) = db.save_cluster_assignment(&run_id, *c_id as i32, &ins.vault_path, Some(scope)).await {
+                    tracing::warn!("Failed to save cluster assignment in compactor: {}", e);
+                }
+            }
+        }
+
         // 3. For each group/cluster, call the LLM to generate the compaction summary and save the WikiNode
         for (cluster_id, member_insights) in &clusters {
             let mut combined_content = String::new();
@@ -1013,6 +1027,7 @@ impl Compactor {
                 cluster_id
             );
         }
+        let _ = db.delete_pipeline_run(&run_id).await;
 
         // 4. Handle outlier insights by grouping them into a single miscellaneous compaction
         if !outlier_insights.is_empty() {

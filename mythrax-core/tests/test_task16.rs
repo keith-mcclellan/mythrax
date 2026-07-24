@@ -217,7 +217,7 @@ outputs:
     required: true
     enum: ["pass", "fail"]
 ---"#;
-    let path = create_handoff_file(&state, "test_7", yaml).await;
+    let _path = create_handoff_file(&state, "test_7", yaml).await;
 
     let args = json!({
         "action": "complete_handoff",
@@ -263,7 +263,7 @@ outputs:
     type: "string"
     required: true
 ---"#;
-    let path = create_handoff_file(&state, "test_10", yaml).await;
+    let _path = create_handoff_file(&state, "test_10", yaml).await;
 
     let args = json!({
         "action": "complete_handoff",

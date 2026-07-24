@@ -220,7 +220,7 @@ pub fn load_model_weights(model_dir: &std::path::Path) -> Result<HashMap<String,
                 anyhow::anyhow!("Failed to load shard {}: {:?}", shard_path.display(), e)
             })?;
             for (k, v) in weights {
-                let mut cast_v = if v.dtype() == Dtype::Bfloat16 || v.dtype() == Dtype::Float32 {
+                let cast_v = if v.dtype() == Dtype::Bfloat16 || v.dtype() == Dtype::Float32 {
                     v.as_dtype(Dtype::Float16)?
                 } else {
                     v
@@ -236,7 +236,7 @@ pub fn load_model_weights(model_dir: &std::path::Path) -> Result<HashMap<String,
             .map_err(|e| anyhow::anyhow!("Failed to load safetensors: {:?}", e))?;
         let mut cast_weights = HashMap::new();
         for (k, v) in weights {
-            let mut cast_v = if v.dtype() == Dtype::Bfloat16 || v.dtype() == Dtype::Float32 {
+            let cast_v = if v.dtype() == Dtype::Bfloat16 || v.dtype() == Dtype::Float32 {
                 v.as_dtype(Dtype::Float16)?
             } else {
                 v

@@ -951,7 +951,7 @@ mod tests {
                 { "role": "user", "content": large_chat_msg }
             ]
         });
-        let response = app
+        let _response = app
             .clone()
             .oneshot(
                 Request::builder()

@@ -24,8 +24,8 @@ struct SearchRaw {
     embedding: Option<Vec<f32>>,
     vault_path: Option<String>,
     related_nodes: Option<Vec<RelatedNodeRaw>>,
-    prev_episodes: Option<Vec<EpisodeRaw>>,
-    next_episodes: Option<Vec<EpisodeRaw>>,
+    prev_episodes: Option<Vec<serde_json::Value>>,
+    next_episodes: Option<Vec<serde_json::Value>>,
     last_retrieved_at: Option<String>,
     importance: Option<f64>,
     created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -41,13 +41,16 @@ struct SearchRaw {
     confidence: Option<f32>,
 }
 
-#[derive(serde::Deserialize, Debug, SurrealValue)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, SurrealValue)]
 struct RelatedNodeRaw {
     id: surrealdb::types::RecordId,
     title: Option<String>,
     name: Option<String>,
     content: Option<String>,
     summary: Option<String>,
+    hypothesis: Option<String>,
+    insight: Option<String>,
+    result: Option<String>,
     target_pattern: Option<String>,
     causal_explanation: Option<String>,
     action_to_avoid: Option<String>,
@@ -1035,26 +1038,23 @@ impl SurrealBackend {
         if query_emb.is_some() {
             if include_episodes {
                 if deep_insight {
-                    vector_sql.push_str(&format!(
-                        "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                               ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes,
-                               (<-followed_by<-episode.*)[0..50] AS prev_episodes,
-                               (->followed_by->episode.*)[0..50] AS next_episodes
+                    vector_sql.push_str("
+                        SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
+                               (utility ?? 50.0) AS utility,
+                               (SELECT id, title, name, content, summary, hypothesis, result, insight, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, status, vault_path FROM ->relates_to->(episode, wiki_node, wisdom, entity, hypothesis_node, handoff) LIMIT 10) AS related_nodes,
+                               (SELECT VALUE in FROM followed_by WHERE out = $parent.id LIMIT 10) AS prev_episodes,
+                               (SELECT VALUE out FROM followed_by WHERE in = $parent.id LIMIT 10) AS next_episodes
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
                           AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                           AND ($include_archived = true OR archived = false OR archived = NONE)
                           AND (embedding <|200, 200|> $query_embedding);
-                        ",
-                        traversal = traversal,
-                        related_targets = related_targets
-                    ));
+                        ");
                 } else {
                     vector_sql.push_str("
                         SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility
+                               (utility ?? 50.0) AS utility
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
@@ -1068,7 +1068,7 @@ impl SurrealBackend {
             if deep_insight {
                 vector_sql.push_str(&format!(
                     "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           (utility ?? 50.0) AS utility,
                            ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes
                     FROM wiki_node
                     WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
@@ -1076,7 +1076,7 @@ impl SurrealBackend {
                       {wiki_node_filter};
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                           (utility ?? 50.0) AS utility,
                            ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes
                     FROM wisdom
                     WHERE status != 'superseded'
@@ -1090,14 +1090,14 @@ impl SurrealBackend {
             } else {
                 vector_sql.push_str(&format!(
                     "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                           (utility ?? 50.0) AS utility
                     FROM wiki_node
                     WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|200, 200|> $query_embedding)
                       {wiki_node_filter};
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
-                           (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                           (utility ?? 50.0) AS utility
                     FROM wisdom
                     WHERE status != 'superseded'
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true)
@@ -1114,10 +1114,10 @@ impl SurrealBackend {
                 if deep_insight {
                     keyword_sql.push_str(&format!(
                         "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                               ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes,
-                               (<-followed_by<-episode.*)[0..50] AS prev_episodes,
-                               (->followed_by->episode.*)[0..50] AS next_episodes,
+                               (utility ?? 50.0) AS utility,
+                               (SELECT id, title, name, content, summary, hypothesis, result, insight, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, status, vault_path FROM ->relates_to->(episode, wiki_node, wisdom, entity, hypothesis_node, handoff) LIMIT 10) AS related_nodes,
+                               (SELECT VALUE in FROM followed_by WHERE out = $parent.id LIMIT 10) AS prev_episodes,
+                               (SELECT VALUE out FROM followed_by WHERE in = $parent.id LIMIT 10) AS next_episodes,
                                {fts_score_expr} AS bm25_score
                           FROM episode
                           WHERE {fts_where_clause}
@@ -1128,15 +1128,13 @@ impl SurrealBackend {
                           ORDER BY bm25_score DESC
                           LIMIT 200;
                           ",
-                        traversal = traversal,
-                        related_targets = related_targets,
                         fts_where_clause = fts_where_clause,
                         fts_score_expr = fts_score_expr
                     ));
                 } else {
                     keyword_sql.push_str(&format!("
                         SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
-                               (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
+                               (utility ?? 50.0) AS utility,
                                {fts_score_expr} AS bm25_score
                         FROM episode
                         WHERE {fts_where_clause}
@@ -1420,8 +1418,8 @@ impl SurrealBackend {
                             }
                             rel_list.push(SearchResult {
                                 id: format_record_id(&r_node.id),
-                                title: r_node.title.clone().unwrap_or_default(),
-                                content: r_node.content.clone().unwrap_or_default(),
+                                title: r_node.title.clone().or(r_node.name.clone()).or(r_node.hypothesis.clone()).unwrap_or_default(),
+                                content: r_node.content.clone().or(r_node.insight.clone()).or(r_node.result.clone()).or(r_node.summary.clone()).unwrap_or_default(),
                                 similarity: 0.0,
                                 utility: 0.0,
                                 tier: r_node
@@ -1443,39 +1441,65 @@ impl SurrealBackend {
                         }
                     }
                     if let Some(prevs) = ep.prev_episodes.as_ref() {
-                        for prev in prevs {
-                            rel_list.push(SearchResult {
-                                id: format_record_id(&prev.id),
-                                title: prev.title.clone(),
-                                content: prev.content.clone(),
-                                similarity: 0.0,
-                                utility: 0.0,
-                                tier: crate::contracts::Tier::Session,
-                                embedding: None,
-                                vault_path: prev.vault_path.clone(),
-                                source_episode: Some("temporal_neighbor".to_string()),
-                                discovery_tokens: prev.discovery_tokens,
-                                related_nodes: None,
-                                ..Default::default()
-                            });
+                        for prev_val in prevs {
+                            let prev_str = match prev_val {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Object(map) => {
+                                    if let Some(id_val) = map.get("id") {
+                                        id_val.as_str().unwrap_or_default().to_string()
+                                    } else {
+                                        String::new()
+                                    }
+                                }
+                                _ => prev_val.to_string().trim_matches('"').to_string(),
+                            }.replace('`', "");
+                            if !prev_str.is_empty() {
+                                rel_list.push(SearchResult {
+                                    id: prev_str,
+                                    title: String::new(),
+                                    content: String::new(),
+                                    similarity: 0.0,
+                                    utility: 0.0,
+                                    tier: crate::contracts::Tier::Session,
+                                    embedding: None,
+                                    vault_path: None,
+                                    source_episode: Some("temporal_neighbor".to_string()),
+                                    discovery_tokens: None,
+                                    related_nodes: None,
+                                    ..Default::default()
+                                });
+                            }
                         }
                     }
                     if let Some(nexts) = ep.next_episodes.as_ref() {
-                        for next in nexts {
-                            rel_list.push(SearchResult {
-                                id: format_record_id(&next.id),
-                                title: next.title.clone(),
-                                content: next.content.clone(),
-                                similarity: 0.0,
-                                utility: 0.0,
-                                tier: crate::contracts::Tier::Session,
-                                embedding: None,
-                                vault_path: next.vault_path.clone(),
-                                source_episode: Some("temporal_neighbor".to_string()),
-                                discovery_tokens: next.discovery_tokens,
-                                related_nodes: None,
-                                ..Default::default()
-                            });
+                        for next_val in nexts {
+                            let next_str = match next_val {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Object(map) => {
+                                    if let Some(id_val) = map.get("id") {
+                                        id_val.as_str().unwrap_or_default().to_string()
+                                    } else {
+                                        String::new()
+                                    }
+                                }
+                                _ => next_val.to_string().trim_matches('"').to_string(),
+                            }.replace('`', "");
+                            if !next_str.is_empty() {
+                                rel_list.push(SearchResult {
+                                    id: next_str,
+                                    title: String::new(),
+                                    content: String::new(),
+                                    similarity: 0.0,
+                                    utility: 0.0,
+                                    tier: crate::contracts::Tier::Session,
+                                    embedding: None,
+                                    vault_path: None,
+                                    source_episode: Some("temporal_neighbor".to_string()),
+                                    discovery_tokens: None,
+                                    related_nodes: None,
+                                    ..Default::default()
+                                });
+                            }
                         }
                     }
                     if !rel_list.is_empty() {
@@ -2265,6 +2289,9 @@ impl SurrealBackend {
 
         // Stage 6: Temporal Neighbor Expansion (traverses followed_by edges if cues detected)
         let mut neighbor_candidates = Vec::new();
+        #[allow(unused_mut)]
+        let mut neighbor_to_primary: std::collections::HashMap<String, Vec<(String, f32)>> =
+            std::collections::HashMap::new();
         if let Some((cue_type, weight)) = temporal_cue_info {
             candidates.sort_by(|a, b| {
                 b.similarity
@@ -2294,16 +2321,15 @@ impl SurrealBackend {
                 .filter_map(|c| parse_record_id(&c.id).ok())
                 .collect();
 
+            let mut neighbor_to_primary: std::collections::HashMap<String, Vec<(String, f32)>> =
+                std::collections::HashMap::new();
+
             if !primary_ids.is_empty() {
                 #[derive(serde::Serialize, serde::Deserialize, Debug, SurrealValue)]
                 struct EpisodeRelations {
                     id: surrealdb::types::RecordId,
-                    preds_1: Option<Vec<surrealdb::types::RecordId>>,
-                    preds_2: Option<Vec<surrealdb::types::RecordId>>,
-                    preds_3: Option<Vec<surrealdb::types::RecordId>>,
-                    succs_1: Option<Vec<surrealdb::types::RecordId>>,
-                    succs_2: Option<Vec<surrealdb::types::RecordId>>,
-                    succs_3: Option<Vec<surrealdb::types::RecordId>>,
+                    preds_1: Option<Vec<serde_json::Value>>,
+                    succs_1: Option<Vec<serde_json::Value>>,
                     session_id: Option<String>,
                     scope: Option<String>,
                 }
@@ -2322,12 +2348,8 @@ impl SurrealBackend {
 
                 if !episode_ids.is_empty() {
                     let sql = "SELECT id,
-                               (<-followed_by<-(episode, wiki_node))[0..50] AS preds_1,
-                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_2,
-                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_3,
-                               (->followed_by->(episode, wiki_node))[0..50] AS succs_1,
-                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_2,
-                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_3,
+                               (SELECT VALUE in FROM followed_by WHERE out = $parent.id LIMIT 10) AS preds_1,
+                               (SELECT VALUE out FROM followed_by WHERE in = $parent.id LIMIT 10) AS succs_1,
                                session_id, scope FROM episode WHERE id IN $episode_ids;";
                     let mut res = self
                         .db
@@ -2340,12 +2362,8 @@ impl SurrealBackend {
 
                 if !wiki_node_ids.is_empty() {
                     let sql = "SELECT id,
-                               (<-followed_by<-(episode, wiki_node))[0..50] AS preds_1,
-                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_2,
-                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_3,
-                               (->followed_by->(episode, wiki_node))[0..50] AS succs_1,
-                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_2,
-                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_3,
+                               (SELECT VALUE in FROM followed_by WHERE out = $parent.id LIMIT 10) AS preds_1,
+                               (SELECT VALUE out FROM followed_by WHERE in = $parent.id LIMIT 10) AS succs_1,
                                session_id, scope FROM wiki_node WHERE id IN $wiki_node_ids;";
                     let mut res = self
                         .db
@@ -2362,48 +2380,45 @@ impl SurrealBackend {
                     .collect();
 
                 let mut neighbor_ids_to_fetch = Vec::new();
-                let mut neighbor_to_primary: std::collections::HashMap<String, Vec<(String, f32)>> =
-                    std::collections::HashMap::new();
                 let depth = (weight.round() as usize).clamp(1, 3);
+                let mut hop1_ids = Vec::new();
+                let mut hop1_to_primary: std::collections::HashMap<String, Vec<(String, f32)>> =
+                    std::collections::HashMap::new();
+
+                let parse_val_id = |val: &serde_json::Value| -> String {
+                    match val {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Object(map) => {
+                            if let Some(id_val) = map.get("id") {
+                                id_val.as_str().unwrap_or_default().to_string()
+                            } else {
+                                String::new()
+                            }
+                        }
+                        _ => val.to_string().trim_matches('"').to_string(),
+                    }
+                    .replace('`', "")
+                };
 
                 for c in &top_5_primary {
                     if let Some(rel) = rel_map.get(&c.id) {
                         if cue_type == TemporalCueType::Preceding
                             || cue_type == TemporalCueType::Procedural
                         {
-                            if depth >= 1 {
-                                if let Some(ref preds) = rel.preds_1 {
-                                    if let Some(pred_id) = preds.first() {
-                                        let pred_str = format_record_id(pred_id);
-                                        neighbor_ids_to_fetch.push(pred_id.clone());
+                            if let Some(ref preds) = rel.preds_1 {
+                                for pred_val in preds {
+                                    let pred_str = parse_val_id(pred_val);
+                                    if let Ok(pred_rec_id) = parse_record_id(&pred_str) {
+                                        neighbor_ids_to_fetch.push(pred_rec_id.clone());
+                                        hop1_ids.push(pred_rec_id);
                                         neighbor_to_primary
-                                            .entry(pred_str)
+                                            .entry(pred_str.clone())
                                             .or_default()
                                             .push((c.id.clone(), c.similarity * 0.5f32));
-                                    }
-                                }
-                            }
-                            if depth >= 2 {
-                                if let Some(ref preds) = rel.preds_2 {
-                                    if let Some(pred_id) = preds.first() {
-                                        let pred_str = format_record_id(pred_id);
-                                        neighbor_ids_to_fetch.push(pred_id.clone());
-                                        neighbor_to_primary
+                                        hop1_to_primary
                                             .entry(pred_str)
                                             .or_default()
-                                            .push((c.id.clone(), c.similarity * 0.25f32));
-                                    }
-                                }
-                            }
-                            if depth >= 3 {
-                                if let Some(ref preds) = rel.preds_3 {
-                                    if let Some(pred_id) = preds.first() {
-                                        let pred_str = format_record_id(pred_id);
-                                        neighbor_ids_to_fetch.push(pred_id.clone());
-                                        neighbor_to_primary
-                                            .entry(pred_str)
-                                            .or_default()
-                                            .push((c.id.clone(), c.similarity * 0.125f32));
+                                            .push((c.id.clone(), c.similarity));
                                     }
                                 }
                             }
@@ -2411,39 +2426,121 @@ impl SurrealBackend {
                         if cue_type == TemporalCueType::Succeeding
                             || cue_type == TemporalCueType::Procedural
                         {
-                            if depth >= 1 {
-                                if let Some(ref succs) = rel.succs_1 {
-                                    if let Some(succ_id) = succs.first() {
-                                        let succ_str = format_record_id(succ_id);
-                                        neighbor_ids_to_fetch.push(succ_id.clone());
+                            if let Some(ref succs) = rel.succs_1 {
+                                for succ_val in succs {
+                                    let succ_str = parse_val_id(succ_val);
+                                    if let Ok(succ_rec_id) = parse_record_id(&succ_str) {
+                                        neighbor_ids_to_fetch.push(succ_rec_id.clone());
+                                        hop1_ids.push(succ_rec_id);
                                         neighbor_to_primary
-                                            .entry(succ_str)
+                                            .entry(succ_str.clone())
                                             .or_default()
                                             .push((c.id.clone(), c.similarity * 0.5f32));
+                                        hop1_to_primary
+                                            .entry(succ_str)
+                                            .or_default()
+                                            .push((c.id.clone(), c.similarity));
                                     }
                                 }
                             }
-                            if depth >= 2 {
-                                if let Some(ref succs) = rel.succs_2 {
-                                    if let Some(succ_id) = succs.first() {
-                                        let succ_str = format_record_id(succ_id);
-                                        neighbor_ids_to_fetch.push(succ_id.clone());
-                                        neighbor_to_primary
-                                            .entry(succ_str)
-                                            .or_default()
-                                            .push((c.id.clone(), c.similarity * 0.25f32));
+                        }
+                    }
+                }
+
+                if depth >= 2 && !hop1_ids.is_empty() {
+                    let mut hop2_ids = Vec::new();
+                    let sql = "SELECT id,
+                               (SELECT VALUE in FROM followed_by WHERE out = $parent.id LIMIT 10) AS preds_1,
+                               (SELECT VALUE out FROM followed_by WHERE in = $parent.id LIMIT 10) AS succs_1,
+                               session_id, scope FROM episode, wiki_node WHERE id IN $hop1_ids;";
+                    if let Ok(mut res) = self.db.query(sql).bind(("hop1_ids", hop1_ids.clone())).await {
+                        let hop2_batch: Vec<EpisodeRelations> = res.take(0).unwrap_or_default();
+                        for rel in &hop2_batch {
+                            let h1_str = format_record_id(&rel.id);
+                            if let Some(prim_list) = hop1_to_primary.get(&h1_str) {
+                                for (prim_id, prim_sim) in prim_list {
+                                    if cue_type == TemporalCueType::Preceding
+                                        || cue_type == TemporalCueType::Procedural
+                                    {
+                                        if let Some(ref preds) = rel.preds_1 {
+                                            for pred_val in preds {
+                                                let pred_str = parse_val_id(pred_val);
+                                                if let Ok(pred_rec_id) = parse_record_id(&pred_str) {
+                                                    neighbor_ids_to_fetch.push(pred_rec_id.clone());
+                                                    hop2_ids.push(pred_rec_id);
+                                                    neighbor_to_primary
+                                                        .entry(pred_str)
+                                                        .or_default()
+                                                        .push((prim_id.clone(), prim_sim * 0.25f32));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if cue_type == TemporalCueType::Succeeding
+                                        || cue_type == TemporalCueType::Procedural
+                                    {
+                                        if let Some(ref succs) = rel.succs_1 {
+                                            for succ_val in succs {
+                                                let succ_str = parse_val_id(succ_val);
+                                                if let Ok(succ_rec_id) = parse_record_id(&succ_str) {
+                                                    neighbor_ids_to_fetch.push(succ_rec_id.clone());
+                                                    hop2_ids.push(succ_rec_id);
+                                                    neighbor_to_primary
+                                                        .entry(succ_str)
+                                                        .or_default()
+                                                        .push((prim_id.clone(), prim_sim * 0.25f32));
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
-                            if depth >= 3 {
-                                if let Some(ref succs) = rel.succs_3 {
-                                    if let Some(succ_id) = succs.first() {
-                                        let succ_str = format_record_id(succ_id);
-                                        neighbor_ids_to_fetch.push(succ_id.clone());
-                                        neighbor_to_primary
-                                            .entry(succ_str)
-                                            .or_default()
-                                            .push((c.id.clone(), c.similarity * 0.125f32));
+                        }
+                    }
+
+                    if depth >= 3 && !hop2_ids.is_empty() {
+                        let sql = "SELECT id,
+                                   (SELECT VALUE in FROM followed_by WHERE out = $parent.id LIMIT 10) AS preds_1,
+                                   (SELECT VALUE out FROM followed_by WHERE in = $parent.id LIMIT 10) AS succs_1,
+                                   session_id, scope FROM episode, wiki_node WHERE id IN $hop2_ids;";
+                        if let Ok(mut res) = self.db.query(sql).bind(("hop2_ids", hop2_ids)).await {
+                            let hop3_batch: Vec<EpisodeRelations> = res.take(0).unwrap_or_default();
+                            for rel in &hop3_batch {
+                                let h2_str = format_record_id(&rel.id);
+                                if let Some(prim_list) = hop1_to_primary.get(&h2_str) {
+                                    for (prim_id, prim_sim) in prim_list {
+                                        if cue_type == TemporalCueType::Preceding
+                                            || cue_type == TemporalCueType::Procedural
+                                        {
+                                            if let Some(ref preds) = rel.preds_1 {
+                                                for pred_val in preds {
+                                                    let pred_str = parse_val_id(pred_val);
+                                                    if let Ok(pred_rec_id) = parse_record_id(&pred_str) {
+                                                        neighbor_ids_to_fetch.push(pred_rec_id);
+                                                        neighbor_to_primary
+                                                            .entry(pred_str)
+                                                            .or_default()
+                                                            .push((prim_id.clone(), prim_sim * 0.125f32));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if cue_type == TemporalCueType::Succeeding
+                                            || cue_type == TemporalCueType::Procedural
+                                        {
+                                            if let Some(ref succs) = rel.succs_1 {
+                                                for succ_val in succs {
+                                                    let succ_str = parse_val_id(succ_val);
+                                                    if let Ok(succ_rec_id) = parse_record_id(&succ_str) {
+                                                        neighbor_ids_to_fetch.push(succ_rec_id);
+                                                        neighbor_to_primary
+                                                            .entry(succ_str)
+                                                            .or_default()
+                                                            .push((prim_id.clone(), prim_sim * 0.125f32));
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2551,11 +2648,21 @@ impl SurrealBackend {
         for c in candidates {
             unique_map.insert(c.id.clone(), c);
         }
-        for c in neighbor_candidates {
+        for c in &neighbor_candidates {
+            if let Some(prim_info) = neighbor_to_primary.get(&c.id) {
+                for (prim_id, _) in prim_info {
+                    if let Some(prim_cand) = unique_map.get_mut(prim_id) {
+                        let rel_vec = prim_cand.related_nodes.get_or_insert_with(Vec::new);
+                        if !rel_vec.iter().any(|r| r.id == c.id) {
+                            rel_vec.push(c.clone());
+                        }
+                    }
+                }
+            }
             if let Some(existing) = unique_map.get_mut(&c.id) {
                 existing.similarity = existing.similarity.max(c.similarity);
             } else {
-                unique_map.insert(c.id.clone(), c);
+                unique_map.insert(c.id.clone(), c.clone());
             }
         }
         let mut merged_candidates: Vec<SearchResult> = unique_map.into_values().collect();

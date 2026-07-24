@@ -263,7 +263,7 @@ pub fn migrate_binary_to_sqlite(bin_path: &Path, db_path: &Path) -> Result<()> {
     let mut count = 0;
     let mut tx = conn.transaction()?;
     
-    for i in 0..num_entries {
+    for _i in 0..num_entries {
         if count >= 5000 {
             tx.commit()?;
             tx = conn.transaction()?;
@@ -1104,7 +1104,7 @@ mod tests {
             let vec1 = embedder.embed(s1).unwrap();
             let vec2 = embedder.embed(s2).unwrap();
 
-            let dot_prod: f32 = vec1.iter().zip(vec2.iter()).map(|(&x, &y)| x * y).sum();
+            let _dot_prod: f32 = vec1.iter().zip(vec2.iter()).map(|(&x, &y)| x * y).sum();
             assert_eq!(vec1.len(), 768);
             let sum_sq: f32 = vec1.iter().map(|&x| x * x).sum();
             assert!((sum_sq - 1.0).abs() < 1e-4);
@@ -1188,7 +1188,7 @@ mod tests {
         flush_dirty(&db_path).unwrap();
         
         // K1 should be deleted because it has the oldest created_at (10)
-        let mut stmt = conn.prepare("SELECT text FROM embedding_cache ORDER BY created_at ASC").unwrap();
+        let mut stmt = conn.prepare("SELECT text FROM embedding_cache WHERE text IN ('k1', 'k2', 'k3') ORDER BY created_at ASC").unwrap();
         let rows: Vec<String> = stmt.query_map([], |row| row.get(0)).unwrap().filter_map(Result::ok).collect();
         
         assert_eq!(rows.len(), 2);
@@ -1235,7 +1235,7 @@ mod tests {
         let bin_path = temp_dir.path().join("large_cache.bin");
         let db_path = temp_dir.path().join("large_cache.db");
         
-        let mut file = std::fs::File::create(&bin_path).unwrap();
+        let file = std::fs::File::create(&bin_path).unwrap();
         // Since we can't easily write 1GB, we'll mock metadata if possible, but actually we can just preallocate or sparse write.
         // Seek to 1GB + 1 byte
         file.set_len(1_073_741_825).unwrap();

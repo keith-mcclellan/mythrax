@@ -21,7 +21,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
         let ep = EpisodeSave {
             created_at: None,
             title: title.to_string(),
-            content: content_arch.to_string(),
+            content: format!("{} - {}", title, content_arch),
             scope: Some("general".to_string()),
             ..Default::default()
         };
@@ -36,7 +36,7 @@ async fn test_fts_cap_behavior() -> Result<()> {
         let ep = EpisodeSave {
             created_at: None,
             title: title.to_string(),
-            content: content_other.to_string(),
+            content: format!("{} - {}", title, content_other),
             scope: Some("general".to_string()),
             ..Default::default()
         };

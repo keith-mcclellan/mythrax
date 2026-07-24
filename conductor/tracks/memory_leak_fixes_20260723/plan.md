@@ -107,56 +107,56 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
 
 Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline callers (`synthesis.rs`, `compactor.rs`, `precompact.rs`) are deferred to Phase 4 where they are structurally rewritten for streaming-to-disk, avoiding double-touch.
 
-- [ ] Task: Add `content_hash` schema, index, and hash-based deduplication queries
-  - [ ] Write test: Verify `content_hash` is computed (SHA-256 of normalized content) and stored on episode and wisdom_rule save
-  - [ ] Write test: Verify `find_duplicate_by_content_hash(hash)` returns matching record without full table scan
-  - [ ] Add `DEFINE FIELD content_hash` and `DEFINE INDEX idx_content_hash ON episode FIELDS content_hash` (and same for `wisdom_rule`) to INIT_SCHEMA in `src/db/surreal_init.rs`
-  - [ ] Add `content_hash` field computation to episode and wisdom_rule save paths in `backend.rs`
-  - [ ] Add `find_duplicate_by_content_hash` query to `crud_operations.rs` using DB index lookup
-  - [ ] Run tests and confirm pass
+- [x] Task: Add `content_hash` schema, index, and hash-based deduplication queries
+  - [x] Write test: Verify `content_hash` is computed (SHA-256 of normalized content) and stored on episode and wisdom_rule save
+  - [x] Write test: Verify `find_duplicate_by_content_hash(hash)` returns matching record without full table scan
+  - [x] Add `DEFINE FIELD content_hash` and `DEFINE INDEX idx_content_hash ON episode FIELDS content_hash` (and same for `wisdom_rule`) to INIT_SCHEMA in `src/db/surreal_init.rs`
+  - [x] Add `content_hash` field computation to episode and wisdom_rule save paths in `backend.rs`
+  - [x] Add `find_duplicate_by_content_hash` query to `crud_operations.rs` using DB index lookup
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Backfill `content_hash` for existing episodes and wisdom rules
-  - [ ] Write test: Verify backfill computes correct SHA-256 hash for a known set of existing records
-  - [ ] Write test: Verify backfill is idempotent (running twice does not corrupt hashes)
-  - [ ] Implement `backfill_content_hashes()` function that uses `LIMIT 50` loops **without** `OFFSET` (query `WHERE content_hash IS NONE LIMIT 50`, compute SHA-256 hashes, **save the updated records back to the database**, repeat until 0 results)
-  - [ ] Wire backfill into daemon startup: run once if records with null `content_hash` exist, log progress
-  - [ ] Run tests and confirm pass
+- [x] Task: Backfill `content_hash` for existing episodes and wisdom rules
+  - [x] Write test: Verify backfill computes correct SHA-256 hash for a known set of existing records
+  - [x] Write test: Verify backfill is idempotent (running twice does not corrupt hashes)
+  - [x] Implement `backfill_content_hashes()` function that uses `LIMIT 50` loops **without** `OFFSET` (query `WHERE content_hash IS NONE LIMIT 50`, compute SHA-256 hashes, **save the updated records back to the database**, repeat until 0 results)
+  - [x] Wire backfill into daemon startup: run once if records with null `content_hash` exist, log progress
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate `get_all_episodes()` callers — HTTP handlers (2 files)
-  - [ ] Write test: Verify `vault_handlers` streams all paginated results to the HTTP response without accumulating into a single `Vec` (bounded memory)
-  - [ ] Refactor `vault_handlers.rs` L41, L72 to use chunked JSON stream response directly from paginated DB cursor
-  - [ ] Refactor `manage_handlers.rs` L338, L1214 to use chunked JSON stream response directly from paginated DB cursor
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate `get_all_episodes()` callers — HTTP handlers (2 files)
+  - [x] Write test: Verify `vault_handlers` streams all paginated results to the HTTP response without accumulating into a single `Vec` (bounded memory)
+  - [x] Refactor `vault_handlers.rs` L41, L72 to use chunked JSON stream response directly from paginated DB cursor
+  - [x] Refactor `manage_handlers.rs` L338, L1214 to use chunked JSON stream response directly from paginated DB cursor
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate `get_all_episodes()` callers — internal pipelines (2 files)
-  - [ ] Write test: Verify `blackboard` and `ingestion` process paginated results one chunk at a time without accumulating all episodes into memory
-  - [ ] Refactor `vault/ingestion.rs` L606 to process episodes in bounded chunks (process chunk, drop, fetch next) — do NOT accumulate into a single `Vec`
-  - [ ] Refactor `blackboard.rs` L189 to process episodes in bounded chunks. If full accumulation is strictly required by the logic, fetch only lightweight projections (e.g., `id` and `content_hash`, excluding the large `content` payload)
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate `get_all_episodes()` callers — internal pipelines (2 files)
+  - [x] Write test: Verify `blackboard` and `ingestion` process paginated results one chunk at a time without accumulating all episodes into memory
+  - [x] Refactor `vault/ingestion.rs` L606 to process episodes in bounded chunks (process chunk, drop, fetch next) — do NOT accumulate into a single `Vec`
+  - [x] Refactor `blackboard.rs` L189 to process episodes in bounded chunks. If full accumulation is strictly required by the logic, fetch only lightweight projections (e.g., `id` and `content_hash`, excluding the large `content` payload)
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate standalone `get_all_wiki_nodes()` callers (2 files)
-  - [ ] Write test: Verify `harvest` and `meta_skill` process paginated wiki nodes in bounded chunks without accumulating all into memory. If full accumulation is required by the algorithm, fetch only lightweight projections (e.g., `id` and required fields, excluding large `content` payloads)
-  - [ ] Refactor `harvest.rs` L297 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
-  - [ ] Refactor `meta_skill.rs` L127 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate standalone `get_all_wiki_nodes()` callers (2 files)
+  - [x] Write test: Verify `harvest` and `meta_skill` process paginated wiki nodes in bounded chunks without accumulating all into memory. If full accumulation is required by the algorithm, fetch only lightweight projections (e.g., `id` and required fields, excluding large `content` payloads)
+  - [x] Refactor `harvest.rs` L297 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
+  - [x] Refactor `meta_skill.rs` L127 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate standalone `get_all_wisdom_rules()` callers (1 file)
-  - [ ] Write test: Verify `harvest` processes paginated wisdom rules in bounded chunks without accumulating all into memory
-  - [ ] Refactor `harvest.rs` L342 to process wisdom rules in bounded chunks (process chunk, drop, fetch next)
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate standalone `get_all_wisdom_rules()` callers (1 file)
+  - [x] Write test: Verify `harvest` processes paginated wisdom rules in bounded chunks without accumulating all into memory
+  - [x] Refactor `harvest.rs` L342 to process wisdom rules in bounded chunks (process chunk, drop, fetch next)
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate `get_all_registered_transcripts()` and `get_all_episodes()` in meta_skill (2 files)
-  - [ ] Write test: Verify transcript and episode pagination loops process in bounded chunks without accumulating all into memory
-  - [ ] Refactor `synthesis.rs` L781 (standalone transcript query, not cognitive pipeline rewrite) to process in bounded chunks
-  - [ ] Refactor `meta_skill.rs` L126 to process in bounded chunks
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate `get_all_registered_transcripts()` and `get_all_episodes()` in meta_skill (2 files)
+  - [x] Write test: Verify transcript and episode pagination loops process in bounded chunks without accumulating all into memory
+  - [x] Refactor `synthesis.rs` L781 (standalone transcript query, not cognitive pipeline rewrite) to process in bounded chunks
+  - [x] Refactor `meta_skill.rs` L126 to process in bounded chunks
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Paginate startup missing-embedding backfill
-  - [ ] Write test: Verify startup backfill processes records in bounded batches without skipping any records
-  - [ ] Refactor daemon.rs L126, L152, L178 to use `LIMIT 50` loops **without** `OFFSET` (query `WHERE embedding IS NONE LIMIT 50`, process batch, repeat until 0 results — OFFSET would skip records as they're updated)
-  - [ ] Run tests and confirm pass
+- [x] Task: Paginate startup missing-embedding backfill
+  - [x] Write test: Verify startup backfill processes records in bounded batches without skipping any records
+  - [x] Refactor daemon.rs L126, L152, L178 to use `LIMIT 50` loops **without** `OFFSET` (query `WHERE embedding IS NONE LIMIT 50`, process batch, repeat until 0 results — OFFSET would skip records as they're updated)
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 4: Streaming-to-Disk Cognitive Pipeline (FR-4)
 

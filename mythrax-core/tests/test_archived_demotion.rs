@@ -44,7 +44,7 @@ async fn test_archived_demotion_logic() -> Result<()> {
         let ep = EpisodeSave {
             created_at: None,
             title: "Node".to_string(),
-            content: content.to_string(),
+            content: format!("{} - {}", _title, content),
             scope: Some("general".to_string()),
             session_id,
             ..Default::default()

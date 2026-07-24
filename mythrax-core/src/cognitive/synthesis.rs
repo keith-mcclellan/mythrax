@@ -1261,6 +1261,17 @@ impl DreamCoordinator {
                         }
                     }
 
+                    let run_id = format!("run_{}", uuid::Uuid::new_v4());
+                    for (c_idx, c_eps) in clusters.values().enumerate() {
+                        for ep in c_eps {
+                            if let Some(ref ep_id) = ep.id {
+                                if let Err(e) = db.save_cluster_assignment(&run_id, c_idx as i32, ep_id.as_str(), Some(scope.as_str())).await {
+                                    tracing::warn!("Failed to save cluster assignment in synthesis: {}", e);
+                                }
+                            }
+                        }
+                    }
+
                     let total_clusters = clusters.len();
                     for (cluster_idx, (_, cluster_eps)) in clusters.into_iter().enumerate() {
                         let mut events_text = String::new();
@@ -1490,6 +1501,7 @@ impl DreamCoordinator {
                             total_clusters
                         );
                     }
+                    let _ = db.delete_pipeline_run(&run_id).await;
                 }
 
                 // --- DRIFT & SPLIT MANAGEMENT LOGIC START ---
@@ -2197,22 +2209,34 @@ impl DreamCoordinator {
                     c.iter().map(|m| &m.id).collect::<Vec<_>>()
                 );
             }
-
             for cluster in accepted_clusters {
-                let n = cluster.len();
+                let mut unique_scopes = std::collections::HashSet::new();
                 let mut insights_with_scope_labels = String::new();
+                let mut processed_members = Vec::new();
                 for member in &cluster {
-                    insights_with_scope_labels.push_str(&format!(
+                    let formatted_member = format!(
                         "Scope: {}\nTitle/Name: {}\nContent:\n{}\n\n",
                         member.scope, member.name, member.content
-                    ));
+                    );
+                    if insights_with_scope_labels.len() + formatted_member.len() > 128_000 {
+                        tracing::warn!("Prompt buffer reached 32K token cap, stopping concatenation.");
+                        break;
+                    }
+                    insights_with_scope_labels.push_str(&formatted_member);
+                    unique_scopes.insert(member.scope.clone());
+                    processed_members.push(member);
+                }
+
+                if unique_scopes.len() < 2 {
+                    tracing::warn!("Cluster has fewer than 2 unique scopes after prompt truncation; skipping synthesis.");
+                    continue;
                 }
 
                 let base_sys = "You are a knowledge generalizer. Given project-specific insights that independently emerged in multiple projects, synthesize a single general-purpose rule that captures the cross-cutting pattern. Strip project-specific details. Output valid JSON.";
                 let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                 let user_prompt = format!(
                     "The following insights emerged independently in {} different projects:\n\n{}Respond with a JSON object containing target_pattern: string, action_to_avoid: string, causal_explanation: string, prescribed_remedy: string, and confidence: float.",
-                    n, insights_with_scope_labels
+                    unique_scopes.len(), insights_with_scope_labels
                 );
 
                 let original_tokens = insights_with_scope_labels.len() / 4;
@@ -2234,7 +2258,6 @@ impl DreamCoordinator {
                             &resp_str,
                             original_tokens,
                         );
-                        println!("DEBUG - routed_completion succeeded: {:?}", resp_str);
                         #[derive(serde::Deserialize)]
                         struct GeneralizationResponse {
                             target_pattern: String,
@@ -2263,7 +2286,7 @@ impl DreamCoordinator {
                                         res.causal_explanation,
                                         res.prescribed_remedy,
                                         tier,
-                                        cluster
+                                        processed_members
                                             .iter()
                                             .map(|c| format!("  - \"{}\"", c.id))
                                             .collect::<Vec<_>>()
@@ -2274,7 +2297,7 @@ impl DreamCoordinator {
                                         res.prescribed_remedy
                                     );
                                     rule_md.push_str("\n\n## Source Insights\n");
-                                    for member in &cluster {
+                                    for member in &processed_members {
                                         rule_md.push_str(&format!("- [[{}]]\n", member.name));
                                     }
                                     let _ = store.write_file(&rule_path, &rule_md);
@@ -2289,7 +2312,7 @@ impl DreamCoordinator {
                                         scope: "general".to_string(),
                                         vault_path: Some(rule_path),
                                         embedding: None,
-                                        source_episodes: cluster
+                                        source_episodes: processed_members
                                             .iter()
                                             .map(|c| c.id.clone())
                                             .collect(),
@@ -2316,7 +2339,7 @@ impl DreamCoordinator {
                                                 "DEBUG - save_wisdom_rule_with_deduplication succeeded: {}",
                                                 wisdom_id
                                             );
-                                            for member in &cluster {
+                                            for member in &processed_members {
                                                 let _ = db
                                                     .relate_nodes(
                                                         &member.id,
@@ -2417,6 +2440,26 @@ pub async fn save_wisdom_rule_with_deduplication(
     store: &MarkdownStore,
     rule: &WisdomRule,
 ) -> Result<String> {
+    let norm_content = format!("{}:{}:{}:{}", rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy);
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(norm_content.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    if let Ok(Some(dup_id)) = db.find_duplicate_by_content_hash(&hash).await {
+        if let Ok(Some(tier)) = db.get_wisdom_tier(&dup_id).await {
+            if tier == crate::contracts::Tier::Wisdom {
+                tracing::info!("Found exact content hash match for global wisdom rule, returning existing ID: {}", dup_id);
+                if let Some(ref vp) = rule.vault_path {
+                    let _ = safe_delete_file(&store.vault_root, vp);
+                }
+                for ep in &rule.source_episodes {
+                    let _ = db.relate_nodes(ep, &dup_id, None, None, None).await;
+                }
+                return Ok(dup_id);
+            }
+        }
+    }
+
     let new_emb = if let Some(ref emb) = rule.embedding {
         emb.clone()
     } else {

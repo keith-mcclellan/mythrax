@@ -123,81 +123,123 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                     if backend_startup.embedder.is_some() {
                         tracing::info!("Checking for episodes and wisdom rules with missing embeddings...");
-                        let sql_ep = "SELECT * FROM episode WHERE embedding IS NONE;";
-                        match backend_startup.db.query(sql_ep).await {
-                            Ok(mut response) => {
-                                if let Ok(episodes) = response.take::<Vec<Episode>>(0)
-                                    && !episodes.is_empty() {
-                                        tracing::info!("Found {} episodes with missing embeddings. Regenerating...", episodes.len());
-                                        for ep in episodes {
-                                            if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
-                                                let text_to_embed = format!("{}: {}", ep.title, ep.content);
-                                                if let Ok(vec) = embedder.embed(&text_to_embed)
-                                                    && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                        let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                        let _ = backend_startup.db.query(update_sql)
-                                                            .bind(("id", thing))
-                                                            .bind(("embedding", vec))
-                                                            .await;
-                                                    }
-                                            }
+                        let sql_ep = "SELECT * FROM episode WHERE embedding IS NONE LIMIT 50;";
+                        loop {
+                            match backend_startup.db.query(sql_ep).await {
+                                Ok(mut response) => {
+                                    let episodes: Vec<Episode> = response.take(0).unwrap_or_default();
+                                    if episodes.is_empty() {
+                                        break;
+                                    }
+                                    tracing::info!("Found {} episodes with missing embeddings batch. Regenerating...", episodes.len());
+                                    let mut updated_any = false;
+                                    for ep in episodes {
+                                        if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
+                                            let text_to_embed = format!("{}: {}", ep.title, ep.content);
+                                            if let Ok(vec) = embedder.embed(&text_to_embed)
+                                                && let Ok(thing) = crate::db::parse_record_id(id_str) {
+                                                    let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                    if let Ok(mut u_res) = backend_startup.db.query(update_sql)
+                                                        .bind(("id", thing))
+                                                        .bind(("embedding", vec))
+                                                        .await {
+                                                            if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                                                if !updated_rows.is_empty() {
+                                                                    updated_any = true;
+                                                                }
+                                                            }
+                                                        }
+                                                }
                                         }
                                     }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to query missing episode embeddings on startup: {:?}", e);
+                                    if !updated_any {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to query missing episode embeddings on startup: {:?}", e);
+                                    break;
+                                }
                             }
                         }
 
-                        let sql_wisdom = "SELECT * FROM wisdom WHERE embedding IS NONE OR embedding = [];";
-                        match backend_startup.db.query(sql_wisdom).await {
-                            Ok(mut response) => {
-                                if let Ok(rules) = response.take::<Vec<crate::contracts::WisdomRule>>(0)
-                                    && !rules.is_empty() {
-                                        tracing::info!("Found {} wisdom rules with missing embeddings. Regenerating...", rules.len());
-                                        for r in rules {
-                                            if let (Some(id_str), Some(embedder)) = (&r.id, &backend_startup.embedder) {
-                                                let text_to_embed = format!("{}: {}", r.target_pattern, r.prescribed_remedy);
-                                                if let Ok(vec) = embedder.embed(&text_to_embed)
-                                                    && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                        let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                        let _ = backend_startup.db.query(update_sql)
-                                                            .bind(("id", thing))
-                                                            .bind(("embedding", vec))
-                                                            .await;
-                                                    }
-                                            }
+                        let sql_wisdom = "SELECT * FROM wisdom WHERE embedding IS NONE OR embedding = [] LIMIT 50;";
+                        loop {
+                            match backend_startup.db.query(sql_wisdom).await {
+                                Ok(mut response) => {
+                                    let rules: Vec<crate::contracts::WisdomRule> = response.take(0).unwrap_or_default();
+                                    if rules.is_empty() {
+                                        break;
+                                    }
+                                    tracing::info!("Found {} wisdom rules with missing embeddings batch. Regenerating...", rules.len());
+                                    let mut updated_any = false;
+                                    for r in rules {
+                                        if let (Some(id_str), Some(embedder)) = (&r.id, &backend_startup.embedder) {
+                                            let text_to_embed = format!("{}: {}", r.target_pattern, r.prescribed_remedy);
+                                            if let Ok(vec) = embedder.embed(&text_to_embed)
+                                                && let Ok(thing) = crate::db::parse_record_id(id_str) {
+                                                    let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                    if let Ok(mut u_res) = backend_startup.db.query(update_sql)
+                                                        .bind(("id", thing))
+                                                        .bind(("embedding", vec))
+                                                        .await {
+                                                            if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                                                if !updated_rows.is_empty() {
+                                                                    updated_any = true;
+                                                                }
+                                                            }
+                                                        }
+                                                }
                                         }
                                     }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to query missing wisdom embeddings on startup: {:?}", e);
+                                    if !updated_any {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to query missing wisdom embeddings on startup: {:?}", e);
+                                    break;
+                                }
                             }
                         }
 
-                        let sql_wiki = "SELECT * FROM wiki_node WHERE embedding IS NONE OR embedding = [];";
-                        match backend_startup.db.query(sql_wiki).await {
-                            Ok(mut response) => {
-                                if let Ok(wiki_nodes) = response.take::<Vec<crate::contracts::WikiNode>>(0)
-                                    && !wiki_nodes.is_empty() {
-                                        tracing::info!("Found {} wiki nodes with missing embeddings. Regenerating...", wiki_nodes.len());
-                                        for node in wiki_nodes {
-                                            if let (Some(id_str), Some(embedder)) = (&node.id, &backend_startup.embedder) {
-                                                let text_to_embed = format!("{}: {}", node.name, node.content);
-                                                if let Ok(vec) = embedder.embed(&text_to_embed)
-                                                    && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                        let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                        let _ = backend_startup.db.query(update_sql)
-                                                            .bind(("id", thing))
-                                                            .bind(("embedding", vec))
-                                                            .await;
-                                                    }
-                                            }
+                        let sql_wiki = "SELECT * FROM wiki_node WHERE embedding IS NONE OR embedding = [] LIMIT 50;";
+                        loop {
+                            match backend_startup.db.query(sql_wiki).await {
+                                Ok(mut response) => {
+                                    let wiki_nodes: Vec<crate::contracts::WikiNode> = response.take(0).unwrap_or_default();
+                                    if wiki_nodes.is_empty() {
+                                        break;
+                                    }
+                                    tracing::info!("Found {} wiki nodes with missing embeddings batch. Regenerating...", wiki_nodes.len());
+                                    let mut updated_any = false;
+                                    for node in wiki_nodes {
+                                        if let (Some(id_str), Some(embedder)) = (&node.id, &backend_startup.embedder) {
+                                            let text_to_embed = format!("{}: {}", node.name, node.content);
+                                            if let Ok(vec) = embedder.embed(&text_to_embed)
+                                                && let Ok(thing) = crate::db::parse_record_id(id_str) {
+                                                    let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                    if let Ok(mut u_res) = backend_startup.db.query(update_sql)
+                                                        .bind(("id", thing))
+                                                        .bind(("embedding", vec))
+                                                        .await {
+                                                            if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                                                if !updated_rows.is_empty() {
+                                                                    updated_any = true;
+                                                                }
+                                                            }
+                                                        }
+                                                }
                                         }
                                     }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to query missing wiki node embeddings on startup: {:?}", e);
+                                    if !updated_any {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to query missing wiki node embeddings on startup: {:?}", e);
+                                    break;
+                                }
                             }
                         }
                         tracing::info!("Finished regenerating missing embeddings.");

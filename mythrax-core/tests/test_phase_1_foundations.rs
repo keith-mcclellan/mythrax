@@ -186,13 +186,18 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
         ))
         .await?;
     let results = resp.results;
+    println!("SEARCH RESULTS COUNT: {}", results.len());
+    for r in &results {
+        println!("RESULT ID: {}, TITLE: {}, REL_NODES: {:?}", r.id, r.title, r.related_nodes);
+    }
     assert!(!results.is_empty());
 
     let match_ep2 = results
         .iter()
         .find(|r| r.id == ep2_id)
         .expect("Should find Step 2 in search results");
-    assert!(match_ep2.related_nodes.is_some());
+    println!("MATCH EP2: {:#?}", match_ep2);
+    assert!(match_ep2.related_nodes.is_some(), "Match EP2 has no related nodes");
     let related = match_ep2.related_nodes.as_ref().unwrap();
 
     let related_ids: Vec<String> = related.iter().map(|r| r.id.clone()).collect();

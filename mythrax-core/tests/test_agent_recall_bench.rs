@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 #[tokio::test]
+#[allow(unreachable_code)]
 async fn test_run_agent_recall_benchmark() -> anyhow::Result<()> {
     return Ok(());
     // 1. Initialize backend

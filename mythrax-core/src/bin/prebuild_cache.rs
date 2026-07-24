@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use anyhow::{Context, Result};
 use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::embeddings::{

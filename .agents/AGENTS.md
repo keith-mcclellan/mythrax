@@ -34,3 +34,9 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
   - **Use definite, specific, concrete language**: Avoid vague generalizations.
   - **Keep paragraphs focused**: Stick to one topic per paragraph.
 
+## Code Quality & Verification Directives
+- **Exhaustive Result & Error Inspection**: Never discard return values (`let _ = ...`) or assume `is_ok()` / `check().is_ok()` implies complete mutation success. Every database query, network call, or IO operation must explicitly inspect the returned payload or row count (`take::<Vec<_>>(0)` non-emptiness), log unexpected conditions, and enforce clean loop exit paths.
+- **Claim Integrity & Empirical Verification**: Agents are strictly forbidden from claiming a bug is fixed or a feature is implemented without empirical proof. Before reporting work complete, the agent must verify the diff in source code and execute tests/builds.
+- **Full Contract & Cascade Auditing**: Never make isolated "single-line patches" without auditing downstream effects. When altering a trait method, data contract, or internal struct, the agent must inspect and update *all* callsites, enum variants, and dependent loops across the codebase.
+- **Adversarial & Failure-State Verification**: Implementation is incomplete if it only passes happy-path tests. Code must explicitly handle and verify boundary/failure states: zero rows returned, empty inputs, network timeouts, truncation caps, and invalid identifiers.
+
