@@ -22,39 +22,39 @@ Update project documentation to reflect the new design before writing any code. 
 
 Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency chain.
 
-- [ ] Task: Add `.eval()` to KV cache concatenation in `Qwen2Attention::forward`
-  - [ ] Write test: Verify KV cache tensors are evaluated after concatenation (mock MLX arrays)
-  - [ ] Add `k.eval()?` and `v.eval()?` after `concatenate_axis_device` calls in `llm/qwen2_mlx.rs` L182-183
-  - [ ] Run tests and confirm pass
+- [x] Task: Add `.eval()` to KV cache concatenation in `Qwen2Attention::forward`
+  - [x] Write test: Verify KV cache tensors are evaluated after concatenation (mock MLX arrays)
+  - [x] Add `k.eval()?` and `v.eval()?` after `concatenate_axis_device` calls in `llm/qwen2_mlx.rs` L182-183
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Add `.eval()` to weight dtype casts in `load_model_weights`
-  - [ ] Write test: Verify weight HashMap contains evaluated (non-lazy) arrays after loading
-  - [ ] Add `cast_v.eval().unwrap()` after `as_dtype` in `llm/mlx_weights.rs` at both shard path (L224) and single-file path (L239)
-  - [ ] Run tests and confirm pass
+- [x] Task: Add `.eval()` to weight dtype casts in `load_model_weights`
+  - [x] Write test: Verify weight HashMap contains evaluated (non-lazy) arrays after loading
+  - [x] Add `cast_v.eval().unwrap()` after `as_dtype` in `llm/mlx_weights.rs` at both shard path (L224) and single-file path (L239)
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Add joint eval to mxbai cross-encoder logit access
-  - [ ] Write test: Verify cross-encoder score function evaluates logits jointly (single forward pass)
-  - [ ] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L446-449
-  - [ ] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L492-493
-  - [ ] Run tests and confirm pass
+- [x] Task: Add joint eval to mxbai cross-encoder logit access
+  - [x] Write test: Verify cross-encoder score function evaluates logits jointly (single forward pass)
+  - [x] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L446-449
+  - [x] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L492-493
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Implement SQLite flush path and FIFO eviction for embedding cache
-  - [ ] Write test: Verify `flush_dirty` with SQLite path correctly persists and retrieves dirty entries without loading entire cache
-  - [ ] Write test: Verify cache capacity is enforced during flush via FIFO eviction (oldest entries by `created_at` are deleted first)
-  - [ ] Remove binary `flush_dirty` **write/flush** code path (embeddings.rs L303-375). **Retain** the legacy binary deserialization structs and read logic solely for the one-time migration
-  - [ ] Update `flush_dirty_default()` to always use SQLite path
-  - [ ] Add `created_at` timestamp column to the SQLite embedding cache schema, populated on insert
-  - [ ] Implement FIFO eviction in the SQLite flush path: enforce max cache capacity by deleting oldest entries (by `created_at`) before writing new ones. FIFO is chosen over LRU because write-on-read to update `last_accessed` is too expensive for the embedding cache hot path
-  - [ ] Run tests and confirm pass
+- [x] Task: Implement SQLite flush path and FIFO eviction for embedding cache
+  - [x] Write test: Verify `flush_dirty` with SQLite path correctly persists and retrieves dirty entries without loading entire cache
+  - [x] Write test: Verify cache capacity is enforced during flush via FIFO eviction (oldest entries by `created_at` are deleted first)
+  - [x] Remove binary `flush_dirty` **write/flush** code path (embeddings.rs L303-375). **Retain** the legacy binary deserialization structs and read logic solely for the one-time migration
+  - [x] Update `flush_dirty_default()` to always use SQLite path
+  - [x] Add `created_at` timestamp column to the SQLite embedding cache schema, populated on insert
+  - [x] Implement FIFO eviction in the SQLite flush path: enforce max cache capacity by deleting oldest entries (by `created_at`) before writing new ones. FIFO is chosen over LRU because write-on-read to update `last_accessed` is too expensive for the embedding cache hot path
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Implement one-time binary-to-SQLite embedding cache migration
-  - [ ] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
-  - [ ] Write test: Verify migration safely skips deserialization if `embedding_cache.bin` exceeds 1GB size threshold
-  - [ ] Add migration: on first run, detect `embedding_cache.bin`. If file size exceeds 1GB, log a warning, archive/delete the binary file, and start with a fresh SQLite cache (do NOT attempt to deserialize — it will OOM). Otherwise, deserialize using retained legacy structs, write entries to SQLite in bounded transactional batches (1,000–5,000 records per transaction to prevent memory and journal spikes), then rename/delete the binary file
-  - [ ] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
-  - [ ] Run tests and confirm pass
+- [x] Task: Implement one-time binary-to-SQLite embedding cache migration
+  - [x] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
+  - [x] Write test: Verify migration safely skips deserialization if `embedding_cache.bin` exceeds 1GB size threshold
+  - [x] Add migration: on first run, detect `embedding_cache.bin`. If file size exceeds 1GB, log a warning, archive/delete the binary file, and start with a fresh SQLite cache (do NOT attempt to deserialize — it will OOM). Otherwise, deserialize using retained legacy structs, write entries to SQLite in bounded transactional batches (1,000–5,000 records per transaction to prevent memory and journal spikes), then rename/delete the binary file
+  - [x] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 2: Search Pipeline Memory Safety (FR-2)
 
