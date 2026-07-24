@@ -111,7 +111,7 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
 - [ ] Task: Backfill `content_hash` for existing episodes and wisdom rules
   - [ ] Write test: Verify backfill computes correct SHA-256 hash for a known set of existing records
   - [ ] Write test: Verify backfill is idempotent (running twice does not corrupt hashes)
-  - [ ] Implement `backfill_content_hashes()` function that paginates through all existing episodes and wisdom rules, computes SHA-256, and updates each record
+  - [ ] Implement `backfill_content_hashes()` function that uses `LIMIT 50` loops **without** `OFFSET` (query `WHERE content_hash IS NONE LIMIT 50`, hash batch, repeat until 0 results)
   - [ ] Wire backfill into daemon startup: run once if records with null `content_hash` exist, log progress
   - [ ] Run tests and confirm pass
 
@@ -140,8 +140,8 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Paginate startup missing-embedding backfill
-  - [ ] Write test: Verify startup backfill processes records in bounded batches
-  - [ ] Refactor daemon.rs L126, L152, L178 to use `LIMIT`/`OFFSET` loops
+  - [ ] Write test: Verify startup backfill processes records in bounded batches without skipping any records
+  - [ ] Refactor daemon.rs L126, L152, L178 to use `LIMIT 50` loops **without** `OFFSET` (query `WHERE embedding IS NONE LIMIT 50`, process batch, repeat until 0 results — OFFSET would skip records as they're updated)
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
@@ -182,10 +182,10 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
   - [ ] Add `save_cluster_assignment`, `get_cluster_members(run_id, cluster_id)`, and `delete_pipeline_run(run_id)` to CRUD layer
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Stream unprocessed episode chunks to vault during ingestion
+- [ ] Task: Stream unprocessed episode chunks to vault with bounded batch inserts
   - [ ] Write test: Verify episode chunks are written to `vault/episodes/*.md` incrementally during ingestion, not accumulated in `Vec<Episode>` across the full batch
   - [ ] Write test: Verify ingestion of 1000+ episodes does not exceed bounded memory (≤50 episodes in memory at any time)
-  - [ ] Refactor `vault/ingestion.rs` bulk ingestion loop: write each episode chunk to vault md file immediately after parsing, then save to DB, then drop before processing next chunk
+  - [ ] Refactor `vault/ingestion.rs` bulk ingestion loop: accumulate parsed chunks into a bounded buffer (max 50), write each chunk to vault md file, flush the buffer via `save_episodes_batch`, clear buffer, repeat until all chunks processed
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Stream episode summaries to vault during dreaming
@@ -280,9 +280,11 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [ ] Update all callers to use the renamed functions
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Replace blocking sleeps in daemon.rs
+- [ ] Task: Replace blocking sleeps in daemon.rs and executor.rs
   - [ ] Write test: Verify daemon startup/retry loops use async sleep
+  - [ ] Write test: Verify `run_git_command_with_retry` does not block the tokio runtime
   - [ ] Replace `std::thread::sleep` at daemon.rs L631 and L638 with `tokio::time::sleep`
+  - [ ] Refactor `executor.rs` L40 `run_git_command_with_retry`: convert to async using `tokio::process::Command` and `tokio::time::sleep`, or wrap with `tokio::task::block_in_place` if async conversion is structurally blocked
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Add CancellationToken to all daemon background tasks
@@ -331,11 +333,6 @@ Address remaining medium-severity memory scaling issues.
 - [ ] Task: Add payload size limits to API batch endpoint
   - [ ] Write test: Verify `save_episodes_batch_handler` rejects payloads exceeding limit
   - [ ] Add size check to api.rs L120
-  - [ ] Run tests and confirm pass
-
-- [ ] Task: Switch vault bulk ingestion to batch inserts
-  - [ ] Write test: Verify `bulk_ingest_vault` uses `save_episodes_batch` for chunk inserts
-  - [ ] Refactor `vault/ingestion.rs` L1021 to accumulate chunks and use `save_episodes_batch`
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Fix VRAM tracking state desync
