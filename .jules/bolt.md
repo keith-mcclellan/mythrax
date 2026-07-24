@@ -1,0 +1,3 @@
+## 2024-11-26 - Hoist Vector Norm Computations Outside Inner Loops
+**Learning:** Recalculating constants like `norm_u` and `norm_v` inside inner execution loops for high-dimensional arrays (like 1536d embeddings) causes severe O(N^2) latency bottlenecks.
+**Action:** Always pre-calculate and cache vector norms on the embedding struct (e.g. `GradCandidate`) before entering O(N^2) similarity loops to reduce complexity to O(N).
