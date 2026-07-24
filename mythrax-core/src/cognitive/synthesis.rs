@@ -628,12 +628,12 @@ impl DreamCoordinator {
                             let d = cosine_distance(&sample[i], &sample[j]);
                             dists.push(d);
                         }
-                        dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                        dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         if dists.len() > 4 {
                             k_distances.push(dists[4]);
                         }
                     }
-                    k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    k_distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                     find_elbow_point(&k_distances)
                 } else {
                     let user_override_val = match db.get_profile_key("embeddings.default_epsilon").await {
