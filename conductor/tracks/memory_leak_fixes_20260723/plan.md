@@ -38,12 +38,13 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
   - [ ] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L492-493
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Implement SQLite flush path and LRU eviction for embedding cache
+- [ ] Task: Implement SQLite flush path and FIFO eviction for embedding cache
   - [ ] Write test: Verify `flush_dirty` with SQLite path correctly persists and retrieves dirty entries without loading entire cache
-  - [ ] Write test: Verify cache capacity is enforced during flush via LRU eviction
+  - [ ] Write test: Verify cache capacity is enforced during flush via FIFO eviction (oldest entries by `created_at` are deleted first)
   - [ ] Remove binary `flush_dirty` **write/flush** code path (embeddings.rs L303-375). **Retain** the legacy binary deserialization structs and read logic solely for the one-time migration
   - [ ] Update `flush_dirty_default()` to always use SQLite path
-  - [ ] Implement LRU eviction in the SQLite flush path: enforce max cache capacity by deleting least-recently-used entries before writing new ones
+  - [ ] Add `created_at` timestamp column to the SQLite embedding cache schema, populated on insert
+  - [ ] Implement FIFO eviction in the SQLite flush path: enforce max cache capacity by deleting oldest entries (by `created_at`) before writing new ones. FIFO is chosen over LRU because write-on-read to update `last_accessed` is too expensive for the embedding cache hot path
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Implement one-time binary-to-SQLite embedding cache migration
@@ -70,7 +71,7 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
 
 - [ ] Task: Create `idf_index` table and initialization logic
   - [ ] Write test: Verify `idf_index` table is created during daemon startup INIT_SCHEMA step
-  - [ ] Add `idf_index` table definition (term: String, document_frequency: i64, total_docs: i64, scope: String) to `src/db/surreal_init.rs` INIT_SCHEMA
+  - [ ] Add `idf_index` table definition (term: String, document_frequency: i64, scope: String) to `src/db/surreal_init.rs` INIT_SCHEMA. **Do NOT store `total_docs` per row** — total document count must be queried dynamically via `SELECT count() FROM episode WHERE scope = $scope` or maintained in a separate single-row `scope_metadata` table to avoid O(N) updates on every episode insert/delete
   - [ ] Add `DEFINE INDEX idx_idf_term ON idf_index FIELDS term, scope UNIQUE` to INIT_SCHEMA for efficient term lookups
   - [ ] Run tests and confirm pass
 
@@ -84,7 +85,7 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
 - [ ] Task: Backfill IDF index for existing episodes
   - [ ] Write test: Verify backfill migration computes correct term frequencies for a known set of existing episodes
   - [ ] Write test: Verify backfill is idempotent (running twice produces identical IDF counts)
-  - [ ] Implement `backfill_idf_index()` function that paginates through all existing episodes, tokenizes content, and populates `idf_index` table
+  - [ ] Implement `backfill_idf_index()` function that processes existing episodes in bounded chunks (paginate episodes, tokenize chunk, update IDF counts in DB, **drop chunk from memory**, fetch next) without accumulating all episodes into memory
   - [ ] Wire backfill into daemon startup: run once if `idf_index` table is empty, log progress
   - [ ] Run tests and confirm pass
 
@@ -250,7 +251,8 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 
 - [ ] Task: Cap synthesis cluster prompt concatenation
   - [ ] Write test: Verify `insights_with_scope_labels` string is truncated at 32K token budget
-  - [ ] Add token-budget truncation to synthesis.rs L2204-2210
+  - [ ] Write test: Verify prompt building stops fetching additional cluster members from DB once 32K token budget is reached (no post-hoc truncation of an unbounded string)
+  - [ ] Refactor synthesis.rs L2204-2210: when incrementally building the prompt, stop paginating and fetching cluster members from the database as soon as the 32K token budget is reached, preventing unbounded memory accumulation
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
