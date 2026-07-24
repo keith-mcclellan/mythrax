@@ -50,7 +50,7 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
 - [ ] Task: Implement one-time binary-to-SQLite embedding cache migration
   - [ ] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
   - [ ] Write test: Verify migration safely skips deserialization if `embedding_cache.bin` exceeds 1GB size threshold
-  - [ ] Add migration: on first run, detect `embedding_cache.bin`. If file size exceeds 1GB, log a warning, archive/delete the binary file, and start with a fresh SQLite cache (do NOT attempt to deserialize — it will OOM). Otherwise, deserialize using retained legacy structs, write all entries to SQLite, then rename/delete the binary file
+  - [ ] Add migration: on first run, detect `embedding_cache.bin`. If file size exceeds 1GB, log a warning, archive/delete the binary file, and start with a fresh SQLite cache (do NOT attempt to deserialize — it will OOM). Otherwise, deserialize using retained legacy structs, write entries to SQLite in bounded transactional batches (1,000–5,000 records per transaction to prevent memory and journal spikes), then rename/delete the binary file
   - [ ] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
   - [ ] Run tests and confirm pass
 
@@ -205,7 +205,7 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
   - [ ] Write test: Verify `pipeline_cluster` records are deleted after successful synthesis completion
   - [ ] Refactor `synthesis.rs` DBSCAN flow (L1256-1258): write cluster assignments to `pipeline_cluster` table, then query members per-cluster during insight synthesis
   - [ ] Refactor `compactor.rs` hierarchical DBSCAN (L848-856): write cluster assignments to `pipeline_cluster` table, process clusters sequentially by querying from DB
-  - [ ] Call `delete_pipeline_run(run_id)` at the conclusion of both the synthesis and compaction pipelines to clean up the temporary table
+  - [ ] Call `delete_pipeline_run(run_id)` at the conclusion of both the synthesis and compaction pipelines to clean up the temporary table. **Cleanup must be guaranteed even on error paths** — use a RAII scope guard (e.g., `scopeguard::defer!` or a custom `Drop` impl on the run context) so that `delete_pipeline_run` executes on early returns, `Err(?)`, and panics
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Stream insight synthesis to vault incrementally
