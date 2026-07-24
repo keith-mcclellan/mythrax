@@ -38,13 +38,16 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
   - [ ] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L492-493
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Migrate embedding cache from binary to SQLite-only
+- [ ] Task: Implement SQLite flush path and LRU eviction for embedding cache
   - [ ] Write test: Verify `flush_dirty` with SQLite path correctly persists and retrieves dirty entries without loading entire cache
   - [ ] Write test: Verify cache capacity is enforced during flush via LRU eviction
-  - [ ] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
   - [ ] Remove binary `flush_dirty` **write/flush** code path (embeddings.rs L303-375). **Retain** the legacy binary deserialization structs and read logic solely for the one-time migration
   - [ ] Update `flush_dirty_default()` to always use SQLite path
   - [ ] Implement LRU eviction in the SQLite flush path: enforce max cache capacity by deleting least-recently-used entries before writing new ones
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Implement one-time binary-to-SQLite embedding cache migration
+  - [ ] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
   - [ ] Add migration: on first run, detect `embedding_cache.bin`, deserialize using retained legacy structs, write all entries to SQLite, then rename/delete the binary file
   - [ ] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
   - [ ] Run tests and confirm pass
@@ -116,25 +119,30 @@ Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline 
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_episodes()` callers — HTTP handlers (2 files)
+  - [ ] Write test: Verify `vault_handlers` correctly accumulates or streams all paginated results without truncation
   - [ ] Refactor `vault_handlers.rs` L41, L72
   - [ ] Refactor `manage_handlers.rs` L338, L1214
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_episodes()` callers — internal pipelines (2 files)
+  - [ ] Write test: Verify `blackboard` and `ingestion` correctly accumulate all paginated results without truncation
   - [ ] Refactor `vault/ingestion.rs` L606
   - [ ] Refactor `blackboard.rs` L189
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate standalone `get_all_wiki_nodes()` callers (2 files)
+  - [ ] Write test: Verify `harvest` and `meta_skill` correctly accumulate all paginated wiki nodes without truncation
   - [ ] Refactor `harvest.rs` L297
   - [ ] Refactor `meta_skill.rs` L127
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate standalone `get_all_wisdom_rules()` callers (1 file)
+  - [ ] Write test: Verify `harvest` correctly accumulates all paginated wisdom rules without truncation
   - [ ] Refactor `harvest.rs` L342
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate `get_all_registered_transcripts()` and `get_all_episodes()` in meta_skill (2 files)
+  - [ ] Write test: Verify transcript and episode pagination loops complete without truncation
   - [ ] Refactor `synthesis.rs` L781 (standalone transcript query, not cognitive pipeline rewrite)
   - [ ] Refactor `meta_skill.rs` L126
   - [ ] Run tests and confirm pass
@@ -163,12 +171,22 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 | Pruned/archived nodes | Vault `archive/` | Human-readable audit trail |
 | Compaction summaries | Vault md (`wiki/<scope>/compactions/*.md`) | Human-readable, version-controlled |
 
-- [ ] Task: Migrate cognitive pipeline `get_all_*` callers to paginated queries (deferred from Phase 3)
+- [ ] Task: Migrate cognitive pipeline `get_all_episodes` callers to paginated queries (deferred from Phase 3)
+  - [ ] Write test: Verify `compactor` and `synthesis` episode pagination loops complete without truncation
   - [ ] Refactor `compactor.rs` L252, L1211 (`get_all_episodes`)
   - [ ] Refactor `synthesis.rs` L891, L917, L2987 (`get_all_episodes`)
-  - [ ] Refactor `synthesis.rs` L504, L1949, L2440, L3199 (`get_all_wiki_nodes`)
-  - [ ] Refactor `synthesis.rs` L2440, `compactor.rs` L180, `synthesis.rs` L1967 (`get_episodes_by_node_type`)
   - [ ] Refactor `precompact.rs` L127 (`get_all_episodes`)
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate cognitive pipeline `get_all_wiki_nodes` callers to paginated queries (deferred from Phase 3)
+  - [ ] Write test: Verify `synthesis` wiki node pagination loops complete without truncation
+  - [ ] Refactor `synthesis.rs` L504, L1949, L2440, L3199 (`get_all_wiki_nodes`)
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate cognitive pipeline `get_episodes_by_node_type` callers to paginated queries (deferred from Phase 3)
+  - [ ] Write test: Verify `compactor` and `synthesis` node-type pagination loops complete without truncation
+  - [ ] Refactor `compactor.rs` L180 (`get_episodes_by_node_type`)
+  - [ ] Refactor `synthesis.rs` L1967 (`get_episodes_by_node_type`)
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Migrate cognitive pipeline deduplication to hash-based lookups (deferred from Phase 3)
@@ -268,14 +286,18 @@ Now safe to unlock concurrency — all memory bombs are fixed.
     - `llm/mxbai_mlx.rs` L405
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Add new async embed functions (strangler pattern) and migrate all callers
+- [ ] Task: Add async embed function variants (strangler pattern)
   - [ ] Add `embed_async()`, `embed_batch_async()`, `embed_sub_batch_async()` as new async functions alongside the existing synchronous versions
-  - [ ] Migrate all category (a) callers (async context) to call the new `*_async()` functions
-  - [ ] For category (b) callers (sync context called from within tokio runtime): bubble `async` up the call stack to the nearest async context. If bubbling is structurally impossible (e.g., restricted by external sync trait), use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** use bare `block_on()` which panics inside a tokio runtime
-  - [ ] Update any trait signatures identified in category (c) if needed, or add async trait variants
+  - [ ] Add async trait variants if needed for category (c) callers
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Remove deprecated synchronous embed functions
+- [ ] Task: Migrate async-context embed callers to new async variants
+  - [ ] Migrate all category (a) callers (async context) to call the new `*_async()` functions
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate sync-context embed callers and remove deprecated sync functions
+  - [ ] For category (b) callers (sync context called from within tokio runtime): bubble `async` up the call stack to the nearest async context. If bubbling is structurally impossible (e.g., restricted by external sync trait), use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** use bare `block_on()` which panics inside a tokio runtime
+  - [ ] Update any remaining trait signatures identified in category (c)
   - [ ] Delete the old synchronous `embed()`, `embed_batch()`, `embed_sub_batch()` functions
   - [ ] Rename `*_async()` functions to `embed()`, `embed_batch()`, `embed_sub_batch()` (drop the `_async` suffix)
   - [ ] Update all callers to use the renamed functions
@@ -302,14 +324,18 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [ ] Document the categorized caller list in a scratch note before proceeding
   - [ ] Run tests and confirm pass (no code changes, audit only)
 
-- [ ] Task: Add async inference functions (strangler pattern) and migrate all callers
+- [ ] Task: Add async inference function variants (strangler pattern)
   - [ ] Add async variants of blocking inference/generation functions alongside existing synchronous versions
-  - [ ] Migrate all category (a) callers (async context) to the new async variants
-  - [ ] For category (b) callers: bubble `async` up the call stack. If structurally impossible, use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** bare `block_on()`
-  - [ ] Update any trait signatures identified in category (c) if needed
+  - [ ] Add async trait variants if needed for category (c) callers
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Remove deprecated synchronous inference functions
+- [ ] Task: Migrate async-context inference callers to new async variants
+  - [ ] Migrate all category (a) callers (async context) to the new async variants
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate sync-context inference callers and remove deprecated sync functions
+  - [ ] For category (b) callers: bubble `async` up the call stack. If structurally impossible, use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** bare `block_on()`
+  - [ ] Update any remaining trait signatures identified in category (c)
   - [ ] Delete the old synchronous inference/generation functions
   - [ ] Rename async variants to drop `_async` suffix
   - [ ] Update all callers to use the renamed functions
