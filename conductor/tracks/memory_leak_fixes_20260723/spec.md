@@ -29,14 +29,14 @@ Four independent failure modes converge during bulk ingestion:
 - All `get_all_*` query functions must support `LIMIT`/`OFFSET` pagination.
 - ALL callers (24+) must migrate from bulk loads to paginated or streaming iteration.
 - `get_episodes_by_node_type` must also be paginated.
-- Deduplication logic must use hash-based approaches instead of full table scans.
+- Deduplication logic must use hash-based approaches (SHA-256 `content_hash` field with DB index) instead of full table scans or paginated comparison loops.
 
 ### FR-4: Streaming-to-Disk Cognitive Pipeline (High)
 Each stage of the memory pipeline MUST write its output to vault markdown files as produced, then release the in-memory data before proceeding to the next stage. Specific stages:
 
 - **Episodes:** Unprocessed episode chunks must be written to `vault/episodes/*.md` as they're ingested, not accumulated in `Vec<Episode>` across the full batch.
 - **Summaries:** Episode summaries produced by the LLM must be flushed to `wiki/<scope>/episodes/*.md` immediately after generation, not held for the full dreaming cycle.
-- **Clusters:** DBSCAN cluster assignments must be serialized to a temporary `wiki/<scope>/.clusters/<timestamp>.json` manifest, then individual cluster members read back from disk during synthesis rather than holding all cluster data in-memory.
+- **Clusters:** DBSCAN cluster assignments must be stored in a SurrealDB `pipeline_cluster` temporary table (not the filesystem), where they can be queried per-cluster during synthesis and bulk-deleted after the pipeline run completes. This avoids FS watcher re-ingestion, provides transaction safety, and eliminates filesystem I/O overhead.
 - **Insights:** Synthesized insight notes must be written to `wiki/<scope>/insights/*.md` immediately and dropped from memory before processing the next cluster.
 - **Directions:** Direction promotion results must be written to `wiki/<scope>/directions/*.md` immediately and dropped before evaluating the next candidate.
 - **Wisdom:** Graduated wisdom rules must be written to `wisdom/*.md` immediately after cross-scope matching, not accumulated in graduation candidate Vecs.
