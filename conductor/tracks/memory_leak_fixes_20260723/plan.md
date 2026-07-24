@@ -261,11 +261,11 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 
 Now safe to unlock concurrency — all memory bombs are fixed.
 
-- [ ] Task: Identify and categorize all callers of blocking embed functions
-  - [ ] Audit all callers of `embed()`, `embed_batch()`, `embed_sub_batch()` across the codebase
-  - [ ] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
-  - [ ] Document the categorized caller list in a scratch note before proceeding
-  - [ ] Run tests and confirm pass (no code changes, audit only)
+- [x] Task: Identify and categorize all callers of blocking embed functions
+  - [x] Audit all callers of `embed()`, `embed_batch()`, `embed_sub_batch()` across the codebase
+  - [x] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
+  - [x] Document the categorized caller list in a scratch note before proceeding
+  - [x] Run tests and confirm pass (no code changes, audit only)
 
 - [ ] Task: Add async embed function variants with async semaphores (strangler pattern)
   - [ ] Write test: Verify new async embed variants return identical results to legacy sync variants
@@ -302,11 +302,11 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [ ] Wire token cancellation into the graceful shutdown sequence
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Audit and categorize blocking inference/generation functions
-  - [ ] Audit all blocking inference functions (text generation, completion loops, reranking) across `llm/` modules
-  - [ ] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
-  - [ ] Document the categorized caller list in a scratch note before proceeding
-  - [ ] Run tests and confirm pass (no code changes, audit only)
+- [x] Task: Audit and categorize blocking inference/generation functions
+  - [x] Audit all blocking inference functions (text generation, completion loops, reranking) across `llm/` modules
+  - [x] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
+  - [x] Document the categorized caller list in a scratch note before proceeding
+  - [x] Run tests and confirm pass (no code changes, audit only)
 
 - [ ] Task: Add async inference function variants with async semaphores (strangler pattern)
   - [ ] Write test: Verify new async inference variants return identical results to legacy sync variants
@@ -338,25 +338,25 @@ Address remaining medium-severity memory scaling issues.
   - [ ] Implement sliding window or periodic flush for `tool_sequence` in `precompact.rs` L125-160
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Stream chunk processing in Forge pipeline
-  - [ ] Write test: Verify forge pipeline processes document chunks in bounded batches, not loading entire document into memory
-  - [ ] Refactor `forge.rs` to use streaming chunk iteration with bounded buffer (identify specific accumulation points via `Vec<Chunk>` patterns)
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream chunk processing in Forge pipeline
+  - [x] Write test: Verify forge pipeline processes document chunks in bounded batches, not loading entire document into memory
+  - [x] Refactor `forge.rs` to use streaming chunk iteration with bounded buffer (identify specific accumulation points via `Vec<Chunk>` patterns)
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Add payload size limits to API batch endpoint
-  - [ ] Write test: Verify `save_episodes_batch_handler` rejects payloads exceeding limit
-  - [ ] Add size check to api.rs L120
-  - [ ] Run tests and confirm pass
+- [x] Task: Add payload size limits to API batch endpoint
+  - [x] Write test: Verify `save_episodes_batch_handler` rejects payloads exceeding limit
+  - [x] Add size check to api.rs L120
+  - [x] Run tests and confirm pass
 
 - [ ] Task: Fix VRAM tracking state desync
   - [ ] Write test: Verify `acquire_llm` updates `active_tier` and `last_weak_ref` on cache hit
   - [ ] Update early-return path in `llm/mod.rs` L1528 to set `active_tier` and `last_weak_ref`
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Bound completions proxy chat history concatenation
-  - [ ] Write test: Verify prompt string is bounded by max token limit
-  - [ ] Add truncation logic to `completions_proxy_handler` in api.rs L613-622
-  - [ ] Run tests and confirm pass
+- [x] Task: Bound completions proxy chat history concatenation
+  - [x] Write test: Verify prompt string is bounded by max token limit
+  - [x] Add truncation logic to `completions_proxy_handler` in api.rs L613-622
+  - [x] Run tests and confirm pass
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 

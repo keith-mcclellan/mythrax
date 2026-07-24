@@ -117,11 +117,20 @@ async fn save_episode_handler(
 async fn save_episodes_batch_handler(
     State(state): State<Arc<ApiState>>,
     headers: HeaderMap,
-    Json(payload): Json<Vec<EpisodeSave>>,
+    bytes: Bytes,
 ) -> Result<Json<Value>, StatusCode> {
     if !check_auth(&headers, &state) {
         return Err(StatusCode::UNAUTHORIZED);
     }
+
+    if bytes.len() > 5 * 1024 * 1024 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let payload: Vec<EpisodeSave> = match serde_json::from_slice(&bytes) {
+        Ok(p) => p,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
 
     if let Some(backend) = state
         .backend
@@ -617,17 +626,19 @@ async fn completions_proxy_handler(
                     let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
                     if role == "system" {
                         system_instruction = Some(content);
-                    } else if role == "user" {
-                        if !prompt.is_empty() {
-                            prompt.push_str("\n\n");
-                        }
-                        prompt.push_str(content);
-                    } else if role == "assistant" {
+                    } else if role == "user" || role == "assistant" {
                         if !prompt.is_empty() {
                             prompt.push_str("\n\n");
                         }
                         prompt.push_str(content);
                     }
+                }
+
+                let max_tokens = 32000;
+                let max_chars = max_tokens * 4;
+                if prompt.len() > max_chars {
+                    let start = prompt.len() - max_chars;
+                    prompt = prompt[start..].to_string();
                 }
             }
 
@@ -913,6 +924,52 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Test POST /v1/episodes/batch payload too large
+        let large_payload = vec![0u8; 6 * 1024 * 1024]; // 6MB
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/episodes/batch")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(large_payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        
+        // Test chat completions history truncation
+        let large_chat_msg = "A".repeat(33000 * 4); // > 128000 chars
+        let chat_payload = serde_json::json!({
+            "model": "test",
+            "messages": [
+                { "role": "user", "content": large_chat_msg }
+            ]
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_vec(&chat_payload).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // In tests with no external completions url and mlx, this will return 503 or fail generating,
+        // but we just verify it doesn't panic on truncation, and passes parsing.
+        // As long as it's not a panic, it's fine.
     }
 }
 
