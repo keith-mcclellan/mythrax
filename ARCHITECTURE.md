@@ -22,8 +22,8 @@ This document outlines the technical architecture, data flows, concurrency bound
                     v          v            v          v         v
              +----------+ +----------+ +--------+ +--------+ +-------+
              | Surreal  | |  Model   | |   FS   | |  Arbor | | Size  |
-             |   KV /   | |  Broker  | |  Watch  | |  HTR   | | Roll  |
-             | RocksDB  | | (MLX/ORT)| | (500ms)| |  Loops | | Logger|
+             |  KV /    | |  Broker  | |  Watch | |  HTR   | | Roll  |
+             |  SQLite  | | (MLX/ORT)| | (500ms)| |  Loops | | Logger|
              +----------+ +----------+ +--------+ +--------+ +-------+
 ```
 
@@ -42,81 +42,93 @@ Mythrax 3.0 consolidates all administrative, memory, Model Context Protocol (MCP
 
 ---
 
-## 2. Dual-Engine Storage & Persistent Lock Resiliency
+## 2. Storage Architecture & Persistent Storage Engine
 
-To guarantee database integrity and solve concurrent process contention, Mythrax 3.0 implements a robust dual-engine storage model and connection retry mechanism.
+To guarantee database integrity, high performance, and resolve memory bottlenecks under large context ingestion, Mythrax 3.0 implements a hybrid SurrealKV and SQLite persistent storage architecture:
 
-- **SurrealKV & RocksDB Engines**: Supports both `surrealkv://` and `rocksdb://` local storage prefixes, ensuring all agent memories, handoffs, and cognitive graphs are fully persisted to disk.
-- **Persistent Lock Retry Loop**: RocksDB and SurrealKV require exclusive file locks. In multi-process test runs or rapid daemon restarts, this often triggers lock contention errors. Mythrax 3.0 solves this by wrapping the database connection in a **retry loop with backoff** (up to 10 attempts, 500ms sleep) to wait for pending locks to release.
+- **SurrealKV Storage Engine**: Operates exclusively on `surrealkv://` local key-value engine for SurrealDB, ensuring all agent memories, wiki nodes, directions, handoffs, and cognitive graphs are safely persisted to disk without third-party native library dependencies.
+- **SQLite Embedding Cache**: Replaces legacy monolithic binary embedding cache serialization (`embedding_cache.bin`) with a lightweight SQLite persistent store (`embeddings.db`). Cache writes and flushes operate incrementally via transaction-bounded batches, backed by FIFO eviction on maximum capacity constraints (using `created_at` timestamps) to prevent startup OOM spikes.
+- **Incremental IDF Indexer (`idf_index` Table)**: Eliminates bulk-loading episode content into memory during search score calculations. Document term frequencies are tracked incrementally in the `idf_index` SurrealDB table (keyed by `term` and `scope`), while total document counts are computed dynamically via scope queries (`SELECT count() FROM episode WHERE scope = $scope`).
+- **Hash-Based Deduplication (`content_hash` Field)**: Episodes and wisdom rules store a SHA-256 hash of normalized content (`content_hash`) with indexed database lookup (`idx_content_hash`) to provide O(1) duplicate detection without in-memory string comparison sweeps.
+- **Ephemeral Pipeline DBSCAN State (`pipeline_cluster` Table)**: Ephemeral DBSCAN clustering assignments during cognitive synthesis are stored in SurrealDB temporary table `pipeline_cluster` (keyed by `run_id`, `cluster_id`, `episode_id`), guaranteeing transactional state safety without file-system watcher re-ingestion races.
+- **Persistent Lock Retry Loop**: File locks are protected during multi-process execution or daemon restarts via connection retries with exponential backoff (up to 10 attempts, 500ms sleep).
 - **Startup Bootstrapping & Transaction Initialization Sequence**:
   1. **Port/Daemon Detection**: CLI detects running daemon port. If inactive, spawns detached daemon process and polls readiness.
   2. **Exclusive File Locking**: Database initializes via `SurrealBackend::new`. Reconnection retry attempts handle transient locks.
-  3. **Schema Bootstrapping**: Runs schema definitions (`INIT_SCHEMA`) and inserts the default configuration `config:settings` (defaulting to `mlx-community/Qwen3.6-35B-A3B-4bit`).
+  3. **Schema Bootstrapping**: Runs schema definitions (`INIT_SCHEMA`), including `idf_index`, `pipeline_cluster`, `content_hash` indices, and purges orphaned `pipeline_cluster` records from prior aborted runs. Inserts default configuration `config:settings`.
   4. **Transaction-Aware Ingestion**: Leverages SurrealDB `BEGIN TRANSACTION` and `COMMIT TRANSACTION` boundaries for safe, atomic batch insertions.
   5. **Atomic File Operations**: Writes temporary candidate files to disk and renames them atomically to target destinations, preventing data corruption on abrupt termination.
-- **Startup Pruning**: On startup, the daemon automatically runs background pruning loops to sweep stale handoffs, orphaned context links, and transient session files, keeping the database footprint compact.
 
 ---
 
 ## 3. Three-Tiered Model Broker & VRAM Safeguards
 
-The cognitive and inference capabilities in Mythrax 3.0 are managed by a highly optimized, hardware-aware Model Broker.
+The cognitive and inference capabilities in Mythrax 3.0 are managed by a hardware-aware Model Broker enforcing strict evaluation and VRAM memory boundaries:
 
 - **Three-Tiered Engine**: Dynamic routing supports:
   1. **MLX (Local Apple Silicon)**: Exploits metal GPU acceleration for ultra-fast local inference and embeddings.
   2. **ORT (ONNX Runtime)**: Run-anywhere CPU/GPU ONNX model execution.
-  3. **Mock Mode**: Light, in-memory simulations for lightning-fast testing and offline compilation.
+  3. **Mock Mode**: Light, in-memory simulations for fast testing and offline compilation.
+- **MLX Lazy Graph Evaluation Invariants (`.eval()`)**:
+  - To prevent catastrophic Metal GPU unified memory leaks from unevaluated computational graphs, MLX array operations MUST be explicitly evaluated before holding references or extracting raw buffers:
+    - **KV Cache Concatenation**: Concatenated key/value arrays in attention blocks (`Qwen2Attention::forward`) must execute `.eval()?` immediately after concatenation.
+    - **Weight Dtype Casts**: Model weight arrays cast during loading (`as_dtype`) must execute `.eval().unwrap()` before being inserted into weight maps.
+    - **Cross-Encoder Logit Access**: Logit tensors in cross-encoders must execute joint evaluation (`mlx_rs::eval(&[&logit_0, &logit_1])?`) prior to calling `.as_slice()`.
 - **Hybrid In-Process vs External Routing**:
-  - **In-Process Engine**: Lightweight dense models (e.g., Nomics embeddings and the Qwen2.5-0.5B/1.5B/7B family) are loaded natively into the Rust process memory and run in-process using the Metal GPU backend.
-  - **External Model Delegation**: Large hybrid models (such as `mlx-community/Qwen3.6-35B-A3B-4bit`) bypass the in-process engine and route directly to the local `mlx-lm` HTTP completions server on port 8080 to prevent VRAM exhaustion and execute complex custom kernels.
-- **Split GPU Semaphores**: To prevent deadlocks under heavy parallel workloads (e.g., when a background dreaming compaction runs while an agent is actively querying memory), the broker separates the pipelines into independent semaphores:
+  - **In-Process Engine**: Lightweight dense models (e.g., Nomic embeddings and the Qwen2.5-0.5B/1.5B/7B family) load natively into process memory and run in-process using the Metal GPU backend.
+  - **External Model Delegation**: Large hybrid models (such as `mlx-community/Qwen3.6-35B-A3B-4bit`) route directly to local `mlx-lm` HTTP completions server on port 8080.
+- **Split GPU Semaphores**:
   - `METAL_INFERENCE_SEMAPHORE`: Coordinates model text generation.
   - `METAL_EMBEDDING_SEMAPHORE`: Coordinates vector embedding calculations.
-- **VRAM Eviction & Sequential Swapping**: To run large models on consumer-grade hardware without Out-Of-Memory (OOM) crashes, the broker executes a sequential eviction loop. Before loading a new model into VRAM, it evicts unused models, flushes caches, and waits for memory release.
+- **VRAM Eviction & Sequential Swapping**: Before loading a new model into VRAM, the broker evicts unused models, flushes caches, and waits for memory release.
 
 ---
 
-## 4. Cognitive Scheduling & Arbor HTR Loop
+## 4. Cognitive Scheduling & Streaming Pipeline Architecture
 
-Mythrax 3.0 introduces advanced scheduling loops and transaction logging to guarantee durability and consistency.
+Mythrax 3.0 decouples cognitive synthesis and memory compaction into a streaming-to-disk architecture backed by strict pagination:
 
-- **500ms File Watcher Coalescing**: The Obsidian vault watcher utilizes the `notify` crate to detect file edits. To prevent high-frequency write cascades and ingestion races, events are coalesced over a **500ms sliding window** before being committed to the database.
-- **Arbor HTR Parallel Verification Loop**: Candidate changes and code refinements are evaluated within isolated git worktrees using distinct `CARGO_TARGET_DIR` folders and ports, preventing database/test environment pollution.
-- **DBSCAN Epsilon-Calibrated Compaction**: During the daily "dreaming" cycle, the compactor runs DBSCAN clustering on episodic memories. Epsilon parameters are dynamically calibrated to group related memories, which are then summarized via hierarchical RAPTOR trees into permanent `wiki_node` structures.
-- **Pre-Compaction Hook & Verbatim Ingestion**: Before dreaming runs, the daemon executes a pre-compaction hook to ingest the active transcript of a session. The hook parses the session's JSONL transcripts line-by-line:
-  - Supports flat string schemas (`role` and `content` as text strings).
-  - Handles array-of-blocks schemas (e.g., `content` represented as an array of text/tool blocks) used by modern AI agent hosts like Claude Code and Gemini.
-  - Extracts the raw text and tool results verbatim, indexing them into SurrealDB as episodic memories without dropping any tool output details.
-- **Memory Co-existence & Retrieval Router (Flow 4)**:
-  - **Co-existence Safeguard**: When episodic memories are summarized into permanent `wiki_node` structures via compaction, the original verbatim episodes are preserved in the database rather than replaced, allowing both high-level semantic retrieval and raw verbatim lookups to co-exist.
-  - **Sigmoid Gating Formula**: Retrieval relevance scores are passed through a Sigmoid-gated filter to eliminate low-similarity matches:
-    $$g = \frac{1}{1 + e^{-20(\text{similarity} - 0.60)}}$$
-    This creates a soft step function centered at similarity `0.60` with a steepness of `-20.0`, clamping matches below `0.55` to near zero and boosting matches above `0.65`.
-  - **Verbatim Floor / Decayed Episode Demotion**: Episodic memories that have decayed below a utility threshold (`utility < 10.0`) are marked as `archived = true` instead of deleted. Archived episodes remain retrievable but are heavily demoted in search ranking by multiplying their blended similarity score by a factor of `0.4` (a 60% demotion), keeping them visible as a baseline verbatim floor without cluttering top results.
-- **Background Sweeps & Compaction Recovery (Flow 5)**:
-  - **Idle Session Sweep**: The compaction daemon periodically scans registered session transcripts. If a session remains idle for $>10$ minutes, the compactor compares the file's last modified timestamp against the session's `_last_swept_at` record in Short-Term Memory (STM).
-  - **Trailing Turn Ingestion**: If the transcript file contains un-ingested trailing turns, the compactor executes `mine_transcript` to parse and import them, then updates `_last_swept_at` to the current time.
-  - **Orphan Cleanup**: If a registered transcript file has been deleted or is missing, the compactor purges the registered path from the STM registry to prevent polling loop leaks.
+- **Streaming-to-Disk Cognitive Pipeline**:
+  - Human-readable cognitive artifacts (episodes, summaries, insights, directions, wisdom rules, compactions) are written incrementally to Obsidian Vault markdown files (`vault/episodes/*.md`, `wiki/<scope>/*.md`, `wisdom/*.md`) as they are generated. Intermediate objects are dropped immediately rather than held in memory buffers.
+  - Ephemeral machine state (DBSCAN clusters) is stored temporarily in SurrealDB `pipeline_cluster` tables and cleaned up upon pipeline conclusion.
+- **Bounded Pagination & Query Constraints**:
+  - All database reads avoid unbounded `get_all_*` calls, replacing them with bounded pagination (`LIMIT 50`) loops or streaming cursors.
+  - HTTP handlers stream paginated records directly into chunked JSON response streams rather than accumulating full result sets in memory.
+  - Temporal expansion graph traversals apply `LIMIT 50` constraints per hop level (depth 1/2/3) to prevent graph explosion on dense memory clusters.
+  - Prompt concatenation for cluster insight synthesis enforces a strict 32K token budget limit, stopping database member fetches as soon as the budget is reached.
+- **500ms File Watcher Coalescing**: Obsidian vault watcher coalesces file edit events over a 500ms sliding window.
+- **Arbor HTR Parallel Verification Loop**: Evaluates candidate changes within isolated git worktrees using distinct target folders and ports.
+- **DBSCAN Epsilon-Calibrated Compaction**: Daily dreaming compactor clusters episodic memories via dynamic epsilon calibration, writing hierarchical RAPTOR summaries to vault markdown files.
+- **Verbatim Ingestion & Sigmoid Gated Search**:
+  - Verbatim episodic memories are preserved alongside compact summaries.
+  - Search ranking passes similarity scores through a Sigmoid-gated filter ($g = \frac{1}{1 + e^{-20(\text{similarity} - 0.60)}}$) and applies a $0.4$ demotion factor to archived records ($utility < 10.0$).
 
 ---
 
-## 5. Thread-Safe Size-Rolling Logs & Graceful Shutdown
+## 5. Async Runtime Safety & Graceful Shutdown
 
-For production-grade operations, Mythrax 3.0 implements robust logging and clean lifecycle termination.
+Mythrax 3.0 provides robust thread safety, async task cancellation, and signal termination:
 
-- **Thread-Safe SizeRollingFileWriter**: A custom thread-safe rolling writer writes logs to `~/.mythrax/daemon.log`. It automatically rolls the log file upon reaching **50MB** and maintains up to **3 historical backups** (`daemon.log.1`, `daemon.log.2`, `daemon.log.3`). Tracing is integrated via non-blocking guards to ensure no logs are lost on exit.
-- **5-Second Graceful Shutdown Sequence**: Upon receiving a SIGINT (Ctrl+C) or SIGTERM signal, the daemon triggers a graceful shutdown sequence wrapped in a **5-second timeout**:
-  1. Sleep for 500ms to allow active file-watcher events and database writes to finish.
-  2. Evict all loaded models from VRAM via `broker.evict_unused_models()`.
-  3. Clear Metal FFI caches and log the event.
-  4. Flush and close the database connection.
-  5. Delete the `daemon.pid` file and exit cleanly.
+- **Async Semaphore Models & Non-Blocking Spin-Loops**:
+  - Replaces blocking spin-loops (`std::thread::sleep` + `try_acquire`) in async routines with non-blocking `tokio::sync::Semaphore::acquire().await` to yield control back to the tokio runtime executor.
+  - Synchronous legacy functions adapt via Strangler pattern (`*_async` variants) or `tokio::task::block_in_place` bridges when async bubbling is structurally blocked by sync traits, preventing runtime panics.
+- **Background Task Lifecycle & `CancellationToken`**:
+  - All background loops (daemon timers, watcher tasks, session sweeps, compaction schedulers) register a shared `tokio_util::sync::CancellationToken`.
+  - Loops evaluate `tokio::select! { _ = token.cancelled() => break, ... }` to guarantee complete shutdown within 5 seconds of signal receipt.
+  - Temporary DBSCAN pipeline state cleanup (`delete_pipeline_run`) is guarded by RAII scope guards (`scopeguard::defer!`) to guarantee execution on early returns, `Err(?)`, or panics.
+- **Thread-Safe Size-Rolling Logs**: Custom thread-safe writer rolls `~/.mythrax/daemon.log` at **50MB** and maintains **3 backups**.
+- **5-Second Graceful Shutdown Sequence**:
+  1. Trigger shared `CancellationToken` to halt background loops.
+  2. Sleep for 500ms for active IO and DB writes to complete.
+  3. Evict loaded VRAM models via `broker.evict_unused_models()`.
+  4. Flush and close database connection.
+  5. Delete `daemon.pid` file and exit cleanly.
 
 ---
 
 ## 6. End-to-End Cognitive Memory Data Flow
 
-The following data flow trace summarizes the path of session telemetry and local LLM execution:
+The following data flow trace summarizes the path of session telemetry, streaming compaction, and model execution:
 
 ```
 [Agent Action / Chat Turn]
@@ -125,34 +137,43 @@ The following data flow trace summarizes the path of session telemetry and local
 [Pre-Invocation Hook] ──► Extracts text & tool output verbatim (JSONL array)
            │
            ▼
-[SurrealDB Episode Ingestion] (Indexed as raw episodic memory)
+[SurrealDB Episode Ingestion] ──► SHA-256 content_hash deduplication check
            │
-           ├──► [Obsidian Vault Watcher] ──► 500ms coalescing writes to disk
+           ├──► [Obsidian Vault Incremental Writer] ──► Writes vault/episodes/*.md
            │
-           ▼ (Idle Session > 10m Sweep)
+           ▼ (Idle Session > 10m Sweep / Bounded Pagination LIMIT 50)
 [Compactor Sweep Service]
            │
            ├──► [Model Router]
            │         │
-           │         ├──► Small Dense (0.5B) ──► Loads In-Process (Metal GPU)
+           │         ├──► Small Dense (0.5B) ──► Loads In-Process (Metal GPU + .eval())
            │         │
            │         └──► MoE Hybrid (35B)  ──► Delegates to external HTTP (:8080)
            │
-           ▼ (Summary Generation)
-[Sigmoid Gated Search Indexer]
+           ▼ (Streaming DBSCAN Clustering & RAPTOR Synthesis)
+[Sigmoid & IDF Indexer] (Pre-computed idf_index lookup without content load)
            │
-           ├──► [Daily dreaming compactor]
-           │         │
-           │         ├──► Runs DBSCAN to cluster related memories
-           │         │
-           │         └──► Executes Arbor HTR loop in git worktree branches
+           ├──► [SurrealDB pipeline_cluster Table] ──► Ephemeral cluster state (RAII cleanup)
+           │
+           ├──► [Incremental Vault Flusher] ──► Streams wiki/<scope>/*.md & wisdom/*.md
+           │
+           └──► [Arbor HTR Verification] ──► Runs verification in git worktree branches
            │
            ▼
-[Knowledge WikiNode / Wisdom Rule Synthesis] (Vault and DB updated)
+[Knowledge WikiNode / Wisdom Rule Complete] (Vault md persisted, DB indexed)
 ```
 
-1. **Ingestion Flow (Flow 6)**: Documents or session turns are parsed, token-counted, and indexed. Documents parsed by Forge are split into table-of-contents structural guides and concept rules natively via in-process models.
-2. **Retrieval Flow (Flow 4)**: Blended search matches semantic vectors (via `nomic-embed` in-process) and applies Sigmoid-gated filtering. Past memories that decayed in utility are demoted by `0.4` to clear top-tier attention paths while preserving baseline context.
-3. **Compaction Flow (Flow 7/8)**: The background scheduling sweeps detect abandoned session files. Trailing turns are mined, summarized through hybrid model routing, and clustered. High-cohesion memory clusters run through the Arbor HTR (Hypothesis-Tree-Refinement) Git branch loop to verify code synthesis, merging successful rules into permanent WikiNodes.
-4. **Eviction Flow (Flow 9)**: Dynamic model loading runs VRAM checks and evicted model wait loops to safeguard local system memory from GPU overflows.
+---
 
+## 7. Memory Safety Invariants
+
+Mythrax 3.0 enforces mandatory memory safety invariants across all subsystems to guarantee sub-GB RAM footprint stability during high-throughput workloads:
+
+1. **Pipeline Stage Memory Cap**: No cognitive pipeline stage, vector search expansion, or batch ingestion loop may hold more than **50 intermediate items** in memory simultaneously.
+2. **No Unbounded Queries**: Calling `get_all_episodes()`, `get_all_wiki_nodes()`, or `get_all_wisdom_rules()` without pagination bounds is strictly forbidden. All database queries must use paginated loops (`LIMIT 50`) or streaming cursor iterators.
+3. **HTTP Streaming Serialization**: HTTP batch endpoints and query handlers MUST stream paginated results via chunked JSON serialization directly from database cursors rather than materializing full result vectors in memory.
+4. **Mandatory MLX Graph Evaluation**: All MLX array concatenations, weight dtype casts, and cross-encoder logit extractions MUST execute `.eval()` immediately before buffer access or storage.
+5. **O(1) Hash-Based Deduplication**: Content duplicate checks MUST query the indexed `content_hash` field (`idx_content_hash`) instead of performing full-text content comparisons or in-memory string matching sweeps.
+6. **O(1) Pre-Computed IDF Lookups**: FTS relevance scoring MUST query term frequencies from `idf_index` table (`idx_idf_term`), calculating total document counts dynamically without loading raw episode content fields into RAM.
+7. **Ephemeral State Isolation & Guaranteed Purge**: Temporary machine state (DBSCAN clusters) MUST use database tables rather than in-memory arrays and MUST be wrapped in RAII scope guards to guarantee deletion upon completion or failure.
+8. **Asynchronous Non-Blocking Execution**: Long-running or IO-bound routines inside the tokio runtime MUST NOT execute blocking thread sleeps (`std::thread::sleep`) or blocking lock spin-loops (`try_acquire` loops). They MUST yield to the executor using async primitives (`tokio::time::sleep`, `tokio::sync::Semaphore::acquire().await`) or `tokio::task::block_in_place`.

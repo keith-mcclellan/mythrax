@@ -8,15 +8,15 @@
 
 Update project documentation to reflect the new design before writing any code. This establishes the architectural contract that all subsequent phases implement against.
 
-- [ ] Task: Update ARCHITECTURE.md with new design
-  - [ ] Update Section 2 (Dual-Engine Storage): document planned SQLite embedding cache migration, incremental IDF indexer with `idf_index` table, `pipeline_cluster` temporary table for DBSCAN state, `content_hash` field for hash-based deduplication. **Remove all references to RocksDB** — the SurrealDB backend is SurrealKV exclusively. Rename the section if needed to reflect this.
-  - [ ] Update Section 3 (Three-Tiered Model Broker): document MLX `.eval()` requirements for KV caches, weight casts, and cross-encoder logits (joint eval pattern)
-  - [ ] Update Section 4 (Cognitive Scheduling): document streaming-to-disk pipeline architecture (vault md for human-readable artifacts, SurrealDB for machine state), bounded pagination for all DB queries, temporal traversal LIMIT constraints
-  - [ ] Update Section 5 (Graceful Shutdown): document planned CancellationToken lifecycle for background tasks, async semaphore model replacing blocking spin-loops
-  - [ ] Update Section 6 (End-to-End Data Flow): update data flow diagram to reflect streaming pipeline stages, IDF indexer, hash-based deduplication, and bounded graph traversals
-  - [ ] Add new Section: Memory Safety Invariants (pipeline stage memory cap ≤50 items, no `get_all_*` unbounded queries, all MLX operations evaluated before caching, hash-based deduplication for content comparison)
+- [x] Task: Update ARCHITECTURE.md with new design
+  - [x] Update Section 2 (Dual-Engine Storage): document planned SQLite embedding cache migration, incremental IDF indexer with `idf_index` table, `pipeline_cluster` temporary table for DBSCAN state, `content_hash` field for hash-based deduplication. **Remove all references to RocksDB** — the SurrealDB backend is SurrealKV exclusively. Rename the section if needed to reflect this.
+  - [x] Update Section 3 (Three-Tiered Model Broker): document MLX `.eval()` requirements for KV caches, weight casts, and cross-encoder logits (joint eval pattern)
+  - [x] Update Section 4 (Cognitive Scheduling): document streaming-to-disk pipeline architecture (vault md for human-readable artifacts, SurrealDB for machine state), bounded pagination for all DB queries, temporal traversal LIMIT constraints
+  - [x] Update Section 5 (Graceful Shutdown): document planned CancellationToken lifecycle for background tasks, async semaphore model replacing blocking spin-loops
+  - [x] Update Section 6 (End-to-End Data Flow): update data flow diagram to reflect streaming pipeline stages, IDF indexer, hash-based deduplication, and bounded graph traversals
+  - [x] Add new Section: Memory Safety Invariants (pipeline stage memory cap ≤50 items, no `get_all_*` unbounded queries, all MLX operations evaluated before caching, hash-based deduplication for content comparison)
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 1: Critical MLX Graph Fixes (FR-1, FR-6)
 
