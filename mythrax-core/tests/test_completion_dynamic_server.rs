@@ -38,6 +38,7 @@ async fn test_completion_dynamic_server_loading() {
         cloud_provider: Some("gemini".to_string()),
         api_key: None,
         llm_post_inference_delay_ms: None,
+        model_tier_mappings: None,
     };
     backend.update_llm_config(&req).await.unwrap();
 
@@ -111,6 +112,7 @@ async fn test_complete_code_task_mcp_tool() {
         cloud_provider: Some("gemini".to_string()),
         api_key: None,
         llm_post_inference_delay_ms: None,
+        model_tier_mappings: None,
     };
     backend.update_llm_config(&req).await.unwrap();
 
@@ -183,6 +185,7 @@ async fn test_tier3_completion_and_eviction() {
         cloud_provider: Some("gemini".to_string()),
         api_key: None,
         llm_post_inference_delay_ms: None,
+        model_tier_mappings: None,
     };
     backend.update_llm_config(&req).await.unwrap();
 

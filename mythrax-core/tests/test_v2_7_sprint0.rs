@@ -46,6 +46,23 @@ fn test_secret_filter_no_panic_on_mismatch() {
     assert!(!cleaned_multibyte.contains("🔑secret"));
 }
 
+struct FailingEmbedder;
+
+impl mythrax_core::embeddings::TextEmbedder for FailingEmbedder {
+    fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        Err(anyhow::anyhow!("No embedding model loaded"))
+    }
+    fn embed_batch(&self, _texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Err(anyhow::anyhow!("No embedding model loaded"))
+    }
+    fn count_tokens(&self, _text: &str) -> anyhow::Result<usize> {
+        Ok(0)
+    }
+    fn is_mock(&self) -> bool {
+        false
+    }
+}
+
 #[tokio::test]
 async fn test_embed_batch_error_propagation() -> Result<()> {
     let _guard = match TEST_MUTEX.lock() {
@@ -64,7 +81,7 @@ async fn test_embed_batch_error_propagation() -> Result<()> {
 
     let config = mythrax_core::db::BackendConfig {
         check_daemon: false,
-        embedder: None,
+        embedder: Some(Arc::new(FailingEmbedder)),
         llm: Some(mythrax_core::llm::LLMClient::new_mock()),
     };
     let backend = SurrealBackend::new("mem://", config).await?;
@@ -181,6 +198,9 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
         );
         None
     };
+    unsafe {
+        std::env::set_var("MYTHRAX_COMPLETIONS_URL", "http://127.0.0.1:8080/v1/chat/completions");
+    }
 
     let backend = Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
@@ -264,6 +284,10 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
     if let Some((handle, shutdown_tx)) = mock_server_handle {
         let _ = shutdown_tx.send(());
         let _ = handle.await;
+    }
+
+    unsafe {
+        std::env::remove_var("MYTHRAX_COMPLETIONS_URL");
     }
 
     Ok(())

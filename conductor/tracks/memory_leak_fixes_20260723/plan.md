@@ -60,48 +60,48 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
 
 The TF-IDF cache-miss bomb is the largest single memory allocation in the codebase. Must be fixed before any concurrency improvements. Paginated CRUD primitives are built first since backfill tasks depend on them.
 
-- [ ] Task: Implement paginated query variants in CRUD layer
-  - [ ] Write test: Verify `get_episodes_paginated(limit, offset)` returns correct subset with proper offset/limit
-  - [ ] Write test: Verify `get_wiki_nodes_paginated(limit, offset)` returns correct subset
-  - [ ] Write test: Verify `get_wisdom_rules_paginated(limit, offset)` returns correct subset
-  - [ ] Write test: Verify `get_episodes_by_node_type_paginated(type, limit, offset)` returns correct subset
-  - [ ] Write test: Verify `get_registered_transcripts_paginated(limit, offset)` returns correct subset
-  - [ ] Add paginated variants to `crud_operations.rs` and `backend.rs` trait
-  - [ ] Run tests and confirm pass
+- [x] Task: Implement paginated query variants in CRUD layer
+  - [x] Write test: Verify `get_episodes_paginated(limit, offset)` returns correct subset with proper offset/limit
+  - [x] Write test: Verify `get_wiki_nodes_paginated(limit, offset)` returns correct subset
+  - [x] Write test: Verify `get_wisdom_rules_paginated(limit, offset)` returns correct subset
+  - [x] Write test: Verify `get_episodes_by_node_type_paginated(type, limit, offset)` returns correct subset
+  - [x] Write test: Verify `get_registered_transcripts_paginated(limit, offset)` returns correct subset
+  - [x] Add paginated variants to `crud_operations.rs` and `backend.rs` trait
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Create `idf_index` table and initialization logic
-  - [ ] Write test: Verify `idf_index` table is created during daemon startup INIT_SCHEMA step
-  - [ ] Add `idf_index` table definition (term: String, document_frequency: i64, scope: String) to `src/db/surreal_init.rs` INIT_SCHEMA. **Do NOT store `total_docs` per row** — total document count must be queried dynamically via `SELECT count() FROM episode WHERE scope = $scope` or maintained in a separate single-row `scope_metadata` table to avoid O(N) updates on every episode insert/delete
-  - [ ] Add `DEFINE INDEX idx_idf_term ON idf_index FIELDS term, scope UNIQUE` to INIT_SCHEMA for efficient term lookups
-  - [ ] Run tests and confirm pass
+- [x] Task: Create `idf_index` table and initialization logic
+  - [x] Write test: Verify `idf_index` table is created during daemon startup INIT_SCHEMA step
+  - [x] Add `idf_index` table definition (term: String, document_frequency: i64, scope: String) to `src/db/surreal_init.rs` INIT_SCHEMA. **Do NOT store `total_docs` per row** — total document count must be queried dynamically via `SELECT count() FROM episode WHERE scope = $scope` or maintained in a separate single-row `scope_metadata` table to avoid O(N) updates on every episode insert/delete
+  - [x] Add `DEFINE INDEX idx_idf_term ON idf_index FIELDS term, scope UNIQUE` to INIT_SCHEMA for efficient term lookups
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Build incremental IDF update function
-  - [ ] Write test: Verify `update_idf_index(episode_id)` correctly increments term document frequencies on episode insert
-  - [ ] Write test: Verify `update_idf_index` correctly decrements term document frequencies on episode delete
-  - [ ] Add `update_idf_index` to `crud_operations.rs`
-  - [ ] Wire `update_idf_index` into `save_episode`, `save_episodes_batch`, **and `delete_episode`** code paths in `backend.rs`
-  - [ ] Run tests and confirm pass
+- [x] Task: Build incremental IDF update function
+  - [x] Write test: Verify `update_idf_index(episode_id)` correctly increments term document frequencies on episode insert
+  - [x] Write test: Verify `update_idf_index` correctly decrements term document frequencies on episode delete
+  - [x] Add `update_idf_index` to `crud_operations.rs`
+  - [x] Wire `update_idf_index` into `save_episode`, `save_episodes_batch`, **and `delete_episode`** code paths in `backend.rs`
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Backfill IDF index for existing episodes
-  - [ ] Write test: Verify backfill migration computes correct term frequencies for a known set of existing episodes
-  - [ ] Write test: Verify backfill is idempotent (running twice produces identical IDF counts)
-  - [ ] Implement `backfill_idf_index()` function that processes existing episodes in bounded chunks (paginate episodes, tokenize chunk, update IDF counts in DB, **drop chunk from memory**, fetch next) without accumulating all episodes into memory
-  - [ ] Wire backfill into daemon startup: run once if `idf_index` table is empty, log progress
-  - [ ] Run tests and confirm pass
+- [x] Task: Backfill IDF index for existing episodes
+  - [x] Write test: Verify backfill migration computes correct term frequencies for a known set of existing episodes
+  - [x] Write test: Verify backfill is idempotent (running twice produces identical IDF counts)
+  - [x] Implement `backfill_idf_index()` function that processes existing episodes in bounded chunks (paginate episodes, tokenize chunk, update IDF counts in DB, **drop chunk from memory**, fetch next) without accumulating all episodes into memory
+  - [x] Wire backfill into daemon startup: run once if `idf_index` table is empty, log progress
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Replace TF-IDF cache-miss bulk load with IDF index lookup
-  - [ ] Write test: Verify FTS search uses pre-computed IDF index on cache miss (no `SELECT VALUE content FROM episode`)
-  - [ ] Refactor `search_pipeline.rs` L1927 to read from `idf_index` table instead of loading all episode content
-  - [ ] Run tests and confirm pass
+- [x] Task: Replace TF-IDF cache-miss bulk load with IDF index lookup
+  - [x] Write test: Verify FTS search uses pre-computed IDF index on cache miss (no `SELECT VALUE content FROM episode`)
+  - [x] Refactor `search_pipeline.rs` L1927 to read from `idf_index` table instead of loading all episode content
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Add LIMIT constraints to temporal neighbor graph traversals
-  - [ ] Write test: Verify temporal expansion returns at most 50 results per hop level
-  - [ ] Write test: Verify depth-3 traversal on dense graph does not exceed memory bounds
-  - [ ] Add `LIMIT 50` to each hop level in `search_pipeline.rs` L2323-2328 (preds_1/2/3, succs_1/2/3)
-  - [ ] Add `LIMIT 50` to the secondary temporal expansion query at L2341-2346
-  - [ ] Run tests and confirm pass
+- [x] Task: Add LIMIT constraints to temporal neighbor graph traversals
+  - [x] Write test: Verify temporal expansion returns at most 50 results per hop level
+  - [x] Write test: Verify depth-3 traversal on dense graph does not exceed memory bounds
+  - [x] Add `LIMIT 50` to each hop level in `search_pipeline.rs` L2323-2328 (preds_1/2/3, succs_1/2/3)
+  - [x] Add `LIMIT 50` to the secondary temporal expansion query at L2341-2346
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 3: Pagination Migration — Standalone Callers (FR-3, FR-8)
 

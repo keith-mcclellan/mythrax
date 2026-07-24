@@ -1038,9 +1038,9 @@ impl SurrealBackend {
                     vector_sql.push_str(&format!(
                         "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
-                               <-followed_by<-episode.* AS prev_episodes,
-                               ->followed_by->episode.* AS next_episodes
+                               ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes,
+                               (<-followed_by<-episode.*)[0..50] AS prev_episodes,
+                               (->followed_by->episode.*)[0..50] AS next_episodes
                         FROM episode
                         WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                           AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
@@ -1069,7 +1069,7 @@ impl SurrealBackend {
                 vector_sql.push_str(&format!(
                     "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                           ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes
                     FROM wiki_node
                     WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
                       AND (embedding <|200, 200|> $query_embedding)
@@ -1077,7 +1077,7 @@ impl SurrealBackend {
 
                     SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
                            (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
-                           {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes
+                           ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes
                     FROM wisdom
                     WHERE status != 'superseded'
                       AND (scope IN [$target_scope, 'general'] OR $search_all = true)
@@ -1115,9 +1115,9 @@ impl SurrealBackend {
                     keyword_sql.push_str(&format!(
                         "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
                                (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility,
-                               {traversal}(relates_to, mentions){traversal}({related_targets}).* AS related_nodes,
-                               <-followed_by<-episode.* AS prev_episodes,
-                               ->followed_by->episode.* AS next_episodes,
+                               ({traversal}(relates_to, mentions){traversal}({related_targets}))[0..50].* AS related_nodes,
+                               (<-followed_by<-episode.*)[0..50] AS prev_episodes,
+                               (->followed_by->episode.*)[0..50] AS next_episodes,
                                {fts_score_expr} AS bm25_score
                           FROM episode
                           WHERE {fts_where_clause}
@@ -1924,33 +1924,35 @@ impl SurrealBackend {
             }
 
             if !cache_hit {
-                let all_contents: Vec<String> = match self.db.query("SELECT VALUE content FROM episode WHERE scope = $scope OR scope = 'general';")
-                    .bind(("scope", resolved_scope.as_str()))
-                    .await
-                {
-                    Ok(mut res) => res.take(0).unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                };
-
-                let doc_token_sets: Vec<std::collections::HashSet<String>> = all_contents
-                    .iter()
-                    .map(|content| {
-                        crate::retrieval::bm25::tokenize(content.as_str())
-                            .into_iter()
-                            .collect()
-                    })
-                    .collect();
-
-                total_n = doc_token_sets.len().max(1);
-
-                for token in &query_tokens {
-                    let mut count = 0;
-                    for doc_set in &doc_token_sets {
-                        if doc_set.contains(token) {
-                            count += 1;
+                let count_sql = "SELECT count() AS total FROM episode WHERE scope = $scope OR scope = 'general' GROUP ALL;";
+                let mut tn = 0;
+                if let Ok(mut res) = self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).await {
+                    let count_val: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
+                    if let Some(arr) = count_val {
+                        if let Some(first) = arr.first() {
+                            if let Some(n) = first.get("total").and_then(|v| v.as_u64()) {
+                                tn = n as usize;
+                            }
                         }
                     }
-                    global_df.insert(token.clone(), count);
+                }
+                total_n = tn.max(1);
+
+                let idf_sql = "SELECT term, math::sum(document_frequency) as df FROM idf_index WHERE term IN $terms AND (scope = $scope OR scope = 'general') GROUP BY term;";
+                if let Ok(mut res) = self.db.query(idf_sql).bind(("terms", query_tokens.clone())).bind(("scope", resolved_scope.as_str())).await {
+                    let idf_vals: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
+                    if let Some(arr) = idf_vals {
+                        for row in arr {
+                            if let Some(term) = row.get("term").and_then(|v| v.as_str()) {
+                                let df = row.get("df").and_then(|v| {
+                                    if let Some(i) = v.as_u64() { Some(i as usize) }
+                                    else if let Some(f) = v.as_f64() { Some(f as usize) }
+                                    else { None }
+                                }).unwrap_or(0);
+                                global_df.insert(term.to_string(), df);
+                            }
+                        }
+                    }
                 }
             }
             tracing::debug!(
@@ -2320,12 +2322,12 @@ impl SurrealBackend {
 
                 if !episode_ids.is_empty() {
                     let sql = "SELECT id,
-                               <-followed_by<-(episode, wiki_node) AS preds_1,
-                               <-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node) AS preds_2,
-                               <-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node) AS preds_3,
-                               ->followed_by->(episode, wiki_node) AS succs_1,
-                               ->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node) AS succs_2,
-                               ->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node) AS succs_3,
+                               (<-followed_by<-(episode, wiki_node))[0..50] AS preds_1,
+                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_2,
+                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_3,
+                               (->followed_by->(episode, wiki_node))[0..50] AS succs_1,
+                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_2,
+                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_3,
                                session_id, scope FROM episode WHERE id IN $episode_ids;";
                     let mut res = self
                         .db
@@ -2338,12 +2340,12 @@ impl SurrealBackend {
 
                 if !wiki_node_ids.is_empty() {
                     let sql = "SELECT id,
-                               <-followed_by<-(episode, wiki_node) AS preds_1,
-                               <-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node) AS preds_2,
-                               <-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node) AS preds_3,
-                               ->followed_by->(episode, wiki_node) AS succs_1,
-                               ->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node) AS succs_2,
-                               ->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node) AS succs_3,
+                               (<-followed_by<-(episode, wiki_node))[0..50] AS preds_1,
+                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_2,
+                               (<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node)<-followed_by<-(episode, wiki_node))[0..50] AS preds_3,
+                               (->followed_by->(episode, wiki_node))[0..50] AS succs_1,
+                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_2,
+                               (->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node)->followed_by->(episode, wiki_node))[0..50] AS succs_3,
                                session_id, scope FROM wiki_node WHERE id IN $wiki_node_ids;";
                     let mut res = self
                         .db

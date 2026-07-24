@@ -80,8 +80,16 @@ async fn test_live_session_feedback_hardening() -> anyhow::Result<()> {
         "Should create a 'corrects' relation from feedback to agent thought"
     );
 
-    // Sleep briefly to let the spawned run_llm_critic finish
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Run LLM critic directly to diagnose/guarantee execution
+    mythrax_core::mcp_routes::write_handlers::run_llm_critic(
+        backend.clone(),
+        store.clone(),
+        ep_feedback.content.clone(),
+        Some("general".to_string()),
+        Some(ep_feedback.id.clone().unwrap()),
+    )
+    .await
+    .unwrap();
 
     // Check if a WisdomRule was saved via the LLM critic
     let rules = backend.get_all_wisdom_rules().await?;

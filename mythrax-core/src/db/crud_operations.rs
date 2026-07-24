@@ -33,6 +33,25 @@ impl SurrealBackend {
             .check()
             .context("Failed to run legacy episode node_type migration")?;
 
+        let idf_check = "SELECT count() AS total FROM idf_index GROUP ALL;";
+        if let Ok(mut res) = self.db.query(idf_check).await {
+            let count_val: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
+            let mut idf_count = 0;
+            if let Some(arr) = count_val {
+                if let Some(first) = arr.first() {
+                    if let Some(n) = first.get("total").and_then(|v| v.as_u64()) {
+                        idf_count = n as usize;
+                    }
+                }
+            }
+            if idf_count == 0 {
+                tracing::info!("IDF index is empty. Backfilling...");
+                if let Err(e) = self.backfill_idf_index_db().await {
+                    tracing::error!("Failed to backfill IDF index: {:?}", e);
+                }
+            }
+        }
+
         // Initialize default configuration if config:settings does not exist
         let check_sql = "SELECT * FROM config:settings;";
         let mut response = self
@@ -341,6 +360,12 @@ impl SurrealBackend {
         self.record_episode_tokens_for_cache(&scope_val, &episode.content)
             .await;
 
+        if !is_update {
+            if let Err(e) = self.update_idf_index_db(&new_ep_id, false).await {
+                println!("IDF ERROR: {:?}", e);
+            }
+        }
+
         Ok(new_ep_id)
     }
 
@@ -384,8 +409,10 @@ impl SurrealBackend {
 
         // 3. Map episodes to JSON objects for SurrealQL
         let mut mapped_json_array: Vec<serde_json::Value> = Vec::with_capacity(episodes.len());
+        let mut inserted_ids: Vec<String> = Vec::with_capacity(episodes.len());
         for (i, ep) in episodes.iter().enumerate() {
             let id_str = Uuid::new_v4().to_string();
+            inserted_ids.push(id_str.clone());
             let metrics_id_str = Uuid::new_v4().to_string();
             let embedding = embeddings.get(i).cloned().flatten();
             let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
@@ -508,6 +535,10 @@ impl SurrealBackend {
             .await?;
         res.check()
             .context("SurrealDB save_episodes_batch transaction failed")?;
+
+        for id_str in inserted_ids {
+            let _ = self.update_idf_index_db(&id_str, false).await;
+        }
 
         // 6. Relate temporal followed_by connections
         for rel in relations {
@@ -1004,6 +1035,21 @@ impl SurrealBackend {
         Ok(episodes)
     }
 
+    pub async fn get_episodes_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        let sql = "SELECT * FROM episode LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Query paginated episodes failed")?;
+        let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
     pub async fn get_episodes_by_node_type_db(&self, node_type: &str) -> Result<Vec<Episode>> {
         let sql = "SELECT * FROM episode WHERE node_type = $node_type;";
         let mut response = self
@@ -1013,6 +1059,22 @@ impl SurrealBackend {
             .await?
             .check()
             .context("Query episodes by node type failed")?;
+        let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
+    pub async fn get_episodes_by_node_type_paginated_db(&self, node_type: &str, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        let sql = "SELECT * FROM episode WHERE node_type = $node_type LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("node_type", node_type))
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Query paginated episodes by node type failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
         let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
@@ -1448,6 +1510,85 @@ impl SurrealBackend {
         Ok(scopes)
     }
 
+    pub async fn delete_episode_db(&self, id: &str) -> Result<()> {
+        let _ = self.update_idf_index_db(id, true).await;
+        let clean_id = id.strip_prefix("episode:").unwrap_or(id);
+        let sql = "DELETE type::record('episode', $id);";
+        self.db.query(sql).bind(("id", clean_id)).await?.check()?;
+        Ok(())
+    }
+
+    pub async fn get_episode_db(&self, id: &str) -> Result<Option<Episode>> {
+        let clean_id = id.strip_prefix("episode:").unwrap_or(id);
+        let sql = "SELECT *, type::string(id) AS id, type::string(created_at) AS created_at, type::string(last_retrieved_at) AS last_retrieved_at FROM type::record('episode', $id);";
+        let mut response = self.db.query(sql).bind(("id", clean_id)).await?;
+        let episode: Option<Episode> = response.take(0)?;
+        Ok(episode)
+    }
+
+    pub async fn update_idf_index_db(&self, episode_id: &str, is_delete: bool) -> Result<()> {
+        let ep = match self.get_episode_db(episode_id).await {
+            Ok(Some(ep)) => ep,
+            res => {
+                println!("EARLY RETURN in update_idf_index_db for id {}: {:?}", episode_id, res);
+                return Ok(());
+            }
+        };
+        let tokens = crate::retrieval::bm25::tokenize(&ep.content);
+        let mut unique_terms = std::collections::HashSet::new();
+        for t in tokens {
+            unique_terms.insert(t);
+        }
+        let scope = &ep.scope;
+        for term in unique_terms {
+            if is_delete {
+                let sql = "UPDATE idf_index SET document_frequency -= 1 WHERE term = $term AND scope = $scope;";
+                self.db.query(sql).bind(("term", term)).bind(("scope", scope.clone())).await?.check()?;
+            } else {
+                let update_sql = "UPDATE idf_index SET document_frequency += 1 WHERE term = $term AND scope = $scope;";
+                let mut res = self.db.query(update_sql).bind(("term", term.clone())).bind(("scope", scope.clone())).await?;
+                let updated: Vec<serde_json::Value> = res.take(0).unwrap_or_default();
+                if updated.is_empty() {
+                    let insert_sql = "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: 1 };";
+                    self.db.query(insert_sql).bind(("term", term)).bind(("scope", scope.clone())).await?.check()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn backfill_idf_index_db(&self) -> Result<()> {
+        self.db.query("DELETE FROM idf_index;").await?.check()?;
+        let mut offset = 0;
+        let limit = 1000;
+        let mut idf_map: std::collections::HashMap<(String, String), i64> = std::collections::HashMap::new();
+
+        loop {
+            let episodes = self.get_episodes_paginated_db(limit, offset).await?;
+            if episodes.is_empty() {
+                break;
+            }
+            for ep in &episodes {
+                let tokens = crate::retrieval::bm25::tokenize(&ep.content);
+                let mut unique_terms = std::collections::HashSet::new();
+                for t in tokens {
+                    unique_terms.insert(t);
+                }
+                let scope = ep.scope.as_deref().unwrap_or("general").to_string();
+                for term in unique_terms {
+                    *idf_map.entry((term, scope.clone())).or_insert(0) += 1;
+                }
+            }
+            offset += limit;
+        }
+
+        for ((term, scope), df) in idf_map {
+            let sql = "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $df };";
+            self.db.query(sql).bind(("term", term)).bind(("scope", scope)).bind(("df", df)).await?.check()?;
+        }
+        Ok(())
+    }
+
     pub async fn delete_by_vault_path_db(&self, vault_path: &str) -> Result<()> {
         let sql1 = "DELETE FROM episode WHERE vault_path = $vault_path;";
         let sql2 = "DELETE FROM wisdom WHERE vault_path = $vault_path;";
@@ -1879,6 +2020,34 @@ impl SurrealBackend {
         Ok(rules)
     }
 
+    pub async fn get_wisdom_rules_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>> {
+        let sql = "
+            SELECT *,
+                   (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+            FROM wisdom
+            WHERE status != 'superseded'
+            LIMIT $limit START $offset;
+        ";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Get paginated wisdom rules query failed")?;
+        let raws: Vec<WisdomRaw> = response.take(0)?;
+        let mut rules: Vec<WisdomRule> = raws.into_iter().map(|r| r.into_wisdom_rule()).collect();
+        for w in &mut rules {
+            if let Some(id_str) = &w.id {
+                if let Ok(thing) = parse_record_id(id_str) {
+                    w.id = Some(format_record_id(&thing));
+                }
+            }
+        }
+        Ok(rules)
+    }
+
     pub async fn get_all_wiki_nodes_db(&self) -> Result<Vec<WikiNode>> {
         let sql = "SELECT * FROM wiki_node;";
         let mut response = self
@@ -1887,6 +2056,21 @@ impl SurrealBackend {
             .await?
             .check()
             .context("Get all wiki nodes query failed")?;
+        let raws: Vec<WikiNodeRaw> = response.take(0)?;
+        let nodes: Vec<WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
+        Ok(nodes)
+    }
+
+    pub async fn get_wiki_nodes_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WikiNode>> {
+        let sql = "SELECT * FROM wiki_node LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Get paginated wiki nodes query failed")?;
         let raws: Vec<WikiNodeRaw> = response.take(0)?;
         let nodes: Vec<WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
         Ok(nodes)

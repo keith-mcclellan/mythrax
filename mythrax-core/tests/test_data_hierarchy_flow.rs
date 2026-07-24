@@ -103,6 +103,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         scope: "general".to_string(),
         vault_path: Some("wiki/archive/raptor_summary_test.md".to_string()),
         embedding: None,
+        ..Default::default()
     };
 
     let raptor_id = backend.save_wiki_node(&raptor_node).await.unwrap();
@@ -144,6 +145,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         scope: "general".to_string(),
         vault_path: Some("wiki/insight_hierarchical.md".to_string()),
         embedding: None,
+        ..Default::default()
     };
 
     let insight_id = backend.save_wiki_node(&insight_node).await.unwrap();
@@ -200,6 +202,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         superseded_by: None,
 
         rule_type: None,
+        ..Default::default()
     };
 
     let wisdom_id = backend.save_wisdom_rule(&wisdom_rule).await.unwrap();
@@ -210,7 +213,7 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
 
     // Retrieve Wisdom Rule
     let search_wisdom = backend
-        .get_wisdom("WHERE clauses", None, 5, 0, 0.1)
+        .get_wisdom("query parameters", None, 5, 0, 0.1)
         .await
         .unwrap();
     assert!(

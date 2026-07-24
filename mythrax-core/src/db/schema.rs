@@ -47,6 +47,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS parent_task_id ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS summary ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS distilled_at ON episode TYPE option<datetime>;
+    DEFINE FIELD IF NOT EXISTS content_hash ON episode TYPE option<string>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -56,6 +57,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS episode_node_type ON episode FIELDS node_type;
     DEFINE INDEX IF NOT EXISTS episode_processed_in_dream ON episode FIELDS processed_in_dream;
     DEFINE INDEX IF NOT EXISTS episode_created_at ON episode FIELDS created_at;
+    DEFINE INDEX IF NOT EXISTS episode_content_hash ON episode FIELDS content_hash;
     DEFINE ANALYZER IF NOT EXISTS ascii TOKENIZERS blank, punct FILTERS lowercase, ascii;
     DEFINE ANALYZER IF NOT EXISTS snowball_en TOKENIZERS blank, punct FILTERS lowercase, snowball(english);
     DEFINE INDEX OVERWRITE episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER snowball_en BM25(1.2, 0.60);
@@ -99,11 +101,13 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS importance ON wisdom TYPE float DEFAULT 5.0;
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wisdom TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON wisdom TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS content_hash ON wisdom TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS rule_type ON wisdom TYPE string DEFAULT 'aesthetic';
     DEFINE FIELD IF NOT EXISTS severity ON wisdom TYPE option<string> DEFAULT 'info';
     DEFINE FIELD IF NOT EXISTS blocking ON wisdom TYPE option<bool> DEFAULT false;
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
+    DEFINE INDEX IF NOT EXISTS wisdom_content_hash ON wisdom FIELDS content_hash;
     DEFINE INDEX OVERWRITE wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
@@ -137,6 +141,8 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS is_override ON config TYPE bool DEFAULT false;
     DEFINE FIELD IF NOT EXISTS expires_at ON config TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS llm_post_inference_delay_ms ON config TYPE option<int>;
+    DEFINE FIELD IF NOT EXISTS model_tier_mappings ON config TYPE option<object>;
+
 
     DEFINE TABLE IF NOT EXISTS metrics SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS target_id ON metrics TYPE record;
@@ -431,4 +437,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE TABLE IF NOT EXISTS forged_section_hash SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS bootstrap_state SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS distilled_conversation SCHEMALESS;
+
+    DEFINE TABLE IF NOT EXISTS idf_index SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS term ON idf_index TYPE string;
+    DEFINE FIELD IF NOT EXISTS document_frequency ON idf_index TYPE int;
+    DEFINE FIELD IF NOT EXISTS scope ON idf_index TYPE string DEFAULT 'general';
+    DEFINE INDEX IF NOT EXISTS idx_idf_term ON idf_index FIELDS term, scope UNIQUE;
 ";

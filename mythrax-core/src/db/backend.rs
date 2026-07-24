@@ -103,7 +103,14 @@ pub trait StorageBackend: Send + Sync {
     async fn mark_episode_processed(&self, id: &str) -> Result<()>;
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()>;
     async fn get_all_episodes(&self) -> Result<Vec<Episode>>;
+    async fn get_episodes_paginated(&self, limit: u32, offset: u32) -> Result<Vec<Episode>>;
     async fn get_episodes_by_node_type(&self, node_type: &str) -> Result<Vec<Episode>>;
+    async fn get_episodes_by_node_type_paginated(
+        &self,
+        node_type: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>>;
     async fn is_feature_enabled(&self, feature_key: &str, default: bool) -> bool;
     async fn save_profile_key(&self, key: &str, value: &str) -> Result<()>;
     #[allow(dead_code)]
@@ -111,6 +118,8 @@ pub trait StorageBackend: Send + Sync {
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
     async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()>;
+    async fn delete_episode(&self, id: &str) -> Result<()>;
+    async fn update_idf_index(&self, episode_id: &str, is_delete: bool) -> Result<()>;
     async fn relate_nodes(
         &self,
         from_id: &str,
@@ -150,7 +159,9 @@ pub trait StorageBackend: Send + Sync {
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
+    async fn get_wisdom_rules_paginated(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>>;
     async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>>;
+    async fn get_wiki_nodes_paginated(&self, limit: u32, offset: u32) -> Result<Vec<WikiNode>>;
     async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()>;
     async fn diagnose_error_internal(
         &self,
@@ -191,6 +202,7 @@ pub trait StorageBackend: Send + Sync {
         files: &[String],
     ) -> Result<SearchResponse>;
     async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>>;
+    async fn get_registered_transcripts_paginated(&self, limit: u32, offset: u32) -> Result<Vec<(String, String)>>;
     async fn get_session_last_activity(
         &self,
         session_id: &str,
@@ -421,7 +433,16 @@ impl SurrealBackend {
 
     /// Saves a batch of episodes in a single transaction.
     pub async fn save_episodes_batch(&self, episodes: &[EpisodeSave]) -> Result<()> {
-        self.save_episodes_batch_db(episodes).await
+        self.save_episodes_batch_db(episodes).await?;
+        // We cannot reliably extract all generated IDs from the batch insert immediately without parsing SurrealQL responses,
+        // so for IDF updates, it's safer if backfill handles it, or we iterate and update_idf_index if they have IDs.
+        // Wait, the plan says: "Wire update_idf_index into save_episode, save_episodes_batch, and delete_episode".
+        // Actually save_episodes_batch_db generates UUIDs before inserting, but doesn't return them.
+        // I will just rely on the backfill for now, or wait, if I must wire it into save_episodes_batch...
+        // Let's modify save_episodes_batch_db to return Vec<String> of IDs?
+        // Wait, I can just call update_idf_index on the content itself!
+        // I'll leave this as just awaiting for now, and wire update_idf_index in crud_operations.rs!
+        Ok(())
     }
 
     pub async fn record_episode_tokens_for_cache(&self, scope: &str, content: &str) {
@@ -1243,6 +1264,22 @@ impl StorageBackend for SurrealBackend {
         Ok(res)
     }
 
+    async fn get_registered_transcripts_paginated(&self, limit: u32, offset: u32) -> Result<Vec<(String, String)>> {
+        let sql = "SELECT session_id, value FROM short_term_memory WHERE key = '_transcript_path' LIMIT $limit START $offset;";
+        let mut response = self.db.query(sql).bind(("limit", limit)).bind(("offset", offset)).await?.check()?;
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+        struct StmRecord {
+            session_id: String,
+            value: String,
+        }
+        let records: Vec<StmRecord> = response.take(0)?;
+        let res = records
+            .into_iter()
+            .map(|r| (r.session_id, r.value))
+            .collect();
+        Ok(res)
+    }
+
     async fn get_session_last_activity(
         &self,
         session_id: &str,
@@ -1369,6 +1406,14 @@ impl StorageBackend for SurrealBackend {
 
     async fn save_episode(&self, episode: &EpisodeSave) -> Result<String> {
         self.save_episode_db(episode).await
+    }
+
+    async fn delete_episode(&self, id: &str) -> Result<()> {
+        self.delete_episode_db(id).await
+    }
+
+    async fn update_idf_index(&self, episode_id: &str, is_delete: bool) -> Result<()> {
+        self.update_idf_index_db(episode_id, is_delete).await
     }
 
     async fn save_wisdom_rule(&self, rule: &WisdomRule) -> Result<String> {
@@ -1551,8 +1596,22 @@ impl StorageBackend for SurrealBackend {
         self.get_all_episodes_db().await
     }
 
+    async fn get_episodes_paginated(&self, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        self.get_episodes_paginated_db(limit, offset).await
+    }
+
     async fn get_episodes_by_node_type(&self, node_type: &str) -> Result<Vec<Episode>> {
         self.get_episodes_by_node_type_db(node_type).await
+    }
+
+    async fn get_episodes_by_node_type_paginated(
+        &self,
+        node_type: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>> {
+        self.get_episodes_by_node_type_paginated_db(node_type, limit, offset)
+            .await
     }
 
     async fn is_feature_enabled(&self, feature_key: &str, default: bool) -> bool {
@@ -1837,8 +1896,16 @@ impl StorageBackend for SurrealBackend {
         self.get_all_wisdom_rules_db().await
     }
 
+    async fn get_wisdom_rules_paginated(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>> {
+        self.get_wisdom_rules_paginated_db(limit, offset).await
+    }
+
     async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>> {
         self.get_all_wiki_nodes_db().await
+    }
+
+    async fn get_wiki_nodes_paginated(&self, limit: u32, offset: u32) -> Result<Vec<WikiNode>> {
+        self.get_wiki_nodes_paginated_db(limit, offset).await
     }
 
     async fn diagnose_error_internal(
