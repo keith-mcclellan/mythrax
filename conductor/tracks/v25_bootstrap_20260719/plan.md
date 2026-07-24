@@ -30,11 +30,11 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md). (959f9b5)
 
 ## Phase 4: MCP-Driven Bootstrapping Orchestration
-- [ ] Task: Execute Clean Reset of the environment.
-- [ ] Task: Spawn Callback Resolver.
-- [ ] Task: Execute Fast Bulk Ingest with `skip_llm`.
-- [ ] Task: Trigger Async Distillation to complete the bootstrap process.
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md).
+- [x] Task: Execute Clean Reset of the environment.
+- [x] Task: Spawn Callback Resolver.
+- [x] Task: Execute Fast Bulk Ingest with `skip_llm`.
+- [x] Task: Trigger Async Distillation to complete the bootstrap process.
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md).
 
 ## Phase: Review Fixes
 - [x] Task: Apply review suggestions (949cf28)
