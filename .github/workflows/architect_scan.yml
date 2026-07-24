@@ -1,0 +1,36 @@
+name: Architect Sanitation Scan
+
+on:
+  push: {}
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+      issues: write
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run Architecture Scan
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+      run: python scripts/architect_scan.py
