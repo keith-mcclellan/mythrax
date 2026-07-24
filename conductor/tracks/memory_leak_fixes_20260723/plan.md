@@ -1,8 +1,22 @@
 # Implementation Plan: Memory Leak Remediation & OOM Crash Prevention
 
-> **Phase ordering rationale:** Memory leaks are fixed before async throughput improvements. Unlocking concurrency while memory bombs exist would accelerate OOM crashes.
+> **Phase ordering rationale:** Memory leaks are fixed before async throughput improvements. Unlocking concurrency while memory bombs exist would accelerate OOM crashes. Architecture documentation is updated first (Phase 0) per workflow.md Principle #2 — changes to the tech stack must be documented before implementation.
 >
 > **Phase gate protocol:** Every phase ends with the **complete 14-step Phase Completion Protocol** defined in `conductor/workflow.md` (unit tests → dev50 → manual verification → user confirmation → conductor-review → adversarial CTO review → conditional commit → git notes → checkpoint SHA). No phase may bypass any step.
+
+## Phase 0: Architecture & Data Flow Documentation Update
+
+Update project documentation to reflect the new design before writing any code. This establishes the architectural contract that all subsequent phases implement against.
+
+- [ ] Task: Update ARCHITECTURE.md with new design
+  - [ ] Update Section 2 (Dual-Engine Storage): document planned SQLite embedding cache migration, incremental IDF indexer with `idf_index` table, `pipeline_cluster` temporary table for DBSCAN state, `content_hash` field for hash-based deduplication
+  - [ ] Update Section 3 (Three-Tiered Model Broker): document MLX `.eval()` requirements for KV caches, weight casts, and cross-encoder logits (joint eval pattern)
+  - [ ] Update Section 4 (Cognitive Scheduling): document streaming-to-disk pipeline architecture (vault md for human-readable artifacts, SurrealDB for machine state), bounded pagination for all DB queries, temporal traversal LIMIT constraints
+  - [ ] Update Section 5 (Graceful Shutdown): document planned CancellationToken lifecycle for background tasks, async semaphore model replacing blocking spin-loops
+  - [ ] Update Section 6 (End-to-End Data Flow): update data flow diagram to reflect streaming pipeline stages, IDF indexer, hash-based deduplication, and bounded graph traversals
+  - [ ] Add new Section: Memory Safety Invariants (pipeline stage memory cap ≤50 items, no `get_all_*` unbounded queries, all MLX operations evaluated before caching, hash-based deduplication for content comparison)
+
+- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 1: Critical MLX Graph Fixes (FR-1, FR-6)
 
@@ -27,9 +41,11 @@ Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency 
 - [ ] Task: Migrate embedding cache from binary to SQLite-only
   - [ ] Write test: Verify `flush_dirty` with SQLite path correctly persists and retrieves dirty entries without loading entire cache
   - [ ] Write test: Verify cache capacity is enforced during flush
-  - [ ] Remove binary `flush_dirty` code path (embeddings.rs L303-375)
+  - [ ] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
+  - [ ] Remove binary `flush_dirty` **write/flush** code path (embeddings.rs L303-375). **Retain** the legacy binary deserialization structs and read logic solely for the one-time migration
   - [ ] Update `flush_dirty_default()` to always use SQLite path
-  - [ ] Add migration: convert existing `embedding_cache.bin` to SQLite on first run
+  - [ ] Add migration: on first run, detect `embedding_cache.bin`, deserialize using retained legacy structs, write all entries to SQLite, then rename/delete the binary file
+  - [ ] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
@@ -48,6 +64,13 @@ The TF-IDF cache-miss bomb is the largest single memory allocation in the codeba
   - [ ] Write test: Verify `update_idf_index` correctly decrements term document frequencies on episode delete
   - [ ] Add `update_idf_index` to `crud_operations.rs`
   - [ ] Wire `update_idf_index` into `save_episode` and `save_episodes_batch` code paths in `backend.rs`
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Backfill IDF index for existing episodes
+  - [ ] Write test: Verify backfill migration computes correct term frequencies for a known set of existing episodes
+  - [ ] Write test: Verify backfill is idempotent (running twice produces identical IDF counts)
+  - [ ] Implement `backfill_idf_index()` function that paginates through all existing episodes, tokenizes content, and populates `idf_index` table
+  - [ ] Wire backfill into daemon startup: run once if `idf_index` table is empty, log progress
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Replace TF-IDF cache-miss bulk load with IDF index lookup
@@ -77,12 +100,22 @@ Exhaustive sweep of ALL unpaginated bulk-load call sites.
   - [ ] Add paginated variants to `crud_operations.rs` and `backend.rs` trait
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Implement hash-based deduplication for wisdom rules and episodes
+- [ ] Task: Add `content_hash` field and hash-based deduplication queries
+  - [ ] Write test: Verify `content_hash` is computed (SHA-256 of normalized content) and stored on episode and wisdom_rule save
   - [ ] Write test: Verify `find_duplicate_by_content_hash(hash)` returns matching record without full table scan
-  - [ ] Write test: Verify `content_hash` is computed and stored on episode/wisdom save
-  - [ ] Add `content_hash` field (SHA-256 of normalized content) to episode and wisdom_rule records
+  - [ ] Add `content_hash` field computation to episode and wisdom_rule save paths in `backend.rs`
   - [ ] Add `find_duplicate_by_content_hash` query to `crud_operations.rs` using DB index lookup
-  - [ ] Refactor wisdom deduplication in `synthesis.rs` L2440 to use hash lookup instead of paginated comparison
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Backfill `content_hash` for existing episodes and wisdom rules
+  - [ ] Write test: Verify backfill computes correct SHA-256 hash for a known set of existing records
+  - [ ] Write test: Verify backfill is idempotent (running twice does not corrupt hashes)
+  - [ ] Implement `backfill_content_hashes()` function that paginates through all existing episodes and wisdom rules, computes SHA-256, and updates each record
+  - [ ] Wire backfill into daemon startup: run once if records with null `content_hash` exist, log progress
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Migrate deduplication logic to hash-based lookups
+  - [ ] Refactor wisdom deduplication in `synthesis.rs` L2440 to use `find_duplicate_by_content_hash` instead of paginated comparison
   - [ ] Refactor near-duplicate detection in `compactor.rs` L253 to use hash pre-filter before embedding comparison
   - [ ] Run tests and confirm pass
 
@@ -169,12 +202,12 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
   - [ ] Write test: Verify each synthesized insight is written to `wiki/<scope>/insights/*.md` immediately and dropped from memory before next cluster
   - [ ] Write test: Verify no more than 50 insights are held in memory simultaneously
   - [ ] Refactor cluster-to-insight synthesis loop in `synthesis.rs` (L1258-1400): write insight md, drop from memory, proceed to next cluster
-  - [ ] Refactor scope insights loading (L977-978, L1505): use paginated vault reads instead of `load_insights()` loading all files
+  - [ ] Refactor scope insights loading (L977-978, L1505): implement chunked directory reading in `load_insights()` using `fs::read_dir` to load, process, and drop markdown files in bounded batches of 50
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Stream direction promotion to vault incrementally
   - [ ] Write test: Verify direction nodes are written to `wiki/<scope>/directions/*.md` immediately after promotion evaluation
-  - [ ] Refactor direction backpropagation (synthesis.rs L2988-3002): load directions paginated, process one-at-a-time, write result to vault, drop, next
+  - [ ] Refactor direction backpropagation (synthesis.rs L2988-3002): load directions paginated from DB, process one-at-a-time, write result to vault, drop, next
   - [ ] Refactor direction promotion drift metrics (L3060-3155): evaluate and write one candidate at a time
   - [ ] Run tests and confirm pass
 
@@ -220,7 +253,7 @@ Now safe to unlock concurrency — all memory bombs are fixed.
 - [ ] Task: Identify and categorize all callers of blocking embed functions
   - [ ] Audit all callers of `embed()`, `embed_batch()`, `embed_sub_batch()` across the codebase
   - [ ] Categorize each caller as: (a) already in async context, (b) in sync context requiring `block_on` bridge, or (c) in trait impl requiring signature change
-  - [ ] Document the migration plan for each caller in a scratch note before proceeding
+  - [ ] Document the categorized caller list in a scratch note before proceeding
   - [ ] Run tests and confirm pass (no code changes, audit only)
 
 - [ ] Task: Replace blocking semaphore spin-loops with async semaphores
@@ -231,14 +264,17 @@ Now safe to unlock concurrency — all memory bombs are fixed.
     - `llm/mxbai_mlx.rs` L405
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Convert embed functions to async and update async-context callers
-  - [ ] Convert `embed()`, `embed_batch()`, `embed_sub_batch()` to async functions
-  - [ ] Update all callers identified in category (a) — those already in async context
+- [ ] Task: Add new async embed functions (strangler pattern) and migrate all callers
+  - [ ] Add `embed_async()`, `embed_batch_async()`, `embed_sub_batch_async()` as new async functions alongside the existing synchronous versions
+  - [ ] Migrate all category (a) callers (async context) to call the new `*_async()` functions
+  - [ ] Migrate all category (b) callers (sync context) to call the new `*_async()` functions via `tokio::runtime::Handle::current().block_on()`
+  - [ ] Update any trait signatures identified in category (c) if needed, or add async trait variants
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Bridge sync-context callers to async embed functions
-  - [ ] For callers identified in category (b): add `tokio::runtime::Handle::current().block_on()` bridge
-  - [ ] For callers identified in category (c): update trait signatures if needed, or add async trait variants
+- [ ] Task: Remove deprecated synchronous embed functions
+  - [ ] Delete the old synchronous `embed()`, `embed_batch()`, `embed_sub_batch()` functions
+  - [ ] Rename `*_async()` functions to `embed()`, `embed_batch()`, `embed_sub_batch()` (drop the `_async` suffix)
+  - [ ] Update all callers to use the renamed functions
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Replace blocking sleeps in daemon.rs
@@ -292,17 +328,14 @@ Address remaining medium-severity memory scaling issues.
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
-## Phase 7: Architecture & Data Flow Documentation Update
+## Phase 7: Final Documentation Reconciliation
 
-Update project documentation to reflect all architectural changes made in Phases 1-6.
+Reconcile ARCHITECTURE.md with actual implementation (Phase 0 documented the design; this phase reconciles any deviations discovered during implementation).
 
-- [ ] Task: Update ARCHITECTURE.md
-  - [ ] Update Section 2 (Dual-Engine Storage): document SQLite embedding cache migration, incremental IDF indexer, `pipeline_cluster` temporary table
-  - [ ] Update Section 3 (Three-Tiered Model Broker): document MLX `.eval()` requirements for KV caches, weight casts, and cross-encoder logits
-  - [ ] Update Section 4 (Cognitive Scheduling): document streaming-to-disk pipeline architecture (vault md for human-readable, SurrealDB for machine state), bounded pagination for all DB queries, temporal traversal LIMIT constraints
-  - [ ] Update Section 5 (Graceful Shutdown): document CancellationToken lifecycle for background tasks, async semaphore model
-  - [ ] Update Section 6 (End-to-End Data Flow): update data flow diagram to reflect streaming pipeline, IDF indexer, hash-based deduplication, and bounded graph traversals
-  - [ ] Add new Section: Memory Safety Invariants (pipeline stage memory cap ≤50 items, no `get_all_*` unbounded queries, all MLX operations evaluated before caching, hash-based deduplication for content comparison)
+- [ ] Task: Reconcile ARCHITECTURE.md with implemented changes
+  - [ ] Diff Phase 0 ARCHITECTURE.md against actual implementation across Phases 1-6
+  - [ ] Update any sections where implementation deviated from the Phase 0 design
+  - [ ] Verify all code examples and diagrams match the final codebase state
 
 - [ ] Task: Update inline code documentation
   - [ ] Add doc comments to all new paginated query functions in `crud_operations.rs` and `backend.rs`
