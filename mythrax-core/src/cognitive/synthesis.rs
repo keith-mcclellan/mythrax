@@ -494,7 +494,7 @@ impl DreamCoordinator {
                 let max_tokens = 2048;
                 let truncated_content =
                     truncate_by_tokens(&node.content, max_tokens, Some(emb.as_ref()));
-                if let Ok(e) = emb.embed(&truncated_content) {
+                if let Ok(e) = emb.embed_async(&truncated_content).await {
                     node.embedding = Some(e);
                 }
             }
@@ -683,7 +683,7 @@ impl DreamCoordinator {
                                         max_tokens,
                                         Some(emb.as_ref()),
                                     );
-                                    if let Ok(e) = emb.embed(&truncated_content) {
+                                    if let Ok(e) = emb.embed_async(&truncated_content).await {
                                         new_node.embedding = Some(e);
                                     }
                                 }
@@ -710,7 +710,7 @@ impl DreamCoordinator {
                                         max_tokens,
                                         Some(emb.as_ref()),
                                     );
-                                    if let Ok(e) = emb.embed(&truncated_content) {
+                                    if let Ok(e) = emb.embed_async(&truncated_content).await {
                                         updated_existing.embedding = Some(e);
                                     }
                                 }
@@ -1620,7 +1620,7 @@ impl DreamCoordinator {
                         if let Some(ref embedder) = embedder {
                             if !episodes_needing_embedding.is_empty() {
                                 if let Ok(embeds) =
-                                    embedder.embed_batch(&episodes_needing_embedding)
+                                    embedder.embed_batch_async(&episodes_needing_embedding).await
                                 {
                                     for (i, ep) in episodes_with_embedding.iter_mut().enumerate() {
                                         if i < embeds.len() {

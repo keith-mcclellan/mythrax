@@ -919,7 +919,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
 
     // Make it idle again
     surreal_backend.db
-        .query("UPDATE short_term_memory SET updated_at = time::now() - 11m WHERE session_id = 'sess_abandoned';")
+        .query("UPDATE short_term_memory SET updated_at = time::now() - 11m, value = '2020-01-01T00:00:00Z' WHERE session_id = 'sess_abandoned';")
         .await?
         .check()?;
 

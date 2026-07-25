@@ -391,19 +391,17 @@ impl MxbaiReranker {
         Ok(Self { model, tokenizer })
     }
 
-    pub fn score_pairs(&mut self, query: &str, passages: &[&str]) -> Result<Vec<f32>> {
+    pub async fn score_pairs(&mut self, query: &str, passages: &[&str]) -> Result<Vec<f32>> {
         use mlx_rs::ops::indexing::TryIndexOp;
 
         if passages.is_empty() {
             return Ok(Vec::new());
         }
 
-        let _permit = loop {
-            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
-                break permit;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        };
+        let _permit = crate::llm::metal_embedding_semaphore()
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Embedding semaphore error: {}", e))?;
 
         // 1. Compute null logits for query-only baseline
         let null_text = format!("query: {} document: ", query);

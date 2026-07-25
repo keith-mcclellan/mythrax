@@ -1814,6 +1814,11 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let emp = self
+            .embedder
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No embedder configured"))?;
+
         if let Some(cached) = crate::embeddings::get_cached_embedding(text) {
             return Ok(cached);
         }
@@ -1843,16 +1848,7 @@ impl StorageBackend for SurrealBackend {
             }
         }
 
-        let embedder = self.embedder.clone();
-        let text_str = text.to_string();
-        let res = tokio::task::spawn_blocking(move || {
-            if let Some(ref emp) = embedder {
-                emp.embed(&text_str)
-            } else {
-                anyhow::bail!("No embedder configured")
-            }
-        })
-        .await?;
+        let res = emp.embed_async(text).await;
 
         self.active_embeddings
             .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -1876,6 +1872,11 @@ impl StorageBackend for SurrealBackend {
         }
 
         if !missing_texts.is_empty() {
+            let emp = self
+                .embedder
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("No embedding model loaded"))?;
+
             let sem = self.get_embedding_semaphore().await;
             let _permit = sem
                 .acquire()
@@ -1901,16 +1902,7 @@ impl StorageBackend for SurrealBackend {
                 }
             }
 
-            let embedder = self.embedder.clone();
-            let missing_texts_clone = missing_texts.clone();
-            let res = tokio::task::spawn_blocking(move || {
-                if let Some(ref emp) = embedder {
-                    emp.embed_batch(&missing_texts_clone)
-                } else {
-                    Err(anyhow::anyhow!("No embedding model loaded"))
-                }
-            })
-            .await?;
+            let res = emp.embed_batch_async(&missing_texts).await;
 
             self.active_embeddings
                 .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);

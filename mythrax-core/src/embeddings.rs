@@ -8,9 +8,12 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tokenizers::Tokenizer;
 
+#[async_trait::async_trait]
 pub trait TextEmbedder: Send + Sync {
     fn embed(&self, text: &str) -> Result<Vec<f32>>;
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    async fn embed_async(&self, text: &str) -> Result<Vec<f32>>;
+    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     fn count_tokens(&self, text: &str) -> Result<usize>;
     fn is_mock(&self) -> bool;
 }
@@ -441,11 +444,7 @@ impl LocalEmbedder {
         })
     }
 
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        if let Some(cached) = get_cached_embedding(text) {
-            return Ok(cached);
-        }
-
+    fn embed_internal(&self, text: &str) -> Result<Vec<f32>> {
         // Nomic Embed Text requires a prefix for search queries vs document indices:
         // "search_query: " or "search_document: "
         let formatted_text = if text.contains(':') {
@@ -553,6 +552,39 @@ impl LocalEmbedder {
         Ok(sum_embeddings)
     }
 
+    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_async(text)))
+        } else {
+            futures::executor::block_on(self.embed_async(text))
+        }
+    }
+
+    pub async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
+        if let Some(cached) = get_cached_embedding(text) {
+            return Ok(cached);
+        }
+        let _permit = crate::llm::metal_embedding_semaphore()
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
+
+        tokio::task::yield_now().await;
+
+        let compute = || self.embed_internal(text);
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(compute)
+        } else {
+            compute()
+        }
+    }
+
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
         let encoding = self
             .tokenizer
@@ -564,6 +596,17 @@ impl LocalEmbedder {
     }
 
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_batch_async(texts)))
+        } else {
+            futures::executor::block_on(self.embed_batch_async(texts))
+        }
+    }
+
+    pub async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -584,7 +627,7 @@ impl LocalEmbedder {
         if !uncached_texts.is_empty() {
             let mut uncached_embeddings = Vec::with_capacity(uncached_texts.len());
             for chunk in uncached_texts.chunks(128) {
-                let chunk_embeddings = self.embed_sub_batch(chunk)?;
+                let chunk_embeddings = self.embed_sub_batch_async(chunk).await?;
                 uncached_embeddings.extend(chunk_embeddings);
             }
 
@@ -600,7 +643,33 @@ impl LocalEmbedder {
         Ok(final_embeddings)
     }
 
-    fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    pub fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_sub_batch_internal(texts)
+    }
+
+    pub async fn embed_sub_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        let _permit = crate::llm::metal_embedding_semaphore()
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
+
+        tokio::task::yield_now().await;
+
+        let compute = || self.embed_sub_batch_internal(texts);
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(compute)
+        } else {
+            compute()
+        }
+    }
+
+    fn embed_sub_batch_internal(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -740,12 +809,19 @@ impl LocalEmbedder {
 }
 
 #[cfg(not(feature = "mlx"))]
+#[async_trait::async_trait]
 impl TextEmbedder for LocalEmbedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         self.embed(text)
     }
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         self.embed_batch(texts)
+    }
+    async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed_async(text).await
+    }
+    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch_async(texts).await
     }
     fn count_tokens(&self, text: &str) -> Result<usize> {
         self.count_tokens(text)
@@ -814,11 +890,7 @@ impl LocalEmbedder {
         })
     }
 
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        if let Some(cached) = get_cached_embedding(text) {
-            return Ok(cached);
-        }
-
+    fn tokenize_single(&self, text: &str) -> Result<(Array, Array, usize)> {
         let formatted_text = if text.contains(':') {
             text.to_string()
         } else {
@@ -837,7 +909,7 @@ impl LocalEmbedder {
         let mut seq_len = ids.len();
 
         if seq_len == 0 {
-            return Ok(vec![0.0; 768]);
+            seq_len = 1;
         }
 
         if seq_len > 2048 {
@@ -850,13 +922,15 @@ impl LocalEmbedder {
         let mask_i32: Vec<i32> = mask.iter().take(seq_len).map(|&x| x as i32).collect();
         let mask_array = Array::from_slice(&mask_i32, &[1, seq_len as i32]);
 
-        let _permit = loop {
-            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
-                break permit;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        };
+        Ok((input_array, mask_array, seq_len))
+    }
 
+    fn embed_single_internal(
+        &self,
+        input_array: &Array,
+        mask_array: &Array,
+        seq_len: usize,
+    ) -> Result<Vec<f32>> {
         let mut model_lock = self
             .model
             .lock()
@@ -873,7 +947,7 @@ impl LocalEmbedder {
             *model_lock = Some(loaded);
         }
         let model = model_lock.as_mut().unwrap();
-        let output = model.forward(&input_array, Some(&mask_array))?;
+        let output = model.forward(input_array, Some(mask_array))?;
 
         // Mean pool on GPU: sum(x * mask) / max(sum(mask), 1.0)
         let mask_expanded = mask_array
@@ -900,6 +974,42 @@ impl LocalEmbedder {
         Ok(vec)
     }
 
+    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_async(text)))
+        } else {
+            futures::executor::block_on(self.embed_async(text))
+        }
+    }
+
+    pub async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
+        if let Some(cached) = get_cached_embedding(text) {
+            return Ok(cached);
+        }
+
+        let (input_array, mask_array, seq_len) = self.tokenize_single(text)?;
+
+        let _permit = crate::llm::metal_embedding_semaphore()
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
+
+        tokio::task::yield_now().await;
+
+        let compute = || self.embed_single_internal(&input_array, &mask_array, seq_len);
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(compute)
+        } else {
+            compute()
+        }
+    }
+
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
         let encoding = self
             .tokenizer
@@ -911,6 +1021,17 @@ impl LocalEmbedder {
     }
 
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_batch_async(texts)))
+        } else {
+            futures::executor::block_on(self.embed_batch_async(texts))
+        }
+    }
+
+    pub async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -931,7 +1052,7 @@ impl LocalEmbedder {
         if !uncached_texts.is_empty() {
             let mut uncached_embeddings = Vec::with_capacity(uncached_texts.len());
             for chunk in uncached_texts.chunks(128) {
-                let chunk_embeddings = self.embed_sub_batch(chunk)?;
+                let chunk_embeddings = self.embed_sub_batch_async(chunk).await?;
                 uncached_embeddings.extend(chunk_embeddings);
             }
 
@@ -947,11 +1068,7 @@ impl LocalEmbedder {
         Ok(final_embeddings)
     }
 
-    fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(vec![]);
-        }
-
+    fn tokenize_batch(&self, texts: &[String]) -> Result<(Array, Array, usize, usize)> {
         let formatted_texts: Vec<String> = texts
             .iter()
             .map(|text| {
@@ -1003,13 +1120,16 @@ impl LocalEmbedder {
         let mask_array =
             Array::from_slice(&attention_mask_data, &[batch_size as i32, max_len as i32]);
 
-        let _permit = loop {
-            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
-                break permit;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        };
+        Ok((input_array, mask_array, batch_size, max_len))
+    }
 
+    fn embed_sub_batch_internal(
+        &self,
+        input_array: &Array,
+        mask_array: &Array,
+        batch_size: usize,
+        max_len: usize,
+    ) -> Result<Vec<Vec<f32>>> {
         let mut model_lock = self
             .model
             .lock()
@@ -1026,7 +1146,7 @@ impl LocalEmbedder {
             *model_lock = Some(loaded);
         }
         let model = model_lock.as_mut().unwrap();
-        let output = model.forward(&input_array, Some(&mask_array))?;
+        let output = model.forward(input_array, Some(mask_array))?;
 
         let mask_expanded = mask_array
             .reshape(&[batch_size as i32, max_len as i32, 1])?
@@ -1054,15 +1174,62 @@ impl LocalEmbedder {
         }
         Ok(results)
     }
+
+    pub fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        let (input_array, mask_array, batch_size, max_len) = self.tokenize_batch(texts)?;
+
+        let _permit = loop {
+            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
+                break permit;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+
+        self.embed_sub_batch_internal(&input_array, &mask_array, batch_size, max_len)
+    }
+
+    pub async fn embed_sub_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        let (input_array, mask_array, batch_size, max_len) = self.tokenize_batch(texts)?;
+
+        let _permit = crate::llm::metal_embedding_semaphore()
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
+
+        tokio::task::yield_now().await;
+
+        let compute = || self.embed_sub_batch_internal(&input_array, &mask_array, batch_size, max_len);
+        if tokio::runtime::Handle::try_current()
+            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+            .unwrap_or(false)
+        {
+            tokio::task::block_in_place(compute)
+        } else {
+            compute()
+        }
+    }
 }
 
 #[cfg(feature = "mlx")]
+#[async_trait::async_trait]
 impl TextEmbedder for LocalEmbedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         self.embed(text)
     }
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         self.embed_batch(texts)
+    }
+    async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed_async(text).await
+    }
+    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch_async(texts).await
     }
     fn count_tokens(&self, text: &str) -> Result<usize> {
         self.count_tokens(text)
@@ -1269,6 +1436,7 @@ mod tests {
 #[derive(Clone)]
 pub struct MockEmbedder;
 
+#[async_trait::async_trait]
 impl TextEmbedder for MockEmbedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         use std::collections::hash_map::DefaultHasher;
@@ -1300,6 +1468,12 @@ impl TextEmbedder for MockEmbedder {
         Ok(res)
     }
 
+    async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text)
+    }
+    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch(texts)
+    }
     fn count_tokens(&self, text: &str) -> Result<usize> {
         Ok(text.split_whitespace().count())
     }

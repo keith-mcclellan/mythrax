@@ -175,7 +175,7 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                     if let Some(embedder) = &backend.embedder {
                         let text_to_embed =
                             format!("{} {:?}", causal.unwrap_or_default(), parsed["lessons"]);
-                        if let Ok(vec) = embedder.embed(&text_to_embed) {
+                        if let Ok(vec) = embedder.embed_async(&text_to_embed).await {
                             let rule_sql = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active';";
                             if let Ok(mut rule_res) = backend.db.query(rule_sql).await {
                                 if let Ok(rules_raw) =

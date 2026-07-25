@@ -268,40 +268,40 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [x] Document the categorized caller list in a scratch note before proceeding
   - [x] Run tests and confirm pass (no code changes, audit only)
 
-- [ ] Task: Add async embed function variants with async semaphores (strangler pattern)
-  - [ ] Write test: Verify new async embed variants return identical results to legacy sync variants
-  - [ ] Write test: Verify embedding semaphore acquisition in async variants is non-blocking and yields to tokio runtime
-  - [ ] Add `embed_async()`, `embed_batch_async()`, `embed_sub_batch_async()` as new async functions alongside the existing synchronous versions
-  - [ ] In the new async variants, use `tokio::sync::Semaphore::acquire().await` instead of `try_acquire()` spin-loops (the old sync variants retain `try_acquire` until deleted)
-  - [ ] Add async trait variants if needed for category (c) callers
-  - [ ] Run tests and confirm pass
+- [x] Task: Add async embed function variants with async semaphores (strangler pattern)
+  - [x] Write test: Verify new async embed variants return identical results to legacy sync variants
+  - [x] Write test: Verify embedding semaphore acquisition in async variants is non-blocking and yields to tokio runtime
+  - [x] Add `embed_async()`, `embed_batch_async()`, `embed_sub_batch_async()` as new async functions alongside the existing synchronous versions
+  - [x] In the new async variants, use `tokio::sync::Semaphore::acquire().await` instead of `try_acquire()` spin-loops (the old sync variants retain `try_acquire` until deleted)
+  - [x] Add async trait variants if needed for category (c) callers
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate async-context embed callers to new async variants
-  - [ ] Migrate all category (a) callers (async context) to call the new `*_async()` functions
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate async-context embed callers to new async variants
+  - [x] Migrate all category (a) callers (async context) to call the new `*_async()` functions
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate sync-context embed callers and remove deprecated sync functions
-  - [ ] For category (b) callers (sync context called from within tokio runtime): bubble `async` up the call stack to the nearest async context. If bubbling is structurally impossible (e.g., restricted by external sync trait), use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** use bare `block_on()` which panics inside a tokio runtime
-  - [ ] Update any remaining trait signatures identified in category (c)
-  - [ ] Delete the old synchronous `embed()`, `embed_batch()`, `embed_sub_batch()` functions
-  - [ ] Rename `*_async()` functions to `embed()`, `embed_batch()`, `embed_sub_batch()` (drop the `_async` suffix)
-  - [ ] Update all callers to use the renamed functions
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate sync-context embed callers and remove deprecated sync functions
+  - [x] For category (b) callers (sync context called from within tokio runtime): bubble `async` up the call stack to the nearest async context. If bubbling is structurally impossible (e.g., restricted by external sync trait), use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** use bare `block_on()` which panics inside a tokio runtime
+  - [x] Update any remaining trait signatures identified in category (c)
+  - [x] Delete the old synchronous `embed()`, `embed_batch()`, `embed_sub_batch()` functions
+  - [x] Rename `*_async()` functions to `embed()`, `embed_batch()`, `embed_sub_batch()` (drop the `_async` suffix)
+  - [x] Update all callers to use the renamed functions
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Replace blocking sleeps in daemon.rs and executor.rs
-  - [ ] Write test: Verify daemon startup/retry loops use async sleep
-  - [ ] Write test: Verify `run_git_command_with_retry` does not block the tokio runtime
-  - [ ] Replace `std::thread::sleep` at daemon.rs L631 and L638 with `tokio::time::sleep`
-  - [ ] Refactor `executor.rs` L40 `run_git_command_with_retry`: convert to async using `tokio::process::Command` and `tokio::time::sleep`, or wrap with `tokio::task::block_in_place` if async conversion is structurally blocked
-  - [ ] Run tests and confirm pass
+- [x] Task: Replace blocking sleeps in daemon.rs and executor.rs
+  - [x] Write test: Verify daemon startup/retry loops use async sleep
+  - [x] Write test: Verify `run_git_command_with_retry` does not block the tokio runtime
+  - [x] Replace `std::thread::sleep` at daemon.rs L631 and L638 with `tokio::time::sleep`
+  - [x] Refactor `executor.rs` L40 `run_git_command_with_retry`: convert to async using `tokio::process::Command` and `tokio::time::sleep`, or wrap with `tokio::task::block_in_place` if async conversion is structurally blocked
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Add CancellationToken to all daemon background tasks
-  - [ ] Write test: Verify all background tasks terminate within 5 seconds when cancellation is signaled
-  - [ ] Create shared `CancellationToken` in daemon startup
-  - [ ] Pass token to all 5 `tokio::spawn` loops (daemon.rs L228, L238, L249, L261, L268)
-  - [ ] Replace bare `loop {}` with `loop { tokio::select! { _ = token.cancelled() => break, ... } }`
-  - [ ] Wire token cancellation into the graceful shutdown sequence
-  - [ ] Run tests and confirm pass
+- [x] Task: Add CancellationToken to all daemon background tasks
+  - [x] Write test: Verify all background tasks terminate within 5 seconds when cancellation is signaled
+  - [x] Create shared `CancellationToken` in daemon startup
+  - [x] Pass token to all 5 `tokio::spawn` loops (daemon.rs L228, L238, L249, L261, L268)
+  - [x] Replace bare `loop {}` with `loop { tokio::select! { _ = token.cancelled() => break, ... } }`
+  - [x] Wire token cancellation into the graceful shutdown sequence
+  - [x] Run tests and confirm pass
 
 - [x] Task: Audit and categorize blocking inference/generation functions
   - [x] Audit all blocking inference functions (text generation, completion loops, reranking) across `llm/` modules
@@ -309,24 +309,24 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [x] Document the categorized caller list in a scratch note before proceeding
   - [x] Run tests and confirm pass (no code changes, audit only)
 
-- [ ] Task: Add async inference function variants with async semaphores (strangler pattern)
-  - [ ] Write test: Verify new async inference variants return identical results to legacy sync variants
-  - [ ] Add async variants of blocking inference/generation functions alongside existing synchronous versions
-  - [ ] In the new async variants, use async semaphore acquisition where applicable (the old sync variants retain blocking paths until deleted)
-  - [ ] Add async trait variants if needed for category (c) callers
-  - [ ] Run tests and confirm pass
+- [x] Task: Add async inference function variants with async semaphores (strangler pattern)
+  - [x] Write test: Verify new async inference variants return identical results to legacy sync variants
+  - [x] Add async variants of blocking inference/generation functions alongside existing synchronous versions
+  - [x] In the new async variants, use async semaphore acquisition where applicable (the old sync variants retain blocking paths until deleted)
+  - [x] Add async trait variants if needed for category (c) callers
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate async-context inference callers to new async variants
-  - [ ] Migrate all category (a) callers (async context) to the new async variants
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate async-context inference callers to new async variants
+  - [x] Migrate all category (a) callers (async context) to the new async variants
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Migrate sync-context inference callers and remove deprecated sync functions
-  - [ ] For category (b) callers: bubble `async` up the call stack. If structurally impossible, use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** bare `block_on()`
-  - [ ] Update any remaining trait signatures identified in category (c)
-  - [ ] Delete the old synchronous inference/generation functions
-  - [ ] Rename async variants to drop `_async` suffix
-  - [ ] Update all callers to use the renamed functions
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate sync-context inference callers and remove deprecated sync functions
+  - [x] For category (b) callers: bubble `async` up the call stack. If structurally impossible, use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** bare `block_on()`
+  - [x] Update any remaining trait signatures identified in category (c)
+  - [x] Delete the old synchronous inference/generation functions
+  - [x] Rename async variants to drop `_async` suffix
+  - [x] Update all callers to use the renamed functions
+  - [x] Run tests and confirm pass
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 

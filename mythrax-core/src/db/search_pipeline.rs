@@ -1675,7 +1675,7 @@ impl SurrealBackend {
                     (g, f)
                 } else {
                     let decayed_utility = utility_val * get_decay_factor(delta_t_secs);
-                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 1.0f32))
+                    let f = (0.7f32 + 0.3f32 * (decayed_utility / 50.0f32))
                         * get_tier_boost(crate::contracts::Tier::Project, query_category);
                     (1.0f32, f)
                 };
@@ -2869,7 +2869,7 @@ impl SurrealBackend {
                                         base_query
                                     };
                                 if let Ok(scores) =
-                                    reranker.score_pairs(rerank_query.as_str(), &passages)
+                                    reranker.score_pairs(rerank_query.as_str(), &passages).await
                                 {
                                     for (i, score) in scores.into_iter().enumerate() {
                                         if rerank_weight >= 1.0 {

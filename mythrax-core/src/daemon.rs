@@ -85,6 +85,8 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
             std::fs::write(&pid_path, pid.to_string())?;
 
             let run_res = async {
+                let cancel_token = tokio_util::sync::CancellationToken::new();
+
                 // Composition root: inject mock dependencies when test env vars are set
                 let backend_config = if crate::is_test_mock() {
                     crate::db::BackendConfig {
@@ -119,12 +121,22 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
                 // Reprocess missing embeddings on startup
                 let backend_startup = backend.clone();
+                let cancel_token_startup = cancel_token.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    tokio::select! {
+                        _ = cancel_token_startup.cancelled() => {
+                            tracing::info!("Startup missing embeddings task received cancellation signal, stopping");
+                            return;
+                        }
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(2)) => {}
+                    }
                     if backend_startup.embedder.is_some() {
                         tracing::info!("Checking for episodes and wisdom rules with missing embeddings...");
                         let sql_ep = "SELECT * FROM episode WHERE embedding IS NONE LIMIT 50;";
                         loop {
+                            if cancel_token_startup.is_cancelled() {
+                                break;
+                            }
                             match backend_startup.db.query(sql_ep).await {
                                 Ok(mut response) => {
                                     let episodes: Vec<Episode> = response.take(0).unwrap_or_default();
@@ -134,9 +146,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     tracing::info!("Found {} episodes with missing embeddings batch. Regenerating...", episodes.len());
                                     let mut updated_any = false;
                                     for ep in episodes {
+                                        if cancel_token_startup.is_cancelled() {
+                                            break;
+                                        }
                                         if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
                                             let text_to_embed = format!("{}: {}", ep.title, ep.content);
-                                            if let Ok(vec) = embedder.embed(&text_to_embed)
+                                            if let Ok(vec) = embedder.embed_async(&text_to_embed).await
                                                 && let Ok(thing) = crate::db::parse_record_id(id_str) {
                                                     let update_sql = "UPDATE $id SET embedding = $embedding;";
                                                     if let Ok(mut u_res) = backend_startup.db.query(update_sql)
@@ -165,6 +180,9 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
                         let sql_wisdom = "SELECT * FROM wisdom WHERE embedding IS NONE OR embedding = [] LIMIT 50;";
                         loop {
+                            if cancel_token_startup.is_cancelled() {
+                                break;
+                            }
                             match backend_startup.db.query(sql_wisdom).await {
                                 Ok(mut response) => {
                                     let rules: Vec<crate::contracts::WisdomRule> = response.take(0).unwrap_or_default();
@@ -174,9 +192,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     tracing::info!("Found {} wisdom rules with missing embeddings batch. Regenerating...", rules.len());
                                     let mut updated_any = false;
                                     for r in rules {
+                                        if cancel_token_startup.is_cancelled() {
+                                            break;
+                                        }
                                         if let (Some(id_str), Some(embedder)) = (&r.id, &backend_startup.embedder) {
                                             let text_to_embed = format!("{}: {}", r.target_pattern, r.prescribed_remedy);
-                                            if let Ok(vec) = embedder.embed(&text_to_embed)
+                                            if let Ok(vec) = embedder.embed_async(&text_to_embed).await
                                                 && let Ok(thing) = crate::db::parse_record_id(id_str) {
                                                     let update_sql = "UPDATE $id SET embedding = $embedding;";
                                                     if let Ok(mut u_res) = backend_startup.db.query(update_sql)
@@ -205,6 +226,9 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
                         let sql_wiki = "SELECT * FROM wiki_node WHERE embedding IS NONE OR embedding = [] LIMIT 50;";
                         loop {
+                            if cancel_token_startup.is_cancelled() {
+                                break;
+                            }
                             match backend_startup.db.query(sql_wiki).await {
                                 Ok(mut response) => {
                                     let wiki_nodes: Vec<crate::contracts::WikiNode> = response.take(0).unwrap_or_default();
@@ -214,9 +238,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     tracing::info!("Found {} wiki nodes with missing embeddings batch. Regenerating...", wiki_nodes.len());
                                     let mut updated_any = false;
                                     for node in wiki_nodes {
+                                        if cancel_token_startup.is_cancelled() {
+                                            break;
+                                        }
                                         if let (Some(id_str), Some(embedder)) = (&node.id, &backend_startup.embedder) {
                                             let text_to_embed = format!("{}: {}", node.name, node.content);
-                                            if let Ok(vec) = embedder.embed(&text_to_embed)
+                                            if let Ok(vec) = embedder.embed_async(&text_to_embed).await
                                                 && let Ok(thing) = crate::db::parse_record_id(id_str) {
                                                     let update_sql = "UPDATE $id SET embedding = $embedding;";
                                                     if let Ok(mut u_res) = backend_startup.db.query(update_sql)
@@ -267,32 +294,56 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 // Spawn background checkpointing daemon
                 let backend_chk = backend.clone();
                 let vault_chk = vault_path.clone();
+                let cancel_token_chk = cancel_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(600)).await; // 10 minutes
-                        if let Err(e) = run_checkpoint(&*backend_chk, &vault_chk).await {
-                            tracing::error!("Checkpointing daemon error: {:?}", e);
+                        tokio::select! {
+                            _ = cancel_token_chk.cancelled() => {
+                                tracing::info!("Checkpointing daemon received cancellation signal, stopping loop");
+                                break;
+                            }
+                            _ = tokio::time::sleep(tokio::time::Duration::from_secs(600)) => {
+                                if let Err(e) = run_checkpoint(&*backend_chk, &vault_chk).await {
+                                    tracing::error!("Checkpointing daemon error: {:?}", e);
+                                }
+                            }
                         }
                     }
                 });
 
                 // Spawn background embedding cache flusher
+                let cancel_token_flush = cancel_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await; // every 60 seconds
-                        if let Err(e) = crate::embeddings::flush_dirty_default() {
-                            tracing::error!("Background embedding cache flush failed: {:?}", e);
+                        tokio::select! {
+                            _ = cancel_token_flush.cancelled() => {
+                                tracing::info!("Embedding cache flusher received cancellation signal, stopping loop");
+                                break;
+                            }
+                            _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {
+                                if let Err(e) = crate::embeddings::flush_dirty_default() {
+                                    tracing::error!("Background embedding cache flush failed: {:?}", e);
+                                }
+                            }
                         }
                     }
                 });
 
                 // Spawn reflection harvester loop
                 let backend_harvest = backend.clone();
+                let cancel_token_harvest = cancel_token.clone();
                 tokio::spawn(async move {
                     loop {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await; // every 60 seconds
-                        if let Err(e) = crate::hooks::reflect::harvest_completed_reflections(&*backend_harvest).await {
-                            tracing::error!("Reflection harvester failed: {:?}", e);
+                        tokio::select! {
+                            _ = cancel_token_harvest.cancelled() => {
+                                tracing::info!("Reflection harvester received cancellation signal, stopping loop");
+                                break;
+                            }
+                            _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {
+                                if let Err(e) = crate::hooks::reflect::harvest_completed_reflections(&*backend_harvest).await {
+                                    tracing::error!("Reflection harvester failed: {:?}", e);
+                                }
+                            }
                         }
                     }
                 });
@@ -300,6 +351,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 // Spawn the tokio background scheduler loop
                 let backend_dream = backend.clone();
                 let store_dream = store.clone();
+                let cancel_token_dream = cancel_token.clone();
                 tokio::spawn(async move {
                     let dream_coordinator = cognitive::synthesis::DreamCoordinator::new();
                     let compactor = cognitive::compactor::Compactor::new();
@@ -307,42 +359,49 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     // Spawn daily scheduler
                     let backend_daily = backend_dream.clone();
                     let store_daily = store_dream.clone();
+                    let cancel_token_daily = cancel_token_dream.clone();
                     tokio::spawn(async move {
                         let dc = cognitive::synthesis::DreamCoordinator::new();
                         let cmp = cognitive::compactor::Compactor::new();
                         loop {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
-
-                            tracing::info!("Daily scheduled background handoff cleanup starting...");
-                            let pruning_days = match backend_daily.get_profile_key("stm.pruning_days").await {
-                                Ok(Some(val_str)) => val_str.parse::<i64>().unwrap_or(7),
-                                _ => std::env::var("MYTHRAX_STM_PRUNING_DAYS")
-                                    .ok()
-                                    .and_then(|v| v.parse::<i64>().ok())
-                                    .unwrap_or(7),
-                            };
-                            if let Err(e) = backend_daily.delete_stale_handoffs(pruning_days).await {
-                                tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
-                            }
-
-                            tracing::info!("Daily scheduled deep dreaming starting...");
-                            if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep"), backend_daily.embedder.clone()).await {
-                                tracing::error!("Daily deep dreaming failed: {:?}", e);
-                            } else {
-                                tracing::info!("Deep dreaming synthesis completed. Running compactions...");
-                                let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
-                                if scopes.is_empty() {
-                                    scopes.push("general".to_string());
+                            tokio::select! {
+                                _ = cancel_token_daily.cancelled() => {
+                                    tracing::info!("Daily scheduler received cancellation signal, stopping loop");
+                                    break;
                                 }
-                                for scope in scopes {
-                                    let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope, backend_daily.embedder.clone()).await;
+                                _ = tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)) => {
+                                    tracing::info!("Daily scheduled background handoff cleanup starting...");
+                                    let pruning_days = match backend_daily.get_profile_key("stm.pruning_days").await {
+                                        Ok(Some(val_str)) => val_str.parse::<i64>().unwrap_or(7),
+                                        _ => std::env::var("MYTHRAX_STM_PRUNING_DAYS")
+                                            .ok()
+                                            .and_then(|v| v.parse::<i64>().ok())
+                                            .unwrap_or(7),
+                                    };
+                                    if let Err(e) = backend_daily.delete_stale_handoffs(pruning_days).await {
+                                        tracing::error!("Daily stale handoff cleanup failed: {:?}", e);
+                                    }
+
+                                    tracing::info!("Daily scheduled deep dreaming starting...");
+                                    if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep"), backend_daily.embedder.clone()).await {
+                                        tracing::error!("Daily deep dreaming failed: {:?}", e);
+                                    } else {
+                                        tracing::info!("Deep dreaming synthesis completed. Running compactions...");
+                                        let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
+                                        if scopes.is_empty() {
+                                            scopes.push("general".to_string());
+                                        }
+                                        for scope in scopes {
+                                            let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope, backend_daily.embedder.clone()).await;
+                                        }
+
+                                    }
+
+                                    tracing::info!("Daily scheduled auditor calibration starting...");
+                                    if let Err(e) = run_auditor(&*backend_daily).await {
+                                        tracing::error!("Daily auditor calibration failed: {:?}", e);
+                                    }
                                 }
-
-                            }
-
-                            tracing::info!("Daily scheduled auditor calibration starting...");
-                            if let Err(e) = run_auditor(&*backend_daily).await {
-                                tracing::error!("Daily auditor calibration failed: {:?}", e);
                             }
                         }
                     });
@@ -352,6 +411,10 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
                     loop {
                         tokio::select! {
+                            _ = cancel_token_dream.cancelled() => {
+                                tracing::info!("Dreaming coordinator received cancellation signal, stopping loop");
+                                break;
+                            }
                             val = dream_rx.recv() => {
                                 match val {
                                     Some(_) => {
@@ -474,6 +537,9 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                         tracing::info!("SIGTERM received. Initiating graceful shutdown...");
                     }
                 }
+
+                tracing::info!("Signalling background tasks to cancel...");
+                cancel_token.cancel();
 
                 let shutdown_sequence = async {
                     tracing::info!("Sending Shutdown event to blackboard actor...");
@@ -670,14 +736,14 @@ pub async fn stop_daemon() -> Result<()> {
                     if system.process(pid).is_none() {
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(100));
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
                 if system.process(pid).is_some() {
                     println!("Process did not exit, sending SIGKILL...");
                     if let Some(process) = system.process(pid) {
                         process.kill_with(Signal::Kill);
                     }
-                    std::thread::sleep(Duration::from_millis(500));
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             } else {
                 println!("Process with PID {} not found.", pid);

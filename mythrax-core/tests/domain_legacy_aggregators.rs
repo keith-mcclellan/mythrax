@@ -51,11 +51,18 @@ fn test_secret_filter_no_panic_on_mismatch() {
 
 struct FailingEmbedder;
 
+#[async_trait::async_trait]
 impl mythrax_core::embeddings::TextEmbedder for FailingEmbedder {
     fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
         Err(anyhow::anyhow!("No embedding model loaded"))
     }
     fn embed_batch(&self, _texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Err(anyhow::anyhow!("No embedding model loaded"))
+    }
+    async fn embed_async(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        Err(anyhow::anyhow!("No embedding model loaded"))
+    }
+    async fn embed_batch_async(&self, _texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
         Err(anyhow::anyhow!("No embedding model loaded"))
     }
     fn count_tokens(&self, _text: &str) -> anyhow::Result<usize> {

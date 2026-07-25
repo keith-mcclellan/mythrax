@@ -1072,8 +1072,10 @@ async fn run_evaluation(
 
     // Warm up embedding VRAM model and metal buffers before scoring benchmark questions
     if let Ok(embedder) = mythrax_core::embeddings::LocalEmbedder::get_global() {
-        let _ = embedder.embed("warmup query for metal vram");
-        let _ = embedder.embed_batch(&["warmup batch query for metal vram".to_string()]);
+        let _ = embedder.embed_async("warmup query for metal vram").await;
+        let _ = embedder
+            .embed_batch_async(&["warmup batch query for metal vram".to_string()])
+            .await;
     }
 
     let total_q = target_questions.len();
