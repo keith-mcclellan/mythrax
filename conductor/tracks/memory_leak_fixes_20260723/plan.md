@@ -365,28 +365,30 @@ Address remaining medium-severity memory scaling issues.
 
 Automate boundary-isolated mirroring, SHA-256 deduplicated indexing, and MOC linking of workspace-root and Conductor documentation assets (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into the Mythrax human-readable vault (`vault_root/reference/`) and retrieval index.
 
-- [ ] Task: Add `content_hash` deduplication support to `WikiNode` schema
+- [ ] Task: Add `content_hash` deduplication support & backfill for `WikiNode`
   - [ ] Add `content_hash` field to `WikiNode` struct in `contracts.rs`
-  - [ ] Add `DEFINE FIELD content_hash` and `DEFINE INDEX idx_wiki_node_hash ON wiki_node FIELDS content_hash` in `surreal_init.rs`
+  - [ ] Add `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node TYPE option<string>;` and `DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;` in `src/db/schema.rs`
+  - [ ] Compute SHA-256 `content_hash` in `save_wiki_node` inside `backend.rs` / `crud_operations.rs`
   - [ ] Add `find_wiki_node_by_hash(hash)` query to CRUD layer
+  - [ ] Implement `backfill_wiki_node_content_hashes()` daemon startup task
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Implement workspace document mirror engine with boundary isolation
-  - [ ] Write test: Verify `sync_workspace_docs_to_vault` ignores `vault_root` when `vault_root` is inside `workspace_root`
-  - [ ] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved without collisions
+- [ ] Task: Implement workspace document mirror engine with boundary isolation & watcher suppression
+  - [ ] Write test: Verify workspace scan ignores build/VCS dirs (`target/`, `.git/`, `.venv/`, `.cargo/`, `.trash/`, `node_modules/`) and `vault_root` when `vault_root` is inside `workspace_root`
+  - [ ] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved without `WikiNode.name` UNIQUE collisions
   - [ ] Write test: Verify SHA-256 hash comparison skips identical files without disk re-writes or DB queries
-  - [ ] Write test: Verify deletion of source workspace docs prunes mirrored vault file and DB records
-  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` with canonical path checks, SHA-256 diffing, and atomic `.tmp` writes
-  - [ ] Wire `sync_workspace_docs_to_vault` into daemon startup and periodic checkpointing loop (every 600s)
+  - [ ] Write test: Verify deletion of source workspace docs prunes mirrored vault file and DB records using paginated query cursors
+  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` wrapped in `spawn_blocking` with canonical path checks, `WatchIgnoreList` event suppression, SHA-256 diffing, and atomic `.tmp` writes
+  - [ ] Wire `sync_workspace_docs_to_vault` into daemon startup and 600s checkpointing loop with `CancellationToken` select guards
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Index reference docs without heavy LLM concept/rule extraction
-  - [ ] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) without triggering `Forge` LLM concept extraction
+  - [ ] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) with relative path `name` without triggering `Forge` LLM concept extraction
   - [ ] Implement lightweight reference chunker and embedding indexer in `vault/ingestion.rs`
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Rebuild `MOC.md` with nested reference link support
-  - [ ] Write test: Verify `rebuild_reference_moc` formats nested wikilinks (`[[reference/specs/foo/bar|specs / foo / bar]]`) atomically
+- [ ] Task: Surgical atomic `MOC.md` rebuild
+  - [ ] Write test: Verify `rebuild_reference_moc` surgically updates `## Reference` section with nested wikilinks (`[[reference/specs/foo/bar|specs / foo / bar]]`) atomically without overwriting top-level MOC sections
   - [ ] Implement `rebuild_reference_moc` in `store.rs` and trigger post-sync
   - [ ] Run tests and confirm pass
 
