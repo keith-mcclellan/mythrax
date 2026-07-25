@@ -5,7 +5,7 @@ description: Query memory via the MCP server before starting tasks, verify vault
 
 # Mythrax Unified Memory, Integrity & Cognitive Guidance (v3.0.0)
 
-The **Mythrax** MCP server provides semantic memory storage, retrieval, reinforcement, compliance verification, self-healing, cognitive hypothesis execution, short-term memory (STM), and document ingestion via Forge.
+The **Mythrax** MCP server provides semantic memory storage, retrieval, reinforcement, compliance verification, self-healing, cognitive hypothesis execution, short-term memory (STM), document ingestion via Forge, and workspace documentation vault mirroring.
 
 ---
 
@@ -19,7 +19,7 @@ Call the `read` tool with the `action` parameter set to one of the following:
 
 - **`action="view"`**: Reads a text or source file (paging large blocks into virtual placeholders to save tokens).
   - *Parameters*: `path: String`, `start_line: Option<integer>`, `end_line: Option<integer>`, `is_skill_file: Option<boolean>`, `token_budget: Option<integer>`
-- **`action="search"`**: Search episodic memories using 6-Signal Unified Retrieval.
+- **`action="search"`**: Search episodic memories using 6-Signal Unified Retrieval (bounded by 50-item paginated windows).
   - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<integer>`, `threshold: Option<number>`, `include_artifacts: Option<boolean>`, `include_episodes: Option<boolean>`
 - **`action="rules"`**: Query active wisdom rules.
   - *Parameters*: `query: String`, `scope: Option<String>`
@@ -29,7 +29,7 @@ Call the `read` tool with the `action` parameter set to one of the following:
   - *Parameters*: None
 - **`action="get"`**: Read stashed STM variables.
   - *Parameters*: `session_id: String`, `key: Option<String>`
-- **`action="query_symbolic"`**: Query relation graphs.
+- **`action="query_symbolic"`**: Query relation graphs (bounded by a global 1,000-hit cap with $O(1)$ hit indexing).
   - *Parameters*: `node_id: String`, `relation: Option<String>`, `max_depth: Option<integer>`
 - **`action="search_index"`**: Fast index search for file lists or node IDs.
   - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<integer>`
@@ -52,7 +52,7 @@ Call the `write` tool with the `action` parameter set to one of the following:
   - *Parameters*: `path: String` or `TargetFile: String`, `target_content: String` or `TargetContent: String`, `replacement_content: String` or `ReplacementContent: String`, `instruction: String`, `description: String`, `start_line: Option<integer>`, `end_line: Option<integer>`, `allow_multiple: Option<boolean>`
 - **`action="multi_replace"`**: Apply non-contiguous edits across a file.
   - *Parameters*: `path: String` or `TargetFile: String`, `chunks: Vec<ReplacementChunk>`, `instruction: String`, `description: String`
-- **`action="save"`**: Save a new episodic memory.
+- **`action="save"`**: Save a new episodic memory (computes SHA-256 `content_hash` for $O(1)$ indexed deduplication).
   - *Parameters*: `title: String`, `content: String`, `scope: Option<String>`, `node_type: Option<String>`, `session_id: Option<String>`, `duration: Option<String>`
 - **`action="feedback"`**: Record reinforcement feedback for an episode.
   - *Parameters*: `episode_id: String`, `success: boolean`
@@ -91,7 +91,7 @@ Call the `manage` tool with the `action` parameter set to one of the following:
     - `ForgedRule`: `{ target_pattern: String, action_to_avoid: String, causal_explanation: String, prescribed_remedy: String }`
 - **`action="pre_invocation"`**: Load belief states and hydrate context.
   - *Parameters*: `session_id: String`, `workspace_path: Option<String>`
-- **`action="precompact"`**: Compact active transcripts.
+- **`action="precompact"`**: Compact active transcripts (tool sequence capped at 1,000-item sliding window).
   - *Parameters*: `session_id: String`, `transcript_path: String`
 - **`action="audit_compliance"`**: Scan files against rules.
   - *Parameters*: `files: Vec<String>`
@@ -99,7 +99,7 @@ Call the `manage` tool with the `action` parameter set to one of the following:
   - *Parameters*: `scope: Option<String>`
 - **`action="bootstrap"`**: Run system bootstrapping.
   - *Parameters*: `scope: Option<String>`
-- **`action="prune"`**: Prune stale memories.
+- **`action="prune"`**: Prune stale memories using atomic single-transaction blocks cascading across all 4 relation tables (`relates_to`, `followed_by`, `mentions`, `superseded_by`) and `metrics` table (`DELETE metrics WHERE target_id = $id;`).
   - *Parameters*: `scope: Option<String>`
 - **`action="init"`, `action="ideate"`, `action="execute"`, `action="backprop"`, `action="merge"`, `action="run"`**:
   - *Usage*: Execute HTR (Hypothesize-Test-Refine) loop stages.
@@ -116,6 +116,17 @@ Call the `agent` tool with the `action` parameter set to:
 
 ---
 
+## Workspace & Project Documentation Vault Mirroring
+
+Mythrax automatically mirrors workspace-root and Conductor documentation assets (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into the human-readable vault (`vault_root/reference/`) via `sync_workspace_docs_to_vault`:
+* **Path Normalization**: Preserves relative directory hierarchies (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) with cross-platform forward-slash (`/`) path normalization.
+* **SHA-256 Diffing**: Compares structural SHA-256 hashes to skip unchanged files without disk re-writes or DB queries.
+* **Lightweight Reference Indexing**: Indexes reference chunks directly into `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`, `name: relative/path.md#part-N`) without LLM extraction loops.
+* **Atomic MOC Rebuilding**: Surgically updates `## Reference` in `MOC.md` via atomic `.tmp` file swaps.
+* **Atomic Cascade Purging**: Deletion pruning executes in single atomic transaction blocks cascading all 4 relation tables (`relates_to`, `followed_by`, `mentions`, `superseded_by`) and `metrics` records.
+
+---
+
 ## Pre-Invocation Hook & Verification Compliance
 
 1. **Automatic Context Injection**: The system runs `pre_invocation` automatically before your first turn. It injects active POMDP belief states, stashed STM variables, handoff tasks, and three-tier hybrid hydration memory nodes:
@@ -129,9 +140,6 @@ Call the `agent` tool with the `action` parameter set to:
    `Execution Check: [Karpathy Rules applied? Yes/No] [Local Model verified? Yes/No/Fallback]`
 4. **Enforced Memory Search**: If the pre-invocation context is empty, manually run `read(action="search", query="...")` before editing code.
 5. **Reinforcement**: Run `write(action="save")` to log results and `write(action="feedback")` to reinforce the pathway.
-
-### 6-Signal Unified Retrieval Pipeline
-The retrieval pipeline scores candidate memories using six signals: vector similarity, BM25, concept spreading activation, active STM memory injection (using `embed_batch` to avoid sequential embedding calls), temporal neighbors, and Gaussian time decay.
 
 ---
 
