@@ -361,6 +361,24 @@ Address remaining medium-severity memory scaling issues.
 
 - [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
+## Phase 6b: Workspace & Project Documentation Vault Mirroring
+
+Automate mirroring and indexing of workspace-root and Conductor documentation assets (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into the Mythrax human-readable vault (`vault_root/reference/`) and retrieval index.
+
+- [ ] Task: Implement workspace document mirror & ingestion engine
+  - [ ] Write test: Verify `sync_workspace_docs_to_vault` mirrors workspace root docs (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into `vault_root/reference/` without corrupting file permissions or duplicate overwrites
+  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` function in `daemon.rs` / `vault/ingestion.rs`
+  - [ ] Wire `sync_workspace_docs_to_vault` into daemon startup and periodic checkpointing loop (every 600s)
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Ingest mirrored workspace docs into retrieval index & MOC
+  - [ ] Write test: Verify mirrored reference docs in `vault_root/reference/` generate `wiki_node` / embedding records and are linked in `MOC.md`
+  - [ ] Wire `Forge::ingest_document` / `save_episodes_batch` to process mirrored `reference/*.md` files into the 6-signal retrieval index
+  - [ ] Update `ensure_vault_structure` in `store.rs` to dynamically include `reference/` entries in `MOC.md`
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
 ## Phase 7: Final Documentation Reconciliation
 
 Reconcile ARCHITECTURE.md with actual implementation (Phase 0 documented the design; this phase reconciles any deviations discovered during implementation).
