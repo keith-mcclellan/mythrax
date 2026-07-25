@@ -607,6 +607,8 @@ pub async fn bulk_ingest_vault(
     limit: Option<usize>,
     skip_llm: bool,
 ) -> Result<(usize, Vec<String>, bool)> {
+    let _ingestion_guard = IngestionGuard::new();
+    crate::daemon::update_last_activity();
     let _ = skip_llm;
     let mut success_count = 0;
     let mut errors = Vec::new();
@@ -697,7 +699,6 @@ pub async fn bulk_ingest_vault(
                 .map(|d| d.0.clone())
                 .collect();
 
-            let _ingestion_guard = IngestionGuard::new();
             let llm = crate::llm::LLMClient::default();
             let mut last_episode_id: Option<String> = None;
 

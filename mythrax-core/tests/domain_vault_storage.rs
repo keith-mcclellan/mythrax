@@ -2285,7 +2285,7 @@ async fn test_inspect_db() -> Result<()> {
 
     println!("Running DreamCoordinator (mode: deep)...");
     let dc = DreamCoordinator::new();
-    let _ = dc.run_dream(&*backend, &store, Some("deep"), None).await;
+    let _ = dc.run_dream(backend.clone(), &store, Some("deep"), None).await;
 
     let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
     println!("Pending Cognitive Tasks AFTER DREAM: {}", pending_tasks.len());

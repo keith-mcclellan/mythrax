@@ -3170,7 +3170,7 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
     // 1. Initialize backend + MarkdownStore (tempdir)
-    let backend = SurrealBackend::new_in_memory().await?;
+    let backend: std::sync::Arc<SurrealBackend> = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
     let temp_vault = tempdir()?;
     let store = MarkdownStore::new(temp_vault.path())?;
@@ -3246,7 +3246,7 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
     // 4. Run Compactor (compact_scope triggers archive_decayed_episodes internally)
     let compactor = Compactor::new();
     compactor
-        .compact_scope(&backend, &store, "general", None)
+        .compact_scope(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, "general", None)
         .await?;
 
     // 5. ASSERT that the decayed episode is STILL retrievable but demoted

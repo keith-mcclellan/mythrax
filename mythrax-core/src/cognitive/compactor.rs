@@ -115,11 +115,17 @@ impl Compactor {
 
     pub async fn compact_scope(
         &self,
-        db: &dyn StorageBackend,
+        db: std::sync::Arc<dyn StorageBackend>,
         store: &MarkdownStore,
         scope: &str,
         _embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
+        crate::daemon::update_last_activity();
+        if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::info!("Ingestion in progress, skipping scope compaction.");
+            return Ok(());
+        }
+
         if let Some(surreal_backend) = db
             .as_any()
             .downcast_ref::<crate::db::backend::SurrealBackend>()
@@ -172,7 +178,7 @@ impl Compactor {
         }
 
         let _ = db.prune_stale_memories(&store.vault_root).await;
-        let _ = self.archive_decayed_episodes(db, store).await;
+        let _ = self.archive_decayed_episodes(&*db, store).await;
 
         // -------------------------------------------------------------
         // Enforce 500-node procedural episode cap per scope
@@ -924,6 +930,7 @@ impl Compactor {
         }
 
         let run_id = format!("run_compactor_{}", uuid::Uuid::new_v4());
+        let mut guard = crate::cognitive::synthesis::ClusterCleanupGuard::new(db.clone(), &run_id);
         for (c_id, member_insights) in &clusters {
             for (ins, _) in member_insights {
                 if let Err(e) = db.save_cluster_assignment(&run_id, *c_id as i32, &ins.vault_path, Some(scope)).await {
@@ -950,7 +957,7 @@ impl Compactor {
             let summary = self
                 .llm
                 .routed_completion(
-                    db,
+                    &*db,
                     &crate::contracts::TaskProfile::new(
                         crate::contracts::TaskArchetype::Summarization,
                     ),
@@ -958,7 +965,7 @@ impl Compactor {
                     &prompt_text,
                 )
                 .await?;
-            let summary = page_markdown_code_blocks(db, &summary).await?;
+            let summary = page_markdown_code_blocks(&*db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -1089,6 +1096,7 @@ impl Compactor {
             );
         }
         let _ = db.delete_pipeline_run(&run_id).await;
+        guard.disarm();
 
         // 4. Handle outlier insights by grouping them into a single miscellaneous compaction
         if !outlier_insights.is_empty() {
@@ -1108,7 +1116,7 @@ impl Compactor {
             let summary = self
                 .llm
                 .routed_completion(
-                    db,
+                    &*db,
                     &crate::contracts::TaskProfile::new(
                         crate::contracts::TaskArchetype::Summarization,
                     ),
@@ -1116,7 +1124,7 @@ impl Compactor {
                     &prompt_text,
                 )
                 .await?;
-            let summary = page_markdown_code_blocks(db, &summary).await?;
+            let summary = page_markdown_code_blocks(&*db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -1241,7 +1249,7 @@ impl Compactor {
         }
 
         // Wire graduation pipeline to run opportunistically during compaction
-        let _ = crate::db::graduation_pipeline::run_graduation_pipeline(db, scope).await;
+        let _ = crate::db::graduation_pipeline::run_graduation_pipeline(&*db, scope).await;
 
         Ok(())
     }

@@ -113,13 +113,13 @@ fn get_or_open_sqlite_conn(
                 "CREATE TABLE IF NOT EXISTS embedding_cache (
                     text TEXT PRIMARY KEY,
                     embedding BLOB,
-                    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                    created_at INTEGER DEFAULT (cast((julianday('now') - 2440587.5) * 86400000 as integer)),
                     last_accessed_ms INTEGER
                 )",
                 [],
             );
             let _ = conn.execute(
-                "ALTER TABLE embedding_cache ADD COLUMN created_at INTEGER DEFAULT (strftime('%s', 'now'));",
+                "ALTER TABLE embedding_cache ADD COLUMN created_at INTEGER DEFAULT (cast((julianday('now') - 2440587.5) * 86400000 as integer));",
                 [],
             );
             let _ = conn.execute(
@@ -151,12 +151,12 @@ fn persist_evicted_embedding(text: &str, embedding: &[f32]) {
                 }
                 let now_ms = chrono::Utc::now().timestamp_millis();
                 let _ = conn.execute(
-                    "INSERT INTO embedding_cache (text, embedding, last_accessed_ms)
-                     VALUES (?1, ?2, ?3)
+                    "INSERT INTO embedding_cache (text, embedding, created_at, last_accessed_ms)
+                     VALUES (?1, ?2, ?3, ?4)
                      ON CONFLICT(text) DO UPDATE SET
                         embedding = excluded.embedding,
                         last_accessed_ms = excluded.last_accessed_ms",
-                    rusqlite::params![text, bytes, now_ms],
+                    rusqlite::params![text, bytes, now_ms, now_ms],
                 );
             }
         }
@@ -239,7 +239,6 @@ pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
                     embedding.push(f32::from_le_bytes(chunk.try_into().unwrap()));
                 }
 
-                // Update last_accessed_ms on SQLite hit
                 let now_ms = chrono::Utc::now().timestamp_millis();
                 let _ = conn.execute(
                     "UPDATE embedding_cache SET last_accessed_ms = ?1 WHERE text = ?2",
@@ -358,13 +357,13 @@ pub fn migrate_binary_to_sqlite(bin_path: &Path, db_path: &Path) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS embedding_cache (
             text TEXT PRIMARY KEY,
             embedding BLOB,
-            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            created_at INTEGER DEFAULT (cast((julianday('now') - 2440587.5) * 86400000 as integer)),
             last_accessed_ms INTEGER
         )",
         [],
     )?;
     let _ = conn.execute(
-        "ALTER TABLE embedding_cache ADD COLUMN created_at INTEGER DEFAULT (strftime('%s', 'now'));",
+        "ALTER TABLE embedding_cache ADD COLUMN created_at INTEGER DEFAULT (cast((julianday('now') - 2440587.5) * 86400000 as integer));",
         [],
     );
     let _ = conn.execute(
@@ -406,8 +405,8 @@ pub fn migrate_binary_to_sqlite(bin_path: &Path, db_path: &Path) -> Result<()> {
         }
 
         tx.execute(
-            "INSERT OR IGNORE INTO embedding_cache (text, embedding, last_accessed_ms) VALUES (?1, ?2, ?3)",
-            rusqlite::params![key, bytes, now_ms],
+            "INSERT OR IGNORE INTO embedding_cache (text, embedding, created_at, last_accessed_ms) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![key, bytes, now_ms, now_ms],
         )?;
         count += 1;
     }
@@ -467,8 +466,8 @@ pub fn flush_dirty_cache(cache: &mut EmbeddingLruCache, path: &Path) -> Result<(
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare(
-            "INSERT INTO embedding_cache (text, embedding, last_accessed_ms)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO embedding_cache (text, embedding, created_at, last_accessed_ms)
+             VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(text) DO UPDATE SET
                 embedding = excluded.embedding,
                 last_accessed_ms = excluded.last_accessed_ms",
@@ -479,19 +478,19 @@ pub fn flush_dirty_cache(cache: &mut EmbeddingLruCache, path: &Path) -> Result<(
                 for &val in embedding.iter() {
                     bytes.extend_from_slice(&val.to_le_bytes());
                 }
-                stmt.execute(rusqlite::params![key, bytes, now_ms])?;
+                stmt.execute(rusqlite::params![key, bytes, now_ms, now_ms])?;
                 *dirty = false;
             }
         }
     }
     tx.commit()?;
 
-    // LRU eviction by last_accessed_ms with fallback to created_at * 1000
+    // LRU eviction by last_accessed_ms with fallback to created_at (supporting ms and legacy s)
     let disk_capacity = cache.capacity() * 10;
     conn.execute(
         "DELETE FROM embedding_cache WHERE text NOT IN (
             SELECT text FROM embedding_cache 
-            ORDER BY COALESCE(last_accessed_ms, created_at * 1000, 0) DESC 
+            ORDER BY COALESCE(last_accessed_ms, CASE WHEN created_at < 10000000000 THEN created_at * 1000 ELSE created_at END, 0) DESC 
             LIMIT ?1
         )",
         rusqlite::params![disk_capacity],

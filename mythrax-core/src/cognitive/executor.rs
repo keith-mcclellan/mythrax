@@ -128,9 +128,9 @@ impl ArborExecutor {
             for (rel_path, content) in changes {
                 let file_path = worktree_path.join(rel_path);
                 if let Some(parent) = file_path.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    tokio::fs::create_dir_all(parent).await?;
                 }
-                std::fs::write(&file_path, content)?;
+                tokio::fs::write(&file_path, content).await?;
 
                 let add_status = Command::new("git")
                     .args(["add", rel_path])
@@ -257,14 +257,14 @@ impl ArborExecutor {
         // Ensure folder is deleted
         let path = Path::new(&worktree_dir);
         if path.exists() {
-            let _ = std::fs::remove_dir_all(path);
+            let _ = tokio::fs::remove_dir_all(path).await;
         }
 
         // Clean up cargo target directory if exists
         let target_dir = format!("target/htr_{}", node_id);
         let target_path = Path::new(&target_dir);
         if target_path.exists() {
-            let _ = std::fs::remove_dir_all(target_path);
+            let _ = tokio::fs::remove_dir_all(target_path).await;
         }
 
         Ok(())

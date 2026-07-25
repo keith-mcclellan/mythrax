@@ -2821,7 +2821,7 @@ async fn test_aesthetic_vs_procedural_synthesis() -> Result<()> {
 
     let coordinator = DreamCoordinator::new();
     coordinator
-        .run_dream(&*backend, &store, Some("deep"), backend.embedder.clone())
+        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("deep"), backend.embedder.clone())
         .await?;
 
     // The mock LLM when prompt contains "Wisdom" will return a procedural rule.
@@ -2916,7 +2916,7 @@ This is standard content.
 
     // 3. Run compaction
     compactor
-        .compact_scope(&*backend, &store, "scope1", backend.embedder.clone())
+        .compact_scope(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, "scope1", backend.embedder.clone())
         .await?;
 
     // 4. Verify that anchors are carried verbatim in the compaction file and the content is cleaned of markers
@@ -3219,7 +3219,7 @@ pub fn run_test() {}
     std::fs::write(&main_rs_path, original_content)?;
 
     // Initialize backend
-    let backend = SurrealBackend::new_in_memory().await?;
+    let backend: std::sync::Arc<SurrealBackend> = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
 
     // Seed LLM config
@@ -3243,7 +3243,7 @@ This is a test insight that references `page_fn_test_fn`.
     // Run compactor
     let compactor = Compactor::new();
     compactor
-        .compact_scope(&backend, &store, "test_scope", backend.embedder.clone())
+        .compact_scope(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, "test_scope", backend.embedder.clone())
         .await?;
 
     // Assert that the workspace source file was NOT modified on disk
@@ -3636,7 +3636,7 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
 
-    let backend = SurrealBackend::new_in_memory().await?;
+    let backend: std::sync::Arc<SurrealBackend> = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
     let store = MarkdownStore::new(&vault_root)?;
     let compactor = Compactor::new();
@@ -3679,7 +3679,7 @@ async fn test_cognitive_sleep_archiving() -> Result<()> {
 
     // Run compaction/sleep cycle
     compactor
-        .compact_scope(&backend, &store, "archive-test", backend.embedder.clone())
+        .compact_scope(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, "archive-test", backend.embedder.clone())
         .await?;
 
     // 1. Verify active record is marked archived in DB

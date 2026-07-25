@@ -830,6 +830,7 @@ impl SurrealBackend {
     }
 
     pub(crate) async fn search_pipeline(&self, params: SearchParams) -> Result<SearchResponse> {
+        crate::daemon::update_last_activity();
         if self.is_client_mode() {
             let payload = serde_json::json!({
                 "query": params.query,

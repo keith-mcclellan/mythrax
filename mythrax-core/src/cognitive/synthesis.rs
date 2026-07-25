@@ -350,6 +350,45 @@ impl Default for DreamCoordinator {
     }
 }
 
+pub struct ClusterCleanupGuard {
+    run_id: String,
+    db: std::sync::Arc<dyn StorageBackend>,
+    disarmed: bool,
+}
+
+impl ClusterCleanupGuard {
+    pub fn new(db: std::sync::Arc<dyn StorageBackend>, run_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            db,
+            disarmed: false,
+        }
+    }
+
+    pub fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+
+    pub async fn cleanup(mut self) {
+        self.disarmed = true;
+        let _ = self.db.delete_pipeline_run(&self.run_id).await;
+    }
+}
+
+impl Drop for ClusterCleanupGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            let db = self.db.clone();
+            let run_id = self.run_id.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = db.delete_pipeline_run(&run_id).await;
+                });
+            }
+        }
+    }
+}
+
 impl DreamCoordinator {
     pub fn new() -> Self {
         Self {
@@ -364,6 +403,11 @@ impl DreamCoordinator {
         store: &MarkdownStore,
         episode: &Episode,
     ) -> Result<()> {
+        if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::info!("Ingestion in progress, skipping episode metadata distillation.");
+            return Ok(());
+        }
+
         let sys_prompt = "You are a technical documentation summarizer. Given a raw conversation transcript, produce a concise title and summary.";
         let user_prompt = format!(
             "Please analyze these events: Produce a JSON object with 'title' (max 80 chars, descriptive) and 'summary' (2-4 sentences capturing key decisions, changes, and outcomes) for this transcript:\n\n{}",
@@ -748,11 +792,12 @@ impl DreamCoordinator {
 
     pub async fn run_dream(
         &self,
-        db: &dyn StorageBackend,
+        db: std::sync::Arc<dyn StorageBackend>,
         store: &MarkdownStore,
         mode_override: Option<&str>,
         embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
+        crate::daemon::update_last_activity();
         if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
             tracing::info!("Ingestion in progress, skipping background dream synthesis.");
             return Ok(());
@@ -827,7 +872,7 @@ impl DreamCoordinator {
                                 if let Ok(count) = crate::hooks::precompact::mine_transcript(
                                     &session_id,
                                     &path,
-                                    db,
+                                    &*db,
                                     store,
                                     &ignore_list,
                                 )
@@ -1073,7 +1118,7 @@ impl DreamCoordinator {
                                 let updated_summary = self
                                     .llm
                                     .routed_completion(
-                                        db,
+                                        &*db,
                                         &crate::contracts::TaskProfile::new(
                                             crate::contracts::TaskArchetype::Summarization,
                                         ),
@@ -1153,7 +1198,7 @@ impl DreamCoordinator {
                                     );
                                 }
 
-                                if let Err(e) = self.distill_episode_metadata(db, store, &ep).await
+                                if let Err(e) = self.distill_episode_metadata(&*db, store, &ep).await
                                 {
                                     tracing::error!("distill_episode_metadata error: {:?}", e);
                                 }
@@ -1177,7 +1222,7 @@ impl DreamCoordinator {
                                 let source_eps = vec![ep.id.clone().unwrap_or_default()];
                                 if let Ok(wiki_node_id) = self
                                     .save_wiki_node_with_contradiction_resolution(
-                                        db,
+                                        &*db,
                                         store,
                                         &node_contract,
                                         embedder.clone(),
@@ -1211,7 +1256,7 @@ impl DreamCoordinator {
                                         db.get_memory_nodes(&new_source_episodes).await
                                     {
                                         if let Err(e) = promote_insight_to_direction(
-                                            db,
+                                            &*db,
                                             store,
                                             &node_with_id,
                                             &mem_resp.episodes,
@@ -1231,7 +1276,7 @@ impl DreamCoordinator {
                                     );
                                     let compactor = crate::cognitive::compactor::Compactor::new();
                                     let _ = compactor
-                                        .compact_scope(db, store, &scope, embedder.clone())
+                                        .compact_scope(db.clone(), store, &scope, embedder.clone())
                                         .await;
                                     insights_changed = 0;
                                 }
@@ -1294,6 +1339,7 @@ impl DreamCoordinator {
                     }
 
                     let run_id = format!("run_{}", uuid::Uuid::new_v4());
+                    let mut guard = ClusterCleanupGuard::new(db.clone(), &run_id);
                     for (c_idx, c_eps) in clusters.values().enumerate() {
                         for ep in c_eps {
                             if let Some(ref ep_id) = ep.id {
@@ -1368,7 +1414,7 @@ impl DreamCoordinator {
                             let llm_res = self
                                 .llm
                                 .routed_completion(
-                                    db,
+                                    &*db,
                                     &crate::contracts::TaskProfile::new(
                                         crate::contracts::TaskArchetype::Summarization,
                                     ),
@@ -1457,7 +1503,7 @@ impl DreamCoordinator {
                             };
                             if let Ok(wiki_node_id) = self
                                 .save_wiki_node_with_contradiction_resolution(
-                                    db,
+                                    &*db,
                                     store,
                                     &node_contract,
                                     embedder.clone(),
@@ -1491,7 +1537,7 @@ impl DreamCoordinator {
                                 node_with_id.id = Some(wiki_node_id);
                                 if let Ok(mem_resp) = db.get_memory_nodes(&cluster_ep_ids).await {
                                     if let Err(e) = promote_insight_to_direction(
-                                        db,
+                                        &*db,
                                         store,
                                         &node_with_id,
                                         &mem_resp.episodes,
@@ -1511,13 +1557,13 @@ impl DreamCoordinator {
                                 );
                                 let compactor = crate::cognitive::compactor::Compactor::new();
                                 let _ = compactor
-                                    .compact_scope(db, store, &scope, embedder.clone())
+                                    .compact_scope(db.clone(), store, &scope, embedder.clone())
                                     .await;
                                 insights_changed = 0;
                             }
 
                             for ep in cluster_eps {
-                                if let Err(e) = self.distill_episode_metadata(db, store, ep).await {
+                                if let Err(e) = self.distill_episode_metadata(&*db, store, ep).await {
                                     tracing::error!("distill_episode_metadata error: {:?}", e);
                                 }
                                 if let Some(ref ep_id) = ep.id {
@@ -1542,6 +1588,7 @@ impl DreamCoordinator {
                     }
                     .await;
                     let _ = db.delete_pipeline_run(&run_id).await;
+                    guard.disarm();
                     cluster_res?;
 
                     for noise_ep in noise_episodes {
@@ -1793,7 +1840,7 @@ impl DreamCoordinator {
                                 if let Ok(llm_res) = self
                                     .llm
                                     .routed_completion(
-                                        db,
+                                        &*db,
                                         &crate::contracts::TaskProfile::new(
                                             crate::contracts::TaskArchetype::Summarization,
                                         ),
@@ -1927,7 +1974,7 @@ impl DreamCoordinator {
                                             .collect::<Vec<_>>();
                                         let save_res = self
                                             .save_wiki_node_with_contradiction_resolution(
-                                                db,
+                                                &*db,
                                                 store,
                                                 &node_contract,
                                                 embedder.clone(),
@@ -1988,7 +2035,7 @@ impl DreamCoordinator {
 
         // Run direction backpropagation after dreaming completes for all scopes
         tracing::info!("Running direction backpropagation...");
-        if let Err(e) = backpropagate_directions(db, store).await {
+        if let Err(e) = backpropagate_directions(&*db, store).await {
             tracing::warn!("Direction backpropagation failed: {:?}", e);
         }
 
@@ -2306,7 +2353,7 @@ impl DreamCoordinator {
                 match self
                     .llm
                     .routed_completion(
-                        db,
+                        &*db,
                         &crate::contracts::TaskProfile::new(
                             crate::contracts::TaskArchetype::Reasoning,
                         ),
@@ -2391,7 +2438,7 @@ impl DreamCoordinator {
                                     };
 
                                     match save_wisdom_rule_with_deduplication(
-                                        db,
+                                        &*db,
                                         store,
                                         &rule_contract,
                                     )
@@ -3080,6 +3127,11 @@ pub async fn backpropagate_directions(
     db: &dyn StorageBackend,
     store: &MarkdownStore,
 ) -> Result<()> {
+    if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
+        tracing::info!("Ingestion in progress, skipping direction backpropagation.");
+        return Ok(());
+    }
+
     let mut directions = Vec::new();
     let mut offset = 0;
     loop {
@@ -3302,6 +3354,11 @@ pub async fn graduate_wisdom(
     db: &dyn crate::db::StorageBackend,
     store: &crate::store::MarkdownStore,
 ) -> Result<()> {
+    if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
+        tracing::info!("Ingestion in progress, skipping wisdom graduation.");
+        return Ok(());
+    }
+
     let mut directions = Vec::new();
     let mut offset = 0;
     loop {

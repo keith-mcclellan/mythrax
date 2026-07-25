@@ -344,7 +344,7 @@ async fn dream_handler(
     };
 
     let res_scope = compactor
-        .compact_scope(&*state.backend, &state.store, scope, embedder)
+        .compact_scope(state.backend.clone(), &state.store, scope, embedder)
         .await;
     match res_scope {
         Ok(_) => Ok(Json(json!({ "status": "success" }))),

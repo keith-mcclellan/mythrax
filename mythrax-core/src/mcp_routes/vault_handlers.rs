@@ -140,7 +140,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
 
                     if let Err(e) = coordinator
                         .run_dream(
-                            &*state_clone.backend,
+                            state_clone.backend.clone(),
                             &state_clone.store,
                             None,
                             embedder.clone(),
@@ -153,7 +153,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                     let scope_name = scope.as_deref().unwrap_or("general");
                     if let Err(e) = compactor
                         .compact_scope(
-                            &*state_clone.backend,
+                            state_clone.backend.clone(),
                             &state_clone.store,
                             scope_name,
                             embedder,
@@ -186,12 +186,12 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 };
 
                 coordinator
-                    .run_dream(&*state.backend, &state.store, None, embedder.clone())
+                    .run_dream(state.backend.clone(), &state.store, None, embedder.clone())
                     .await?;
 
                 let scope_name = scope.as_deref().unwrap_or("general");
                 compactor
-                    .compact_scope(&*state.backend, &state.store, scope_name, embedder)
+                    .compact_scope(state.backend.clone(), &state.store, scope_name, embedder)
                     .await?;
 
                 Ok(json!({

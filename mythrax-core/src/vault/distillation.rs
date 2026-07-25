@@ -472,6 +472,7 @@ pub async fn ingest_artifacts_in_dir(
     conversation_id: &str,
     scope: &str,
 ) -> Result<()> {
+    let _guard = crate::vault::ingestion::IngestionGuard::new();
     if !dir_path.exists() {
         return Ok(());
     }

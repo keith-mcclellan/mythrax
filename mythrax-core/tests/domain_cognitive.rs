@@ -9,7 +9,7 @@ use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 #[tokio::test]
@@ -143,7 +143,7 @@ Insight Three content."#;
 
     // Execute compaction
     compactor
-        .compact_scope(&backend, &store, "scope1", backend.embedder.clone())
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "scope1", backend.embedder.clone())
         .await?;
 
     // Verify compactions on disk
@@ -428,7 +428,7 @@ Insight content
 
     // Call DreamCoordinator::run_dream
     mythrax_core::cognitive::synthesis::DreamCoordinator::new()
-        .run_dream(&backend, &store, Some("deep"), backend.embedder.clone())
+        .run_dream(std::sync::Arc::new(backend.clone()), &store, Some("deep"), backend.embedder.clone())
         .await?;
 
     let mut after_nodes_resp = backend
@@ -955,7 +955,7 @@ Insight Two content."#,
 
     // Execute compaction
     compactor
-        .compact_scope(&backend, &store, "scope2", backend.embedder.clone())
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "scope2", backend.embedder.clone())
         .await?;
 
     let compaction_dir = vault_root.join("wiki/scope2/compactions");
@@ -1054,7 +1054,7 @@ async fn test_garbage_collect_low_confidence_nodes() -> Result<()> {
 
     // Execute compaction
     compactor
-        .compact_scope(&backend, &store, "scope1", None)
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "scope1", None)
         .await?;
 
     // Verify:
@@ -1160,7 +1160,7 @@ async fn test_hebbian_synaptic_pruning() -> Result<()> {
 
     // Execute compaction
     compactor
-        .compact_scope(&backend, &store, "scope1", None)
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "scope1", None)
         .await?;
 
     // Verify:
@@ -1376,7 +1376,7 @@ async fn test_compactor_decay_referenced_safety() -> Result<()> {
 
     // Call compaction to trigger decay of this node
     let _ = compactor
-        .compact_scope(&backend, &store, "general", None)
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "general", None)
         .await;
 
     // Check if the physical file still exists in its original place
@@ -1591,7 +1591,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
         "DEBUG - ALL WIKI NODES IN DB: {:#?}",
         backend.get_all_wiki_nodes().await?
     );
-    coordinator.run_dream(&backend, &store, None, None).await?;
+    coordinator.run_dream(std::sync::Arc::new(backend.clone()), &store, None, None).await?;
 
     // Verify a general scope WisdomRule has been created in DB
     let all_rules = backend.get_all_wisdom_rules().await?;
@@ -1774,7 +1774,7 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
 
     // Run compact_scope
     compactor
-        .compact_scope(&backend, &store, "test_scope", None)
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "test_scope", None)
         .await?;
 
     // Verify newer episode is updated to superseded
@@ -1946,7 +1946,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
 
     // Run prune_stale_memories (or compact_scope) to trigger decay evaluation
     compactor
-        .compact_scope(&backend, &store, "test_scope", None)
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "test_scope", None)
         .await?;
 
     // Verify Standard Ep is archived
@@ -2010,7 +2010,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
 
     // Run pruning
     compactor
-        .compact_scope(&backend, &store, "cap_scope", None)
+        .compact_scope(std::sync::Arc::new(backend.clone()), &store, "cap_scope", None)
         .await?;
 
     // Query active (unarchived) procedural episodes in cap_scope
@@ -6171,7 +6171,7 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
     let compactor = Compactor::new();
     compactor
         .compact_scope(
-            &*state.backend,
+            state.backend.clone(),
             &state.store,
             "general",
             backend.embedder.clone(),

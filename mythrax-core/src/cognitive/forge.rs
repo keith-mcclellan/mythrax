@@ -39,6 +39,7 @@ impl Forge {
         scope: &str,
         _source_name: &str,
     ) -> Result<()> {
+        let _guard = crate::vault::ingestion::IngestionGuard::new();
         let normalized_scope = {
             let s = scope.trim().to_lowercase();
             let cleaned: String = s

@@ -534,7 +534,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
     // Run the compactor dreaming sweep unmocked (will route LLM calls to 35B model on mlx-lm HTTP server)
     let coordinator = mythrax_core::cognitive::synthesis::DreamCoordinator::new();
     coordinator
-        .run_dream(&backend, &store, Some("incremental"), None)
+        .run_dream(backend.clone(), &store, Some("incremental"), None)
         .await?;
 
     // Verify the new turns are mined into the database

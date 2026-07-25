@@ -145,6 +145,7 @@ impl SurrealBackend {
     }
 
     pub async fn save_episode_db(&self, episode: &EpisodeSave) -> Result<String> {
+        crate::daemon::update_last_activity();
         if self.is_client_mode() {
             #[derive(serde::Deserialize)]
             struct SaveResponse {

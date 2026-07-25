@@ -13,8 +13,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, Signal, System};
 
+pub static LAST_ACTIVITY_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn update_last_activity() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    LAST_ACTIVITY_TIME.store(now, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Handles background daemon operations (start, run, stop).
 pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
+    update_last_activity();
     match action {
         DaemonAction::Start { port, vault } | DaemonAction::Run { port, vault } => {
             #[cfg(unix)]
@@ -191,8 +202,9 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     }
                                     tracing::info!("Found {} wisdom rules with missing embeddings batch. Regenerating...", rules.len());
                                     let mut updated_any = false;
-                                    for r in rules {
-                                        if cancel_token_startup.is_cancelled() {
+                                     for r in rules {
+                                         update_last_activity();
+                                         if cancel_token_startup.is_cancelled() {
                                             break;
                                         }
                                         if let (Some(id_str), Some(embedder)) = (&r.id, &backend_startup.embedder) {
@@ -237,8 +249,9 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     }
                                     tracing::info!("Found {} wiki nodes with missing embeddings batch. Regenerating...", wiki_nodes.len());
                                     let mut updated_any = false;
-                                    for node in wiki_nodes {
-                                        if cancel_token_startup.is_cancelled() {
+                                     for node in wiki_nodes {
+                                         update_last_activity();
+                                         if cancel_token_startup.is_cancelled() {
                                             break;
                                         }
                                         if let (Some(id_str), Some(embedder)) = (&node.id, &backend_startup.embedder) {
@@ -303,6 +316,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                 break;
                             }
                             _ = tokio::time::sleep(tokio::time::Duration::from_secs(600)) => {
+                                update_last_activity();
                                 if let Err(e) = run_checkpoint(&*backend_chk, &vault_chk).await {
                                     tracing::error!("Checkpointing daemon error: {:?}", e);
                                 }
@@ -340,6 +354,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                 break;
                             }
                             _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {
+                                update_last_activity();
                                 if let Err(e) = crate::hooks::reflect::harvest_completed_reflections(&*backend_harvest).await {
                                     tracing::error!("Reflection harvester failed: {:?}", e);
                                 }
@@ -370,6 +385,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     break;
                                 }
                                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)) => {
+                                    update_last_activity();
                                     tracing::info!("Daily scheduled background handoff cleanup starting...");
                                     let pruning_days = match backend_daily.get_profile_key("stm.pruning_days").await {
                                         Ok(Some(val_str)) => val_str.parse::<i64>().unwrap_or(7),
@@ -383,7 +399,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     }
 
                                     tracing::info!("Daily scheduled deep dreaming starting...");
-                                    if let Err(e) = dc.run_dream(&*backend_daily, &store_daily, Some("deep"), backend_daily.embedder.clone()).await {
+                                    if let Err(e) = dc.run_dream(backend_daily.clone(), &store_daily, Some("deep"), backend_daily.embedder.clone()).await {
                                         tracing::error!("Daily deep dreaming failed: {:?}", e);
                                     } else {
                                         tracing::info!("Deep dreaming synthesis completed. Running compactions...");
@@ -392,7 +408,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                             scopes.push("general".to_string());
                                         }
                                         for scope in scopes {
-                                            let _ = cmp.compact_scope(&*backend_daily, &store_daily, &scope, backend_daily.embedder.clone()).await;
+                                            let _ = cmp.compact_scope(backend_daily.clone(), &store_daily, &scope, backend_daily.embedder.clone()).await;
                                         }
 
                                     }
@@ -408,6 +424,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
                     let mut last_activity = Instant::now();
                     let mut pending_debounce = false;
+                    let mut idle_timer = tokio::time::interval(tokio::time::Duration::from_secs(30));
 
                     loop {
                         tokio::select! {
@@ -415,16 +432,30 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                 tracing::info!("Dreaming coordinator received cancellation signal, stopping loop");
                                 break;
                             }
+                            _ = idle_timer.tick() => {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+                                let last = LAST_ACTIVITY_TIME.load(std::sync::atomic::Ordering::SeqCst);
+                                if last > 0 && now.saturating_sub(last) >= 30 {
+                                    crate::llm::evict_global_reranker().await;
+                                    if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+                                        broker.evict_unused_models().await;
+                                    }
+                                }
+                            }
                             val = dream_rx.recv() => {
                                 match val {
                                     Some(_) => {
+                                        update_last_activity();
                                         last_activity = Instant::now();
 
                                         // Check threshold triggered synthesis (> 50 unprocessed)
                                         if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
                                             && unprocessed.len() > 50 {
                                                 tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
-                                                if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
+                                                if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
                                                     tracing::error!("Threshold dreaming failed: {:?}", e);
                                                 } else {
                                                     let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
@@ -432,7 +463,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                         scopes.push("general".to_string());
                                                     }
                                                     for scope in scopes {
-                                                        let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope, backend_dream.embedder.clone()).await;
+                                                        let _ = compactor.compact_scope(backend_dream.clone(), &store_dream, &scope, backend_dream.embedder.clone()).await;
                                                     }
 
                                                 }
@@ -453,7 +484,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
                                         && !unprocessed.is_empty() {
                                             tracing::info!("Idle debounced synthesis starting...");
-                                            if let Err(e) = dream_coordinator.run_dream(&*backend_dream, &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
+                                            if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
                                                 tracing::error!("Debounced incremental dreaming failed: {:?}", e);
                                             } else {
                                                 let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
@@ -461,11 +492,16 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                     scopes.push("general".to_string());
                                                 }
                                                 for scope in scopes {
-                                                    let _ = compactor.compact_scope(&*backend_dream, &store_dream, &scope, backend_dream.embedder.clone()).await;
+                                                    let _ = compactor.compact_scope(backend_dream.clone(), &store_dream, &scope, backend_dream.embedder.clone()).await;
                                                 }
 
                                             }
                                         }
+
+                                    crate::llm::evict_global_reranker().await;
+                                    if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+                                        broker.evict_unused_models().await;
+                                    }
                                 }
                             }
                         }

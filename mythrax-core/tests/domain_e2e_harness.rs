@@ -37,7 +37,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
 
-    let backend = SurrealBackend::new_in_memory().await?;
+    let backend: std::sync::Arc<SurrealBackend> = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
     let store = MarkdownStore::new(&vault_root)?;
     let coordinator = DreamCoordinator::new();
@@ -154,7 +154,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // 2. Run run_dream(mode="deep") synchronously
     // In deep dreaming mode, all scopes are processed.
     coordinator
-        .run_dream(&backend, &store, Some("deep"), None)
+        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("deep"), None)
         .await?;
 
     // 3. Assertions
@@ -787,7 +787,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
     // 5. Run the compactor dreaming sweep
     let coordinator = mythrax_core::cognitive::synthesis::DreamCoordinator::new();
     coordinator
-        .run_dream(&*backend, &store, Some("incremental"), None)
+        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("incremental"), None)
         .await?;
 
     // Assertion 1: Verify the new turns are mined into the database
@@ -844,7 +844,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
         .check()?;
 
     coordinator
-        .run_dream(&*backend, &store, Some("incremental"), None)
+        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("incremental"), None)
         .await?;
 
     // Verify _last_swept_at was NOT updated (same timestamp string as first)
@@ -878,7 +878,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
         .check()?;
 
     coordinator
-        .run_dream(&*backend, &store, Some("incremental"), None)
+        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("incremental"), None)
         .await?;
 
     // Assert that the new content was mined
@@ -924,7 +924,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
         .check()?;
 
     coordinator
-        .run_dream(&*backend, &store, Some("incremental"), None)
+        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("incremental"), None)
         .await?;
 
     // Assert that the registry was cleaned up (STM keys cleared)
