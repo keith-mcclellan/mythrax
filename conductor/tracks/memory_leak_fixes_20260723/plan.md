@@ -367,23 +367,25 @@ Automate boundary-isolated mirroring, SHA-256 deduplicated indexing, and MOC lin
 
 - [ ] Task: Add `content_hash` deduplication support & backfill for `WikiNode`
   - [ ] Add `content_hash` field to `WikiNode` struct in `contracts.rs`
+  - [ ] Update `WikiNodeRaw` struct and `From<WikiNodeRaw> for WikiNode` in `backend.rs` to include `content_hash`
   - [ ] Add `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node TYPE option<string>;` and `DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;` in `src/db/schema.rs`
-  - [ ] Compute SHA-256 `content_hash` in `save_wiki_node` inside `backend.rs` / `crud_operations.rs`
+  - [ ] Add `content_hash` SQL field bindings to `UPDATE` and `CREATE` query paths in `save_wiki_node_db` (`crud_operations.rs`)
   - [ ] Add `find_wiki_node_by_hash(hash)` query to CRUD layer
   - [ ] Implement `backfill_wiki_node_content_hashes()` daemon startup task
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Implement workspace document mirror engine with boundary isolation & watcher suppression
+  - [ ] Add `reference/` directory and `MOC.md` path exclusions to `watcher.rs` main event filtering loop to prevent cascading LLM dreaming passes
   - [ ] Write test: Verify workspace scan ignores build/VCS dirs (`target/`, `.git/`, `.venv/`, `.cargo/`, `.trash/`, `node_modules/`) and `vault_root` when `vault_root` is inside `workspace_root`
-  - [ ] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved without `WikiNode.name` UNIQUE collisions
+  - [ ] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved without collisions
   - [ ] Write test: Verify SHA-256 hash comparison skips identical files without disk re-writes or DB queries
-  - [ ] Write test: Verify deletion of source workspace docs prunes mirrored vault file and DB records using paginated query cursors
-  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` wrapped in `spawn_blocking` with canonical path checks, `WatchIgnoreList` event suppression, SHA-256 diffing, and atomic `.tmp` writes
+  - [ ] Write test: Verify deletion of source workspace docs prunes mirrored vault file and DB records using zero-offset `LIMIT 50` loops
+  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` wrapped in `spawn_blocking` with `IS_SYNCING_WORKSPACE_DOCS` `AtomicBool` guard, `cancel_token` checks, `WatchIgnoreList` event suppression, SHA-256 diffing, and atomic `.tmp` writes
   - [ ] Wire `sync_workspace_docs_to_vault` into daemon startup and 600s checkpointing loop with `CancellationToken` select guards
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Index reference docs without heavy LLM concept/rule extraction
-  - [ ] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) with relative path `name` without triggering `Forge` LLM concept extraction
+  - [ ] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) with unique chunk naming (`relative/path.md#part-N`) preventing SurrealDB `(name, scope)` UNIQUE constraint collisions
   - [ ] Implement lightweight reference chunker and embedding indexer in `vault/ingestion.rs`
   - [ ] Run tests and confirm pass
 
