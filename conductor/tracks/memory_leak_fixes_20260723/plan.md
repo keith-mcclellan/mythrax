@@ -400,14 +400,15 @@ Automate boundary-isolated mirroring, SHA-256 deduplicated indexing, and MOC lin
 
 Reconcile ARCHITECTURE.md with actual implementation (Phase 0 documented the design; this phase reconciles any deviations discovered during implementation).
 
-- [ ] Task: Reconcile ARCHITECTURE.md with implemented changes
-  - [ ] Diff Phase 0 ARCHITECTURE.md against actual implementation across Phases 1-6
-  - [ ] Update any sections where implementation deviated from the Phase 0 design
-  - [ ] Verify all code examples and diagrams match the final codebase state
+- [x] Task: Reconcile ARCHITECTURE.md with implemented changes
+  - [x] Diff Phase 0 ARCHITECTURE.md against actual implementation across Phases 1-6
+  - [x] Update any sections where implementation deviated from the Phase 0 design
+  - [x] Verify all code examples and diagrams match the final codebase state
 
-- [ ] Task: Update inline code documentation
-  - [ ] Add doc comments to all new paginated query functions in `crud_operations.rs` and `backend.rs`
-  - [ ] Add doc comments to `update_idf_index`, `pipeline_cluster` CRUD functions, and streaming pipeline functions
-  - [ ] Add safety comments at all `.eval()` call sites explaining the lazy graph accumulation risk
+- [x] Task: Update inline code documentation
+  - [x] Add doc comments to all new paginated query functions in `crud_operations.rs` and `backend.rs`
+  - [x] Add doc comments to `update_idf_index`, `pipeline_cluster` CRUD functions, and streaming pipeline functions
+  - [x] Add safety comments at all `.eval()` call sites explaining the lazy graph accumulation risk
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+

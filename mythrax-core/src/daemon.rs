@@ -507,8 +507,8 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         last_activity = Instant::now();
 
                                         // Check threshold triggered synthesis (> 50 unprocessed)
-                                        if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
-                                            && unprocessed.len() > 50 {
+                                        if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
+                                            && unprocessed.len() >= 50 {
                                                 tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
                                                 if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
                                                     tracing::error!("Threshold dreaming failed: {:?}", e);
@@ -536,7 +536,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                 if last_activity.elapsed() >= tokio::time::Duration::from_secs(30) {
                                     pending_debounce = false;
 
-                                    if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes().await
+                                    if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
                                         && !unprocessed.is_empty() {
                                             tracing::info!("Idle debounced synthesis starting...");
                                             if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {

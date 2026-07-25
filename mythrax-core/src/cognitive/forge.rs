@@ -121,6 +121,8 @@ impl Forge {
         let parent_id_str = self.backend.save_wiki_node(&parent_node).await?;
 
         // 2. Process chunks in bounded batches (Phase 6: Bounded chunk streaming)
+        // Memory Safety Invariant: Processing in 5-chunk window batches prevents unbounded AST and memory growth
+        // when ingesting large multi-megabyte document trees.
         let batch_size = 5;
         let mut chunk_ids = Vec::new();
 

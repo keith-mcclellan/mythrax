@@ -179,6 +179,8 @@ impl Qwen2Attention {
                     StreamOrDevice::gpu(),
                 )?;
             }
+            // Safety/Memory Invariant: Explicitly evaluate concatenated KV cache tensors before holding references
+            // to prevent Metal GPU unified memory leaks from unevaluated computational graphs.
             k.eval()?;
             v.eval()?;
             *cached_k = k.clone();

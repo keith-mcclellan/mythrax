@@ -3004,4 +3004,458 @@ async fn test_watcher_upstream_filtering_coalescing_and_bounded_pool() {
     );
 }
 
+mod edge_cascading_tests {
+    use super::*;
+    use anyhow::Result;
+    use mythrax_core::contracts::{EpisodeSave, WikiNode};
+    use mythrax_core::db::{parse_record_id, StorageBackend, SurrealBackend};
+
+    #[tokio::test]
+    async fn test_orphaned_edge_cascading_on_episode_deletion() -> Result<()> {
+        let backend = SurrealBackend::new_in_memory().await?;
+        backend.init().await?;
+
+        let ep1 = EpisodeSave {
+            title: "Episode 1".to_string(),
+            content: "Content 1".to_string(),
+            scope: Some("test".to_string()),
+            vault_path: Some("episodes/ep1.md".to_string()),
+            ..Default::default()
+        };
+        let ep2 = EpisodeSave {
+            title: "Episode 2".to_string(),
+            content: "Content 2".to_string(),
+            scope: Some("test".to_string()),
+            vault_path: Some("episodes/ep2.md".to_string()),
+            ..Default::default()
+        };
+        let ep1_id = backend.save_episode(&ep1).await?;
+        let ep2_id = backend.save_episode(&ep2).await?;
+        let ep1_rec = parse_record_id(&ep1_id)?;
+        let ep2_rec = parse_record_id(&ep2_id)?;
+        let ent_rec = parse_record_id("entity:ent1")?;
+
+        // Insert relations across relation tables
+        backend
+            .db
+            .query("RELATE $in -> relates_to -> $out CONTENT { confidence: 0.9 };")
+            .bind(("in", ep1_rec.clone()))
+            .bind(("out", ep2_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> followed_by -> $out;")
+            .bind(("in", ep1_rec.clone()))
+            .bind(("out", ep2_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> mentions -> $out;")
+            .bind(("in", ep1_rec.clone()))
+            .bind(("out", ent_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> superseded_by -> $out;")
+            .bind(("in", ep1_rec.clone()))
+            .bind(("out", ep2_rec.clone()))
+            .await?
+            .check()?;
+
+        // Verify relations and metrics exist before deletion
+        let res_rel: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM relates_to WHERE in = $id OR out = $id;")
+            .bind(("id", ep1_rec.clone()))
+            .await?
+            .take(0)?;
+        assert!(!res_rel.is_empty(), "relates_to edge should exist prior to deletion");
+
+        let res_met: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM metrics WHERE target_id = $id;")
+            .bind(("id", ep1_rec.clone()))
+            .await?
+            .take(0)?;
+        assert!(!res_met.is_empty(), "metrics record should exist prior to deletion");
+
+        // Delete episode 1
+        backend.delete_episode(&ep1_id).await?;
+
+        // Assert 0 orphaned edges and metrics remain
+        let res_rel_after: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM relates_to WHERE in = $id OR out = $id;")
+            .bind(("id", ep1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_fol_after: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM followed_by WHERE in = $id OR out = $id;")
+            .bind(("id", ep1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_men_after: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM mentions WHERE in = $id OR out = $id;")
+            .bind(("id", ep1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_sup_after: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM superseded_by WHERE in = $id OR out = $id;")
+            .bind(("id", ep1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_met_after: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM metrics WHERE target_id = $id;")
+            .bind(("id", ep1_rec.clone()))
+            .await?
+            .take(0)?;
+
+        assert!(res_rel_after.is_empty(), "relates_to orphaned edges must be 0");
+        assert!(res_fol_after.is_empty(), "followed_by orphaned edges must be 0");
+        assert!(res_men_after.is_empty(), "mentions orphaned edges must be 0");
+        assert!(res_sup_after.is_empty(), "superseded_by orphaned edges must be 0");
+        assert!(res_met_after.is_empty(), "metrics orphaned records must be 0");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_orphaned_edge_cascading_on_wiki_node_deletion() -> Result<()> {
+        let backend = SurrealBackend::new_in_memory().await?;
+        backend.init().await?;
+
+        let node1 = WikiNode {
+            name: "WikiNode1".to_string(),
+            content: "Content 1".to_string(),
+            scope: "test_scope".to_string(),
+            vault_path: Some("wiki/test_scope/WikiNode1.md".to_string()),
+            ..Default::default()
+        };
+        let node2 = WikiNode {
+            name: "WikiNode2".to_string(),
+            content: "Content 2".to_string(),
+            scope: "test_scope".to_string(),
+            vault_path: Some("wiki/test_scope/WikiNode2.md".to_string()),
+            ..Default::default()
+        };
+        let n1_id = backend.save_wiki_node(&node1).await?;
+        let n2_id = backend.save_wiki_node(&node2).await?;
+        let n1_rec = parse_record_id(&n1_id)?;
+        let n2_rec = parse_record_id(&n2_id)?;
+
+        backend
+            .db
+            .query("RELATE $in -> relates_to -> $out CONTENT { confidence: 0.8 };")
+            .bind(("in", n1_rec.clone()))
+            .bind(("out", n2_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> followed_by -> $out;")
+            .bind(("in", n1_rec.clone()))
+            .bind(("out", n2_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> superseded_by -> $out;")
+            .bind(("in", n1_rec.clone()))
+            .bind(("out", n2_rec.clone()))
+            .await?
+            .check()?;
+
+        backend.delete_wiki_node("WikiNode1", "test_scope").await?;
+
+        let res_rel: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM relates_to WHERE in = $id OR out = $id;")
+            .bind(("id", n1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_fol: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM followed_by WHERE in = $id OR out = $id;")
+            .bind(("id", n1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_men: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM mentions WHERE in = $id OR out = $id;")
+            .bind(("id", n1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_sup: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM superseded_by WHERE in = $id OR out = $id;")
+            .bind(("id", n1_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_met: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM metrics WHERE target_id = $id;")
+            .bind(("id", n1_rec.clone()))
+            .await?
+            .take(0)?;
+
+        assert!(res_rel.is_empty(), "relates_to orphaned edges must be 0 after wiki_node delete");
+        assert!(res_fol.is_empty(), "followed_by orphaned edges must be 0 after wiki_node delete");
+        assert!(res_men.is_empty(), "mentions orphaned edges must be 0 after wiki_node delete");
+        assert!(res_sup.is_empty(), "superseded_by orphaned edges must be 0 after wiki_node delete");
+        assert!(res_met.is_empty(), "metrics orphaned records must be 0 after wiki_node delete");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_orphaned_edge_cascading_on_vault_path_deletion() -> Result<()> {
+        let backend = SurrealBackend::new_in_memory().await?;
+        backend.init().await?;
+
+        let ep = EpisodeSave {
+            title: "Vault Path Episode".to_string(),
+            content: "Content".to_string(),
+            scope: Some("test_scope".to_string()),
+            vault_path: Some("episodes/vp_test.md".to_string()),
+            ..Default::default()
+        };
+        let ep_id = backend.save_episode(&ep).await?;
+        let ep_rec = parse_record_id(&ep_id)?;
+
+        let node = WikiNode {
+            name: "TargetNode".to_string(),
+            content: "Target Content".to_string(),
+            scope: "test_scope".to_string(),
+            ..Default::default()
+        };
+        let target_id = backend.save_wiki_node(&node).await?;
+        let target_rec = parse_record_id(&target_id)?;
+        let ent_rec = parse_record_id("entity:ent2")?;
+
+        backend
+            .db
+            .query("RELATE $in -> relates_to -> $out;")
+            .bind(("in", ep_rec.clone()))
+            .bind(("out", target_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> followed_by -> $out;")
+            .bind(("in", ep_rec.clone()))
+            .bind(("out", target_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> mentions -> $out;")
+            .bind(("in", ep_rec.clone()))
+            .bind(("out", ent_rec.clone()))
+            .await?
+            .check()?;
+        backend
+            .db
+            .query("RELATE $in -> superseded_by -> $out;")
+            .bind(("in", ep_rec.clone()))
+            .bind(("out", target_rec.clone()))
+            .await?
+            .check()?;
+
+        // Verify metrics exist before deletion
+        let res_met: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM metrics WHERE target_id = $id;")
+            .bind(("id", ep_rec.clone()))
+            .await?
+            .take(0)?;
+        assert!(!res_met.is_empty(), "metrics record should exist prior to deletion");
+
+        backend.delete_by_vault_path_db("episodes/vp_test.md").await?;
+
+        let res_rel: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM relates_to WHERE in = $id OR out = $id;")
+            .bind(("id", ep_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_fol: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM followed_by WHERE in = $id OR out = $id;")
+            .bind(("id", ep_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_men: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM mentions WHERE in = $id OR out = $id;")
+            .bind(("id", ep_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_sup: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM superseded_by WHERE in = $id OR out = $id;")
+            .bind(("id", ep_rec.clone()))
+            .await?
+            .take(0)?;
+        let res_met: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM metrics WHERE target_id = $id;")
+            .bind(("id", ep_rec.clone()))
+            .await?
+            .take(0)?;
+
+        assert!(res_rel.is_empty(), "relates_to orphaned edges must be 0 after vault_path delete");
+        assert!(res_fol.is_empty(), "followed_by orphaned edges must be 0 after vault_path delete");
+        assert!(res_men.is_empty(), "mentions orphaned edges must be 0 after vault_path delete");
+        assert!(res_sup.is_empty(), "superseded_by orphaned edges must be 0 after vault_path delete");
+        assert!(res_met.is_empty(), "metrics orphaned records must be 0 after vault_path delete");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compactor_episode_deduplication_edge_cleanup() -> Result<()> {
+        let tmp = tempdir()?;
+        let vault_root = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault_root)?;
+        std::fs::create_dir_all(vault_root.join("episodes"))?;
+        std::fs::create_dir_all(vault_root.join("wiki"))?;
+        std::fs::create_dir_all(vault_root.join("wisdom"))?;
+
+        let backend = SurrealBackend::new_in_memory().await?;
+        backend.init().await?;
+        let store = mythrax_core::store::MarkdownStore::new(&vault_root)?;
+        let compactor = mythrax_core::cognitive::compactor::Compactor::new();
+
+        let ep_older_save = EpisodeSave {
+            created_at: Some("2026-01-01T00:00:00Z".to_string()),
+            title: "Deduplication Test Episode".to_string(),
+            content: "Shared content for deduplication test episode number 1.".to_string(),
+            scope: Some("testing".to_string()),
+            session_id: Some("sess-1".to_string()),
+            node_type: Some("episodic".to_string()),
+            vault_path: Some("episodes/older.md".to_string()),
+            ..Default::default()
+        };
+
+        let ep_newer_save = EpisodeSave {
+            created_at: Some("2026-01-02T00:00:00Z".to_string()),
+            title: "Deduplication Test Episode".to_string(),
+            content: "Shared content for deduplication test episode number 2.".to_string(),
+            scope: Some("testing".to_string()),
+            session_id: Some("sess-1".to_string()),
+            node_type: Some("episodic".to_string()),
+            vault_path: Some("episodes/newer.md".to_string()),
+            ..Default::default()
+        };
+
+        let older_id_str = backend.save_episode(&ep_older_save).await?;
+        let newer_id_str = backend.save_episode(&ep_newer_save).await?;
+
+        let older_rec = parse_record_id(&older_id_str)?;
+        let newer_rec = parse_record_id(&newer_id_str)?;
+
+        let ep_other_save = EpisodeSave {
+            created_at: Some("2026-01-01T12:00:00Z".to_string()),
+            title: "Other Episode".to_string(),
+            content: "Other content.".to_string(),
+            scope: Some("testing".to_string()),
+            ..Default::default()
+        };
+        let other_id_str = backend.save_episode(&ep_other_save).await?;
+        let other_rec = parse_record_id(&other_id_str)?;
+
+        let relate_sql = "RELATE $newer -> relates_to -> $other CONTENT { confidence: 0.9 };";
+        backend
+            .db
+            .query(relate_sql)
+            .bind(("newer", newer_rec.clone()))
+            .bind(("other", other_rec.clone()))
+            .await?
+            .check()?;
+
+        let follow_sql = "RELATE $other -> followed_by -> $newer CONTENT { created_at: time::now() };";
+        backend
+            .db
+            .query(follow_sql)
+            .bind(("newer", newer_rec.clone()))
+            .bind(("other", other_rec.clone()))
+            .await?
+            .check()?;
+
+        let update_met_sql = "UPDATE metrics SET access_count = 5 WHERE target_id = $newer;";
+        backend
+            .db
+            .query(update_met_sql)
+            .bind(("newer", newer_rec.clone()))
+            .await?
+            .check()?;
+
+        let dummy_emb = vec![0.1f32; 768];
+        backend
+            .db
+            .query("UPDATE episode SET embedding = $emb WHERE scope = 'testing';")
+            .bind(("emb", dummy_emb))
+            .await?
+            .check()?;
+
+        compactor
+            .compact_scope(std::sync::Arc::new(backend.clone()), &store, "testing", None)
+            .await?;
+
+        let res_rel: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM relates_to WHERE in = $newer OR out = $newer;")
+            .bind(("newer", newer_rec.clone()))
+            .await?
+            .take(0)?;
+        assert!(
+            res_rel.is_empty(),
+            "relates_to edges on newer_rec must be 0 after compaction"
+        );
+
+        let res_fol: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM followed_by WHERE in = $newer OR out = $newer;")
+            .bind(("newer", newer_rec.clone()))
+            .await?
+            .take(0)?;
+        assert!(
+            res_fol.is_empty(),
+            "followed_by edges on newer_rec must be 0 after compaction"
+        );
+
+        let res_trans: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM relates_to WHERE in = $older OR out = $older;")
+            .bind(("older", older_rec.clone()))
+            .await?
+            .take(0)?;
+        assert!(
+            !res_trans.is_empty(),
+            "Transferred relates_to edge must exist on older_rec"
+        );
+
+        let res_sup: Vec<serde_json::Value> = backend
+            .db
+            .query("SELECT id FROM superseded_by WHERE in = $newer AND out = $older;")
+            .bind(("newer", newer_rec.clone()))
+            .bind(("older", older_rec.clone()))
+            .await?
+            .take(0)?;
+        assert!(
+            !res_sup.is_empty(),
+            "superseded_by edge from newer_rec to older_rec must exist"
+        );
+
+        Ok(())
+    }
+}
+
 }

@@ -2047,7 +2047,6 @@ pub async fn sync_workspace_docs_to_vault(
             vault_path: Option<String>,
         }
 
-        let mut stale_nodes: Vec<(surrealdb::types::RecordId, Option<String>)> = Vec::new();
         let mut offset = 0;
         loop {
             let sql = "SELECT id, vault_path FROM wiki_node WHERE scope = 'workspace_ref' LIMIT 50 START $offset;";
@@ -2057,6 +2056,9 @@ pub async fn sync_workspace_docs_to_vault(
                 break;
             }
 
+            let page_len = refs.len();
+            let mut deleted_count = 0;
+
             for node in refs {
                 let is_stale = match &node.vault_path {
                     Some(vp) => !active_vault_paths.contains(vp),
@@ -2064,35 +2066,32 @@ pub async fn sync_workspace_docs_to_vault(
                 };
 
                 if is_stale {
-                    stale_nodes.push((node.id, node.vault_path));
+                    if let Some(ref vp) = node.vault_path {
+                        let fpath = store.vault_root.join(vp);
+                        if fpath.exists() {
+                            let _ = std::fs::remove_file(fpath);
+                        }
+                    }
+                    let _ = surreal
+                        .db
+                        .query("DELETE relates_to WHERE in = $id OR out = $id;")
+                        .bind(("id", node.id.clone()))
+                        .await;
+                    let _ = surreal
+                        .db
+                        .query("DELETE followed_by WHERE in = $id OR out = $id;")
+                        .bind(("id", node.id.clone()))
+                        .await;
+                    let _ = surreal
+                        .db
+                        .query("DELETE $id;")
+                        .bind(("id", node.id.clone()))
+                        .await;
+                    deleted_count += 1;
                 }
             }
 
-            offset += 50;
-        }
-
-        for (thing, vault_path) in stale_nodes {
-            if let Some(ref vp) = vault_path {
-                let fpath = store.vault_root.join(vp);
-                if fpath.exists() {
-                    let _ = std::fs::remove_file(fpath);
-                }
-            }
-            let _ = surreal
-                .db
-                .query("DELETE relates_to WHERE in = $id OR out = $id;")
-                .bind(("id", thing.clone()))
-                .await;
-            let _ = surreal
-                .db
-                .query("DELETE followed_by WHERE in = $id OR out = $id;")
-                .bind(("id", thing.clone()))
-                .await;
-            let _ = surreal
-                .db
-                .query("DELETE $id;")
-                .bind(("id", thing.clone()))
-                .await;
+            offset += page_len - deleted_count;
         }
     }
 

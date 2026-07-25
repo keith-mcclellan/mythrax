@@ -190,6 +190,8 @@ pub async fn mine_transcript(
                         .and_then(|v| v.as_str());
                     if let Some(name) = name_opt {
                         tool_sequence.push_back(name.to_string());
+                        // Memory Safety Invariant: Enforce 1,000-element sliding window cap on tool sequences
+                        // to bound RAM consumption during long-running agent session mining.
                         if tool_sequence.len() > 1000 {
                             tool_sequence.pop_front();
                         }

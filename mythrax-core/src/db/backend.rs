@@ -108,6 +108,8 @@ pub trait StorageBackend: Send + Sync {
     async fn mark_episode_processed(&self, id: &str) -> Result<()>;
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()>;
     async fn get_all_episodes(&self) -> Result<Vec<Episode>>;
+    /// Retrieves a paginated subset of episodes from SurrealDB (`LIMIT $limit START $offset`).
+    /// Memory Safety Invariant: Prevents OOM by bounding query result sizes.
     async fn get_episodes_paginated(&self, limit: u32, offset: u32) -> Result<Vec<Episode>>;
     async fn get_episodes_by_node_type(&self, node_type: &str) -> Result<Vec<Episode>>;
     async fn get_episodes_by_node_type_paginated(
@@ -123,6 +125,8 @@ pub trait StorageBackend: Send + Sync {
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
     async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()>;
+    /// Looks up a `WikiNode` by its SHA-256 content hash and scope.
+    /// Memory Safety Invariant: Provides O(1) indexed duplicate checking (`idx_wiki_node_hash`).
     async fn find_wiki_node_by_hash(&self, hash: &str, scope: &str) -> Result<Option<WikiNode>>;
     async fn delete_episode(&self, id: &str) -> Result<()>;
     async fn update_idf_index(&self, episode_id: &str, is_delete: bool) -> Result<()>;
@@ -154,6 +158,8 @@ pub trait StorageBackend: Send + Sync {
     async fn get_related_node_ids(&self, from_id: &str) -> Result<Vec<String>>;
     async fn get_wiki_node_id_by_vault_path(&self, vault_path: &str) -> Result<Option<String>>;
     async fn get_active_scopes(&self) -> Result<Vec<String>>;
+    /// Deletes records matching the specified `vault_path` across episodes, wisdom rules, and wiki nodes.
+    /// Memory Safety Invariant: Surgical removal of stale vault records without full table scans.
     async fn delete_by_vault_path(&self, vault_path: &str) -> Result<()>;
     async fn save_stm(&self, session_id: &str, key: &str, value: &str) -> Result<()>;
     async fn get_stm(
@@ -170,8 +176,12 @@ pub trait StorageBackend: Send + Sync {
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>>;
+    /// Retrieves a paginated subset of wisdom rules from SurrealDB (`LIMIT $limit START $offset`).
+    /// Memory Safety Invariant: Prevents OOM by bounding query result sizes.
     async fn get_wisdom_rules_paginated(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>>;
     async fn get_all_wiki_nodes(&self) -> Result<Vec<WikiNode>>;
+    /// Retrieves a paginated subset of wiki nodes from SurrealDB (`LIMIT $limit START $offset`).
+    /// Memory Safety Invariant: Prevents OOM by bounding query result sizes.
     async fn get_wiki_nodes_paginated(&self, limit: u32, offset: u32) -> Result<Vec<WikiNode>>;
     async fn prune_stale_memories(&self, vault_root: &std::path::Path) -> Result<()>;
     async fn diagnose_error_internal(
@@ -868,6 +878,11 @@ impl SurrealBackend {
         anchors
     }
 
+    fn get_rpc_http_client() -> &'static reqwest::Client {
+        static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+        CLIENT.get_or_init(reqwest::Client::new)
+    }
+
     /// Post a request to the running daemon
     pub async fn daemon_post<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
         &self,
@@ -881,7 +896,7 @@ impl SurrealBackend {
         let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
         let token = Self::get_auth_token();
 
-        let client = reqwest::Client::new();
+        let client = Self::get_rpc_http_client();
         let res = client
             .post(&url)
             .header("X-Mythrax-Token", token)
@@ -919,7 +934,7 @@ impl SurrealBackend {
         let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
         let token = Self::get_auth_token();
 
-        let client = reqwest::Client::new();
+        let client = Self::get_rpc_http_client();
         let res = client
             .get(&url)
             .header("X-Mythrax-Token", token)

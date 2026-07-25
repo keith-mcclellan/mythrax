@@ -1130,6 +1130,9 @@ impl SurrealBackend {
         Ok(episodes)
     }
 
+    /// Retrieves a paginated subset of episodes from SurrealDB (`LIMIT $limit START $offset`).
+    ///
+    /// Memory Safety Invariant: Bounds memory allocation by returning at most `limit` items per query.
     pub async fn get_episodes_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<Episode>> {
         let sql = "SELECT * FROM episode LIMIT $limit START $offset;";
         let mut response = self
@@ -1567,7 +1570,7 @@ impl SurrealBackend {
             SELECT VALUE out FROM relates_to
             WHERE in = $from
               AND (valid_from = NONE OR valid_from <= $as_of)
-              AND (valid_to = NONE OR valid_to >= $as_of);
+              AND (valid_to = NONE OR valid_to >= $as_of) LIMIT 50;
         ";
 
         let mut response = self
@@ -1586,7 +1589,7 @@ impl SurrealBackend {
 
     pub async fn get_related_node_ids_db(&self, from_id: &str) -> Result<Vec<String>> {
         let from_thing = parse_record_id(from_id)?;
-        let sql = "SELECT VALUE out FROM relates_to WHERE in = $from;";
+        let sql = "SELECT VALUE out FROM relates_to WHERE in = $from LIMIT 50;";
         let mut response = self.db.query(sql).bind(("from", from_thing)).await?;
         let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
         Ok(ids
@@ -1616,10 +1619,32 @@ impl SurrealBackend {
     }
 
     pub async fn delete_episode_db(&self, id: &str) -> Result<()> {
-        let _ = self.update_idf_index_db(id, true).await;
+        let ep_opt = self.get_episode_db(id).await.ok().flatten();
         let clean_id = id.strip_prefix("episode:").unwrap_or(id);
-        let sql = "DELETE type::record('episode', $id);";
-        self.db.query(sql).bind(("id", clean_id)).await?.check()?;
+        let q_ep = "SELECT VALUE id FROM type::record('episode', $id);";
+        let mut res_ep = self.db.query(q_ep).bind(("id", clean_id)).await?.check()?;
+        let mut ep_ids: Vec<surrealdb::types::RecordId> = res_ep.take(0)?;
+        if ep_ids.is_empty() {
+            if let Ok(rec_id) = parse_record_id(&format!("episode:{}", clean_id)) {
+                ep_ids.push(rec_id);
+            }
+        }
+        for rec_id in ep_ids {
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            self.db.query(cascade_sql).bind(("id", rec_id)).await?.check()?;
+        }
+        if let Some(ep) = ep_opt {
+            let _ = self.update_idf_index_for_episode(&ep, true).await;
+        }
         Ok(())
     }
 
@@ -1631,14 +1656,8 @@ impl SurrealBackend {
         Ok(episode)
     }
 
-    pub async fn update_idf_index_db(&self, episode_id: &str, is_delete: bool) -> Result<()> {
-        let ep = match self.get_episode_db(episode_id).await {
-            Ok(Some(ep)) => ep,
-            res => {
-                println!("EARLY RETURN in update_idf_index_db for id {}: {:?}", episode_id, res);
-                return Ok(());
-            }
-        };
+    /// Increments or decrements term document frequencies in the `idf_index` SurrealDB table using a given episode.
+    pub async fn update_idf_index_for_episode(&self, ep: &Episode, is_delete: bool) -> Result<()> {
         let tokens = crate::retrieval::bm25::tokenize(&ep.content);
         let mut unique_terms = std::collections::HashSet::new();
         for t in tokens {
@@ -1662,6 +1681,23 @@ impl SurrealBackend {
         Ok(())
     }
 
+    /// Increments or decrements term document frequencies in the `idf_index` SurrealDB table.
+    ///
+    /// Memory Safety Invariant: Avoids bulk in-memory TF-IDF dictionary accumulation by persisting token statistics incrementally.
+    pub async fn update_idf_index_db(&self, episode_id: &str, is_delete: bool) -> Result<()> {
+        let ep = match self.get_episode_db(episode_id).await {
+            Ok(Some(ep)) => ep,
+            res => {
+                println!("EARLY RETURN in update_idf_index_db for id {}: {:?}", episode_id, res);
+                return Ok(());
+            }
+        };
+        self.update_idf_index_for_episode(&ep, is_delete).await
+    }
+
+    /// Backfills document term frequencies into the `idf_index` SurrealDB table using paginated episode iteration.
+    ///
+    /// Memory Safety Invariant: Drops processed episode batches from memory during backfill traversal.
     pub async fn backfill_idf_index_db(&self) -> Result<()> {
         self.db.query("DELETE FROM idf_index;").await?.check()?;
         let mut offset = 0;
@@ -1712,6 +1748,9 @@ impl SurrealBackend {
         }
     }
 
+    /// Computes and populates missing SHA-256 `content_hash` fields for episodes and wisdom rules in zero-offset `LIMIT 50` chunks.
+    ///
+    /// Memory Safety Invariant: Uses non-offset `LIMIT 50` queries on unhashed records to eliminate unbounded result accumulation.
     pub async fn backfill_content_hashes_db(&self) -> Result<()> {
         let limit = 50;
         loop {
@@ -1795,6 +1834,9 @@ impl SurrealBackend {
         Ok(())
     }
 
+    /// Computes and populates missing SHA-256 `content_hash` fields for `WikiNode` records in zero-offset `LIMIT 50` chunks.
+    ///
+    /// Memory Safety Invariant: Uses non-offset `LIMIT 50` loops on unhashed records to bound batch execution memory.
     pub async fn backfill_wiki_node_content_hashes_db(&self) -> Result<()> {
         let limit = 50;
         loop {
@@ -1838,6 +1880,9 @@ impl SurrealBackend {
         Ok(())
     }
 
+    /// Searches for a `WikiNode` matching a specific SHA-256 content hash and scope.
+    ///
+    /// Memory Safety Invariant: Uses the indexed `idx_wiki_node_hash` field for O(1) duplicate checks.
     pub async fn find_wiki_node_by_hash_db(&self, content_hash: &str, scope: &str) -> Result<Option<WikiNode>> {
         let check_query = "SELECT * FROM wiki_node WHERE content_hash = $content_hash AND scope = $scope LIMIT 1;";
         let mut response = self
@@ -1890,6 +1935,9 @@ impl SurrealBackend {
         Ok(None)
     }
 
+    /// Persists an ephemeral DBSCAN cluster assignment to the SurrealDB `pipeline_cluster` temporary table.
+    ///
+    /// Memory Safety Invariant: Replaces in-memory cluster arrays with database table records.
     pub async fn save_cluster_assignment_db(&self, run_id: &str, cluster_id: i32, entity_id: &str, scope: Option<&str>) -> Result<()> {
         let ep_thing = if let Ok(rec_id) = parse_record_id(entity_id) {
             rec_id
@@ -1909,6 +1957,9 @@ impl SurrealBackend {
         Ok(())
     }
 
+    /// Retrieves a paginated subset of cluster member episodes from the `pipeline_cluster` temporary table.
+    ///
+    /// Memory Safety Invariant: Bounds memory consumption during cognitive synthesis by returning at most `limit` members.
     pub async fn get_cluster_members_paginated_db(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>> {
         let sql = "SELECT VALUE episode_id FROM pipeline_cluster WHERE run_id = $run_id AND cluster_id = $cluster_id LIMIT $limit START $offset;";
         let mut res = self.db.query(sql)
@@ -1928,43 +1979,74 @@ impl SurrealBackend {
         Ok(episodes)
     }
 
+    /// Deletes all ephemeral DBSCAN state associated with a pipeline run from `pipeline_cluster`.
+    ///
+    /// Memory Safety Invariant: Invoked via RAII scope guards to guarantee purge on completion or failure.
     pub async fn delete_pipeline_run_db(&self, run_id: &str) -> Result<()> {
         let sql = "DELETE FROM pipeline_cluster WHERE run_id = $run_id;";
         self.db.query(sql).bind(("run_id", run_id)).await?.check()?;
         Ok(())
     }
 
+    /// Deletes records across `episode`, `wisdom`, and `wiki_node` matching the given `vault_path`.
+    ///
+    /// Memory Safety Invariant: Surgically purges deleted vault records without loading table contents into memory.
     pub async fn delete_by_vault_path_db(&self, vault_path: &str) -> Result<()> {
-        let sql1 = "DELETE FROM episode WHERE vault_path = $vault_path;";
-        let sql2 = "DELETE FROM wisdom WHERE vault_path = $vault_path;";
-        let sql3 = "DELETE FROM wiki_node WHERE vault_path = $vault_path;";
+        let q_ep = "SELECT VALUE id FROM episode WHERE vault_path = $vault_path;";
+        let q_wis = "SELECT VALUE id FROM wisdom WHERE vault_path = $vault_path;";
+        let q_wiki = "SELECT VALUE id FROM wiki_node WHERE vault_path = $vault_path;";
 
-        self.db
-            .query(sql1)
-            .bind(("vault_path", vault_path))
-            .await?
-            .check()?;
-        self.db
-            .query(sql2)
-            .bind(("vault_path", vault_path))
-            .await?
-            .check()?;
-        self.db
-            .query(sql3)
-            .bind(("vault_path", vault_path))
-            .await?
-            .check()?;
+        let mut res_ep = self.db.query(q_ep).bind(("vault_path", vault_path)).await?.check()?;
+        let ep_ids: Vec<surrealdb::types::RecordId> = res_ep.take(0)?;
+
+        let mut res_wis = self.db.query(q_wis).bind(("vault_path", vault_path)).await?.check()?;
+        let wis_ids: Vec<surrealdb::types::RecordId> = res_wis.take(0)?;
+
+        let mut res_wiki = self.db.query(q_wiki).bind(("vault_path", vault_path)).await?.check()?;
+        let wiki_ids: Vec<surrealdb::types::RecordId> = res_wiki.take(0)?;
+
+        let all_ids: Vec<surrealdb::types::RecordId> = ep_ids.into_iter().chain(wis_ids).chain(wiki_ids).collect();
+
+        for id in all_ids {
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            self.db.query(cascade_sql).bind(("id", id)).await?.check()?;
+        }
+
         Ok(())
     }
 
     pub async fn delete_wiki_node_db(&self, name: &str, scope: &str) -> Result<()> {
-        let sql = "DELETE FROM wiki_node WHERE name = $name AND scope = $scope;";
-        self.db
-            .query(sql)
+        let q_wiki = "SELECT VALUE id FROM wiki_node WHERE name = $name AND scope = $scope;";
+        let mut res = self
+            .db
+            .query(q_wiki)
             .bind(("name", name))
             .bind(("scope", scope))
             .await?
             .check()?;
+        let ids: Vec<surrealdb::types::RecordId> = res.take(0)?;
+        for id in ids {
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            self.db.query(cascade_sql).bind(("id", id)).await?.check()?;
+        }
         Ok(())
     }
 
@@ -2219,19 +2301,24 @@ impl SurrealBackend {
                 .bind(("subagent", h.subagent_conversation_id.as_str()))
                 .await?
                 .check()?;
-        }
 
-        let delete_sql = "
-            DELETE FROM handoff
-            WHERE (status = 'COMPLETED' OR status = 'FAILED')
-              AND created_at < time::now() - <duration> $duration;
-        ";
-        let _ = self
-            .db
-            .query(delete_sql)
-            .bind(("duration", duration_str.as_str()))
-            .await?
-            .check()?;
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            let _ = self
+                .db
+                .query(cascade_sql)
+                .bind(("id", h.id.clone()))
+                .await?
+                .check()?;
+        }
 
         Ok(())
     }
@@ -2365,6 +2452,9 @@ impl SurrealBackend {
         Ok(rules)
     }
 
+    /// Retrieves a paginated subset of wisdom rules from SurrealDB (`LIMIT $limit START $offset`).
+    ///
+    /// Memory Safety Invariant: Prevents OOM by bounding query result size to `limit` entries.
     pub async fn get_wisdom_rules_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>> {
         let sql = "
             SELECT *,
@@ -2406,6 +2496,9 @@ impl SurrealBackend {
         Ok(nodes)
     }
 
+    /// Retrieves a paginated subset of wiki nodes from SurrealDB (`LIMIT $limit START $offset`).
+    ///
+    /// Memory Safety Invariant: Prevents OOM by bounding query result size to `limit` entries.
     pub async fn get_wiki_nodes_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WikiNode>> {
         let sql = "SELECT * FROM wiki_node LIMIT $limit START $offset;";
         let mut response = self
@@ -2439,9 +2532,13 @@ impl SurrealBackend {
         let mut path_conf = HashMap::new();
         path_conf.insert(start_thing.clone(), 1.0f32);
 
-        let mut hits = Vec::new();
+        let mut hits: Vec<crate::contracts::SymbolicHit> = Vec::new();
+        let mut hit_index_map: HashMap<String, usize> = HashMap::new();
 
         while let Some((current, depth, current_conf)) = queue.pop_front() {
+            if hits.len() >= 1000 {
+                break;
+            }
             if depth >= limit_depth {
                 continue;
             }
@@ -2452,18 +2549,18 @@ impl SurrealBackend {
                       WHERE in = $current
                         AND relation = $relation
                         AND (valid_from = NONE OR valid_from <= $as_of)
-                        AND (valid_to = NONE OR valid_to >= $as_of);"
+                        AND (valid_to = NONE OR valid_to >= $as_of) LIMIT 50;"
                 } else {
-                    "SELECT out, confidence FROM relates_to WHERE in = $current AND relation = $relation;"
+                    "SELECT out, confidence FROM relates_to WHERE in = $current AND relation = $relation LIMIT 50;"
                 }
             } else {
                 if as_of.is_some() {
                     "SELECT out, confidence FROM relates_to
                       WHERE in = $current
                         AND (valid_from = NONE OR valid_from <= $as_of)
-                        AND (valid_to = NONE OR valid_to >= $as_of);"
+                        AND (valid_to = NONE OR valid_to >= $as_of) LIMIT 50;"
                 } else {
-                    "SELECT out, confidence FROM relates_to WHERE in = $current;"
+                    "SELECT out, confidence FROM relates_to WHERE in = $current LIMIT 50;"
                 }
             };
 
@@ -2496,18 +2593,20 @@ impl SurrealBackend {
 
                 if should_visit {
                     let neighbor_str = format_record_id(&neighbor);
-                    if let Some(hit) = hits
-                        .iter_mut()
-                        .find(|h: &&mut crate::contracts::SymbolicHit| h.node_id == neighbor_str)
-                    {
-                        hit.path_confidence = next_conf;
-                        hit.hops = depth + 1;
+                    if let Some(&idx) = hit_index_map.get(&neighbor_str) {
+                        hits[idx].path_confidence = next_conf;
+                        hits[idx].hops = depth + 1;
                     } else {
+                        if hits.len() >= 1000 {
+                            break;
+                        }
+                        let idx = hits.len();
                         hits.push(crate::contracts::SymbolicHit {
-                            node_id: neighbor_str,
+                            node_id: neighbor_str.clone(),
                             path_confidence: next_conf,
                             hops: depth + 1,
                         });
+                        hit_index_map.insert(neighbor_str, idx);
                     }
                     queue.push_back((neighbor, depth + 1, next_conf));
                 }
@@ -2599,18 +2698,18 @@ impl SurrealBackend {
         };
 
         // Query HTR tree state (all hypothesis nodes)
-        let mut response = self.db.query("SELECT * FROM hypothesis_node;").await?;
+        let mut response = self.db.query("SELECT * FROM hypothesis_node LIMIT 100;").await?;
         let htr_tree_state: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
 
         // Query active STM keys
         let mut stm_response = if let Some(sid) = session_id {
             self.db
-                .query("SELECT key, value FROM short_term_memory WHERE session_id = $session_id;")
+                .query("SELECT key, value FROM short_term_memory WHERE session_id = $session_id LIMIT 100;")
                 .bind(("session_id", sid))
                 .await?
         } else {
             self.db
-                .query("SELECT key, value FROM short_term_memory;")
+                .query("SELECT key, value FROM short_term_memory LIMIT 100;")
                 .await?
         };
 

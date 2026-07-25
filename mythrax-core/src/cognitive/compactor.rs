@@ -145,9 +145,19 @@ impl Compactor {
             {
                 if let Ok(nodes) = resp.take::<Vec<GcNode>>(0) {
                     for node in nodes {
+                        let cascade_sql = "
+                            BEGIN TRANSACTION;
+                            DELETE relates_to WHERE in = $id OR out = $id;
+                            DELETE followed_by WHERE in = $id OR out = $id;
+                            DELETE mentions WHERE in = $id OR out = $id;
+                            DELETE superseded_by WHERE in = $id OR out = $id;
+                            DELETE metrics WHERE target_id = $id;
+                            DELETE $id;
+                            COMMIT TRANSACTION;
+                        ";
                         let _ = surreal_backend
                             .db
-                            .query("DELETE $id;")
+                            .query(cascade_sql)
                             .bind(("id", node.id))
                             .await;
                         if let Some(ref vp) = node.vault_path {
@@ -506,7 +516,6 @@ impl Compactor {
                                     let mut older_count = 0;
                                     let mut newer_count = 0;
                                     let mut older_exists = false;
-                                    let mut newer_exists = false;
 
                                     let metrics_sql = "SELECT target_id, access_count FROM metrics WHERE target_id = $older OR target_id = $newer;";
                                     if let Ok(mut resp) = surreal_backend
@@ -534,7 +543,6 @@ impl Compactor {
                                                     == *newer.id.as_ref().unwrap()
                                                 {
                                                     newer_count = r.access_count;
-                                                    newer_exists = true;
                                                 }
                                             }
                                         }
@@ -566,28 +574,7 @@ impl Compactor {
                                             .await;
                                     }
 
-                                    // 1. Create superseded_by edge: newer -> superseded_by -> older
-                                    let relate_sql =
-                                        "RELATE $newer -> superseded_by -> $older CONTENT {
-                                        reason: 'Deduplicated during compaction',
-                                        created_at: time::now()
-                                    };";
-                                    if let Err(e) = surreal_backend
-                                        .db
-                                        .query(relate_sql)
-                                        .bind(("newer", newer_rec.clone()))
-                                        .bind(("older", older_rec.clone()))
-                                        .await
-                                        .and_then(|r| r.check())
-                                    {
-                                        tracing::error!(
-                                            "Failed to create superseded_by relation in compactor: {:?}",
-                                            e
-                                        );
-                                    }
-
-                                    // 2. Transfer all edges from newer node to older node before deletion
-
+                                    // 1. Transfer all edges from newer node to older node before deletion
                                     let sql = "SELECT * FROM relates_to WHERE in = $newer OR out = $newer;";
                                     match surreal_backend
                                         .db
@@ -705,7 +692,7 @@ impl Compactor {
                                         ),
                                     }
 
-                                    // 3. Expand temporal range on surviving node
+                                    // 2. Expand temporal range on surviving node
                                     if let (Some(newer_start), Some(older_start)) =
                                         (newer.temporal_range_start, older.temporal_range_start)
                                     {
@@ -724,16 +711,50 @@ impl Compactor {
                                         }
                                     }
 
-                                    if newer_exists {
-                                        let delete_metric_sql =
-                                            "DELETE FROM metrics WHERE target_id = $target_id;";
-                                        let _ = surreal_backend
-                                            .db
-                                            .query(delete_metric_sql)
-                                            .bind(("target_id", newer_rec.clone()))
-                                            .await;
+                                    // 3. Delete old edges and metrics of newer node in an atomic transaction
+                                    let atomic_cleanup_sql = "
+                                        BEGIN TRANSACTION;
+                                        DELETE relates_to WHERE in = $newer OR out = $newer;
+                                        DELETE followed_by WHERE in = $newer OR out = $newer;
+                                        DELETE mentions WHERE in = $newer OR out = $newer;
+                                        DELETE superseded_by WHERE in = $newer OR out = $newer;
+                                        DELETE metrics WHERE target_id = $newer;
+                                        COMMIT TRANSACTION;
+                                    ";
+                                    if let Err(e) = surreal_backend
+                                        .db
+                                        .query(atomic_cleanup_sql)
+                                        .bind(("newer", newer_rec.clone()))
+                                        .await
+                                        .and_then(|r| r.check())
+                                    {
+                                        tracing::error!(
+                                            "Failed to delete old edges and metrics for newer episode in compactor: {:?}",
+                                            e
+                                        );
                                     }
 
+                                    // 4. Create superseded_by edge: newer -> superseded_by -> older
+                                    let relate_sql =
+                                        "RELATE $newer -> superseded_by -> $older CONTENT {
+                                        reason: 'Deduplicated during compaction',
+                                        created_at: time::now()
+                                    };";
+                                    if let Err(e) = surreal_backend
+                                        .db
+                                        .query(relate_sql)
+                                        .bind(("newer", newer_rec.clone()))
+                                        .bind(("older", older_rec.clone()))
+                                        .await
+                                        .and_then(|r| r.check())
+                                    {
+                                        tracing::error!(
+                                            "Failed to create superseded_by relation in compactor: {:?}",
+                                            e
+                                        );
+                                    }
+
+                                    // 5. Mark newer episode as archived and superseded
                                     let newer_raw_id = newer
                                         .id
                                         .as_ref()
@@ -803,9 +824,19 @@ impl Compactor {
                                 if ids.len() > 100 {
                                     let to_delete = &ids[100..];
                                     for item in to_delete {
+                                        let cascade_sql = "
+                                            BEGIN TRANSACTION;
+                                            DELETE relates_to WHERE in = $id OR out = $id;
+                                            DELETE followed_by WHERE in = $id OR out = $id;
+                                            DELETE mentions WHERE in = $id OR out = $id;
+                                            DELETE superseded_by WHERE in = $id OR out = $id;
+                                            DELETE metrics WHERE target_id = $id;
+                                            DELETE $id;
+                                            COMMIT TRANSACTION;
+                                        ";
                                         let _ = surreal_backend
                                             .db
-                                            .query("DELETE $id;")
+                                            .query(cascade_sql)
                                             .bind(("id", item.id.clone()))
                                             .await;
                                     }
@@ -833,12 +864,33 @@ impl Compactor {
             .as_any()
             .downcast_ref::<crate::db::backend::SurrealBackend>()
         {
-            let delete_query = "DELETE wiki_node WHERE scope = $scope AND (vault_path CONTAINS 'compactions/' OR name CONTAINS 'Compaction:');";
-            let _ = surreal_backend
+            let select_query = "SELECT VALUE id FROM wiki_node WHERE scope = $scope AND (vault_path CONTAINS 'compactions/' OR name CONTAINS 'Compaction:');";
+            if let Ok(mut resp) = surreal_backend
                 .db
-                .query(delete_query)
+                .query(select_query)
                 .bind(("scope", scope))
-                .await;
+                .await
+            {
+                if let Ok(node_ids) = resp.take::<Vec<surrealdb::types::RecordId>>(0) {
+                    for id in node_ids {
+                        let cascade_sql = "
+                            BEGIN TRANSACTION;
+                            DELETE relates_to WHERE in = $id OR out = $id;
+                            DELETE followed_by WHERE in = $id OR out = $id;
+                            DELETE mentions WHERE in = $id OR out = $id;
+                            DELETE superseded_by WHERE in = $id OR out = $id;
+                            DELETE metrics WHERE target_id = $id;
+                            DELETE $id;
+                            COMMIT TRANSACTION;
+                        ";
+                        let _ = surreal_backend
+                            .db
+                            .query(cascade_sql)
+                            .bind(("id", id))
+                            .await;
+                    }
+                }
+            }
         }
 
         let insights = load_insights(&store.vault_root);

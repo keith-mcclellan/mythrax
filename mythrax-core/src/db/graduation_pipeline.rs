@@ -160,9 +160,19 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         for rule in to_delete {
             if let Some(ref id) = rule.id {
                 let id_raw = id.split(':').nth(1).unwrap_or(id).to_string();
+                let cascade_sql = "
+                    BEGIN TRANSACTION;
+                    DELETE relates_to WHERE in = type::record('wisdom', $id) OR out = type::record('wisdom', $id);
+                    DELETE followed_by WHERE in = type::record('wisdom', $id) OR out = type::record('wisdom', $id);
+                    DELETE mentions WHERE in = type::record('wisdom', $id) OR out = type::record('wisdom', $id);
+                    DELETE superseded_by WHERE in = type::record('wisdom', $id) OR out = type::record('wisdom', $id);
+                    DELETE metrics WHERE target_id = type::record('wisdom', $id);
+                    DELETE type::record('wisdom', $id);
+                    COMMIT TRANSACTION;
+                ";
                 let _ = surreal_backend
                     .db
-                    .query("DELETE type::record('wisdom', $id);")
+                    .query(cascade_sql)
                     .bind(("id", id_raw))
                     .await;
             }
