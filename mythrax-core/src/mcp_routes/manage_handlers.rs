@@ -335,16 +335,26 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 } else {
                     session_id
                 };
-                if let Ok(db_rules) = state.backend.get_all_wisdom_rules().await {
-                    let filtered: Vec<_> = db_rules.iter().filter(|r| r.scope == scope).collect();
-                    if !filtered.is_empty() {
-                        rules_content.push_str("\n\n### Learned Wisdom Rules:\n");
-                        for r in filtered {
-                            rules_content.push_str(&format!(
-                                "- Target: {}\n  Avoid: {}\n  Remedy: {}\n",
-                                r.target_pattern, r.action_to_avoid, r.prescribed_remedy
-                            ));
+                let mut db_rules = Vec::new();
+                let mut w_offset = 0;
+                loop {
+                    match state.backend.get_wisdom_rules_paginated(100, w_offset).await {
+                        Ok(page) if !page.is_empty() => {
+                            let count = page.len() as u32;
+                            db_rules.extend(page);
+                            w_offset += count;
                         }
+                        _ => break,
+                    }
+                }
+                let filtered: Vec<_> = db_rules.iter().filter(|r| r.scope == scope).collect();
+                if !filtered.is_empty() {
+                    rules_content.push_str("\n\n### Learned Wisdom Rules:\n");
+                    for r in filtered {
+                        rules_content.push_str(&format!(
+                            "- Target: {}\n  Avoid: {}\n  Remedy: {}\n",
+                            r.target_pattern, r.action_to_avoid, r.prescribed_remedy
+                        ));
                     }
                 }
             }

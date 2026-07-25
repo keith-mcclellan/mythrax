@@ -100,6 +100,11 @@ pub trait StorageBackend: Send + Sync {
     async fn get_llm_config(&self) -> Result<LlmConfigResponse>;
     async fn update_llm_config(&self, req: &LlmConfigRequest) -> Result<()>;
     async fn get_unprocessed_episodes(&self) -> Result<Vec<Episode>>;
+    async fn get_unprocessed_episodes_paginated(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>>;
     async fn mark_episode_processed(&self, id: &str) -> Result<()>;
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()>;
     async fn get_all_episodes(&self) -> Result<Vec<Episode>>;
@@ -1483,7 +1488,7 @@ impl StorageBackend for SurrealBackend {
             let sql = if tier.is_some() {
                 "
                 SELECT *,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                       (utility ?? 50.0) AS utility
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND tier = $tier
@@ -1493,7 +1498,7 @@ impl StorageBackend for SurrealBackend {
             } else {
                 "
                 SELECT *,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                       (utility ?? 50.0) AS utility
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
@@ -1511,7 +1516,7 @@ impl StorageBackend for SurrealBackend {
             let sql = if tier.is_some() {
                 "
                 SELECT *,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                       (utility ?? 50.0) AS utility
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND tier = $tier
@@ -1521,7 +1526,7 @@ impl StorageBackend for SurrealBackend {
             } else {
                 "
                 SELECT *,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                       (utility ?? 50.0) AS utility
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND (scope IN [$active_scope, 'general'] OR $active_scope = 'all')
@@ -1609,6 +1614,15 @@ impl StorageBackend for SurrealBackend {
 
     async fn get_unprocessed_episodes(&self) -> Result<Vec<Episode>> {
         self.get_unprocessed_episodes_db().await
+    }
+
+    async fn get_unprocessed_episodes_paginated(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>> {
+        self.get_unprocessed_episodes_paginated_db(limit, offset)
+            .await
     }
 
     async fn mark_episode_processed(&self, id: &str) -> Result<()> {

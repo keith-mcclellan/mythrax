@@ -1064,6 +1064,25 @@ impl SurrealBackend {
         Ok(episodes)
     }
 
+    pub async fn get_unprocessed_episodes_paginated_db(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>> {
+        let sql = "SELECT * FROM episode WHERE processed_in_dream = false AND (node_type IS NONE OR node_type != 'experience') LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Query paginated unprocessed episodes failed")?;
+        let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
     pub async fn mark_episode_processed_db(&self, id: &str) -> Result<()> {
         let thing_id = parse_record_id(id)?;
 
@@ -2256,7 +2275,7 @@ impl SurrealBackend {
     pub async fn get_all_wisdom_rules_db(&self) -> Result<Vec<WisdomRule>> {
         let sql = "
             SELECT *,
-                   (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                   (utility ?? 50.0) AS utility
             FROM wisdom
             WHERE status != 'superseded';
         ";
@@ -2281,7 +2300,7 @@ impl SurrealBackend {
     pub async fn get_wisdom_rules_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>> {
         let sql = "
             SELECT *,
-                   (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                   (utility ?? 50.0) AS utility
             FROM wisdom
             WHERE status != 'superseded'
             LIMIT $limit START $offset;
@@ -2719,8 +2738,14 @@ impl SurrealBackend {
         }
         let thing_id = parse_record_id(id)?;
 
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+        struct MetricRecord {
+            id: surrealdb::types::RecordId,
+            utility_score: f64,
+        }
+
         let fetch_sql =
-            "SELECT VALUE utility_score FROM metrics WHERE target_id = $target_id LIMIT 1;";
+            "SELECT id, utility_score FROM metrics WHERE target_id = $target_id LIMIT 1;";
         let mut response = self
             .db
             .query(fetch_sql)
@@ -2728,26 +2753,80 @@ impl SurrealBackend {
             .await?
             .check()
             .context("Fetch metrics query failed")?;
-        let utility_opt: Option<f64> = response.take(0)?;
+        let rows: Vec<MetricRecord> = response.take(0).unwrap_or_default();
 
-        let prev_utility = utility_opt.unwrap_or(1.0);
-        let reinforcement = if success { 1.0 } else { 0.0 };
+        let (prev_utility, metric_id) = if let Some(row) = rows.into_iter().next() {
+            (row.utility_score, Some(row.id))
+        } else {
+            (50.0, None)
+        };
 
+        let reinforcement = if success { 100.0 } else { 0.0 };
         let new_utility = (0.3 * reinforcement) + (0.7 * prev_utility);
 
-        let update_sql = "
-            UPDATE metrics
-            SET utility_score = $new_utility, access_count = access_count + 1, last_accessed = time::now()
-            WHERE target_id = $target_id;
-        ";
+        if let Some(m_id) = metric_id {
+            let update_sql = "
+                UPDATE $metric_id SET
+                    utility_score = $new_utility,
+                    access_count = access_count + 1,
+                    last_accessed = time::now();
+            ";
+            let _ = self
+                .db
+                .query(update_sql)
+                .bind(("metric_id", m_id))
+                .bind(("new_utility", new_utility))
+                .await?
+                .check()
+                .context("Update metrics query failed")?;
+        } else {
+            let metrics_uuid = uuid::Uuid::new_v4().to_string();
+            let create_sql = "
+                LET $met = type::record('metrics', $metrics_uuid);
+                INSERT INTO metrics (id, target_id, utility_score, access_count, last_accessed)
+                VALUES ($met, $target_id, $new_utility, 1, time::now());
+            ";
+            let res = self
+                .db
+                .query(create_sql)
+                .bind(("metrics_uuid", metrics_uuid.as_str()))
+                .bind(("target_id", thing_id.clone()))
+                .bind(("new_utility", new_utility))
+                .await;
+
+            let insert_ok = match res {
+                Ok(resp) => resp.check().is_ok(),
+                Err(_) => false,
+            };
+
+            if !insert_ok {
+                let fallback_sql = "
+                    UPDATE metrics SET
+                        utility_score = $new_utility,
+                        access_count = access_count + 1,
+                        last_accessed = time::now()
+                    WHERE target_id = $target_id;
+                ";
+                let _ = self
+                    .db
+                    .query(fallback_sql)
+                    .bind(("target_id", thing_id.clone()))
+                    .bind(("new_utility", new_utility))
+                    .await?
+                    .check()
+                    .context("Fallback metrics update query failed")?;
+            }
+        }
+
+        let target_update_sql = "UPDATE $target MERGE { utility: $utility };";
         let _ = self
             .db
-            .query(update_sql)
-            .bind(("new_utility", new_utility))
-            .bind(("target_id", thing_id.clone()))
+            .query(target_update_sql)
+            .bind(("target", thing_id))
+            .bind(("utility", new_utility))
             .await?
             .check()
-            .context("Update metrics query failed")?;
+            .context("Update target utility query failed")?;
 
         Ok(())
     }

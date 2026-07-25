@@ -177,57 +177,103 @@ impl Compactor {
         // -------------------------------------------------------------
         // Enforce 500-node procedural episode cap per scope
         // -------------------------------------------------------------
-        if let Ok(mut active_procs) = db.get_episodes_by_node_type("procedural").await {
-            active_procs
-                .retain(|ep| ep.scope.as_deref() == Some(scope) && !ep.archived.unwrap_or(false));
-            if active_procs.len() > 500 {
-                active_procs.sort_by(|a, b| {
-                    let time_a = a
-                        .last_retrieved_at
-                        .as_ref()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                        .unwrap_or_else(|| chrono::Utc::now());
-                    let time_b = b
-                        .last_retrieved_at
-                        .as_ref()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                        .unwrap_or_else(|| chrono::Utc::now());
-                    time_a.cmp(&time_b)
-                });
+        let mut active_procs: Vec<crate::contracts::Episode> = Vec::new();
+        let mut proc_offset = 0;
+        while proc_offset < 5000 {
+            match db
+                .get_episodes_by_node_type_paginated("procedural", 100, proc_offset)
+                .await
+            {
+                Ok(page) if !page.is_empty() => {
+                    let page_len = page.len() as u32;
+                    for ep in page {
+                        if ep.scope.as_deref() == Some(scope) && !ep.archived.unwrap_or(false) {
+                            active_procs.push(ep);
+                        }
+                    }
+                    proc_offset += page_len;
+                }
+                _ => break,
+            }
+        }
+        if active_procs.len() > 500 {
+            active_procs.sort_by(|a, b| {
+                let epoch_zero = chrono::DateTime::from_timestamp(0, 0).unwrap().with_timezone(&chrono::Utc);
+                let time_a = a
+                    .last_retrieved_at
+                    .as_ref()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .or_else(|| {
+                        a.created_at
+                            .as_ref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                    })
+                    .unwrap_or(epoch_zero);
+                let time_b = b
+                    .last_retrieved_at
+                    .as_ref()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .or_else(|| {
+                        b.created_at
+                            .as_ref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                    })
+                    .unwrap_or(epoch_zero);
+                time_a.cmp(&time_b)
+            });
 
-                let num_to_archive = active_procs.len() - 500;
-                if let Some(surreal_backend) = db
-                    .as_any()
-                    .downcast_ref::<crate::db::backend::SurrealBackend>()
-                {
-                    for i in 0..num_to_archive {
-                        if let Some(ref ep_id) = active_procs[i].id {
-                            let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
-                            let archive_sql = "UPDATE type::record('episode', $id) MERGE {
+            let num_to_archive = active_procs.len() - 500;
+            if let Some(surreal_backend) = db
+                .as_any()
+                .downcast_ref::<crate::db::backend::SurrealBackend>()
+            {
+                for i in 0..num_to_archive {
+                    if let Some(ref ep_id) = active_procs[i].id {
+                        let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
+                        let new_vp = active_procs[i].vault_path.as_ref().map(|vp| {
+                            let filename = std::path::Path::new(vp)
+                                .file_name()
+                                .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
+                            format!("archive/{}", filename.to_string_lossy())
+                        });
+
+                        let archive_sql = if new_vp.is_some() {
+                            "UPDATE type::record('episode', $id) MERGE {
+                                archived: true,
+                                archived_at: time::now(),
+                                utility: 1.0,
+                                importance: 1.0,
+                                vault_path: $new_vp
+                            };"
+                        } else {
+                            "UPDATE type::record('episode', $id) MERGE {
                                 archived: true,
                                 archived_at: time::now(),
                                 utility: 1.0,
                                 importance: 1.0
-                            };";
-                            let _ = surreal_backend
-                                .db
-                                .query(archive_sql)
-                                .bind(("id", id_raw))
-                                .await;
+                            };"
+                        };
 
-                            if let Some(ref vp) = active_procs[i].vault_path {
-                                let src_file = store.vault_root.join(vp);
-                                if src_file.exists() {
-                                    let archive_dir = store.vault_root.join("vault/archive");
-                                    let _ = std::fs::create_dir_all(&archive_dir);
-                                    let filename = std::path::Path::new(vp)
-                                        .file_name()
-                                        .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
-                                    let dest_file = archive_dir.join(filename);
-                                    let _ = std::fs::rename(&src_file, &dest_file);
-                                }
+                        let mut query = surreal_backend.db.query(archive_sql).bind(("id", id_raw));
+                        if let Some(ref nvp) = new_vp {
+                            query = query.bind(("new_vp", nvp.clone()));
+                        }
+                        let _ = query.await;
+
+                        if let Some(ref vp) = active_procs[i].vault_path {
+                            let src_file = store.vault_root.join(vp);
+                            if src_file.exists() {
+                                let archive_dir = store.vault_root.join("archive");
+                                let _ = std::fs::create_dir_all(&archive_dir);
+                                let filename = std::path::Path::new(vp)
+                                    .file_name()
+                                    .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
+                                let dest_file = archive_dir.join(filename);
+                                let _ = std::fs::rename(&src_file, &dest_file);
                             }
                         }
                     }
@@ -249,16 +295,31 @@ impl Compactor {
                 }
             }
 
-            if let Ok(episodes) = db.get_all_episodes().await {
-                let mut active_eps: Vec<crate::contracts::Episode> = episodes
-                    .into_iter()
-                    .filter(|ep| {
-                        ep.scope.as_deref() == Some(scope)
+            let mut active_eps: Vec<crate::contracts::Episode> = Vec::new();
+            let mut pg_offset = 0;
+            while active_eps.len() < 500 && pg_offset < 5000 {
+                if let Ok(page) = db.get_episodes_paginated(100, pg_offset).await {
+                    if page.is_empty() {
+                        break;
+                    }
+                    let page_len = page.len() as u32;
+                    for ep in page {
+                        if ep.scope.as_deref() == Some(scope)
                             && !ep.archived.unwrap_or(false)
                             && ep.embedding.is_some()
                             && ep.id.is_some()
-                    })
-                    .collect();
+                        {
+                            active_eps.push(ep);
+                            if active_eps.len() >= 500 {
+                                break;
+                            }
+                        }
+                    }
+                    pg_offset += page_len;
+                } else {
+                    break;
+                }
+            }
 
                 let mut deleted_ids = std::collections::HashSet::new();
 
@@ -663,7 +724,7 @@ impl Compactor {
                                         let _ = surreal_backend
                                             .db
                                             .query(delete_metric_sql)
-                                            .bind(("target_id", newer_rec))
+                                            .bind(("target_id", newer_rec.clone()))
                                             .await;
                                     }
 
@@ -675,7 +736,8 @@ impl Compactor {
                                         .nth(1)
                                         .unwrap_or(newer.id.as_ref().unwrap())
                                         .to_string();
-                                    let update_ep_sql = "UPDATE type::record('episode', $id) SET archived = true, status = 'superseded';";
+                                    let update_ep_sql =
+                                        "UPDATE type::record('episode', $id) MERGE { archived: true, status: 'superseded', vault_path: '' };";
                                     if let Err(e) = surreal_backend
                                         .db
                                         .query(update_ep_sql)
@@ -705,7 +767,6 @@ impl Compactor {
                     }
                 }
             }
-        }
 
         // Prune chat history exceeding 100 turns per session
         if let Some(surreal_backend) = db
@@ -1207,209 +1268,250 @@ impl Compactor {
             }
         }
 
-        let mut access_counts = std::collections::HashMap::new();
-        if let Some(surreal_backend) = db
-            .as_any()
-            .downcast_ref::<crate::db::backend::SurrealBackend>()
-        {
-            let metrics_sql = "SELECT target_id, access_count FROM metrics;";
-            if let Ok(mut resp) = surreal_backend.db.query(metrics_sql).await {
-                if let Ok(rows) = resp.take::<Vec<crate::db::backend::MetricAccess>>(0) {
-                    for r in rows {
-                        let target_str = crate::db::backend::format_record_id(&r.target_id);
-                        access_counts.insert(target_str, r.access_count);
-                    }
-                }
-            }
-        }
-
-        let episodes = db.get_all_episodes().await?;
         let now = std::time::SystemTime::now();
-        for ep in episodes {
-            if ep.archived.unwrap_or(false) {
+        let mut offset = 0;
+        let mut attempted_ids = std::collections::HashSet::new();
+        loop {
+            let episodes = db.get_episodes_paginated(100, offset).await?;
+            if episodes.is_empty() {
+                break;
+            }
+            if attempted_ids.len() > 5000 {
+                attempted_ids.clear();
+            }
+            let mut fallback_deleted_any = false;
+            let filtered_episodes: Vec<crate::contracts::Episode> = episodes
+                .into_iter()
+                .filter(|ep| {
+                    ep.id
+                        .as_ref()
+                        .map_or(true, |id| !attempted_ids.contains(id))
+                })
+                .collect();
+            if filtered_episodes.is_empty() {
+                offset += 100;
                 continue;
             }
-            let last_ret = if let Some(ref lr_str) = ep.last_retrieved_at {
-                chrono::DateTime::parse_from_rfc3339(lr_str)
-                    .map(|dt| std::time::SystemTime::from(dt))
-                    .unwrap_or(now)
-            } else if let Some(ref ca_str) = ep.created_at {
-                chrono::DateTime::parse_from_rfc3339(ca_str)
-                    .map(|dt| std::time::SystemTime::from(dt))
-                    .unwrap_or(now)
-            } else {
-                now
-            };
 
-            let is_procedural = ep.node_type.as_deref() == Some("procedural");
-            let access_count = ep
-                .id
-                .as_ref()
-                .and_then(|id| access_counts.get(id).copied())
-                .unwrap_or(0);
+            for ep in filtered_episodes {
+                if let Some(ref id) = ep.id {
+                    attempted_ids.insert(id.clone());
+                }
+                if ep.archived.unwrap_or(false) {
+                    continue;
+                }
+                let last_ret = if let Some(ref lr_str) = ep.last_retrieved_at {
+                    chrono::DateTime::parse_from_rfc3339(lr_str)
+                        .map(|dt| std::time::SystemTime::from(dt))
+                        .unwrap_or(now)
+                } else if let Some(ref ca_str) = ep.created_at {
+                    chrono::DateTime::parse_from_rfc3339(ca_str)
+                        .map(|dt| std::time::SystemTime::from(dt))
+                        .unwrap_or(now)
+                } else {
+                    now
+                };
 
-            let t_half_type = if is_procedural { 365.0f32 } else { 30.0f32 };
-            let t_half_eff = if is_procedural {
-                365.0f32
-            } else {
-                t_half_type * (1.0f32 + 0.3f32 * ((1.0f32 + access_count as f32).log2()))
-            };
-
-            let lambda_eff = 2.0f32.ln() / t_half_eff;
-            let t_secs = now
-                .duration_since(last_ret)
-                .unwrap_or_default()
-                .as_secs_f32();
-            let t_days = t_secs / 86400.0f32;
-            let decay_factor = (-lambda_eff * t_days).exp();
-            let utility = ep.utility.unwrap_or(50.0);
-            let decayed_utility = utility * decay_factor;
-
-            if decayed_utility < decay_threshold * 50.0 {
-                let mut is_referenced = false;
-                if let Some(surreal_backend) = db
+                let is_procedural = ep.node_type.as_deref() == Some("procedural");
+                let access_count = if let Some(surreal_backend) = db
                     .as_any()
                     .downcast_ref::<crate::db::backend::SurrealBackend>()
                 {
                     if let Some(ref ep_id) = ep.id {
                         if let Ok(ep_rec) = crate::db::backend::parse_record_id(ep_id) {
-                            let check_ref_sql = "SELECT VALUE id FROM relates_to WHERE in = $ep OR out = $ep LIMIT 1;";
+                            let metrics_sql =
+                                "SELECT VALUE access_count FROM metrics WHERE target_id = $ep LIMIT 1;";
                             if let Ok(mut resp) = surreal_backend
                                 .db
-                                .query(check_ref_sql)
+                                .query(metrics_sql)
                                 .bind(("ep", ep_rec))
                                 .await
                             {
-                                if let Ok(rows) = resp.take::<Vec<surrealdb::types::RecordId>>(0) {
-                                    if !rows.is_empty() {
-                                        is_referenced = true;
-                                    }
-                                }
+                                resp.take::<Vec<u64>>(0)
+                                    .ok()
+                                    .and_then(|counts| counts.first().copied())
+                                    .unwrap_or(0)
+                            } else {
+                                0
                             }
+                        } else {
+                            0
                         }
+                    } else {
+                        0
                     }
-                }
+                } else {
+                    0
+                };
 
-                if is_referenced {
+                let t_half_type = if is_procedural { 365.0f32 } else { 30.0f32 };
+                let t_half_eff = if is_procedural {
+                    365.0f32
+                } else {
+                    t_half_type * (1.0f32 + 0.3f32 * ((1.0f32 + access_count as f32).log2()))
+                };
+
+                let lambda_eff = 2.0f32.ln() / t_half_eff;
+                let t_secs = now
+                    .duration_since(last_ret)
+                    .unwrap_or_default()
+                    .as_secs_f32();
+                let t_days = t_secs / 86400.0f32;
+                let decay_factor = (-lambda_eff * t_days).exp();
+                let utility = ep.utility.unwrap_or(50.0);
+                let decayed_utility = utility * decay_factor;
+
+                if decayed_utility < decay_threshold * 50.0 {
+                    let mut is_referenced = false;
                     if let Some(surreal_backend) = db
                         .as_any()
                         .downcast_ref::<crate::db::backend::SurrealBackend>()
                     {
                         if let Some(ref ep_id) = ep.id {
+                            if let Ok(ep_rec) = crate::db::backend::parse_record_id(ep_id) {
+                                let check_ref_sql = "SELECT VALUE id FROM relates_to WHERE in = $ep OR out = $ep LIMIT 1;";
+                                if let Ok(mut resp) = surreal_backend
+                                    .db
+                                    .query(check_ref_sql)
+                                    .bind(("ep", ep_rec))
+                                    .await
+                                {
+                                    if let Ok(rows) = resp.take::<Vec<surrealdb::types::RecordId>>(0) {
+                                        if !rows.is_empty() {
+                                            is_referenced = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if is_referenced {
+                        if let Some(surreal_backend) = db
+                            .as_any()
+                            .downcast_ref::<crate::db::backend::SurrealBackend>()
+                        {
+                            if let Some(ref ep_id) = ep.id {
+                                let query_sql = "UPDATE type::record('episode', $id) MERGE {
+                                    archived: true,
+                                    archived_at: time::now(),
+                                    utility: 1.0,
+                                    importance: 1.0
+                                };";
+                                let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
+                                let _ = surreal_backend
+                                    .db
+                                    .query(query_sql)
+                                    .bind(("id", id_raw))
+                                    .await;
+
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Move physical file to archive/
+                    if let Some(ref vp) = ep.vault_path {
+                        let src_file = store.vault_root.join(vp);
+                        if src_file.exists() {
+                            let archive_dir = store.vault_root.join("archive");
+                            let _ = std::fs::create_dir_all(&archive_dir);
+                            let filename = std::path::Path::new(vp)
+                                .file_name()
+                                .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
+                            let dest_file = archive_dir.join(filename);
+                            let _ = std::fs::rename(&src_file, &dest_file);
+                        }
+
+                        // 2. Generate high-level Raptor summary using the LLM
+                        let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+                        let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
+                        match self
+                            .llm
+                            .routed_completion(
+                                db,
+                                &crate::contracts::TaskProfile::new(
+                                    crate::contracts::TaskArchetype::Summarization,
+                                ),
+                                Some(sys_prompt),
+                                &prompt,
+                            )
+                            .await
+                        {
+                            Ok(summary) => {
+                                // 3. Save as wiki Raptor summary node
+                                let uuid = uuid::Uuid::new_v4().to_string();
+                                let resolved_scope =
+                                    ep.scope.clone().unwrap_or_else(|| "general".to_string());
+                                let archive_dir = store
+                                    .vault_root
+                                    .join(format!("wiki/{}/archive", resolved_scope));
+                                let _ = std::fs::create_dir_all(&archive_dir);
+                                let wiki_rel = format!(
+                                    "wiki/{}/archive/raptor_summary_{}.md",
+                                    resolved_scope,
+                                    &uuid[..8]
+                                );
+                                let wiki_content = format!(
+                                    "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
+                                    ep.title, ep.title, summary
+                                );
+                                let _ = store.write_file(&wiki_rel, &wiki_content);
+
+                                let node_contract = WikiNode {
+                                    id: None,
+                                    name: format!("Raptor Summary: {}", ep.title),
+                                    content: summary,
+                                    scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
+                                    vault_path: Some(wiki_rel),
+                                    embedding: None,
+                                    ..Default::default()
+                                };
+                                let _ = db.save_wiki_node(&node_contract).await;
+                            }
+                            Err(e) => {
+                                eprintln!("COMPACTOR SUMMARY ERROR: {:?}", e);
+                            }
+                        }
+
+                        // 4. Demote the record in the database instead of deleting it (Epic 3)
+                        if let Some(surreal_backend) = db
+                            .as_any()
+                            .downcast_ref::<crate::db::backend::SurrealBackend>()
+                        {
+                            let ep_id = ep
+                                .id
+                                .as_ref()
+                                .ok_or_else(|| anyhow::anyhow!("Episode ID missing"))?;
+                            let filename = std::path::Path::new(vp)
+                                .file_name()
+                                .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
+                            let new_vp = format!("archive/{}", filename.to_string_lossy());
+
                             let query_sql = "UPDATE type::record('episode', $id) MERGE {
                                 archived: true,
                                 archived_at: time::now(),
                                 utility: 1.0,
-                                importance: 1.0
+                                importance: 1.0,
+                                vault_path: $new_vp
                             };";
-                            let id_raw = ep_id.split(':').nth(1).unwrap_or(ep_id).to_string();
-                            let _ = surreal_backend
+
+                            let resp = surreal_backend
                                 .db
                                 .query(query_sql)
-                                .bind(("id", id_raw))
-                                .await;
+                                .bind(("id", ep_id.split(':').nth(1).unwrap_or(ep_id).to_string()))
+                                .bind(("new_vp", new_vp))
+                                .await?;
+                            resp.check()?;
+                        } else {
+                            db.delete_by_vault_path(vp).await?;
+                            fallback_deleted_any = true;
                         }
-                    }
-                    continue;
-                }
-
-                // Move physical file to archive/
-                if let Some(ref vp) = ep.vault_path {
-                    let src_file = store.vault_root.join(vp);
-                    if src_file.exists() {
-                        let archive_dir = store.vault_root.join("archive");
-                        let _ = std::fs::create_dir_all(&archive_dir);
-                        let filename = std::path::Path::new(vp)
-                            .file_name()
-                            .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
-                        let dest_file = archive_dir.join(filename);
-                        let _ = std::fs::rename(&src_file, &dest_file);
-                    }
-
-                    // 2. Generate high-level Raptor summary using the LLM
-                    let sys_prompt = "You are a master systems summarizer. Generate a high-level, highly compressed Raptor summary of the following episode's content, preserving the essential historical trace.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
-                    let prompt = format!("Episode Title: {}\nContent:\n{}", ep.title, ep.content);
-                    match self
-                        .llm
-                        .routed_completion(
-                            db,
-                            &crate::contracts::TaskProfile::new(
-                                crate::contracts::TaskArchetype::Summarization,
-                            ),
-                            Some(sys_prompt),
-                            &prompt,
-                        )
-                        .await
-                    {
-                        Ok(summary) => {
-                            // 3. Save as wiki Raptor summary node
-                            let uuid = uuid::Uuid::new_v4().to_string();
-                            let resolved_scope =
-                                ep.scope.clone().unwrap_or_else(|| "general".to_string());
-                            let archive_dir = store
-                                .vault_root
-                                .join(format!("wiki/{}/archive", resolved_scope));
-                            let _ = std::fs::create_dir_all(&archive_dir);
-                            let wiki_rel = format!(
-                                "wiki/{}/archive/raptor_summary_{}.md",
-                                resolved_scope,
-                                &uuid[..8]
-                            );
-                            let wiki_content = format!(
-                                "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
-                                ep.title, ep.title, summary
-                            );
-                            let _ = store.write_file(&wiki_rel, &wiki_content);
-
-                            let node_contract = WikiNode {
-                                id: None,
-                                name: format!("Raptor Summary: {}", ep.title),
-                                content: summary,
-                                scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
-                                vault_path: Some(wiki_rel),
-                                embedding: None,
-                                ..Default::default()
-                            };
-                            let _ = db.save_wiki_node(&node_contract).await;
-                        }
-                        Err(e) => {
-                            eprintln!("COMPACTOR SUMMARY ERROR: {:?}", e);
-                        }
-                    }
-
-                    // 4. Demote the record in the database instead of deleting it (Epic 3)
-                    if let Some(surreal_backend) = db
-                        .as_any()
-                        .downcast_ref::<crate::db::backend::SurrealBackend>()
-                    {
-                        let ep_id = ep
-                            .id
-                            .as_ref()
-                            .ok_or_else(|| anyhow::anyhow!("Episode ID missing"))?;
-                        let filename = std::path::Path::new(vp)
-                            .file_name()
-                            .unwrap_or_else(|| std::ffi::OsStr::new("episode.md"));
-                        let new_vp = format!("archive/{}", filename.to_string_lossy());
-
-                        let query_sql = "UPDATE type::record('episode', $id) MERGE {
-                            archived: true,
-                            archived_at: time::now(),
-                            utility: 1.0,
-                            importance: 1.0,
-                            vault_path: $new_vp
-                        };";
-
-                        let resp = surreal_backend
-                            .db
-                            .query(query_sql)
-                            .bind(("id", ep_id.split(':').nth(1).unwrap_or(ep_id).to_string()))
-                            .bind(("new_vp", new_vp))
-                            .await?;
-                        resp.check()?;
-                    } else {
-                        db.delete_by_vault_path(vp).await?;
                     }
                 }
+            }
+            if !fallback_deleted_any {
+                offset += 100;
             }
         }
         Ok(())

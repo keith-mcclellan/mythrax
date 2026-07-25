@@ -585,6 +585,18 @@ pub fn extract_scope_from_log(log_path: &Path) -> Option<String> {
     }
 }
 
+async fn episode_title_exists(db: &dyn StorageBackend, title: &str) -> bool {
+    if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let sql = "SELECT VALUE id FROM episode WHERE title = $title LIMIT 1;";
+        if let Ok(mut resp) = surreal.db.query(sql).bind(("title", title)).await {
+            if let Ok(Some(_id)) = resp.take::<Option<surrealdb::types::RecordId>>(0) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub async fn bulk_ingest_vault(
     vault_root: &Path,
     source_dir: &Path,
@@ -603,21 +615,6 @@ pub async fn bulk_ingest_vault(
     let store = MarkdownStore::new(vault_root)?;
 
     let mut existing_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut pg_offset = 0;
-    let pg_limit = 500;
-    loop {
-        if let Ok(page) = db.get_episodes_paginated(pg_limit, pg_offset).await {
-            if page.is_empty() {
-                break;
-            }
-            for ep in page {
-                existing_titles.insert(ep.title);
-            }
-            pg_offset += pg_limit;
-        } else {
-            break;
-        }
-    }
 
     let find_files = |exts: &[&str]| -> Vec<PathBuf> {
         let mut files = Vec::new();
@@ -759,7 +756,11 @@ pub async fn bulk_ingest_vault(
                     };
 
                     let part1_title = format!("{}_part1", title);
-                    if existing_titles.contains(&title) || existing_titles.contains(&part1_title) {
+                    if existing_titles.contains(&title)
+                        || existing_titles.contains(&part1_title)
+                        || episode_title_exists(db, &title).await
+                        || episode_title_exists(db, &part1_title).await
+                    {
                         tracing::info!(
                             "processing episode {} of {} complete (skipped - already exists)",
                             current_index + 1,
@@ -767,6 +768,7 @@ pub async fn bulk_ingest_vault(
                         );
                         continue;
                     }
+                    existing_titles.insert(title.clone());
 
                     // Dynamically resolve scope for each conversation folder
                     let relative_path = path.strip_prefix(source_dir).unwrap_or(&path);
@@ -1161,7 +1163,7 @@ pub async fn bulk_ingest_vault(
             for file in files {
                 let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                 let title = format!("claude_{}", file_stem);
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     continue;
                 }
                 match parse_claude_log(&file) {
@@ -1198,7 +1200,7 @@ pub async fn bulk_ingest_vault(
             let db_path = source_dir.join("state.vscdb");
             if db_path.exists() {
                 let title = "cursor_chat".to_string();
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     return Ok((0, vec![], false));
                 }
                 match ingest_cursor(&db_path) {
@@ -1235,7 +1237,7 @@ pub async fn bulk_ingest_vault(
             for file in files {
                 let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                 let title = format!("codex_{}", file_stem);
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     continue;
                 }
                 match parse_codex_log(&file) {
@@ -1273,7 +1275,7 @@ pub async fn bulk_ingest_vault(
             for file in files {
                 let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                 let title = format!("opencode_{}", file_stem);
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     continue;
                 }
                 match parse_opencode_log(&file) {
@@ -1311,7 +1313,7 @@ pub async fn bulk_ingest_vault(
             for file in files {
                 let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                 let title = format!("openclaw_{}", file_stem);
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     continue;
                 }
                 match parse_openclaw_log(&file) {
@@ -1348,7 +1350,7 @@ pub async fn bulk_ingest_vault(
             let db_path = source_dir.join("state.db");
             if db_path.exists() {
                 let title = "hermes_chat".to_string();
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     return Ok((0, vec![], false));
                 }
                 match ingest_hermes(&db_path) {
@@ -1385,7 +1387,7 @@ pub async fn bulk_ingest_vault(
             for file in files {
                 let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                 let title = format!("generic_{}", file_stem);
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     continue;
                 }
                 match parse_generic_jsonl(&file) {
@@ -1423,7 +1425,7 @@ pub async fn bulk_ingest_vault(
             for file in files {
                 let file_stem = file.file_stem().unwrap_or_default().to_string_lossy();
                 let title = file_stem.to_string();
-                if existing_titles.contains(&title) {
+                if existing_titles.contains(&title) || episode_title_exists(db, &title).await {
                     continue;
                 }
                 match parse_generic_markdown(&file, scope) {

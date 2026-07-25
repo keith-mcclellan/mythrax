@@ -124,12 +124,27 @@ pub async fn mine_transcript(
     let mut prev_saved_id: Option<String> = None;
     let mut tool_sequence = Vec::new();
 
-    let all_eps = backend.get_all_episodes().await.unwrap_or_default();
-    let mut has_previous_user_input = all_eps.iter().any(|ep| {
-        ep.session_id.as_deref() == Some(session)
-            && (ep.node_type.as_deref() == Some("user_input")
-                || ep.node_type.as_deref() == Some("user_feedback"))
-    });
+    let mut has_previous_user_input = false;
+    let mut ep_offset = 0;
+    loop {
+        let page = backend
+            .get_episodes_paginated(100, ep_offset)
+            .await
+            .unwrap_or_default();
+        if page.is_empty() {
+            break;
+        }
+        let count = page.len() as u32;
+        if page.iter().any(|ep| {
+            ep.session_id.as_deref() == Some(session)
+                && (ep.node_type.as_deref() == Some("user_input")
+                    || ep.node_type.as_deref() == Some("user_feedback"))
+        }) {
+            has_previous_user_input = true;
+            break;
+        }
+        ep_offset += count;
+    }
 
     let mut buf = String::new();
     let mut line_idx = 0;

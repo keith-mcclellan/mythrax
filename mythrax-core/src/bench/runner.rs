@@ -384,7 +384,7 @@ async fn main() -> Result<()> {
     if let Err(e) = mythrax_core::embeddings::load_embedding_cache_from_disk(&target_cache_path) {
         println!("Warning: failed to load embedding cache: {}", e);
     } else {
-        println!("Loaded embedding cache from {:?}", target_cache_path);
+        println!("Initialized SQLite embedding cache from {:?}", target_cache_path.with_extension("db"));
         if args.mode == "tune" {
             // Decoupled coordinate sweep
             let tune_questions = &target_questions;

@@ -501,15 +501,24 @@ impl DreamCoordinator {
         }
 
         // Get all existing wiki nodes in the SAME scope
-        let all_nodes = db.get_all_wiki_nodes().await?;
-        let same_scope_nodes: Vec<WikiNode> = all_nodes
-            .into_iter()
-            .filter(|n| {
-                n.scope == node.scope
+        let mut same_scope_nodes: Vec<WikiNode> = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = db.get_wiki_nodes_paginated(100, offset).await?;
+            if page.is_empty() {
+                break;
+            }
+            let count = page.len() as u32;
+            for n in page {
+                if n.scope == node.scope
                     && n.embedding.is_some()
                     && n.node_type.as_deref().unwrap_or("insight") == "insight"
-            })
-            .collect();
+                {
+                    same_scope_nodes.push(n);
+                }
+            }
+            offset += count;
+        }
 
         let mut candidates = Vec::new();
         if let Some(ref new_emb) = node.embedding {
@@ -778,7 +787,13 @@ impl DreamCoordinator {
 
         // Background Transcript Sweep & Idle Session Recovery
         let mut mined_any = false;
-        if let Ok(transcripts) = db.get_all_registered_transcripts().await {
+        let mut ts_offset = 0;
+        loop {
+            let transcripts = match db.get_registered_transcripts_paginated(100, ts_offset).await {
+                Ok(t) if !t.is_empty() => t,
+                _ => break,
+            };
+            let ts_count = transcripts.len() as u32;
             let idle_threshold = chrono::Duration::minutes(10);
             let now = chrono::Utc::now();
             for (session_id, path) in transcripts {
@@ -794,24 +809,10 @@ impl DreamCoordinator {
 
                         let needs_mine = match last_swept_at_str {
                             Some(swept_str) => {
-                                if let Ok(swept_time) =
+                                if let Ok(swept_dt) =
                                     chrono::DateTime::parse_from_rfc3339(swept_str)
                                 {
-                                    let swept_utc = swept_time.with_timezone(&chrono::Utc);
-                                    // Check modification time of file
-                                    if let Ok(metadata) = std::fs::metadata(&path) {
-                                        if let Ok(modified_time) = metadata.modified() {
-                                            let modified_utc: chrono::DateTime<chrono::Utc> =
-                                                modified_time.into();
-                                            modified_utc > swept_utc
-                                        } else {
-                                            true
-                                        }
-                                    } else {
-                                        // Path invalid or file missing. Clear from STM to prevent loop
-                                        let _ = db.clear_stm(&session_id).await;
-                                        false
-                                    }
+                                    now - swept_dt.with_timezone(&chrono::Utc) > idle_threshold
                                 } else {
                                     true
                                 }
@@ -820,8 +821,8 @@ impl DreamCoordinator {
                         };
 
                         if needs_mine {
-                            // Check file exists before mining
-                            if std::path::Path::new(&path).exists() {
+                            let transcript_path = std::path::Path::new(&path);
+                            if transcript_path.exists() {
                                 let ignore_list = crate::vault::watcher::WatchIgnoreList::default();
                                 if let Ok(count) = crate::hooks::precompact::mine_transcript(
                                     &session_id,
@@ -847,6 +848,7 @@ impl DreamCoordinator {
                     }
                 }
             }
+            ts_offset += ts_count;
         }
 
         if mined_any {
@@ -864,8 +866,17 @@ impl DreamCoordinator {
         }
 
         let mut attempted_ids = std::collections::HashSet::new();
+        let mut ep_offset = 0;
         loop {
-            let unprocessed = db.get_unprocessed_episodes().await?;
+            let unprocessed = db.get_unprocessed_episodes_paginated(50, ep_offset).await?;
+            if unprocessed.is_empty() {
+                break;
+            }
+
+            if attempted_ids.len() > 5000 {
+                attempted_ids.clear();
+            }
+
             let filtered_unprocessed: Vec<Episode> = unprocessed
                 .into_iter()
                 .filter(|ep| {
@@ -876,18 +887,19 @@ impl DreamCoordinator {
                 .collect();
 
             if filtered_unprocessed.is_empty() {
-                break;
+                ep_offset += 50;
+                continue;
             }
 
+            let mut processed_any_episodes = false;
+
             let chunk_unprocessed: Vec<Episode> =
-                filtered_unprocessed.into_iter().take(500).collect();
+                filtered_unprocessed.into_iter().take(50).collect();
             for ep in &chunk_unprocessed {
                 if let Some(ref id) = ep.id {
                     attempted_ids.insert(id.clone());
                 }
             }
-
-            let all_episodes = db.get_all_episodes().await?;
 
             let (_default_eps, default_min_samples) = match active_mode.as_str() {
                 "deep" => (0.15, 2),
@@ -912,15 +924,16 @@ impl DreamCoordinator {
             let final_eps = if let Some(eps) = db_eps.or(file_eps) {
                 eps
             } else {
-                // Dynamic epsilon calibration using k-distance elbow method
-                let all_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
+                // Dynamic epsilon calibration using k-distance elbow method (sample up to 100 via paginated queries)
+                let ep_sample = db.get_episodes_paginated(100, 0).await.unwrap_or_default();
+                let wiki_sample = db.get_wiki_nodes_paginated(100, 0).await.unwrap_or_default();
                 let mut embeddings = Vec::new();
-                for ep in &all_episodes {
+                for ep in &ep_sample {
                     if let Some(ref emb) = ep.embedding {
                         embeddings.push(emb.clone());
                     }
                 }
-                for node in &all_nodes {
+                for node in &wiki_sample {
                     if let Some(ref emb) = node.embedding {
                         embeddings.push(emb.clone());
                     }
@@ -953,9 +966,9 @@ impl DreamCoordinator {
             };
 
             let mut scope_groups: HashMap<String, Vec<Episode>> = HashMap::new();
-            for ep in chunk_unprocessed {
+            for ep in &chunk_unprocessed {
                 let scope = ep.scope.clone().unwrap_or_else(|| "general".to_string());
-                scope_groups.entry(scope).or_default().push(ep);
+                scope_groups.entry(scope).or_default().push(ep.clone());
             }
 
             let total_scopes = scope_groups.len();
@@ -982,7 +995,7 @@ impl DreamCoordinator {
                         let mut centroids = Vec::new();
                         for ins in &scope_insights {
                             if let Some(cent) =
-                                calculate_centroid(&ins.source_episodes, &all_episodes)
+                                calculate_centroid(&ins.source_episodes, &chunk_unprocessed)
                             {
                                 centroids.push((ins.clone(), cent));
                             }
@@ -1145,7 +1158,9 @@ impl DreamCoordinator {
                                     tracing::error!("distill_episode_metadata error: {:?}", e);
                                 }
                                 if let Some(ref ep_id) = ep.id {
-                                    db.mark_episode_processed(ep_id).await?;
+                                    if db.mark_episode_processed(ep_id).await.is_ok() {
+                                        processed_any_episodes = true;
+                                    }
                                 }
 
                                 let node_contract = WikiNode {
@@ -1248,7 +1263,16 @@ impl DreamCoordinator {
                         .filter(|ep| ep.embedding.is_some())
                         .collect();
 
+                    let mut noise_episodes: Vec<&Episode> = Vec::new();
+
                     if valid_candidates.is_empty() {
+                        for noise_ep in &candidates {
+                            if let Some(ref ep_id) = noise_ep.id {
+                                if db.mark_episode_processed(ep_id).await.is_ok() {
+                                    processed_any_episodes = true;
+                                }
+                            }
+                        }
                         continue;
                     }
 
@@ -1258,6 +1282,14 @@ impl DreamCoordinator {
                     for (idx, &label) in labels.iter().enumerate() {
                         if let Some(lbl) = label {
                             clusters.entry(lbl).or_default().push(valid_candidates[idx]);
+                        } else {
+                            noise_episodes.push(valid_candidates[idx]);
+                        }
+                    }
+
+                    for ep in &candidates {
+                        if ep.embedding.is_none() {
+                            noise_episodes.push(ep);
                         }
                     }
 
@@ -1273,235 +1305,252 @@ impl DreamCoordinator {
                     }
 
                     let total_clusters = clusters.len();
-                    for (cluster_idx, (_, cluster_eps)) in clusters.into_iter().enumerate() {
-                        let mut events_text = String::new();
-                        for ep in &cluster_eps {
-                            let mut ep_display_content = ep.content.clone();
-                            if let Some(ref ep_id) = ep.id {
-                                if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
-                                    if !related_ids.is_empty() {
-                                        if let Ok(mem_nodes_resp) =
-                                            db.get_memory_nodes(&related_ids).await
-                                        {
-                                            let mut artifacts_text = String::new();
-                                            for node in mem_nodes_resp.wiki_nodes {
-                                                artifacts_text.push_str(&format!(
-                                                    "\nArtifact Name: {}\nContent:\n{}\n",
-                                                    node.name, node.content
-                                                ));
-                                            }
-                                            if !artifacts_text.is_empty() {
-                                                ep_display_content
-                                                    .push_str("\n\nAssociated Artifacts:\n");
-                                                ep_display_content.push_str(&artifacts_text);
+                    let cluster_res: Result<()> = async {
+                        for (cluster_idx, (_, cluster_eps)) in clusters.into_iter().enumerate() {
+                            let mut events_text = String::new();
+                            for ep in &cluster_eps {
+                                let mut ep_display_content = ep.content.clone();
+                                if let Some(ref ep_id) = ep.id {
+                                    if let Ok(related_ids) = db.get_related_node_ids(ep_id).await {
+                                        if !related_ids.is_empty() {
+                                            if let Ok(mem_nodes_resp) =
+                                                db.get_memory_nodes(&related_ids).await
+                                            {
+                                                let mut artifacts_text = String::new();
+                                                for node in mem_nodes_resp.wiki_nodes {
+                                                    artifacts_text.push_str(&format!(
+                                                        "\nArtifact Name: {}\nContent:\n{}\n",
+                                                        node.name, node.content
+                                                    ));
+                                                }
+                                                if !artifacts_text.is_empty() {
+                                                    ep_display_content
+                                                        .push_str("\n\nAssociated Artifacts:\n");
+                                                    ep_display_content.push_str(&artifacts_text);
+                                                }
                                             }
                                         }
                                     }
                                 }
+
+                                let content_len = ep_display_content.len();
+                                let ep_display_content = if content_len > 100_000 {
+                                    let truncated = truncate_to_boundary(&ep_display_content, 100_000);
+                                    format!(
+                                        "{}... [Truncated {} characters of content due to size]",
+                                        truncated,
+                                        content_len - 100_000
+                                    )
+                                } else {
+                                    ep_display_content
+                                };
+                                events_text.push_str(&format!(
+                                    "Event: {}\nContent:\n{}\n\n",
+                                    ep.title, ep_display_content
+                                ));
                             }
 
-                            let content_len = ep_display_content.len();
-                            let ep_display_content = if content_len > 100_000 {
-                                let truncated = truncate_to_boundary(&ep_display_content, 100_000);
-                                format!(
-                                    "{}... [Truncated {} characters of content due to size]",
-                                    truncated,
-                                    content_len - 100_000
+                            let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                    For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
+                    - 1: Anecdotal / Single Episode\n\
+                    - 3: Corroborated / Tested\n\
+                    - 5: Proven / Universal\n\n\
+                    For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
+                            let sys_prompt =
+                                crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
+
+                            let prompt_text = format!(
+                                "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
+                                events_text
+                            );
+
+                            let original_tokens = events_text.len() / 4;
+                            let llm_res = self
+                                .llm
+                                .routed_completion(
+                                    db,
+                                    &crate::contracts::TaskProfile::new(
+                                        crate::contracts::TaskArchetype::Summarization,
+                                    ),
+                                    Some(&sys_prompt),
+                                    &prompt_text,
                                 )
-                            } else {
-                                ep_display_content
-                            };
-                            events_text.push_str(&format!(
-                                "Event: {}\nContent:\n{}\n\n",
-                                ep.title, ep_display_content
-                            ));
-                        }
-
-                        let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
-                For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
-                - 1: Anecdotal / Single Episode\n\
-                - 3: Corroborated / Tested\n\
-                - 5: Proven / Universal\n\n\
-                For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
-                        let sys_prompt =
-                            crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
-
-                        let prompt_text = format!(
-                            "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
-                            events_text
-                        );
-
-                        let original_tokens = events_text.len() / 4;
-                        let llm_res = self
-                            .llm
-                            .routed_completion(
-                                db,
-                                &crate::contracts::TaskProfile::new(
-                                    crate::contracts::TaskArchetype::Summarization,
-                                ),
-                                Some(&sys_prompt),
+                                .await?;
+                            crate::cognitive::synthesis::check_compression_ratio(
                                 &prompt_text,
-                            )
-                            .await?;
-                        crate::cognitive::synthesis::check_compression_ratio(
-                            &prompt_text,
-                            &llm_res,
-                            original_tokens,
-                        );
+                                &llm_res,
+                                original_tokens,
+                            );
 
-                        #[derive(serde::Deserialize)]
-                        struct ClusterAnalysis {
-                            title: String,
-                            summary: String,
-                            #[serde(default)]
-                            metacognitive_confidence: Option<i32>,
-                            #[serde(default)]
-                            node_type: Option<String>,
-                        }
+                            #[derive(serde::Deserialize)]
+                            struct ClusterAnalysis {
+                                title: String,
+                                summary: String,
+                                #[serde(default)]
+                                metacognitive_confidence: Option<i32>,
+                                #[serde(default)]
+                                node_type: Option<String>,
+                            }
 
-                        let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
-                            Ok(a) => a,
-                            Err(_) => ClusterAnalysis {
-                                title: format!(
-                                    "Cluster Analysis {}",
-                                    &uuid::Uuid::new_v4().to_string()[..8]
-                                ),
-                                summary: llm_res,
-                                metacognitive_confidence: None,
-                                node_type: None,
-                            },
-                        };
+                            let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
+                                Ok(a) => a,
+                                Err(_) => ClusterAnalysis {
+                                    title: format!(
+                                        "Cluster Analysis {}",
+                                        &uuid::Uuid::new_v4().to_string()[..8]
+                                    ),
+                                    summary: llm_res,
+                                    metacognitive_confidence: None,
+                                    node_type: None,
+                                },
+                            };
 
-                        let cluster_ep_ids: Vec<String> = cluster_eps
-                            .iter()
-                            .map(|ep| ep.id.clone().unwrap_or_default())
-                            .collect();
-
-                        let cluster_starts: Vec<_> = cluster_eps
-                            .iter()
-                            .filter_map(|ep| {
-                                ep.temporal_range_start.or_else(|| {
-                                    ep.created_at
-                                        .as_ref()
-                                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                                })
-                            })
-                            .collect();
-                        let temporal_start = cluster_starts.iter().min().cloned();
-                        let temporal_end = cluster_starts.iter().max().cloned();
-
-                        let clean_title = slugify_title(&analysis.title);
-                        let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
-                        let insight_content = format!(
-                            "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}",
-                            analysis.title,
-                            scope,
-                            cluster_ep_ids
+                            let cluster_ep_ids: Vec<String> = cluster_eps
                                 .iter()
-                                .map(|id| format!("  - \"{}\"", id))
-                                .collect::<Vec<_>>()
-                                .join("\n"),
-                            analysis.metacognitive_confidence.unwrap_or(3),
-                            analysis.node_type.as_deref().unwrap_or("insight"),
-                            analysis.summary
-                        );
-                        store.write_file(&relative_path, &insight_content)?;
+                                .map(|ep| ep.id.clone().unwrap_or_default())
+                                .collect();
 
-                        let centroid = calculate_centroid(&cluster_ep_ids, &all_episodes);
-                        let node_contract = WikiNode {
-                            id: None,
-                            name: analysis.title.clone(),
-                            content: analysis.summary.clone(),
-                            scope: scope.clone(),
-                            vault_path: Some(relative_path.clone()),
-                            embedding: centroid,
-                            metacognitive_confidence: analysis.metacognitive_confidence,
-                            node_type: analysis.node_type.clone().or(Some("insight".to_string())),
-                            temporal_range_start: temporal_start,
-                            temporal_range_end: temporal_end,
-                            ..Default::default()
-                        };
-                        if let Ok(wiki_node_id) = self
-                            .save_wiki_node_with_contradiction_resolution(
-                                db,
-                                store,
-                                &node_contract,
-                                embedder.clone(),
-                                cluster_ep_ids.clone(),
-                            )
-                            .await
-                        {
-                            for ep in &cluster_eps {
-                                if let Some(ref ep_id) = ep.id {
-                                    let ep_start = ep.temporal_range_start.or_else(|| {
+                            let cluster_starts: Vec<_> = cluster_eps
+                                .iter()
+                                .filter_map(|ep| {
+                                    ep.temporal_range_start.or_else(|| {
                                         ep.created_at
                                             .as_ref()
-                                            .and_then(|s| {
-                                                chrono::DateTime::parse_from_rfc3339(s).ok()
-                                            })
+                                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                             .map(|dt| dt.with_timezone(&chrono::Utc))
-                                    });
-                                    let _ = db
-                                        .relate_nodes(
-                                            ep_id,
-                                            &wiki_node_id,
-                                            ep_start,
-                                            ep_start,
-                                            Some(1.0),
-                                        )
-                                        .await;
-                                }
-                            }
+                                    })
+                                })
+                                .collect();
+                            let temporal_start = cluster_starts.iter().min().cloned();
+                            let temporal_end = cluster_starts.iter().max().cloned();
 
-                            let mut node_with_id = node_contract.clone();
-                            node_with_id.id = Some(wiki_node_id);
-                            if let Ok(mem_resp) = db.get_memory_nodes(&cluster_ep_ids).await {
-                                if let Err(e) = promote_insight_to_direction(
+                            let clean_title = slugify_title(&analysis.title);
+                            let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
+                            let insight_content = format!(
+                                "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}",
+                                analysis.title,
+                                scope,
+                                cluster_ep_ids
+                                    .iter()
+                                    .map(|id| format!("  - \"{}\"", id))
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
+                                analysis.metacognitive_confidence.unwrap_or(3),
+                                analysis.node_type.as_deref().unwrap_or("insight"),
+                                analysis.summary
+                            );
+                            store.write_file(&relative_path, &insight_content)?;
+
+                            let centroid = calculate_centroid(&cluster_ep_ids, &chunk_unprocessed);
+                            let node_contract = WikiNode {
+                                id: None,
+                                name: analysis.title.clone(),
+                                content: analysis.summary.clone(),
+                                scope: scope.clone(),
+                                vault_path: Some(relative_path.clone()),
+                                embedding: centroid,
+                                metacognitive_confidence: analysis.metacognitive_confidence,
+                                node_type: analysis.node_type.clone().or(Some("insight".to_string())),
+                                temporal_range_start: temporal_start,
+                                temporal_range_end: temporal_end,
+                                ..Default::default()
+                            };
+                            if let Ok(wiki_node_id) = self
+                                .save_wiki_node_with_contradiction_resolution(
                                     db,
                                     store,
-                                    &node_with_id,
-                                    &mem_resp.episodes,
+                                    &node_contract,
+                                    embedder.clone(),
+                                    cluster_ep_ids.clone(),
                                 )
                                 .await
-                                {
-                                    tracing::warn!("Promotion check failed: {:?}", e);
+                            {
+                                for ep in &cluster_eps {
+                                    if let Some(ref ep_id) = ep.id {
+                                        let ep_start = ep.temporal_range_start.or_else(|| {
+                                            ep.created_at
+                                                .as_ref()
+                                                .and_then(|s| {
+                                                    chrono::DateTime::parse_from_rfc3339(s).ok()
+                                                })
+                                                .map(|dt| dt.with_timezone(&chrono::Utc))
+                                        });
+                                        let _ = db
+                                            .relate_nodes(
+                                                ep_id,
+                                                &wiki_node_id,
+                                                ep_start,
+                                                ep_start,
+                                                Some(1.0),
+                                            )
+                                            .await;
+                                    }
+                                }
+
+                                let mut node_with_id = node_contract.clone();
+                                node_with_id.id = Some(wiki_node_id);
+                                if let Ok(mem_resp) = db.get_memory_nodes(&cluster_ep_ids).await {
+                                    if let Err(e) = promote_insight_to_direction(
+                                        db,
+                                        store,
+                                        &node_with_id,
+                                        &mem_resp.episodes,
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!("Promotion check failed: {:?}", e);
+                                    }
                                 }
                             }
-                        }
 
-                        insights_changed += 1;
-                        if insights_changed > 5 {
+                            insights_changed += 1;
+                            if insights_changed > 5 {
+                                tracing::info!(
+                                    "Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.",
+                                    scope
+                                );
+                                let compactor = crate::cognitive::compactor::Compactor::new();
+                                let _ = compactor
+                                    .compact_scope(db, store, &scope, embedder.clone())
+                                    .await;
+                                insights_changed = 0;
+                            }
+
+                            for ep in cluster_eps {
+                                if let Err(e) = self.distill_episode_metadata(db, store, ep).await {
+                                    tracing::error!("distill_episode_metadata error: {:?}", e);
+                                }
+                                if let Some(ref ep_id) = ep.id {
+                                    if let Err(e) = db.mark_episode_processed(ep_id).await {
+                                        tracing::error!("Failed to mark episode processed: {:?}", e);
+                                    } else {
+                                        processed_any_episodes = true;
+                                    }
+                                }
+                            }
+
                             tracing::info!(
-                                "Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.",
-                                scope
+                                "Dreaming scope {}/{} ('{}'): cluster {} of {} complete",
+                                scope_idx + 1,
+                                total_scopes,
+                                scope,
+                                cluster_idx + 1,
+                                total_clusters
                             );
-                            let compactor = crate::cognitive::compactor::Compactor::new();
-                            let _ = compactor
-                                .compact_scope(db, store, &scope, embedder.clone())
-                                .await;
-                            insights_changed = 0;
                         }
-
-                        for ep in cluster_eps {
-                            if let Err(e) = self.distill_episode_metadata(db, store, ep).await {
-                                tracing::error!("distill_episode_metadata error: {:?}", e);
-                            }
-                            if let Some(ref ep_id) = ep.id {
-                                db.mark_episode_processed(ep_id).await?;
-                            }
-                        }
-
-                        tracing::info!(
-                            "Dreaming scope {}/{} ('{}'): cluster {} of {} complete",
-                            scope_idx + 1,
-                            total_scopes,
-                            scope,
-                            cluster_idx + 1,
-                            total_clusters
-                        );
+                        Ok(())
                     }
+                    .await;
                     let _ = db.delete_pipeline_run(&run_id).await;
+                    cluster_res?;
+
+                    for noise_ep in noise_episodes {
+                        if let Some(ref ep_id) = noise_ep.id {
+                            if db.mark_episode_processed(ep_id).await.is_ok() {
+                                processed_any_episodes = true;
+                            }
+                        }
+                    }
                 }
 
                 // --- DRIFT & SPLIT MANAGEMENT LOGIC START ---
@@ -1929,6 +1978,12 @@ impl DreamCoordinator {
                 }
                 // --- DRIFT & SPLIT MANAGEMENT LOGIC END ---
             }
+
+            if processed_any_episodes {
+                ep_offset = 0;
+            } else {
+                ep_offset += 50;
+            }
         }
 
         // Run direction backpropagation after dreaming completes for all scopes
@@ -1957,20 +2012,28 @@ impl DreamCoordinator {
             let mut candidates = Vec::new();
 
             // 1. Fetch wiki nodes
-            if let Ok(wiki_nodes) = db.get_all_wiki_nodes().await {
-                for node in wiki_nodes {
-                    if let Some(ref emb) = node.embedding {
-                        candidates.push(GradCandidate {
-                            id: node.id.unwrap_or_default().replace("`", ""),
-                            scope: node.scope,
-                            name: node.name,
-                            content: node.content,
-                            embedding: emb.clone(),
-                            is_procedural: false,
-                            temporal_range_start: node.temporal_range_start,
-                            temporal_range_end: node.temporal_range_end,
-                        });
+            let mut wiki_offset = 0;
+            loop {
+                match db.get_wiki_nodes_paginated(100, wiki_offset).await {
+                    Ok(wiki_nodes) if !wiki_nodes.is_empty() => {
+                        let w_count = wiki_nodes.len() as u32;
+                        for node in wiki_nodes {
+                            if let Some(ref emb) = node.embedding {
+                                candidates.push(GradCandidate {
+                                    id: node.id.unwrap_or_default().replace("`", ""),
+                                    scope: node.scope,
+                                    name: node.name,
+                                    content: node.content,
+                                    embedding: emb.clone(),
+                                    is_procedural: false,
+                                    temporal_range_start: node.temporal_range_start,
+                                    temporal_range_end: node.temporal_range_end,
+                                });
+                            }
+                        }
+                        wiki_offset += w_count;
                     }
+                    _ => break,
                 }
             }
 
@@ -2479,38 +2542,29 @@ pub async fn save_wisdom_rule_with_deduplication(
         }
     };
 
-    let all_rules = match db.get_all_wisdom_rules().await {
-        Ok(rules) => rules,
-        Err(e) => {
-            tracing::warn!("Failed to get existing rules for deduplication: {}", e);
-            return db.save_wisdom_rule(rule).await;
+    let mut all_rules = Vec::new();
+    let mut pg_offset = 0;
+    while all_rules.len() < 500 && pg_offset < 5000 {
+        if let Ok(page) = db.get_wisdom_rules_paginated(100, pg_offset).await {
+            if page.is_empty() {
+                break;
+            }
+            all_rules.extend(page);
+            pg_offset += 100;
+        } else {
+            break;
         }
-    };
+    }
 
     let mut best_match: Option<(WisdomRule, f32)> = None;
 
-    for mut existing in all_rules {
+    for existing in all_rules {
         let existing_emb = match existing.embedding.as_ref() {
-            Some(emb) => emb.clone(),
-            None => {
-                let ext_text = format!(
-                    "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-                    existing.target_pattern,
-                    existing.action_to_avoid,
-                    existing.causal_explanation,
-                    existing.prescribed_remedy
-                );
-                match db.embed(&ext_text).await {
-                    Ok(emb) => {
-                        existing.embedding = Some(emb.clone());
-                        emb
-                    }
-                    Err(_) => continue,
-                }
-            }
+            Some(emb) => emb,
+            None => continue,
         };
 
-        let sim = crate::math::cosine_similarity(&new_emb, &existing_emb);
+        let sim = crate::math::cosine_similarity(&new_emb, existing_emb);
         if sim > 0.80 {
             if let Some((_, best_sim)) = best_match.as_ref() {
                 if sim > *best_sim {
@@ -3026,11 +3080,21 @@ pub async fn backpropagate_directions(
     db: &dyn StorageBackend,
     store: &MarkdownStore,
 ) -> Result<()> {
-    let all_nodes = db.get_all_wiki_nodes().await?;
-    let directions: Vec<_> = all_nodes
-        .into_iter()
-        .filter(|n| n.node_type.as_deref() == Some("direction"))
-        .collect();
+    let mut directions = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = db.get_wiki_nodes_paginated(100, offset).await?;
+        if page.is_empty() {
+            break;
+        }
+        let count = page.len() as u32;
+        for n in page {
+            if n.node_type.as_deref() == Some("direction") {
+                directions.push(n);
+            }
+        }
+        offset += count;
+    }
 
     for dir_node in directions {
         println!("Checking direction {:?}", dir_node.id);
@@ -3238,12 +3302,26 @@ pub async fn graduate_wisdom(
     db: &dyn crate::db::StorageBackend,
     store: &crate::store::MarkdownStore,
 ) -> Result<()> {
-    let all_nodes = db.get_all_wiki_nodes().await?;
     let mut directions = Vec::new();
-    for node in all_nodes {
-        if node.node_type.as_deref() == Some("direction") && node.embedding.is_some() {
-            directions.push(node);
+    let mut offset = 0;
+    loop {
+        let page = db.get_wiki_nodes_paginated(100, offset).await?;
+        if page.is_empty() {
+            break;
         }
+        let count = page.len() as u32;
+        for node in page {
+            if node.node_type.as_deref() == Some("direction") && node.embedding.is_some() {
+                directions.push(node);
+                if directions.len() >= 1000 {
+                    break;
+                }
+            }
+        }
+        if directions.len() >= 1000 {
+            break;
+        }
+        offset += count;
     }
 
     if directions.is_empty() {

@@ -628,7 +628,18 @@ pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) 
     let client = LLMClient::default();
 
     // Get existing rules to check for duplicates
-    let existing_rules = db.get_all_wisdom_rules().await.unwrap_or_default();
+    let mut existing_rules = Vec::new();
+    let mut w_offset = 0;
+    loop {
+        match db.get_wisdom_rules_paginated(100, w_offset).await {
+            Ok(page) if !page.is_empty() => {
+                let count = page.len() as u32;
+                existing_rules.extend(page);
+                w_offset += count;
+            }
+            _ => break,
+        }
+    }
 
     for path in candidate_files {
         let content = std::fs::read_to_string(&path)?;

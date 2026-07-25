@@ -119,7 +119,7 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         created_at: Option<chrono::DateTime<chrono::Utc>>,
     }
 
-    let sql_wisdom = "SELECT type::string(id) as id, created_at, (utility ?? (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] ?? 50.0) AS utility FROM wisdom WHERE tier = 'Wisdom' OR scope = 'global';";
+    let sql_wisdom = "SELECT type::string(id) as id, created_at, (utility ?? 1.0) AS utility FROM wisdom WHERE tier = 'Wisdom' OR scope = 'global';";
     let mut resp_wisdom = surreal_backend.db.query(sql_wisdom).await?.check()?;
     let mut rules: Vec<WisdomRuleDecayInfo> = resp_wisdom.take(0)?;
 

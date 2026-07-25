@@ -105,6 +105,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS rule_type ON wisdom TYPE string DEFAULT 'aesthetic';
     DEFINE FIELD IF NOT EXISTS severity ON wisdom TYPE option<string> DEFAULT 'info';
     DEFINE FIELD IF NOT EXISTS blocking ON wisdom TYPE option<bool> DEFAULT false;
+    DEFINE FIELD IF NOT EXISTS utility ON wisdom TYPE option<float>;
     DEFINE INDEX IF NOT EXISTS wisdom_scope ON wisdom FIELDS scope;
     DEFINE INDEX IF NOT EXISTS wisdom_tier ON wisdom FIELDS tier;
     DEFINE INDEX IF NOT EXISTS wisdom_content_hash ON wisdom FIELDS content_hash;

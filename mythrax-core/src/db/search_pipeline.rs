@@ -1234,7 +1234,7 @@ impl SurrealBackend {
                       AND ($exclude_execution_logs = false OR node_type NOT IN ['tool_execution', 'system_log', 'handoff_event'])
                       AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)
                       AND ($include_archived = true OR archived = false OR archived = NONE)
-                      AND (embedding <|200, 200|> $query_embedding);
+                      AND (embedding <|50, 50|> $query_embedding);
                 ");
             }
 
@@ -1243,7 +1243,7 @@ impl SurrealBackend {
                        (utility ?? 50.0) AS utility
                 FROM wiki_node
                 WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
-                  AND (embedding <|200, 200|> $query_embedding)
+                  AND (embedding <|50, 50|> $query_embedding)
                   {wiki_node_filter};
 
                 SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at,
@@ -1251,7 +1251,7 @@ impl SurrealBackend {
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND (scope IN [$target_scope, 'general'] OR $search_all = true)
-                  AND (embedding <|200, 200|> $query_embedding);
+                  AND (embedding <|50, 50|> $query_embedding);
                 ",
                 wiki_node_filter = wiki_node_filter
             ));
@@ -1280,14 +1280,14 @@ impl SurrealBackend {
 
             keyword_sql.push_str(&format!(
                 "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                       (utility ?? 50.0) AS utility
                 FROM wiki_node
                 WHERE (string::contains(name, $query) OR string::contains(content, $query))
                   AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                   {wiki_node_filter};
 
                 SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy, tier, scope, generator_name, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
-                       (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                       (utility ?? 50.0) AS utility
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query))
@@ -2486,7 +2486,7 @@ impl SurrealBackend {
 
                     if !fetch_episode_ids.is_empty() {
                         let fetch_sql = "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, archived, archived_at, discovery_tokens, session_id, scope,
-                                               (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                                               (utility ?? 50.0) AS utility,
                                                node_type, graduated_to, confidence, temporal_range_start, temporal_range_end, metacognitive_confidence
                                         FROM episode
                                         WHERE id IN $fetch_episode_ids;";
@@ -2501,7 +2501,7 @@ impl SurrealBackend {
 
                     if !fetch_wiki_ids.is_empty() {
                         let fetch_sql = "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, scope,
-                                               (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility,
+                                               (utility ?? 50.0) AS utility,
                                                'wiki_node' AS node_type, graduated_to, confidence, temporal_range_start, temporal_range_end, metacognitive_confidence
                                         FROM wiki_node
                                         WHERE id IN $fetch_wiki_ids;";
@@ -2657,10 +2657,10 @@ impl SurrealBackend {
                 query_tokens.iter().map(|s| s.as_str()).collect();
 
             let tfidf_pool_size = match self.get_profile_key("search.tfidf_pool_size").await {
-                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(25),
-                _ => 25,
+                Ok(Some(val_str)) => val_str.parse::<usize>().unwrap_or(20),
+                _ => 20,
             };
-            let effective_pool = tfidf_pool_size.max(25);
+            let effective_pool = tfidf_pool_size.max(20);
             let pool_len = merged_candidates.len().min(effective_pool);
             let mut rerank_pool = merged_candidates
                 .drain(0..pool_len)

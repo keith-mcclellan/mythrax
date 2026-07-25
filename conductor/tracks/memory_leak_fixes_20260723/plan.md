@@ -175,87 +175,87 @@ Convert the cognitive pipeline from in-memory accumulation to incremental vault 
 | Pruned/archived nodes | Vault `archive/` | Human-readable audit trail |
 | Compaction summaries | Vault md (`wiki/<scope>/compactions/*.md`) | Human-readable, version-controlled |
 
-- [ ] Task: Migrate cognitive pipeline deduplication to hash-based lookups (deferred from Phase 3)
-  - [ ] Refactor wisdom deduplication in `synthesis.rs` L2440 to use `find_duplicate_by_content_hash` instead of paginated comparison
-  - [ ] Refactor near-duplicate detection in `compactor.rs` L253 to use hash pre-filter before embedding comparison
-  - [ ] Run tests and confirm pass
+- [x] Task: Migrate cognitive pipeline deduplication to hash-based lookups (deferred from Phase 3)
+  - [x] Refactor wisdom deduplication in `synthesis.rs` L2440 to use `find_duplicate_by_content_hash` instead of paginated comparison
+  - [x] Refactor near-duplicate detection in `compactor.rs` L253 to use hash pre-filter before embedding comparison
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Create `pipeline_cluster` temporary table for DBSCAN state
-  - [ ] Write test: Verify `pipeline_cluster` records can be inserted, queried by run_id, and bulk-deleted after synthesis
-  - [ ] Write test: Verify orphaned `pipeline_cluster` records are purged on daemon startup
-  - [ ] Add `pipeline_cluster` table definition to INIT_SCHEMA (fields: run_id, cluster_id, episode_id, scope, created_at)
-  - [ ] Add startup cleanup query `DELETE pipeline_cluster;` in `surreal_init.rs` to purge orphaned ephemeral state from previous terminated runs
-  - [ ] Add `save_cluster_assignment`, `get_cluster_members_paginated(run_id, cluster_id, limit, offset)`, and `delete_pipeline_run(run_id)` to CRUD layer. `get_cluster_members` must be paginated to enforce the ≤50 items in-memory constraint for large clusters
-  - [ ] Run tests and confirm pass
+- [x] Task: Create `pipeline_cluster` temporary table for DBSCAN state
+  - [x] Write test: Verify `pipeline_cluster` records can be inserted, queried by run_id, and bulk-deleted after synthesis
+  - [x] Write test: Verify orphaned `pipeline_cluster` records are purged on daemon startup
+  - [x] Add `pipeline_cluster` table definition to INIT_SCHEMA (fields: run_id, cluster_id, episode_id, scope, created_at)
+  - [x] Add startup cleanup query `DELETE pipeline_cluster;` in `surreal_init.rs` to purge orphaned ephemeral state from previous terminated runs
+  - [x] Add `save_cluster_assignment`, `get_cluster_members_paginated(run_id, cluster_id, limit, offset)`, and `delete_pipeline_run(run_id)` to CRUD layer. `get_cluster_members` must be paginated to enforce the ≤50 items in-memory constraint for large clusters
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream unprocessed episode chunks to vault with bounded batch inserts
-  - [ ] Write test: Verify episode chunks are written to `vault/episodes/*.md` incrementally during ingestion, not accumulated in `Vec<Episode>` across the full batch
-  - [ ] Write test: Verify ingestion of 1000+ episodes does not exceed bounded memory (≤50 episodes in memory at any time)
-  - [ ] Refactor `vault/ingestion.rs` bulk ingestion loop: accumulate parsed chunks into a bounded buffer (max 50), write each chunk to vault md file, flush the buffer via `save_episodes_batch`, clear buffer, repeat until all chunks processed
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream unprocessed episode chunks to vault with bounded batch inserts
+  - [x] Write test: Verify episode chunks are written to `vault/episodes/*.md` incrementally during ingestion, not accumulated in `Vec<Episode>` across the full batch
+  - [x] Write test: Verify ingestion of 1000+ episodes does not exceed bounded memory (≤50 episodes in memory at any time)
+  - [x] Refactor `vault/ingestion.rs` bulk ingestion loop: accumulate parsed chunks into a bounded buffer (max 50), write each chunk to vault md file, flush the buffer via `save_episodes_batch`, clear buffer, repeat until all chunks processed
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream episode summaries to vault during dreaming
-  - [ ] Write test: Verify episode summaries are flushed to `wiki/<scope>/episodes/*.md` immediately after LLM generation, not held in batch Vec
-  - [ ] Refactor `synthesis.rs` dreaming loop (L869-883): process unprocessed episodes in bounded chunks, write each summary to vault md file before processing next chunk
-  - [ ] Drop `all_episodes` cache (L891) — replace with paginated DB queries for centroid calculation using running mean
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream episode summaries to vault during dreaming
+  - [x] Write test: Verify episode summaries are flushed to `wiki/<scope>/episodes/*.md` immediately after LLM generation, not held in batch Vec
+  - [x] Refactor `synthesis.rs` dreaming loop (L869-883): process unprocessed episodes in bounded chunks, write each summary to vault md file before processing next chunk
+  - [x] Drop `all_episodes` cache (L891) — replace with paginated DB queries for centroid calculation using running mean
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream DBSCAN cluster assignments to SurrealDB
-  - [ ] Write test: Verify cluster assignments are stored in `pipeline_cluster` table with unique run_id and individual members retrieved during synthesis
-  - [ ] Write test: Verify `pipeline_cluster` records are deleted after successful synthesis completion
-  - [ ] Refactor `synthesis.rs` DBSCAN flow (L1256-1258): write cluster assignments to `pipeline_cluster` table, then query members per-cluster during insight synthesis
-  - [ ] Refactor `compactor.rs` hierarchical DBSCAN (L848-856): write cluster assignments to `pipeline_cluster` table, process clusters sequentially by querying from DB
-  - [ ] Call `delete_pipeline_run(run_id)` at the conclusion of both the synthesis and compaction pipelines to clean up the temporary table. **Cleanup must be guaranteed even on error paths** — use a RAII scope guard (e.g., `scopeguard::defer!` or a custom `Drop` impl on the run context) so that `delete_pipeline_run` executes on early returns, `Err(?)`, and panics
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream DBSCAN cluster assignments to SurrealDB
+  - [x] Write test: Verify cluster assignments are stored in `pipeline_cluster` table with unique run_id and individual members retrieved during synthesis
+  - [x] Write test: Verify `pipeline_cluster` records are deleted after successful synthesis completion
+  - [x] Refactor `synthesis.rs` DBSCAN flow (L1256-1258): write cluster assignments to `pipeline_cluster` table, then query members per-cluster during insight synthesis
+  - [x] Refactor `compactor.rs` hierarchical DBSCAN (L848-856): write cluster assignments to `pipeline_cluster` table, process clusters sequentially by querying from DB
+  - [x] Call `delete_pipeline_run(run_id)` at the conclusion of both the synthesis and compaction pipelines to clean up the temporary table. **Cleanup must be guaranteed even on error paths** — use a RAII scope guard (e.g., `scopeguard::defer!` or a custom `Drop` impl on the run context) so that `delete_pipeline_run` executes on early returns, `Err(?)`, and panics
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream insight synthesis to vault incrementally
-  - [ ] Write test: Verify each synthesized insight is written to `wiki/<scope>/insights/*.md` immediately and dropped from memory before next cluster
-  - [ ] Write test: Verify no more than 50 insights are held in memory simultaneously
-  - [ ] Refactor cluster-to-insight synthesis loop in `synthesis.rs` (L1258-1400): write insight md, drop from memory, proceed to next cluster
-  - [ ] Refactor scope insights loading (L977-978, L1505): implement chunked directory reading in `load_insights()` using `fs::read_dir` to load, process, and drop markdown files in bounded batches of 50
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream insight synthesis to vault incrementally
+  - [x] Write test: Verify each synthesized insight is written to `wiki/<scope>/insights/*.md` immediately and dropped from memory before next cluster
+  - [x] Write test: Verify no more than 50 insights are held in memory simultaneously
+  - [x] Refactor cluster-to-insight synthesis loop in `synthesis.rs` (L1258-1400): write insight md, drop from memory, proceed to next cluster
+  - [x] Refactor scope insights loading (L977-978, L1505): implement chunked directory reading in `load_insights()` using `fs::read_dir` to load, process, and drop markdown files in bounded batches of 50
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream direction promotion to vault incrementally
-  - [ ] Write test: Verify direction nodes are written to `wiki/<scope>/directions/*.md` immediately after promotion evaluation
-  - [ ] Refactor direction backpropagation (synthesis.rs L2988-3002): load directions paginated from DB, process one-at-a-time, write result to vault, drop, next
-  - [ ] Refactor direction promotion drift metrics (L3060-3155): evaluate and write one candidate at a time
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream direction promotion to vault incrementally
+  - [x] Write test: Verify direction nodes are written to `wiki/<scope>/directions/*.md` immediately after promotion evaluation
+  - [x] Refactor direction backpropagation (synthesis.rs L2988-3002): load directions paginated from DB, process one-at-a-time, write result to vault, drop, next
+  - [x] Refactor direction promotion drift metrics (L3060-3155): evaluate and write one candidate at a time
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream wisdom graduation to vault incrementally
-  - [ ] Write test: Verify graduated wisdom rules are written to `wisdom/*.md` immediately after cross-scope matching
-  - [ ] Refactor graduation candidates (synthesis.rs L1946): load candidates paginated instead of `get_all_wiki_nodes()`
-  - [ ] Refactor graduation clusters (L2168-2182): process one cluster at a time, write wisdom rule to vault, drop, next
-  - [ ] Refactor wisdom deduplication (L2440): use hash-based lookup (Phase 3) for comparison
-  - [ ] Refactor direction-to-wisdom graduation (L3203-3246): process one direction pair at a time
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream wisdom graduation to vault incrementally
+  - [x] Write test: Verify graduated wisdom rules are written to `wisdom/*.md` immediately after cross-scope matching
+  - [x] Refactor graduation candidates (synthesis.rs L1946): load candidates paginated instead of `get_all_wiki_nodes()`
+  - [x] Refactor graduation clusters (L2168-2182): process one cluster at a time, write wisdom rule to vault, drop, next
+  - [x] Refactor wisdom deduplication (L2440): use hash-based lookup (Phase 3) for comparison
+  - [x] Refactor direction-to-wisdom graduation (L3203-3246): process one direction pair at a time
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream pruned nodes — GC and procedural trimming
-  - [ ] Write test: Verify pruned nodes are moved to `vault/archive/` and dropped from memory immediately, not batched
-  - [ ] Refactor GC candidates (compactor.rs L140): process one node at a time — archive file, delete from DB, drop reference
-  - [ ] Refactor procedural episode trimming (compactor.rs L180): paginate active procs, archive excess one-at-a-time
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream pruned nodes — GC and procedural trimming
+  - [x] Write test: Verify pruned nodes are moved to `vault/archive/` and dropped from memory immediately, not batched
+  - [x] Refactor GC candidates (compactor.rs L140): process one node at a time — archive file, delete from DB, drop reference
+  - [x] Refactor procedural episode trimming (compactor.rs L180): paginate active procs, archive excess one-at-a-time
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream pruned nodes — near-duplicate merging and decay archival
-  - [ ] Write test: Verify near-duplicate merging archives each pair immediately, not in batch
-  - [ ] Write test: Verify decayed episodes are archived and dropped from memory per-batch
-  - [ ] Refactor near-duplicate merging (compactor.rs L253): compare pairs using paginated iteration, merge+archive immediately per pair
-  - [ ] Refactor decayed episode archival (compactor.rs L1195-1211): paginate episodes, compute decay per batch, archive immediately
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream pruned nodes — near-duplicate merging and decay archival
+  - [x] Write test: Verify near-duplicate merging archives each pair immediately, not in batch
+  - [x] Write test: Verify decayed episodes are archived and dropped from memory per-batch
+  - [x] Refactor near-duplicate merging (compactor.rs L253): compare pairs using paginated iteration, merge+archive immediately per pair
+  - [x] Refactor decayed episode archival (compactor.rs L1195-1211): paginate episodes, compute decay per batch, archive immediately
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Stream compaction summaries one cluster at a time
-  - [ ] Write test: Verify compaction loop writes each cluster summary to `wiki/<scope>/compactions/*.md` and releases prompt buffer before next cluster
-  - [ ] Write test: Verify outlier insights are written individually, not accumulated in batch Vec
-  - [ ] Refactor compaction loop (compactor.rs L861-1013): flush prompt_content and LLM response after each cluster write
-  - [ ] Refactor outlier handling (compactor.rs L1018-1090): write each outlier insight individually
-  - [ ] Run tests and confirm pass
+- [x] Task: Stream compaction summaries one cluster at a time
+  - [x] Write test: Verify compaction loop writes each cluster summary to `wiki/<scope>/compactions/*.md` and releases prompt buffer before next cluster
+  - [x] Write test: Verify outlier insights are written individually, not accumulated in batch Vec
+  - [x] Refactor compaction loop (compactor.rs L861-1013): flush prompt_content and LLM response after each cluster write
+  - [x] Refactor outlier handling (compactor.rs L1018-1090): write each outlier insight individually
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Cap synthesis cluster prompt concatenation
-  - [ ] Write test: Verify `insights_with_scope_labels` string is truncated at 32K token budget
-  - [ ] Write test: Verify prompt building stops fetching additional cluster members from DB once 32K token budget is reached (no post-hoc truncation of an unbounded string)
-  - [ ] Refactor synthesis.rs L2204-2210: when incrementally building the prompt, stop paginating and fetching cluster members from the database as soon as the 32K token budget is reached, preventing unbounded memory accumulation
-  - [ ] Run tests and confirm pass
+- [x] Task: Cap synthesis cluster prompt concatenation
+  - [x] Write test: Verify `insights_with_scope_labels` string is truncated at 32K token budget
+  - [x] Write test: Verify prompt building stops fetching additional cluster members from DB once 32K token budget is reached (no post-hoc truncation of an unbounded string)
+  - [x] Refactor synthesis.rs L2204-2210: when incrementally building the prompt, stop paginating and fetching cluster members from the database as soon as the 32K token budget is reached, preventing unbounded memory accumulation
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 5: Async Runtime Safety (FR-5, FR-7)
 
