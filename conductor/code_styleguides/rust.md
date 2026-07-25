@@ -72,3 +72,16 @@ Code quality must be enforced using Rust's compiler lints and `clippy`.
 
 *   **Public API:** All public structs, enums, fields, traits, and functions should have documentation comments (`///`).
 *   **Internal Comments:** Document *why* complex logic is written in a particular way, rather than *what* the code does. Keep comments synchronized with code changes.
+
+---
+
+## 6. Architecture & Concurrency Directives
+
+All Rust code written for features, tracks, and refactoring tasks must adhere strictly to these architectural guidelines:
+
+*   **Direct Native Async Refactoring (Anti-Bridge Rule):** Subagents and developers MUST NOT create parallel `_async` methods alongside existing sync methods, nor use `futures::executor::block_on` or `tokio::task::block_in_place` fallbacks inside default trait methods. When converting a trait or subsystem to async, update the trait definition directly with `async fn` and refactor all downstream callsites natively.
+*   **Top-Level Scoping & Safe RAII Guards:** Operational status guards (e.g., `IS_INGESTING`) and cleanup routines MUST be scoped at the outermost public entry point of a function, covering all match arms, harness types, and execution branches. All temporary database state (e.g., `pipeline_cluster`) or filesystem resources MUST use safe RAII scope guards (implementing `Drop` with `Arc<dyn Trait>` handles) so cleanup is guaranteed on early `?` error returns, panics, and scope drops. Unsafe raw pointer transmutes (`*const dyn Trait`) are strictly forbidden.
+*   **Strict Lock Ordering & Contention Prevention:** Never hold a primary lock (e.g., `EMBEDDING_CACHE` or `term_counts_cache`) while acquiring a secondary lock (e.g., `SQLITE_CACHE_CONN` or inner scope locks). Always extract required data into local variables, drop the primary lock completely, and then acquire secondary locks or execute I/O operations.
+*   **Algorithmic Complexity & Bulk Operations (No $O(N)$ Hot-Path Scans):** Never perform $O(N)$ linear iteration scans (e.g., `.min_by_key()`) inside hot-path loops or per-element insertions. Use constant-time $O(1)$ data structures (e.g., `lru::LruCache`) or perform bulk pruning (evicting the bottom 10% of items in a single pass when capacity is reached).
+*   **Complete Resource Lifecycle & Write-on-Evict Safety:** Any component that loads GPU VRAM weights or allocates heavy in-memory buffers MUST implement a public `evict()` method and register it with the background idle eviction loop (`daemon.rs`). Any cache eviction mechanism (such as `LruCache::push` or `resize`) MUST inspect evicted items and immediately persist dirty entries to disk before dropping them from memory (Write-on-Evict).
+
