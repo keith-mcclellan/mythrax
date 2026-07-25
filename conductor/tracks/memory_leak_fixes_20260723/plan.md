@@ -363,18 +363,31 @@ Address remaining medium-severity memory scaling issues.
 
 ## Phase 6b: Workspace & Project Documentation Vault Mirroring
 
-Automate mirroring and indexing of workspace-root and Conductor documentation assets (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into the Mythrax human-readable vault (`vault_root/reference/`) and retrieval index.
+Automate boundary-isolated mirroring, SHA-256 deduplicated indexing, and MOC linking of workspace-root and Conductor documentation assets (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into the Mythrax human-readable vault (`vault_root/reference/`) and retrieval index.
 
-- [ ] Task: Implement workspace document mirror & ingestion engine
-  - [ ] Write test: Verify `sync_workspace_docs_to_vault` mirrors workspace root docs (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into `vault_root/reference/` without corrupting file permissions or duplicate overwrites
-  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` function in `daemon.rs` / `vault/ingestion.rs`
+- [ ] Task: Add `content_hash` deduplication support to `WikiNode` schema
+  - [ ] Add `content_hash` field to `WikiNode` struct in `contracts.rs`
+  - [ ] Add `DEFINE FIELD content_hash` and `DEFINE INDEX idx_wiki_node_hash ON wiki_node FIELDS content_hash` in `surreal_init.rs`
+  - [ ] Add `find_wiki_node_by_hash(hash)` query to CRUD layer
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Implement workspace document mirror engine with boundary isolation
+  - [ ] Write test: Verify `sync_workspace_docs_to_vault` ignores `vault_root` when `vault_root` is inside `workspace_root`
+  - [ ] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved without collisions
+  - [ ] Write test: Verify SHA-256 hash comparison skips identical files without disk re-writes or DB queries
+  - [ ] Write test: Verify deletion of source workspace docs prunes mirrored vault file and DB records
+  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` with canonical path checks, SHA-256 diffing, and atomic `.tmp` writes
   - [ ] Wire `sync_workspace_docs_to_vault` into daemon startup and periodic checkpointing loop (every 600s)
   - [ ] Run tests and confirm pass
 
-- [ ] Task: Ingest mirrored workspace docs into retrieval index & MOC
-  - [ ] Write test: Verify mirrored reference docs in `vault_root/reference/` generate `wiki_node` / embedding records and are linked in `MOC.md`
-  - [ ] Wire `Forge::ingest_document` / `save_episodes_batch` to process mirrored `reference/*.md` files into the 6-signal retrieval index
-  - [ ] Update `ensure_vault_structure` in `store.rs` to dynamically include `reference/` entries in `MOC.md`
+- [ ] Task: Index reference docs without heavy LLM concept/rule extraction
+  - [ ] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) without triggering `Forge` LLM concept extraction
+  - [ ] Implement lightweight reference chunker and embedding indexer in `vault/ingestion.rs`
+  - [ ] Run tests and confirm pass
+
+- [ ] Task: Rebuild `MOC.md` with nested reference link support
+  - [ ] Write test: Verify `rebuild_reference_moc` formats nested wikilinks (`[[reference/specs/foo/bar|specs / foo / bar]]`) atomically
+  - [ ] Implement `rebuild_reference_moc` in `store.rs` and trigger post-sync
   - [ ] Run tests and confirm pass
 
 - [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
