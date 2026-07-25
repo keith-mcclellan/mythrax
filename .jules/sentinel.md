@@ -1,0 +1,4 @@
+## 2026-07-25 - Shell Injection in HTR Parallel Verification Loop
+**Vulnerability:** Shell Injection risk in the Arbor HTR loop via `std::process::Command::new("sh").arg("-c")` wrappers around dynamically constructed test commands.
+**Learning:** The fallback conditional branch `has_shell_operators` delegated command parsing to POSIX shell when operators like `&`, `|`, `>`, or `;` were detected in test commands, intentionally breaking the intended agent process isolation boundary and risking arbitrary command execution.
+**Prevention:** Strictly adhere to direct argument execution (`Command::new(program).args(args)`) as specified in the mythrax-2.0 design doc without attempting convenience fallbacks to system shells. Validate or reject test command inputs that improperly rely on shell built-ins rather than insecurely forwarding them.
