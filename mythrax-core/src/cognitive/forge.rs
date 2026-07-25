@@ -99,10 +99,22 @@ impl Forge {
             embedding: None, // Will update embedding later if needed, or leave None
             ..Default::default()
         };
-        // wait, parent embedding was originally the first in texts_to_embed. Let's embed it alone.
-        let parent_embedding = self.backend.embed_batch(&[format!("{}: {}", _source_name, content)]).await?;
+        let safe_end = content
+            .char_indices()
+            .nth(2000)
+            .map(|(idx, _)| idx)
+            .unwrap_or(content.len());
+        let truncated_parent_content = &content[..safe_end];
+        let parent_embedding = self
+            .backend
+            .embed_batch(&[format!("{}: {}", _source_name, truncated_parent_content)])
+            .await?;
+        let parent_embedding_val = parent_embedding
+            .get(0)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Missing parent embedding"))?;
         let parent_node = WikiNode {
-            embedding: Some(parent_embedding[0].clone()),
+            embedding: Some(parent_embedding_val),
             ..parent_node
         };
         
@@ -138,7 +150,13 @@ impl Forge {
             let mut texts_to_embed = Vec::new();
             for (idx, chunk_text, concepts, rules) in &chunks_data {
                 let chunk_name = format!("{} - Chunk {}", _source_name, idx + 1);
-                texts_to_embed.push(format!("{}: {}", chunk_name, chunk_text));
+                let safe_end = chunk_text
+                    .char_indices()
+                    .nth(2000)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(chunk_text.len());
+                let truncated_chunk_text = &chunk_text[..safe_end];
+                texts_to_embed.push(format!("{}: {}", chunk_name, truncated_chunk_text));
                 for concept in concepts {
                     texts_to_embed.push(format!("{}: {}", concept.name, concept.content));
                 }
@@ -191,7 +209,10 @@ impl Forge {
                 );
                 self.store.write_file(&chunk_path, &chunk_md)?;
 
-                let chunk_embedding = embeddings[embed_idx].clone();
+                let chunk_embedding = embeddings
+                    .get(embed_idx)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Missing embedding for chunk at index {}", embed_idx))?;
                 embed_idx += 1;
 
                 let chunk_node = WikiNode {
@@ -218,7 +239,10 @@ impl Forge {
                     );
                     self.store.write_file(&concept_path, &concept_md)?;
 
-                    let concept_embedding = embeddings[embed_idx].clone();
+                    let concept_embedding = embeddings
+                        .get(embed_idx)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Missing embedding for concept at index {}", embed_idx))?;
                     embed_idx += 1;
 
                     let concept_node = WikiNode {
@@ -247,7 +271,10 @@ impl Forge {
                     );
                     self.store.write_file(&rule_path, &rule_md)?;
 
-                    let rule_embedding = embeddings[embed_idx].clone();
+                    let rule_embedding = embeddings
+                        .get(embed_idx)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Missing embedding for rule at index {}", embed_idx))?;
                     embed_idx += 1;
 
                     let rule_node = WisdomRule {

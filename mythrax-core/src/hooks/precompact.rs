@@ -122,28 +122,37 @@ pub async fn mine_transcript(
     let mut current_offset = start_offset;
     let mut saved_count = 0;
     let mut prev_saved_id: Option<String> = None;
-    let mut tool_sequence = Vec::new();
+    let mut tool_sequence = std::collections::VecDeque::new();
 
     let mut has_previous_user_input = false;
-    let mut ep_offset = 0;
-    loop {
-        let page = backend
-            .get_episodes_paginated(100, ep_offset)
-            .await
-            .unwrap_or_default();
-        if page.is_empty() {
-            break;
+    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let query = "SELECT VALUE id FROM episode WHERE session_id = $session AND (node_type = 'user_input' OR node_type = 'user_feedback') LIMIT 1;";
+        if let Ok(mut response) = surreal.db.query(query).bind(("session", session)).await {
+            if let Ok(ids) = response.take::<Vec<serde_json::Value>>(0) {
+                has_previous_user_input = !ids.is_empty();
+            }
         }
-        let count = page.len() as u32;
-        if page.iter().any(|ep| {
-            ep.session_id.as_deref() == Some(session)
-                && (ep.node_type.as_deref() == Some("user_input")
-                    || ep.node_type.as_deref() == Some("user_feedback"))
-        }) {
-            has_previous_user_input = true;
-            break;
+    } else {
+        let mut ep_offset = 0;
+        loop {
+            let page = backend
+                .get_episodes_paginated(100, ep_offset)
+                .await
+                .unwrap_or_default();
+            if page.is_empty() {
+                break;
+            }
+            let count = page.len() as u32;
+            if page.iter().any(|ep| {
+                ep.session_id.as_deref() == Some(session)
+                    && (ep.node_type.as_deref() == Some("user_input")
+                        || ep.node_type.as_deref() == Some("user_feedback"))
+            }) {
+                has_previous_user_input = true;
+                break;
+            }
+            ep_offset += count;
         }
-        ep_offset += count;
     }
 
     let mut buf = String::new();
@@ -168,49 +177,83 @@ pub async fn mine_transcript(
         }
 
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
-            // Extract tool calls
-            if let Some(tool_calls_arr) = val.get("tool_calls").and_then(|v| v.as_array()) {
-                for tc in tool_calls_arr {
-                    if let Some(name) = tc.get("name").and_then(|v| v.as_str()) {
-                        tool_sequence.push(name.to_string());
+            // Extract tool calls from top-level or message tool_calls
+            let tool_calls_arr = val
+                .get("tool_calls")
+                .or_else(|| val.get("message").and_then(|m| m.get("tool_calls")))
+                .and_then(|v| v.as_array());
+            if let Some(arr) = tool_calls_arr {
+                for tc in arr {
+                    let name_opt = tc
+                        .get("name")
+                        .or_else(|| tc.get("function").and_then(|f| f.get("name")))
+                        .and_then(|v| v.as_str());
+                    if let Some(name) = name_opt {
+                        tool_sequence.push_back(name.to_string());
+                        if tool_sequence.len() > 1000 {
+                            tool_sequence.pop_front();
+                        }
+                    }
+                }
+            }
+
+            // Extract tool calls from Claude content array (tool_use blocks)
+            let content_arr = val
+                .get("content")
+                .or_else(|| val.get("message").and_then(|m| m.get("content")))
+                .and_then(|v| v.as_array());
+            if let Some(arr) = content_arr {
+                for item in arr {
+                    if item.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                        let name_opt = item
+                            .get("name")
+                            .or_else(|| item.get("function").and_then(|f| f.get("name")))
+                            .and_then(|v| v.as_str());
+                        if let Some(name) = name_opt {
+                            tool_sequence.push_back(name.to_string());
+                            if tool_sequence.len() > 1000 {
+                                tool_sequence.pop_front();
+                            }
+                        }
                     }
                 }
             }
 
             // Check for checklist items in the content (WU-3.3)
-            let content_opt = val.get("content").and_then(|c| c.as_str()).or_else(|| {
-                val.get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_str())
-            });
-            if let Some(content_str) = content_opt {
-                let mut checklist_lines = Vec::new();
-                for line in content_str.lines() {
-                    if line.contains("- [ ]") || line.contains("- [x]") {
-                        checklist_lines.push(line.trim().to_string());
-                    }
-                }
-                if !checklist_lines.is_empty() {
-                    let checklist_str = checklist_lines.join("\n");
-                    let _ = backend.save_stm(session, "checklist", &checklist_str).await;
-
-                    let ep =
-                        EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
-                            .scope(Some("general".to_string()))
-                            .session_id(Some(session.to_string()))
-                            .node_type(Some("task_checklist".to_string()))
-                            .build();
-                    let store_arc = Arc::new(crate::store::MarkdownStore {
-                        vault_root: store.vault_root.clone(),
-                    });
-                    if let Ok(saved_id) =
-                        save_episode_bidirectional(&ep, backend, &store_arc, ignore).await
-                    {
-                        if let Some(ref prev_id) = prev_saved_id {
-                            let _ = backend.relate_followed_by(prev_id, &saved_id).await;
+            let content_val = val
+                .get("content")
+                .or_else(|| val.get("message").and_then(|m| m.get("content")));
+            if let Some(c_val) = content_val {
+                let extracted_content = extract_text(c_val);
+                if !extracted_content.is_empty() {
+                    let mut checklist_lines = Vec::new();
+                    for line in extracted_content.lines() {
+                        if line.contains("- [ ]") || line.contains("- [x]") {
+                            checklist_lines.push(line.trim().to_string());
                         }
-                        prev_saved_id = Some(saved_id);
-                        saved_count += 1;
+                    }
+                    if !checklist_lines.is_empty() {
+                        let checklist_str = checklist_lines.join("\n");
+                        let _ = backend.save_stm(session, "checklist", &checklist_str).await;
+
+                        let ep =
+                            EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
+                                .scope(Some("general".to_string()))
+                                .session_id(Some(session.to_string()))
+                                .node_type(Some("task_checklist".to_string()))
+                                .build();
+                        let store_arc = Arc::new(crate::store::MarkdownStore {
+                            vault_root: store.vault_root.clone(),
+                        });
+                        if let Ok(saved_id) =
+                            save_episode_bidirectional(&ep, backend, &store_arc, ignore).await
+                        {
+                            if let Some(ref prev_id) = prev_saved_id {
+                                let _ = backend.relate_followed_by(prev_id, &saved_id).await;
+                            }
+                            prev_saved_id = Some(saved_id);
+                            saved_count += 1;
+                        }
                     }
                 }
             }
@@ -368,7 +411,8 @@ pub async fn mine_transcript(
         .await;
 
     // Run n-gram analysis on the extracted tool sequence
-    let _ = analyze_tool_calls_ngrams(backend, &tool_sequence).await;
+    let tool_seq_slice = tool_sequence.make_contiguous();
+    let _ = analyze_tool_calls_ngrams(backend, tool_seq_slice).await;
 
     // 2.0 dual-durability journaling
     backend
@@ -403,22 +447,40 @@ async fn analyze_tool_calls_ngrams(
     for (ngram, count) in counts {
         if count >= 2 {
             let chain_str = ngram.join(" -> ");
+            let target_pattern = format!("Tool sequence: {}", chain_str);
+            let action_to_avoid = format!(
+                "Avoid manually repeating this tool sequence: {}",
+                chain_str
+            );
+            let causal_explanation = format!(
+                "This tool chain was used {} times in the session transcript.",
+                count
+            );
+            let prescribed_remedy = format!(
+                "Automate this sequence using a combined batch route or helper tool: {}",
+                chain_str
+            );
+
+            let norm_content = format!(
+                "{}:{}:{}",
+                target_pattern, action_to_avoid, prescribed_remedy
+            );
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(norm_content.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
+
+            if let Ok(Some(_existing_id)) = backend.find_duplicate_by_content_hash(&hash).await {
+                continue;
+            }
+
             let uuid = uuid::Uuid::new_v4().to_string();
             let rule = crate::contracts::WisdomRule {
                 id: Some(format!("wisdom:{}", uuid)),
-                target_pattern: format!("Tool sequence: {}", chain_str),
-                action_to_avoid: format!(
-                    "Avoid manually repeating this tool sequence: {}",
-                    chain_str
-                ),
-                causal_explanation: format!(
-                    "This tool chain was used {} times in the session transcript.",
-                    count
-                ),
-                prescribed_remedy: format!(
-                    "Automate this sequence using a combined batch route or helper tool: {}",
-                    chain_str
-                ),
+                target_pattern,
+                action_to_avoid,
+                causal_explanation,
+                prescribed_remedy,
                 tier: crate::contracts::Tier::Project,
                 scope: "general".to_string(),
                 vault_path: None,
@@ -434,7 +496,7 @@ async fn analyze_tool_calls_ngrams(
                 severity: Some("info".to_string()),
                 blocking: Some(false),
                 importance: Some(5.0),
-                content_hash: None,
+                content_hash: Some(hash),
             };
 
             let _ = backend.save_wisdom_rule(&rule).await;
@@ -442,4 +504,91 @@ async fn analyze_tool_calls_ngrams(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use std::io::Write;
+
+    #[tokio::test]
+    async fn test_tool_sequence_sliding_window_bound() {
+        let dir = tempdir().unwrap();
+        let transcript_path = dir.path().join("high_volume_transcript.jsonl");
+        let mut f = File::create(&transcript_path).unwrap();
+        for i in 0..1500 {
+            let line = format!(r#"{{"tool_calls": [{{"name": "tool_{}"}}]}}"#, i);
+            writeln!(f, "{}", line).unwrap();
+        }
+
+        let backend = crate::db::backend::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let store = crate::store::MarkdownStore {
+            vault_root: dir.path().to_path_buf(),
+        };
+        let ignore = WatchIgnoreList::default();
+
+        let res = mine_transcript("test_session", transcript_path.to_str().unwrap(), &backend, &store, &ignore).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_claude_tool_use_mining_and_deduplication() {
+        let dir = tempdir().unwrap();
+        let transcript_path1 = dir.path().join("claude_transcript1.jsonl");
+        let mut f1 = File::create(&transcript_path1).unwrap();
+
+        let line1 = r#"{"content": [{"type": "tool_use", "name": "read_file"}]}"#;
+        let line2 = r#"{"content": [{"type": "tool_use", "name": "replace_file_content"}]}"#;
+        let line3 = r#"{"content": [{"type": "tool_use", "name": "read_file"}]}"#;
+        let line4 = r#"{"content": [{"type": "tool_use", "name": "replace_file_content"}]}"#;
+
+        // Transcript 1 has 2 occurrences (count = 2)
+        writeln!(f1, "{}\n{}\n{}\n{}", line1, line2, line3, line4).unwrap();
+
+        let transcript_path2 = dir.path().join("claude_transcript2.jsonl");
+        let mut f2 = File::create(&transcript_path2).unwrap();
+
+        // Transcript 2 has 4 occurrences (count = 4)
+        writeln!(
+            f2,
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            line1, line2, line3, line4, line1, line2, line3, line4
+        )
+        .unwrap();
+
+        let backend = crate::db::backend::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let store = crate::store::MarkdownStore {
+            vault_root: dir.path().to_path_buf(),
+        };
+        let ignore = WatchIgnoreList::default();
+
+        let res = mine_transcript("test_session_1", transcript_path1.to_str().unwrap(), &backend, &store, &ignore).await;
+        assert!(res.is_ok());
+
+        let rules1 = backend.get_all_wisdom_rules().await.unwrap();
+        let target_rule_count1 = rules1
+            .iter()
+            .filter(|r| r.target_pattern == "Tool sequence: read_file -> replace_file_content")
+            .count();
+        assert_eq!(target_rule_count1, 1, "Should save 1 rule for read_file -> replace_file_content");
+
+        let res2 = mine_transcript("test_session_2", transcript_path2.to_str().unwrap(), &backend, &store, &ignore).await;
+        assert!(res2.is_ok());
+
+        let rules2 = backend.get_all_wisdom_rules().await.unwrap();
+        let target_rule_count2 = rules2
+            .iter()
+            .filter(|r| r.target_pattern == "Tool sequence: read_file -> replace_file_content")
+            .count();
+        assert_eq!(
+            target_rule_count2,
+            1,
+            "Mining transcript of higher count must deduplicate identical wisdom rule target_pattern"
+        );
+    }
 }

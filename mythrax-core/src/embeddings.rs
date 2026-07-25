@@ -20,6 +20,12 @@ pub trait TextEmbedder: Send + Sync {
 
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
+pub fn evict_global_embedder() {
+    if let Some(Ok(embedder)) = GLOBAL_EMBEDDER.get() {
+        embedder.evict();
+    }
+}
+
 pub struct EmbeddingLruCache {
     pub cache: LruCache<String, (Vec<f32>, bool)>,
 }

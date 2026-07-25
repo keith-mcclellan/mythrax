@@ -127,7 +127,21 @@ async fn save_episodes_batch_handler(
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
 
-    let payload: Vec<EpisodeSave> = match serde_json::from_slice(&bytes) {
+    let raw_val: Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    let arr = match raw_val.as_array() {
+        Some(a) => a,
+        None => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    if arr.len() > 100 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let payload: Vec<EpisodeSave> = match serde_json::from_value(raw_val) {
         Ok(p) => p,
         Err(_) => return Err(StatusCode::BAD_REQUEST),
     };
@@ -435,11 +449,20 @@ async fn call_mcp_tool_handler(
 async fn call_mcp_tool_batch_handler(
     State(state): State<Arc<ApiState>>,
     headers: HeaderMap,
-    Json(payload): Json<Value>,
+    bytes: Bytes,
 ) -> Result<Json<Value>, StatusCode> {
     if !check_auth(&headers, &state) {
         return Err(StatusCode::UNAUTHORIZED);
     }
+
+    if bytes.len() > 5 * 1024 * 1024 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let payload: Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
 
     let calls_val = if payload.is_array() {
         &payload
@@ -448,28 +471,42 @@ async fn call_mcp_tool_batch_handler(
     };
 
     let calls_arr = calls_val.as_array().ok_or(StatusCode::BAD_REQUEST)?;
-    let mut futures = Vec::new();
-    for call in calls_arr {
-        let name = call
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let arguments = call
-            .get("arguments")
-            .or_else(|| call.get("args"))
-            .cloned()
-            .unwrap_or(Value::Null);
+    if calls_arr.len() > 100 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let calls_data: Vec<(String, Value)> = calls_arr
+        .iter()
+        .map(|call| {
+            let name = call
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let arguments = call
+                .get("arguments")
+                .or_else(|| call.get("args"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            (name, arguments)
+        })
+        .collect();
+
+    use futures_util::StreamExt;
+    let futures_iter = calls_data.into_iter().map(|(name, arguments)| {
         let state_ref = state.clone();
-        futures.push(async move {
+        async move {
             match crate::mcp_routes::call_mcp_tool(&state_ref, &name, arguments).await {
                 Ok(res) => json!({ "status": "success", "result": res }),
                 Err(e) => json!({ "status": "error", "message": e.to_string() }),
             }
-        });
-    }
+        }
+    });
 
-    let results = futures_util::future::join_all(futures).await;
+    let results: Vec<Value> = futures_util::stream::iter(futures_iter)
+        .buffer_unordered(10)
+        .collect()
+        .await;
+
     Ok(Json(Value::Array(results)))
 }
 
@@ -537,6 +574,35 @@ async fn resources_read_handler(
     }
 }
 
+fn get_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+#[allow(dead_code)]
+fn extract_chat_content(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => {
+            let mut parts = Vec::new();
+            for block in blocks {
+                if let Value::String(s) = block {
+                    parts.push(s.clone());
+                } else if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                    parts.push(t.to_string());
+                } else if let Some(inner) = block.get("content") {
+                    let inner_text = extract_chat_content(inner);
+                    if !inner_text.is_empty() {
+                        parts.push(inner_text);
+                    }
+                }
+            }
+            parts.join("\n")
+        }
+        _ => String::new(),
+    }
+}
+
 async fn completions_proxy_handler(
     State(state): State<Arc<ApiState>>,
     headers: HeaderMap,
@@ -558,7 +624,7 @@ async fn completions_proxy_handler(
     });
 
     if let Some(url) = external_url {
-        let client = reqwest::Client::new();
+        let client = get_http_client();
         let req = client.post(&url).json(&payload);
         let is_stream = payload
             .get("stream")
@@ -618,27 +684,34 @@ async fn completions_proxy_handler(
                 .unwrap_or("mlx-community/Qwen3.6-35B-A3B-4bit");
             let messages = payload.get("messages").and_then(|v| v.as_array());
 
-            let mut system_instruction = None;
+            let mut system_instruction: Option<String> = None;
             let mut prompt = String::new();
             if let Some(msgs) = messages {
                 for msg in msgs {
                     let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("");
-                    let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    let content_text = msg
+                        .get("content")
+                        .map(extract_chat_content)
+                        .unwrap_or_default();
                     if role == "system" {
-                        system_instruction = Some(content);
+                        system_instruction = Some(content_text);
                     } else if role == "user" || role == "assistant" {
                         if !prompt.is_empty() {
                             prompt.push_str("\n\n");
                         }
-                        prompt.push_str(content);
+                        prompt.push_str(&content_text);
                     }
                 }
 
                 let max_tokens = 32000;
                 let max_chars = max_tokens * 4;
-                if prompt.len() > max_chars {
-                    let start = prompt.len() - max_chars;
-                    prompt = prompt[start..].to_string();
+                if let Some(safe_end) = prompt.char_indices().nth(max_chars).map(|(idx, _)| idx) {
+                    prompt.truncate(safe_end);
+                }
+                if let Some(ref mut sys_str) = system_instruction {
+                    if let Some(safe_end) = sys_str.char_indices().nth(max_chars).map(|(idx, _)| idx) {
+                        sys_str.truncate(safe_end);
+                    }
                 }
             }
 
@@ -649,7 +722,7 @@ async fn completions_proxy_handler(
                     "local",
                     "local",
                     model,
-                    system_instruction,
+                    system_instruction.as_deref(),
                     &prompt,
                     false,
                 )
@@ -717,7 +790,7 @@ async fn ollama_proxy_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
     let url = format!("http://127.0.0.1:8080/api/{}", path);
 
     let mut req = client.post(&url);
@@ -943,12 +1016,64 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         
-        // Test chat completions history truncation
-        let large_chat_msg = "A".repeat(33000 * 4); // > 128000 chars
-        let chat_payload = serde_json::json!({
+        // Test POST /v1/mcp/tools/call_batch payload too large (> 5MB)
+        let large_batch_bytes = vec![0u8; 6 * 1024 * 1024]; // 6MB
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/mcp/tools/call_batch")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(large_batch_bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // Test POST /v1/mcp/tools/call_batch max 100 items cap
+        let calls: Vec<Value> = (0..101)
+            .map(|_i| serde_json::json!({ "name": "read", "args": { "action": "get_vault_root" } }))
+            .collect();
+        let over_cap_payload = serde_json::json!({ "calls": calls });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/mcp/tools/call_batch")
+                    .header("X-Mythrax-Token", "secret-token")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::to_vec(&over_cap_payload).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Test chat completions array content blocks handling
+        let array_chat_payload = serde_json::json!({
             "model": "test",
             "messages": [
-                { "role": "user", "content": large_chat_msg }
+                {
+                    "role": "system",
+                    "content": [
+                        { "type": "text", "text": "System prompt text block" }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "User text block 1" },
+                        { "type": "text", "text": "User text block 2" }
+                    ]
+                }
             ]
         });
         let _response = app
@@ -960,7 +1085,7 @@ mod tests {
                     .header("X-Mythrax-Token", "secret-token")
                     .header("Content-Type", "application/json")
                     .body(axum::body::Body::from(
-                        serde_json::to_vec(&chat_payload).unwrap(),
+                        serde_json::to_vec(&array_chat_payload).unwrap(),
                     ))
                     .unwrap(),
             )

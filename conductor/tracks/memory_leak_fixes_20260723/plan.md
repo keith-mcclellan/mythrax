@@ -328,16 +328,16 @@ Now safe to unlock concurrency — all memory bombs are fixed.
   - [x] Update all callers to use the renamed functions
   - [x] Run tests and confirm pass
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 6: Proportional Growth Mitigations (FR-9)
 
 Address remaining medium-severity memory scaling issues.
 
-- [ ] Task: Add sliding window to transcript mining tool sequence
-  - [ ] Write test: Verify `mine_transcript` tool_sequence Vec does not exceed window size
-  - [ ] Implement sliding window or periodic flush for `tool_sequence` in `precompact.rs` L125-160
-  - [ ] Run tests and confirm pass
+- [x] Task: Add sliding window to transcript mining tool sequence
+  - [x] Write test: Verify `mine_transcript` tool_sequence Vec does not exceed window size
+  - [x] Implement sliding window or periodic flush for `tool_sequence` in `precompact.rs` L125-160
+  - [x] Run tests and confirm pass
 
 - [x] Task: Stream chunk processing in Forge pipeline
   - [x] Write test: Verify forge pipeline processes document chunks in bounded batches, not loading entire document into memory
@@ -349,10 +349,10 @@ Address remaining medium-severity memory scaling issues.
   - [x] Add size check to api.rs L120
   - [x] Run tests and confirm pass
 
-- [ ] Task: Fix VRAM tracking state desync
-  - [ ] Write test: Verify `acquire_llm` updates `active_tier` and `last_weak_ref` on cache hit
-  - [ ] Update early-return path in `llm/mod.rs` L1528 to set `active_tier` and `last_weak_ref`
-  - [ ] Run tests and confirm pass
+- [x] Task: Fix VRAM tracking state desync
+  - [x] Write test: Verify `acquire_llm` updates `active_tier` and `last_weak_ref` on cache hit
+  - [x] Update early-return path in `llm/mod.rs` L1528 to set `active_tier` and `last_weak_ref`
+  - [x] Run tests and confirm pass
 
 - [x] Task: Bound completions proxy chat history concatenation
   - [x] Write test: Verify prompt string is bounded by max token limit

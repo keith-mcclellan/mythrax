@@ -1534,6 +1534,10 @@ impl DynamicModelBroker {
             let mut models = self.models.lock().unwrap();
             // If the requested tier is already loaded, we can just return it immediately
             if let Some(model) = models.get(&tier) {
+                let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                *last_weak_ref = Some(Arc::downgrade(model));
+                let mut active_tier = self.active_tier.lock().unwrap();
+                *active_tier = Some(tier);
                 return Ok(model.clone());
             }
 
@@ -1801,10 +1805,22 @@ impl DynamicModelBroker {
 
     /// Evicts unused models from the cache.
     pub async fn evict_unused_models(&self) {
-        {
+        let first_tier_and_model = {
             let mut models = self.models.lock().unwrap();
             models.retain(|_, model| Arc::strong_count(model) > 1);
+            models
+                .iter()
+                .map(|(tier, model)| (*tier, Arc::downgrade(model)))
+                .next()
+        };
+        if let Some((tier, weak_ref)) = first_tier_and_model {
+            *self.active_tier.lock().unwrap() = Some(tier);
+            *self.last_weak_ref.lock().unwrap() = Some(weak_ref);
+        } else {
+            *self.active_tier.lock().unwrap() = None;
+            *self.last_weak_ref.lock().unwrap() = None;
         }
+        crate::embeddings::evict_global_embedder();
         evict_global_reranker().await;
     }
 
@@ -1878,6 +1894,23 @@ mod tests {
         let input_no_lang = "```\nsome non-json content\n```";
         let expected_no_lang = "some non-json content";
         assert_eq!(strip_code_fences(input_no_lang), expected_no_lang);
+    }
+
+    #[tokio::test]
+    async fn test_acquire_llm_cache_hit_updates_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let broker = DynamicModelBroker::new(temp.path().to_path_buf()).await.unwrap();
+
+        let model1 = broker.acquire_llm(ModelTier::Tier1).await.unwrap();
+        assert_eq!(broker.active_tier(), Some(ModelTier::Tier1));
+        assert!(broker.get_weak_llm_reference().unwrap().upgrade().is_some());
+
+        // Cache hit call
+        let model2 = broker.acquire_llm(ModelTier::Tier1).await.unwrap();
+        assert_eq!(broker.active_tier(), Some(ModelTier::Tier1));
+        let weak_ref = broker.get_weak_llm_reference().expect("Weak ref should exist");
+        assert!(Arc::ptr_eq(&model1, &model2));
+        assert!(weak_ref.upgrade().is_some());
     }
 }
 
