@@ -1268,6 +1268,40 @@ impl Compactor {
             }
         }
 
+        let mut access_counts = std::collections::HashMap::new();
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
+            let mut metrics_offset = 0;
+            loop {
+                let metrics_sql =
+                    "SELECT target_id, access_count FROM metrics LIMIT 500 START $offset;";
+                if let Ok(mut resp) = surreal_backend
+                    .db
+                    .query(metrics_sql)
+                    .bind(("offset", metrics_offset))
+                    .await
+                {
+                    if let Ok(rows) = resp.take::<Vec<crate::db::backend::MetricAccess>>(0) {
+                        if rows.is_empty() {
+                            break;
+                        }
+                        let len = rows.len();
+                        for r in rows {
+                            let target_str = crate::db::backend::format_record_id(&r.target_id);
+                            access_counts.insert(target_str, r.access_count);
+                        }
+                        metrics_offset += len;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
         let now = std::time::SystemTime::now();
         let mut offset = 0;
         let mut attempted_ids = std::collections::HashSet::new();
@@ -1313,36 +1347,11 @@ impl Compactor {
                 };
 
                 let is_procedural = ep.node_type.as_deref() == Some("procedural");
-                let access_count = if let Some(surreal_backend) = db
-                    .as_any()
-                    .downcast_ref::<crate::db::backend::SurrealBackend>()
-                {
-                    if let Some(ref ep_id) = ep.id {
-                        if let Ok(ep_rec) = crate::db::backend::parse_record_id(ep_id) {
-                            let metrics_sql =
-                                "SELECT VALUE access_count FROM metrics WHERE target_id = $ep LIMIT 1;";
-                            if let Ok(mut resp) = surreal_backend
-                                .db
-                                .query(metrics_sql)
-                                .bind(("ep", ep_rec))
-                                .await
-                            {
-                                resp.take::<Vec<u64>>(0)
-                                    .ok()
-                                    .and_then(|counts| counts.first().copied())
-                                    .unwrap_or(0)
-                            } else {
-                                0
-                            }
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                };
+                let access_count = ep
+                    .id
+                    .as_ref()
+                    .and_then(|id| access_counts.get(id).copied())
+                    .unwrap_or(0);
 
                 let t_half_type = if is_procedural { 365.0f32 } else { 30.0f32 };
                 let t_half_eff = if is_procedural {
