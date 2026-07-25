@@ -22,7 +22,10 @@ fn match_symbol(line: &str, file_ext: &str) -> Option<(String, String)> {
             if matches!(first, "struct" | "fn" | "enum" | "trait" | "impl") {
                 let pos = trimmed.find(first)?;
                 let clean_remaining = trimmed[pos + first.len()..].trim_start();
-                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                let len = clean_remaining
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .count();
                 if len > 0 {
                     return Some((first.to_string(), clean_remaining[..len].to_string()));
                 }
@@ -37,7 +40,10 @@ fn match_symbol(line: &str, file_ext: &str) -> Option<(String, String)> {
             if matches!(first, "class" | "function" | "interface" | "type") {
                 let pos = trimmed.find(first)?;
                 let clean_remaining = trimmed[pos + first.len()..].trim_start();
-                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                let len = clean_remaining
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .count();
                 if len > 0 {
                     return Some((first.to_string(), clean_remaining[..len].to_string()));
                 }
@@ -49,7 +55,10 @@ fn match_symbol(line: &str, file_ext: &str) -> Option<(String, String)> {
             if matches!(first, "class" | "def") {
                 let pos = trimmed.find(first)?;
                 let clean_remaining = trimmed[pos + first.len()..].trim_start();
-                let len = clean_remaining.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+                let len = clean_remaining
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .count();
                 if len > 0 {
                     return Some((first.to_string(), clean_remaining[..len].to_string()));
                 }
@@ -70,7 +79,7 @@ pub fn extract_symbols(content: &str, file_ext: &str) -> Vec<Symbol> {
             // Extract block: collect lines until the next line that matches a symbol
             let mut block_lines = Vec::new();
             block_lines.push(*line);
-            
+
             for next_line in lines.iter().skip(i + 1) {
                 let next_trimmed = next_line.trim();
                 if match_symbol(next_trimmed, file_ext).is_some() {
@@ -105,10 +114,12 @@ pub async fn page_code_block(
     let mut paged_content = content.to_string();
 
     for sym in symbols {
-        let page_id = format!("page_{}_{}", sym.kind.to_lowercase(), sym.name.to_lowercase()
-            .replace('<', "_")
-            .replace('>', "_"));
-        
+        let page_id = format!(
+            "page_{}_{}",
+            sym.kind.to_lowercase(),
+            sym.name.to_lowercase().replace('<', "_").replace('>', "_")
+        );
+
         // Save/Archive symbol to SurrealDB symbol_archive table
         let sql = "
             UPSERT type::record('symbol_archive', $page_id) CONTENT {
@@ -119,19 +130,28 @@ pub async fn page_code_block(
                 timestamp: time::now()
             };
         ";
-        backend.db.query(sql)
+        backend
+            .db
+            .query(sql)
             .bind(("page_id", page_id.clone()))
             .bind(("symbol_name", sym.name.clone()))
             .bind(("kind", sym.kind.clone()))
             .bind(("content", sym.content.clone()))
-            .await?.check()?;
+            .await?
+            .check()?;
 
         // Replace symbol content in the text with the page ID reference
         if paged_content.contains(&sym.content) {
-            paged_content = paged_content.replace(&sym.content, &format!("[Paged Symbol: Reference {}]", page_id));
+            paged_content = paged_content.replace(
+                &sym.content,
+                &format!("[Paged Symbol: Reference {}]", page_id),
+            );
         }
 
-        page_map.push(format!("Symbol: {} ({}) -> Page ID: {}", sym.name, sym.kind, page_id));
+        page_map.push(format!(
+            "Symbol: {} ({}) -> Page ID: {}",
+            sym.name, sym.kind, page_id
+        ));
     }
 
     if !page_map.is_empty() {
@@ -150,20 +170,23 @@ pub async fn intercept_and_restore_symbols(
     text: &str,
 ) -> String {
     let mut restored = text.to_string();
-    
+
     // Find all occurrences of "page_[a-zA-Z0-9_]+"
     let mut page_ids = Vec::new();
     let mut start = 0;
     while let Some(idx) = text[start..].find("page_") {
         let absolute_idx = start + idx;
         let suffix = &text[absolute_idx + 5..];
-        let len = suffix.chars().take_while(|c| c.is_alphanumeric() || *c == '_').count();
+        let len = suffix
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .count();
         if len > 0 {
             page_ids.push(format!("page_{}", &suffix[..len]));
         }
         start = absolute_idx + 5 + len;
     }
-    
+
     // Deduplicate page IDs
     page_ids.sort();
     page_ids.dedup();
@@ -178,7 +201,8 @@ pub async fn intercept_and_restore_symbols(
                 if restored.contains(&placeholder) {
                     restored = restored.replace(&placeholder, &symbol_content);
                 } else {
-                    restored = restored.replace(&pid, &format!("{}:\n```\n{}\n```", pid, symbol_content));
+                    restored =
+                        restored.replace(&pid, &format!("{}:\n```\n{}\n```", pid, symbol_content));
                 }
             }
         }

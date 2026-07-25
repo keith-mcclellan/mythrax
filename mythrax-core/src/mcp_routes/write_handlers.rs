@@ -1,13 +1,17 @@
 use super::*;
-use serde_json::{json, Value};
-use anyhow::{Result, Context};
-use std::sync::Arc;
 use crate::api::ApiState;
+use crate::contracts::{Entity, EpisodeSave, ThoughtNode};
 use crate::db::SurrealBackend;
-use crate::contracts::{EpisodeSave, Entity, ThoughtNode};
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use std::sync::Arc;
 
 pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action parameter")?.to_string();
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .context("Missing action parameter")?
+        .to_string();
     let mapped_action = match action.as_str() {
         "replace" | "edit_file" => "replace",
         "multi_replace" | "multi_edit_file" => "multi_replace",
@@ -23,91 +27,164 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
         other => other,
     };
     if let Some(obj) = args.as_object_mut() {
-        obj.insert("action".to_string(), serde_json::Value::String(mapped_action.to_string()));
+        obj.insert(
+            "action".to_string(),
+            serde_json::Value::String(mapped_action.to_string()),
+        );
     }
 
     match mapped_action {
         "replace" => {
-            let _path = args.get("path")
+            let _path = args
+                .get("path")
                 .or_else(|| args.get("AbsolutePath"))
                 .or_else(|| args.get("TargetFile"))
                 .and_then(|v| v.as_str())
                 .context("Missing path/AbsolutePath/TargetFile")?;
-            let _target_content = args.get("target_content")
+            let _target_content = args
+                .get("target_content")
                 .or_else(|| args.get("TargetContent"))
                 .and_then(|v| v.as_str())
                 .context("Missing target_content/TargetContent")?;
-            let _replacement_content = args.get("replacement_content")
+            let _replacement_content = args
+                .get("replacement_content")
                 .or_else(|| args.get("ReplacementContent"))
                 .and_then(|v| v.as_str())
                 .context("Missing replacement_content/ReplacementContent")?;
             super::manage_handlers::handle_manage_file(state, args).await
         }
         "multi_replace" => {
-            let _path = args.get("path")
+            let _path = args
+                .get("path")
                 .or_else(|| args.get("AbsolutePath"))
                 .or_else(|| args.get("TargetFile"))
                 .and_then(|v| v.as_str())
                 .context("Missing path/AbsolutePath/TargetFile")?;
-            let _chunks = args.get("chunks").and_then(|v| v.as_array()).context("Missing chunks array parameter")?;
+            let _chunks = args
+                .get("chunks")
+                .and_then(|v| v.as_array())
+                .context("Missing chunks array parameter")?;
             super::manage_handlers::handle_manage_file(state, args).await
         }
         "save" => {
-            let _title = args.get("title").and_then(|v| v.as_str()).context("Missing title")?;
-            let _content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?;
+            let _title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .context("Missing title")?;
+            let _content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .context("Missing content")?;
             handle_record_memory(state, args).await
         }
         "feedback" => {
-            let _episode_id = args.get("episode_id").and_then(|v| v.as_str()).context("Missing episode_id")?;
-            let _success = args.get("success").and_then(|v| v.as_bool()).context("Missing success")?;
+            let _episode_id = args
+                .get("episode_id")
+                .and_then(|v| v.as_str())
+                .context("Missing episode_id")?;
+            let _success = args
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .context("Missing success")?;
             handle_record_memory(state, args).await
         }
         "thought" => {
-            let _content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?;
+            let _content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .context("Missing content")?;
             handle_record_memory(state, args).await
         }
         "put" => {
-            let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
-            let _key = args.get("key").and_then(|v| v.as_str()).context("Missing key")?;
-            let _value = args.get("value").and_then(|v| v.as_str()).context("Missing value")?;
+            let _session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id")?;
+            let _key = args
+                .get("key")
+                .and_then(|v| v.as_str())
+                .context("Missing key")?;
+            let _value = args
+                .get("value")
+                .and_then(|v| v.as_str())
+                .context("Missing value")?;
             super::manage_handlers::handle_manage_stm(state, args).await
         }
         "clear" => {
-            let _session_id = args.get("session_id").and_then(|v| v.as_str()).context("Missing session_id")?;
+            let _session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .context("Missing session_id")?;
             super::manage_handlers::handle_manage_stm(state, args).await
         }
         "handoff" => {
-            let _parent = args.get("parent_conversation_id").and_then(|v| v.as_str()).context("Missing parent_conversation_id")?;
-            let _subagent = args.get("subagent_conversation_id").and_then(|v| v.as_str()).context("Missing subagent_conversation_id")?;
-            let _summary = args.get("summary").and_then(|v| v.as_str()).context("Missing summary")?;
+            let _parent = args
+                .get("parent_conversation_id")
+                .and_then(|v| v.as_str())
+                .context("Missing parent_conversation_id")?;
+            let _subagent = args
+                .get("subagent_conversation_id")
+                .and_then(|v| v.as_str())
+                .context("Missing subagent_conversation_id")?;
+            let _summary = args
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .context("Missing summary")?;
             super::manage_handlers::handle_manage_stm(state, args).await
         }
         "set" => {
-            let _provider = args.get("provider").and_then(|v| v.as_str()).context("Missing provider")?;
+            let _provider = args
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .context("Missing provider")?;
             super::manage_handlers::handle_manage_config(state, args).await
         }
         "save_forged_assets" | "ingest_bulk" | "ingest_forge" => {
             super::vault_handlers::handle_manage_vault(state, args).await
         }
-        "cognitive_callback" => {
-            handle_cognitive_callback(state, args).await
-        }
+        "cognitive_callback" => handle_cognitive_callback(state, args).await,
         _ => anyhow::bail!("Invalid action for write tool: {}", action),
     }
 }
 
 pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("save");
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("save");
     match action {
         "save" => {
-            let title = args.get("title").and_then(|v| v.as_str()).context("Missing title")?.to_string();
-            let content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?.to_string();
-            let scope = args.get("scope").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let vault_path = args.get("vault_path").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let session_id = args.get("session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let task_id = args.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let node_type = args.get("node_type").and_then(|v| v.as_str()).map(|s| s.to_string());
-            
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .context("Missing title")?
+                .to_string();
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .context("Missing content")?
+                .to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let vault_path = args
+                .get("vault_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let session_id = args
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let task_id = args
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let node_type = args
+                .get("node_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             let mut entities = vec![];
             if let Some(arr) = args.get("entities").and_then(|v| v.as_array()) {
                 for item in arr {
@@ -125,7 +202,13 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
                 .node_type(node_type)
                 .build();
 
-            let id = crate::vault::watcher::save_episode_bidirectional(&episode, state.backend.as_ref(), &state.store, &state.ignore_list).await?;
+            let id = crate::vault::watcher::save_episode_bidirectional(
+                &episode,
+                state.backend.as_ref(),
+                &state.store,
+                &state.ignore_list,
+            )
+            .await?;
 
             let content_lower = content.to_lowercase();
             let correction_indicators = [
@@ -139,16 +222,29 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
                 "should have",
                 "didn't run",
             ];
-            let has_correction = correction_indicators.iter().any(|&ind| content_lower.contains(ind));
+            let has_correction = correction_indicators
+                .iter()
+                .any(|&ind| content_lower.contains(ind));
 
             if has_correction {
-                if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
+                if let Some(surreal_backend) =
+                    state.backend.as_any().downcast_ref::<SurrealBackend>()
+                {
                     let backend_clone = Arc::new(surreal_backend.clone());
                     let store_clone = state.store.clone();
                     let content_clone = content.clone();
                     let scope_clone = scope.clone();
+                    let source_ep_id = Some(id.clone());
                     tokio::spawn(async move {
-                        if let Err(e) = run_llm_critic(backend_clone, store_clone, content_clone, scope_clone).await {
+                        if let Err(e) = run_llm_critic(
+                            backend_clone,
+                            store_clone,
+                            content_clone,
+                            scope_clone,
+                            source_ep_id,
+                        )
+                        .await
+                        {
                             tracing::error!("Error running LLM critic: {:?}", e);
                         }
                     });
@@ -165,8 +261,15 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
             }))
         }
         "feedback" => {
-            let id = args.get("id").or_else(|| args.get("episode_id")).and_then(|v| v.as_str()).context("Missing id")?;
-            let success = args.get("success").and_then(|v| v.as_bool()).context("Missing success")?;
+            let id = args
+                .get("id")
+                .or_else(|| args.get("episode_id"))
+                .and_then(|v| v.as_str())
+                .context("Missing id")?;
+            let success = args
+                .get("success")
+                .and_then(|v| v.as_bool())
+                .context("Missing success")?;
             state.backend.record_feedback(id, success).await?;
             Ok(json!({
                 "content": [
@@ -178,13 +281,25 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
             }))
         }
         "thought" => {
-            let title = args.get("title").and_then(|v| v.as_str()).context("Missing title")?.to_string();
-            let content = args.get("content").and_then(|v| v.as_str()).context("Missing content")?.to_string();
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .context("Missing title")?
+                .to_string();
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .context("Missing content")?
+                .to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general")
+                .to_string();
 
             let thought_uuid = uuid::Uuid::new_v4().to_string();
             let relative_path = format!("wiki/thoughts/thought_{}.md", thought_uuid);
-            
+
             let thought = ThoughtNode {
                 id: None,
                 title,
@@ -197,13 +312,19 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
             let mut yaml_val = serde_json::Map::new();
             yaml_val.insert("title".to_string(), serde_json::json!(thought.title));
             yaml_val.insert("scope".to_string(), serde_json::json!(thought.scope));
-            yaml_val.insert("created_at".to_string(), serde_json::json!(thought.created_at));
+            yaml_val.insert(
+                "created_at".to_string(),
+                serde_json::json!(thought.created_at),
+            );
             let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
             let markdown = format!("---\n{}---\n{}", yaml_str.trim(), thought.content);
 
             state.store.write_file(&relative_path, &markdown)?;
 
-            let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required to save thought_node")?;
             let id = surreal_backend.save_thought_node(&thought).await?;
 
@@ -225,8 +346,13 @@ pub async fn run_llm_critic(
     store: Arc<crate::store::MarkdownStore>,
     content: String,
     scope: Option<String>,
+    source_episode_id: Option<String>,
 ) -> Result<()> {
-    let allow_cloud_fallback = match backend.db.query("SELECT allow_cloud_fallback FROM config:settings;").await {
+    let allow_cloud_fallback = match backend
+        .db
+        .query("SELECT allow_cloud_fallback FROM config:settings;")
+        .await
+    {
         Ok(mut resp) => {
             if let Ok(Some(val)) = resp.take::<Option<serde_json::Value>>(0) {
                 val.get("allow_cloud_fallback")
@@ -253,21 +379,26 @@ pub async fn run_llm_critic(
     );
 
     let llm = crate::llm::LLMClient::default();
-    let response_text = match llm.completion_explicit(
-        &*backend,
-        "local",
-        "gemini",
-        "mlx-community/Qwen3.6-35B-A3B-4bit",
-        Some(system_instruction),
-        &prompt,
-        false,
-    ).await {
+    let response_text = match llm
+        .completion_explicit(
+            &*backend,
+            "local",
+            "gemini",
+            "mlx-community/Qwen3.6-35B-A3B-4bit",
+            Some(system_instruction),
+            &prompt,
+            false,
+        )
+        .await
+    {
         Ok(res) => res,
         Err(e) => {
             if allow_cloud_fallback {
                 tracing::warn!("Local LLM critic failed, falling back to cloud: {:?}", e);
                 let config = backend.get_llm_config().await?;
-                let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+                let cloud_model = if config.cloud_provider == "gemini"
+                    && (config.model.contains("Qwen") || config.model.is_empty())
+                {
                     "gemini-1.5-flash"
                 } else {
                     &config.model
@@ -280,7 +411,8 @@ pub async fn run_llm_critic(
                     Some(system_instruction),
                     &prompt,
                     false,
-                ).await?
+                )
+                .await?
             } else {
                 return Err(e);
             }
@@ -295,17 +427,19 @@ pub async fn run_llm_critic(
         prescribed_remedy: String,
     }
 
-    let critic_wisdom: CriticWisdom = serde_json::from_str(&response_text)
-        .or_else(|_| {
-            let cleaned = crate::llm::strip_code_fences(&response_text);
-            serde_json::from_str(&cleaned)
-        })?;
+    let critic_wisdom: CriticWisdom = serde_json::from_str(&response_text).or_else(|_| {
+        let cleaned = crate::llm::strip_code_fences(&response_text);
+        serde_json::from_str(&cleaned)
+    })?;
 
     let active_scope = scope.unwrap_or_else(|| {
         std::env::var("MYTHRAX_ACTIVE_SCOPE").unwrap_or_else(|_| "general".to_string())
     });
 
-    let rule_path = crate::cognitive::synthesis::resolve_rule_path(&active_scope, &critic_wisdom.action_to_avoid);
+    let rule_path = crate::cognitive::synthesis::resolve_rule_path(
+        &active_scope,
+        &critic_wisdom.action_to_avoid,
+    );
 
     let rule_save = crate::contracts::WisdomRule {
         id: None,
@@ -317,7 +451,7 @@ pub async fn run_llm_critic(
         scope: active_scope,
         vault_path: Some(rule_path.clone()),
         embedding: None,
-        source_episodes: vec![],
+        source_episodes: source_episode_id.clone().into_iter().collect(),
         generator_name: "LlmCritic".to_string(),
         similarity: None,
         utility: Some(50.0),
@@ -325,22 +459,50 @@ pub async fn run_llm_critic(
         superseded_at: None,
         superseded_by: None,
         rule_type: None,
-    
+
         ..Default::default()
     };
 
     let markdown = crate::vault::watcher::format_wisdom_markdown(&rule_save);
     store.write_file(&rule_path, &markdown)?;
-    backend.save_wisdom_rule(&rule_save).await?;
+    let rule_id = backend.save_wisdom_rule(&rule_save).await?;
+
+    if let Some(ref src_id) = source_episode_id {
+        if let (Ok(from_thing), Ok(to_thing)) = (
+            crate::db::parse_record_id(src_id),
+            crate::db::parse_record_id(&rule_id),
+        ) {
+            let relate_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                relation: 'corrects',
+                created_at: time::now(),
+                confidence: 1.0
+            };";
+            let _ = backend
+                .db
+                .query(relate_sql)
+                .bind(("from", from_thing))
+                .bind(("to", to_thing))
+                .await;
+        }
+    }
 
     Ok(())
 }
 
 pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<Value> {
-    let callback_id = args.get("callback_id").and_then(|v| v.as_str()).context("Missing callback_id")?;
-    let result = args.get("result").and_then(|v| v.as_str()).context("Missing result")?;
+    let callback_id = args
+        .get("callback_id")
+        .and_then(|v| v.as_str())
+        .context("Missing callback_id")?;
+    let result = args
+        .get("result")
+        .and_then(|v| v.as_str())
+        .context("Missing result")?;
 
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required for cognitive_callback")?;
 
     let task_opt = surreal_backend.get_cognitive_task(callback_id).await?;
@@ -359,7 +521,13 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
         }
     }
 
-    surreal_backend.update_cognitive_task_status(callback_id, crate::db::TaskStatus::Completed, Some(result.to_string())).await?;
+    surreal_backend
+        .update_cognitive_task_status(
+            callback_id,
+            crate::db::TaskStatus::Completed,
+            Some(result.to_string()),
+        )
+        .await?;
 
     let state_opt = surreal_backend.get_pipeline_state(callback_id).await?;
     if let Some(serialized_state) = state_opt {
@@ -376,7 +544,7 @@ async fn resume_pipeline_continuation(
     result: &str,
 ) -> Result<()> {
     let state_val: serde_json::Value = serde_json::from_str(serialized_state)?;
-    
+
     if let Some(target_file) = state_val.get("target_file").and_then(|v| v.as_str()) {
         let temp_file = format!("{}.tmp", target_file);
         std::fs::write(&temp_file, result)?;
@@ -385,7 +553,7 @@ async fn resume_pipeline_continuation(
 
     let worktree_path = state_val.get("worktree_path").and_then(|v| v.as_str());
     let candidate_branch = state_val.get("candidate_branch").and_then(|v| v.as_str());
-    
+
     if let (Some(path), Some(branch)) = (worktree_path, candidate_branch) {
         let _ = tokio::process::Command::new("git")
             .args(&["checkout", "-B", branch])
@@ -402,17 +570,22 @@ async fn resume_pipeline_continuation(
     if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
         surreal_backend.delete_pipeline_state(callback_id).await?;
     }
-    
+
     Ok(())
 }
 
 pub async fn sweep_expired_tasks(state: &ApiState) -> Result<()> {
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required for sweep_expired_tasks")?;
 
     let expired = surreal_backend.get_injected_tasks_older_than_ttl().await?;
     for task in expired {
-        surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Expired, None).await?;
+        surreal_backend
+            .update_cognitive_task_status(&task.id, crate::db::TaskStatus::Expired, None)
+            .await?;
 
         let config = surreal_backend.get_llm_config().await?;
         let sys_instr = if task.system_instruction.is_empty() {
@@ -420,27 +593,40 @@ pub async fn sweep_expired_tasks(state: &ApiState) -> Result<()> {
         } else {
             Some(task.system_instruction.as_str())
         };
-        
-        let response_text = crate::llm::LLMClient::default().completion_explicit(
-            surreal_backend,
-            "local",
-            &config.cloud_provider,
-            &config.model,
-            sys_instr,
-            &task.prompt,
-            false,
-        ).await?;
 
-        surreal_backend.update_cognitive_task_status(&task.id, crate::db::TaskStatus::Expired, Some(response_text.clone())).await?;
+        let response_text = crate::llm::LLMClient::default()
+            .completion_explicit(
+                surreal_backend,
+                "local",
+                &config.cloud_provider,
+                &config.model,
+                sys_instr,
+                &task.prompt,
+                false,
+            )
+            .await?;
+
+        surreal_backend
+            .update_cognitive_task_status(
+                &task.id,
+                crate::db::TaskStatus::Expired,
+                Some(response_text.clone()),
+            )
+            .await?;
 
         let state_opt = surreal_backend.get_pipeline_state(&task.id).await?;
         if let Some(serialized_state) = state_opt {
-            if let Err(e) = resume_pipeline_continuation(state, &task.id, &serialized_state, &response_text).await {
-                tracing::error!("Failed to resume pipeline for expired task {}: {:?}", task.id, e);
+            if let Err(e) =
+                resume_pipeline_continuation(state, &task.id, &serialized_state, &response_text)
+                    .await
+            {
+                tracing::error!(
+                    "Failed to resume pipeline for expired task {}: {:?}",
+                    task.id,
+                    e
+                );
             }
         }
     }
     Ok(())
 }
-
-

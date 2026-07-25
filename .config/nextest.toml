@@ -1,2 +1,14 @@
-[profile.default]
-slow-timeout = "30s"
+[store]
+dir = "target/nextest"
+
+[profiles.default]
+slow-timeout = { period = "15s", terminate-after = 2 }
+leak-tokens = true
+
+[[profiles.default.overrides]]
+filter = 'test(test_abandoned_session_sweep) | test(test_bootstrap_e2e) | test(test_cli_e2e) | test(test_arbor_htr_loop_lifecycle)'
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[profiles.ci]
+slow-timeout = { period = "60s", terminate-after = 2 }
+retries = 1

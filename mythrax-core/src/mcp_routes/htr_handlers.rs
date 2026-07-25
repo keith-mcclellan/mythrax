@@ -1,22 +1,42 @@
-use serde_json::{json, Value};
-use anyhow::{Result, Context};
 use crate::api::ApiState;
-use crate::db::SurrealBackend;
-use crate::contracts::HypothesisNode;
 use crate::cognitive::ArborCoordinator;
+use crate::contracts::HypothesisNode;
+use crate::db::SurrealBackend;
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
 
 pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
-    let action = args.get("action").and_then(|v| v.as_str()).context("Missing action")?;
-    let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .context("Missing action")?;
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("general")
+        .to_string();
 
-    let surreal_backend = state.backend.as_any().downcast_ref::<SurrealBackend>()
+    let surreal_backend = state
+        .backend
+        .as_any()
+        .downcast_ref::<SurrealBackend>()
         .context("SurrealBackend required for HTR")?;
 
     match action {
         "init" => {
-            let hypothesis = args.get("hypothesis").and_then(|v| v.as_str()).context("Missing hypothesis")?.to_string();
-            let files_val = args.get("files").and_then(|v| v.as_array()).context("Missing files")?;
-            let files: Vec<String> = files_val.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
+            let hypothesis = args
+                .get("hypothesis")
+                .and_then(|v| v.as_str())
+                .context("Missing hypothesis")?
+                .to_string();
+            let files_val = args
+                .get("files")
+                .and_then(|v| v.as_array())
+                .context("Missing files")?;
+            let files: Vec<String> = files_val
+                .iter()
+                .map(|v| v.as_str().unwrap_or("").to_string())
+                .collect();
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
@@ -28,7 +48,8 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 scope,
                 "".to_string(),
                 files,
-            ).await;
+            )
+            .await;
             coordinator.init_root(hypothesis, None).await?;
 
             Ok(json!({
@@ -41,7 +62,12 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "ideate" => {
-            let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
+            let node = args
+                .get("node_id")
+                .or_else(|| args.get("node"))
+                .and_then(|v| v.as_str())
+                .context("Missing node")?
+                .to_string();
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
@@ -53,7 +79,8 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 scope,
                 "".to_string(),
                 vec![],
-            ).await;
+            )
+            .await;
             coordinator.trigger_ideation(&node).await?;
 
             Ok(json!({
@@ -66,8 +93,17 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "execute" => {
-            let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
-            let test_command = args.get("test_command").and_then(|v| v.as_str()).context("Missing test_command")?.to_string();
+            let node = args
+                .get("node_id")
+                .or_else(|| args.get("node"))
+                .and_then(|v| v.as_str())
+                .context("Missing node")?
+                .to_string();
+            let test_command = args
+                .get("test_command")
+                .and_then(|v| v.as_str())
+                .context("Missing test_command")?
+                .to_string();
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
@@ -79,7 +115,8 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 scope,
                 test_command,
                 vec![],
-            ).await;
+            )
+            .await;
             coordinator.execute_node(&node).await?;
 
             Ok(json!({
@@ -92,7 +129,12 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "backprop" => {
-            let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
+            let node = args
+                .get("node_id")
+                .or_else(|| args.get("node"))
+                .and_then(|v| v.as_str())
+                .context("Missing node")?
+                .to_string();
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
@@ -104,7 +146,8 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 scope,
                 "".to_string(),
                 vec![],
-            ).await;
+            )
+            .await;
             coordinator.backpropagate_insights(&node).await?;
 
             Ok(json!({
@@ -117,7 +160,12 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "merge" => {
-            let node = args.get("node_id").or_else(|| args.get("node")).and_then(|v| v.as_str()).context("Missing node")?.to_string();
+            let node = args
+                .get("node_id")
+                .or_else(|| args.get("node"))
+                .and_then(|v| v.as_str())
+                .context("Missing node")?
+                .to_string();
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
@@ -129,7 +177,8 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 scope,
                 "".to_string(),
                 vec![],
-            ).await;
+            )
+            .await;
             coordinator.decide_admission(&node).await?;
 
             Ok(json!({
@@ -142,12 +191,29 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "run" => {
-            let hypothesis = args.get("hypothesis").and_then(|v| v.as_str()).context("Missing hypothesis")?.to_string();
-            let files_val = args.get("files").and_then(|v| v.as_array()).context("Missing files")?;
-            let files: Vec<String> = files_val.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
-            let test_command = args.get("test_command").and_then(|v| v.as_str()).context("Missing test_command")?.to_string();
+            let hypothesis = args
+                .get("hypothesis")
+                .and_then(|v| v.as_str())
+                .context("Missing hypothesis")?
+                .to_string();
+            let files_val = args
+                .get("files")
+                .and_then(|v| v.as_array())
+                .context("Missing files")?;
+            let files: Vec<String> = files_val
+                .iter()
+                .map(|v| v.as_str().unwrap_or("").to_string())
+                .collect();
+            let test_command = args
+                .get("test_command")
+                .and_then(|v| v.as_str())
+                .context("Missing test_command")?
+                .to_string();
             let max_steps = args.get("max_steps").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-            let max_time_secs = args.get("max_time_secs").and_then(|v| v.as_u64()).unwrap_or(14400);
+            let max_time_secs = args
+                .get("max_time_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(14400);
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
@@ -159,45 +225,56 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 scope.clone(),
                 test_command,
                 files,
-            ).await;
-            
+            )
+            .await;
+
             coordinator.init_root(hypothesis, None).await?;
-            
+
             let mut step = 0;
             let mut current_node = "ROOT".to_string();
-            let mut status_msg = "HTR run loop completed without finding a candidate score >= 95.0.".to_string();
+            let mut status_msg =
+                "HTR run loop completed without finding a candidate score >= 95.0.".to_string();
             let start_time = std::time::Instant::now();
-            
+
             loop {
                 if start_time.elapsed().as_secs() >= max_time_secs {
-                    status_msg = format!("HTR loop timed out after the maximum configured duration of {} seconds.", max_time_secs);
+                    status_msg = format!(
+                        "HTR loop timed out after the maximum configured duration of {} seconds.",
+                        max_time_secs
+                    );
                     break;
                 }
                 if step >= max_steps {
                     break;
                 }
                 coordinator.trigger_ideation(&current_node).await?;
-                
+
                 let next_batch = coordinator.select_next_batch(1).await?;
                 if next_batch.is_empty() {
                     break;
                 }
-                
+
                 let selected_node = &next_batch[0];
                 coordinator.execute_node(selected_node).await?;
                 coordinator.backpropagate_insights(selected_node).await?;
-                
-                let node_val: Option<HypothesisNode> = surreal_backend.db.select(("hypothesis_node", selected_node.as_str())).await?;
+
+                let node_val: Option<HypothesisNode> = surreal_backend
+                    .db
+                    .select(("hypothesis_node", selected_node.as_str()))
+                    .await?;
                 if let Some(node_node) = node_val {
                     if let Some(score) = node_node.score {
                         if score >= 95.0 {
                             coordinator.decide_admission(selected_node).await?;
-                            status_msg = format!("HTR run loop completed successfully. Node {} merged with Score: {}.", selected_node, score);
+                            status_msg = format!(
+                                "HTR run loop completed successfully. Node {} merged with Score: {}.",
+                                selected_node, score
+                            );
                             break;
                         }
                     }
                 }
-                
+
                 current_node = selected_node.clone();
                 step += 1;
             }
@@ -222,7 +299,8 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 scope,
                 "".to_string(),
                 vec![],
-            ).await;
+            )
+            .await;
             coordinator.prune_failed_hypotheses().await?;
 
             Ok(json!({

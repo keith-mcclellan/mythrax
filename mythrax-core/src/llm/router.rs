@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
-use std::time::{Duration, Instant};
-use std::process::Command;
 use crate::contracts::{ModelTier, TaskArchetype, TaskProfile};
 use crate::db::StorageBackend;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::process::Command;
+use std::sync::{OnceLock, RwLock};
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
 
 /// Global GPU reservation lock to coalesce model loading/routing
@@ -29,7 +29,7 @@ static SWAP_CACHE: OnceLock<RwLock<Option<SwapCache>>> = OnceLock::new();
 /// Reads macOS swap usage via sysctl vm.swapusage
 pub fn get_swap_usage() -> Result<(f64, f64)> {
     let cache_lock = SWAP_CACHE.get_or_init(|| RwLock::new(None));
-    
+
     if let Ok(read_guard) = cache_lock.read() {
         if let Some(ref cache) = *read_guard {
             if cache.last_checked.elapsed() < Duration::from_secs(5) {
@@ -114,13 +114,23 @@ pub async fn route_task(db: &dyn StorageBackend, profile: &TaskProfile) -> Model
     if std::env::var("MYTHRAX_DISABLE_SWAP_ROUTING").is_err() {
         if let Ok((_total_swap, used_swap)) = get_swap_usage() {
             if used_swap >= 4000.0 {
-                let has_cloud_key = std::env::var("GEMINI_API_KEY").map(|s| !s.trim().is_empty()).unwrap_or(false)
-                    || std::env::var("ANTHROPIC_API_KEY").map(|s| !s.trim().is_empty()).unwrap_or(false);
+                let has_cloud_key = std::env::var("GEMINI_API_KEY")
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+                    || std::env::var("ANTHROPIC_API_KEY")
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false);
                 if has_cloud_key {
-                    tracing::warn!("Swap usage used is {:.2}MB (>= 4000MB), routing to Cloud under memory pressure", used_swap);
+                    tracing::warn!(
+                        "Swap usage used is {:.2}MB (>= 4000MB), routing to Cloud under memory pressure",
+                        used_swap
+                    );
                     return ModelTier::Cloud;
                 } else {
-                    tracing::info!("Swap usage used is {:.2}MB, but no Cloud API keys configured. Staying local.", used_swap);
+                    tracing::info!(
+                        "Swap usage used is {:.2}MB, but no Cloud API keys configured. Staying local.",
+                        used_swap
+                    );
                 }
             }
         }

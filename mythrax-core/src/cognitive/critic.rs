@@ -1,6 +1,6 @@
-use crate::db::StorageBackend;
 use crate::cognitive::arbor::ArborLlmClient;
-use anyhow::{Result, Context};
+use crate::db::StorageBackend;
+use anyhow::{Context, Result};
 
 pub struct ArborCritic;
 
@@ -32,9 +32,11 @@ impl ArborCritic {
         );
 
         let response_str = llm_client.evaluate_run(db, &prompt).await?;
-        let output: CriticOutput = serde_json::from_str(&response_str)
-            .context(format!("Failed to parse CriticOutput from LLM response: {}", response_str))?;
-        
+        let output: CriticOutput = serde_json::from_str(&response_str).context(format!(
+            "Failed to parse CriticOutput from LLM response: {}",
+            response_str
+        ))?;
+
         Ok(output)
     }
 }

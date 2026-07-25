@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use anyhow::{Result, anyhow};
 use crate::db::StorageBackend;
+use anyhow::{Result, anyhow};
+use std::path::{Path, PathBuf};
+use tokio::process::Command;
 
 fn get_jitter() -> u64 {
     use std::time::SystemTime;
@@ -12,7 +12,7 @@ fn get_jitter() -> u64 {
     }
 }
 
-fn run_git_command_with_retry(args: &[&str], dir: &Path) -> Result<std::process::ExitStatus> {
+async fn run_git_command_with_retry(args: &[&str], dir: &Path) -> Result<std::process::ExitStatus> {
     use std::time::Duration;
     let mut attempts = 0;
     let max_attempts = 5;
@@ -20,10 +20,7 @@ fn run_git_command_with_retry(args: &[&str], dir: &Path) -> Result<std::process:
 
     loop {
         attempts += 1;
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .status();
+        let status = Command::new("git").args(args).current_dir(dir).status().await;
 
         match status {
             Ok(s) if s.success() => return Ok(s),
@@ -40,7 +37,7 @@ fn run_git_command_with_retry(args: &[&str], dir: &Path) -> Result<std::process:
         }
 
         let sleep_dur = delay + Duration::from_millis(get_jitter());
-        std::thread::sleep(sleep_dur);
+        tokio::time::sleep(sleep_dur).await;
         delay *= 2;
     }
 }
@@ -67,29 +64,30 @@ impl ArborExecutor {
 
         // Ensure clean state: remove if already exists
         if worktree_path.exists() {
-            let _ = self.cleanup_worktree(node_id);
+            let _ = self.cleanup_worktree(node_id).await;
         }
 
         let branch_name = format!("htr_branch_{}", node_id);
-        
+
         // Check if branch exists
         let branch_exists = Command::new("git")
-            .args(["show-ref", "--verify", &format!("refs/heads/{}", branch_name)])
+            .args([
+                "show-ref",
+                "--verify",
+                &format!("refs/heads/{}", branch_name),
+            ])
             .current_dir(&self.repo_path)
             .status()
+            .await
             .map(|s| s.success())
             .unwrap_or(false);
 
         let status = if branch_exists {
             run_git_command_with_retry(
-                &[
-                    "worktree",
-                    "add",
-                    &worktree_dir,
-                    &branch_name,
-                ],
+                &["worktree", "add", &worktree_dir, &branch_name],
                 &self.repo_path,
-            )?
+            )
+            .await?
         } else {
             let res = run_git_command_with_retry(
                 &[
@@ -101,27 +99,27 @@ impl ArborExecutor {
                     commit_sha,
                 ],
                 &self.repo_path,
-            );
-            
+            )
+            .await;
+
             if res.is_err() || !res.as_ref().unwrap().success() {
                 // Fallback: try checking it out as a detached head
                 run_git_command_with_retry(
-                    &[
-                        "worktree",
-                        "add",
-                        "--detach",
-                        &worktree_dir,
-                        commit_sha,
-                    ],
+                    &["worktree", "add", "--detach", &worktree_dir, commit_sha],
                     &self.repo_path,
-                )?
+                )
+                .await?
             } else {
                 res?
             }
         };
 
         if !status.success() {
-            return Err(anyhow!("Failed to add git worktree at {} for branch/commit {}", worktree_dir, commit_sha));
+            return Err(anyhow!(
+                "Failed to add git worktree at {} for branch/commit {}",
+                worktree_dir,
+                commit_sha
+            ));
         }
 
         // Apply code changes if present
@@ -130,14 +128,15 @@ impl ArborExecutor {
             for (rel_path, content) in changes {
                 let file_path = worktree_path.join(rel_path);
                 if let Some(parent) = file_path.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    tokio::fs::create_dir_all(parent).await?;
                 }
-                std::fs::write(&file_path, content)?;
-                
+                tokio::fs::write(&file_path, content).await?;
+
                 let add_status = Command::new("git")
                     .args(["add", rel_path])
                     .current_dir(&worktree_path)
-                    .status();
+                    .status()
+                    .await;
                 if let Ok(status) = add_status {
                     if status.success() {
                         has_changes = true;
@@ -146,13 +145,22 @@ impl ArborExecutor {
             }
             if has_changes {
                 let _ = Command::new("git")
-                    .args(["commit", "-m", &format!("HTR Auto-Commit for node {}", node_id)])
+                    .args([
+                        "commit",
+                        "-m",
+                        &format!("HTR Auto-Commit for node {}", node_id),
+                    ])
                     .current_dir(&worktree_path)
-                    .status();
+                    .status()
+                    .await;
             }
         }
 
-        let has_shell_operators = test_command.contains('&') || test_command.contains('|') || test_command.contains('>') || test_command.contains('<') || test_command.contains(';');
+        let has_shell_operators = test_command.contains('&')
+            || test_command.contains('|')
+            || test_command.contains('>')
+            || test_command.contains('<')
+            || test_command.contains(';');
 
         let mut cmd = if has_shell_operators {
             let mut c = Command::new("sh");
@@ -210,7 +218,7 @@ impl ArborExecutor {
         cmd.env("MYTHRAX_API_PORT", api_port.to_string());
         cmd.env("MYTHRAX_DB_PORT", db_port.to_string());
 
-        let output = cmd.output()?;
+        let output = cmd.output().await?;
 
         let success = output.status.success();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -218,7 +226,9 @@ impl ArborExecutor {
         let mut combined_logs = format!("{}\n{}", stdout, stderr);
 
         if !success {
-            if let Ok(Some((explanation, remedy))) = backend.diagnose_error_internal(&stderr, &stdout).await {
+            if let Ok(Some((explanation, remedy))) =
+                backend.diagnose_error_internal(&stderr, &stdout).await
+            {
                 combined_logs.push_str(&format!(
                     "\n---\n[MYTHRAX AUTO-DIAGNOSTIC]: A matching failure was resolved in the database.\n- Causal Explanation: {}\n- Prescribed Remedy: {}\n---\n",
                     explanation, remedy
@@ -227,33 +237,34 @@ impl ArborExecutor {
         }
 
         // Clean up
-        self.cleanup_worktree(node_id)?;
+        self.cleanup_worktree(node_id).await?;
 
         Ok((success, combined_logs))
     }
 
-    pub fn cleanup_worktree(&self, node_id: &str) -> Result<()> {
+    pub async fn cleanup_worktree(&self, node_id: &str) -> Result<()> {
         let worktree_dir = format!("/tmp/worktree-node-{}", node_id);
 
         // Remove worktree: git worktree remove --force /tmp/worktree-node-<id>
         let _ = run_git_command_with_retry(
             &["worktree", "remove", "--force", &worktree_dir],
             &self.repo_path,
-        );
+        )
+        .await;
 
         // Do NOT delete the branch pointers htr_branch_<node_uuid> on cleanup; preserve them.
 
         // Ensure folder is deleted
         let path = Path::new(&worktree_dir);
         if path.exists() {
-            let _ = std::fs::remove_dir_all(path);
+            let _ = tokio::fs::remove_dir_all(path).await;
         }
 
         // Clean up cargo target directory if exists
         let target_dir = format!("target/htr_{}", node_id);
         let target_path = Path::new(&target_dir);
         if target_path.exists() {
-            let _ = std::fs::remove_dir_all(target_path);
+            let _ = tokio::fs::remove_dir_all(target_path).await;
         }
 
         Ok(())

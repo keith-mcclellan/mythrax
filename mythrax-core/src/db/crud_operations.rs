@@ -1,34 +1,87 @@
-use crate::db::backend::{
-    SurrealBackend, StorageBackend, format_record_id, record_key_to_string, unescape_id_part, parse_record_id,
-    WikiNodeRaw, WisdomRaw, HandoffRaw, EpisodeRaw, ScoredEdge, PROFILE_CACHE,
-    load_api_key, save_api_key, get_user_prefix,
-};
 use crate::contracts::{
-    EpisodeSave, WisdomRule, LlmConfigResponse, LlmConfigRequest, Episode, HandoffSave, WikiNode,
-    GetMemoryNodesResponse,
+    Episode, EpisodeSave, GetMemoryNodesResponse, HandoffSave, LlmConfigRequest, LlmConfigResponse,
+    WikiNode, WisdomRule,
+};
+use crate::db::backend::{
+    EpisodeRaw, HandoffRaw, PROFILE_CACHE, ScoredEdge, StorageBackend, SurrealBackend, WikiNodeRaw,
+    WisdomRaw, format_record_id, get_user_prefix, load_api_key, parse_record_id,
+    record_key_to_string, save_api_key, unescape_id_part,
 };
 use crate::db::schema::INIT_SCHEMA;
+use anyhow::{Context, Result};
 use surrealdb_types::SurrealValue;
-use anyhow::{Result, Context};
 use uuid::Uuid;
-
 
 impl SurrealBackend {
     pub async fn init_db(&self) -> Result<()> {
         if self.is_client_mode() {
             return Ok(());
         }
-        self.db.query(INIT_SCHEMA).await?
-            .check().context("Applying schemas failed")?;
+        self.db
+            .query(INIT_SCHEMA)
+            .await?
+            .check()
+            .context("Applying schemas failed")?;
+
+        // Purge ephemeral pipeline cluster state from previous terminated runs
+        let _ = self.db.query("DELETE pipeline_cluster;").await;
 
         // Migration: Backfill legacy episodes where node_type is None
-        let migration_sql = "UPDATE episode SET node_type = 'agent_thought' WHERE node_type = NONE;";
-        let _ = self.db.query(migration_sql).await?
-            .check().context("Failed to run legacy episode node_type migration")?;
+        let migration_sql =
+            "UPDATE episode SET node_type = 'agent_thought' WHERE node_type = NONE;";
+        let _ = self
+            .db
+            .query(migration_sql)
+            .await?
+            .check()
+            .context("Failed to run legacy episode node_type migration")?;
+
+        let idf_check = "SELECT count() AS total FROM idf_index GROUP ALL;";
+        if let Ok(mut res) = self.db.query(idf_check).await {
+            let count_val: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
+            let mut idf_count = 0;
+            if let Some(arr) = count_val {
+                if let Some(first) = arr.first() {
+                    if let Some(n) = first.get("total").and_then(|v| v.as_u64()) {
+                        idf_count = n as usize;
+                    }
+                }
+            }
+            if idf_count == 0 {
+                tracing::info!("IDF index is empty. Backfilling...");
+                if let Err(e) = self.backfill_idf_index_db().await {
+                    tracing::error!("Failed to backfill IDF index: {:?}", e);
+                }
+            }
+        }
+
+        let hash_check = "SELECT count() AS total FROM episode WHERE content_hash IS NONE GROUP ALL;";
+        if let Ok(mut res) = self.db.query(hash_check).await {
+            let count_val: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
+            let mut missing_count = 0;
+            if let Some(arr) = count_val {
+                if let Some(first) = arr.first() {
+                    if let Some(n) = first.get("total").and_then(|v| v.as_u64()) {
+                        missing_count = n as usize;
+                    }
+                }
+            }
+            if missing_count > 0 {
+                tracing::info!("Found {} episodes missing content_hash. Backfilling...", missing_count);
+                if let Err(e) = self.backfill_content_hashes_db().await {
+                    tracing::error!("Failed to backfill content hashes: {:?}", e);
+                }
+            }
+        }
 
         // Initialize default configuration if config:settings does not exist
         let check_sql = "SELECT * FROM config:settings;";
-        let mut response = self.db.query(check_sql).await?.check().context("Check config failed")?;
+        let mut response = self
+            .db
+            .query(check_sql)
+            .await?
+            .check()
+            .context("Check config failed")?;
         let config_opt: Option<LlmConfigResponse> = response.take(0)?;
         if config_opt.is_none() {
             let insert_sql = "
@@ -40,7 +93,11 @@ impl SurrealBackend {
                     expires_at: NONE
                 };
             ";
-            self.db.query(insert_sql).await?.check().context("Insert default config failed")?;
+            self.db
+                .query(insert_sql)
+                .await?
+                .check()
+                .context("Insert default config failed")?;
         }
 
         if let Some(ref path) = self.db_path {
@@ -62,14 +119,21 @@ impl SurrealBackend {
             }
             if tuned_path.exists() {
                 if let Ok(content) = std::fs::read_to_string(tuned_path) {
-                    if let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content) {
+                    if let Ok(map) = serde_json::from_str::<
+                        std::collections::HashMap<String, serde_json::Value>,
+                    >(&content)
+                    {
                         for (k, v) in map {
                             let val_str = match v {
                                 serde_json::Value::String(s) => s,
                                 other => other.to_string(),
                             };
                             if let Err(e) = self.save_profile_key(&k, &val_str).await {
-                                tracing::warn!("Failed to save profile key {} during initialization: {:?}", k, e);
+                                tracing::warn!(
+                                    "Failed to save profile key {} during initialization: {:?}",
+                                    k,
+                                    e
+                                );
                             }
                         }
                     }
@@ -81,6 +145,7 @@ impl SurrealBackend {
     }
 
     pub async fn save_episode_db(&self, episode: &EpisodeSave) -> Result<String> {
+        crate::daemon::update_last_activity();
         if self.is_client_mode() {
             #[derive(serde::Deserialize)]
             struct SaveResponse {
@@ -95,9 +160,21 @@ impl SurrealBackend {
         let mut ep_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
 
+        let content_hash = episode.content_hash.clone().unwrap_or_else(|| {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(episode.content.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
+
         if let Some(ref vp) = episode.vault_path {
-            let check_query = "SELECT VALUE id FROM episode WHERE vault_path = $vault_path LIMIT 1;";
-            let mut response = self.db.query(check_query).bind(("vault_path", vp.as_str())).await?;
+            let check_query =
+                "SELECT VALUE id FROM episode WHERE vault_path = $vault_path LIMIT 1;";
+            let mut response = self
+                .db
+                .query(check_query)
+                .bind(("vault_path", vp.as_str()))
+                .await?;
             let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
             if let Some(thing) = ids {
                 ep_uuid = match &thing.key {
@@ -105,6 +182,19 @@ impl SurrealBackend {
                     other => unescape_id_part(&record_key_to_string(other)),
                 };
                 is_update = true;
+            }
+        }
+
+        if !is_update {
+            let check_query = "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
+            let mut response = self.db.query(check_query).bind(("content_hash", content_hash.as_str())).await?;
+            let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
+            if let Some(thing) = ids {
+                let id = match &thing.key {
+                    surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                    other => unescape_id_part(&record_key_to_string(other)),
+                };
+                return Ok(format!("episode:{}", id));
             }
         }
 
@@ -130,8 +220,12 @@ impl SurrealBackend {
                     created_at: type::datetime($created_at),
                     importance: $importance,
                     temporal_range_start: $temporal_range_start,
-                    temporal_range_end: $temporal_range_end
+                    temporal_range_end: $temporal_range_end,
+                    content_hash: $content_hash
                 };
+                IF $processed_in_dream = true THEN
+                    UPDATE $ep MERGE { processed_in_dream: true };
+                END;
                 DELETE FROM mentions WHERE in = $ep;
                 COMMIT TRANSACTION;
             "
@@ -140,45 +234,56 @@ impl SurrealBackend {
                 BEGIN TRANSACTION;
                 LET $ep = type::record('episode', $ep_uuid);
                 LET $met = type::record('metrics', $metrics_uuid);
-                
-                CREATE $ep CONTENT {
-                    title: $title,
-                    content: $content,
-                    scope: $target_scope,
-                    vault_path: $vault_path,
-                    processed_in_dream: false,
-                    embedding: $embedding,
-                    utility: $utility,
-                    last_retrieved_at: $last_retrieved_at,
-                    archived: false,
-                    discovery_tokens: $discovery_tokens,
-                    facts: $facts,
-                    concepts: $concepts,
-                    files_read: $files_read,
-                    files_modified: $files_modified,
-                    session_id: $session_id,
-                    word_count: $word_count,
-                    node_type: $node_type,
-                    created_at: type::datetime($created_at),
-                    importance: $importance,
-                    temporal_range_start: $temporal_range_start,
-                    temporal_range_end: $temporal_range_end
-                };
-                
+
+                CREATE $ep SET 
+                    title = $title,
+                    content = $content,
+                    scope = $target_scope,
+                    vault_path = $vault_path,
+                    processed_in_dream = false,
+                    embedding = $embedding,
+                    utility = $utility,
+                    last_retrieved_at = $last_retrieved_at,
+                    archived = false,
+                    discovery_tokens = $discovery_tokens,
+                    facts = $facts,
+                    concepts = $concepts,
+                    files_read = $files_read,
+                    files_modified = $files_modified,
+                    session_id = $session_id,
+                    word_count = $word_count,
+                    node_type = $node_type,
+                    created_at = type::datetime($created_at),
+                    importance = $importance,
+                    temporal_range_start = $temporal_range_start,
+                    temporal_range_end = $temporal_range_end,
+                    source_episode = $source_episode,
+                    confidence = $confidence,
+                    outcome = $outcome,
+                    causal_explanation = $causal_explanation,
+                    parent_task_id = $parent_task_id,
+                    content_hash = $content_hash;
+
                 CREATE $met CONTENT {
                     target_id: $ep,
                     utility_score: 50.0,
                     access_count: 0
                 };
-                
+
                 COMMIT TRANSACTION;
             "
         };
 
         let metrics_uuid = Uuid::new_v4().to_string();
-        let scope_val = episode.scope.clone().unwrap_or_else(|| "general".to_string());
+        let scope_val = episode
+            .scope
+            .clone()
+            .unwrap_or_else(|| "general".to_string());
         let vp_val = episode.vault_path.clone().unwrap_or_default();
-        let node_type_val = episode.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
+        let node_type_val = episode
+            .node_type
+            .clone()
+            .unwrap_or_else(|| "agent_thought".to_string());
 
         let embedding_val = if self.embedder.is_some() {
             let text_to_embed = format!("{}: {}", episode.title, episode.content);
@@ -196,9 +301,14 @@ impl SurrealBackend {
         let now_str = chrono::Utc::now().to_rfc3339();
         let utility_init = 50.0f32;
         let word_count = crate::retrieval::bm25::tokenize(&episode.content).len() as u32;
-        let created_at_val = episode.created_at.clone().unwrap_or_else(|| now_str.clone());
+        let created_at_val = episode
+            .created_at
+            .clone()
+            .unwrap_or_else(|| now_str.clone());
 
-        let response = self.db.query(query_str)
+        let response = self
+            .db
+            .query(query_str)
             .bind(("ep_uuid", ep_uuid.as_str()))
             .bind(("metrics_uuid", metrics_uuid.as_str()))
             .bind(("title", episode.title.as_str()))
@@ -212,7 +322,10 @@ impl SurrealBackend {
             .bind(("facts", episode.facts.clone().unwrap_or_default()))
             .bind(("concepts", episode.concepts.clone().unwrap_or_default()))
             .bind(("files_read", episode.files_read.clone().unwrap_or_default()))
-            .bind(("files_modified", episode.files_modified.clone().unwrap_or_default()))
+            .bind((
+                "files_modified",
+                episode.files_modified.clone().unwrap_or_default(),
+            ))
             .bind(("session_id", episode.session_id.clone()))
             .bind(("word_count", word_count))
             .bind(("node_type", node_type_val))
@@ -220,10 +333,18 @@ impl SurrealBackend {
             .bind(("importance", episode.importance.unwrap_or(5.0)))
             .bind(("temporal_range_start", episode.temporal_range_start))
             .bind(("temporal_range_end", episode.temporal_range_end))
+            .bind(("content_hash", content_hash.clone()))
+            .bind(("source_episode", episode.source_episode.clone()))
+            .bind(("confidence", episode.confidence.unwrap_or(1.0)))
+            .bind(("outcome", episode.outcome.clone()))
+            .bind(("causal_explanation", episode.causal_explanation.clone()))
+            .bind(("parent_task_id", episode.parent_task_id.clone()))
             .await?;
 
         tracing::debug!("save_episode query response: {:?}", response);
-        response.check().context("SurrealDB save_episode transaction failed")?;
+        response
+            .check()
+            .context("SurrealDB save_episode transaction failed")?;
 
         for entity in &episode.entities {
             let entity_query = "
@@ -235,7 +356,7 @@ impl SurrealBackend {
                     summary = $summary,
                     labels = $labels,
                     scope = $target_scope;
-                
+
                 -- Relate episode to entity
                 LET $ep = type::record('episode', $ep_uuid);
                 RELATE $ep -> mentions -> $ent_id CONTENT {
@@ -243,7 +364,9 @@ impl SurrealBackend {
                 };
                 COMMIT TRANSACTION;
             ";
-            let _ = self.db.query(entity_query)
+            let _ = self
+                .db
+                .query(entity_query)
                 .bind(("name", entity.name.as_str()))
                 .bind(("entity_type", entity.entity_type.as_str()))
                 .bind(("summary", entity.summary.as_str()))
@@ -251,7 +374,8 @@ impl SurrealBackend {
                 .bind(("target_scope", scope_val.as_str()))
                 .bind(("ep_uuid", ep_uuid.as_str()))
                 .await?
-                .check().context("Entity relation query failed")?;
+                .check()
+                .context("Entity relation query failed")?;
         }
 
         let new_ep_id = format!("episode:{}", ep_uuid);
@@ -271,13 +395,13 @@ impl SurrealBackend {
                     let to_thing = parse_record_id(&new_ep_id);
                     if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
                         let relate_query = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
-                        if let Err(e) = self.db.query(relate_query)
+                        let rel_res = self
+                            .db
+                            .query(relate_query)
                             .bind(("from", from))
                             .bind(("to", to))
-                            .await
-                        {
-                            tracing::warn!("Failed to relate temporal episodes: {:?}", e);
-                        }
+                            .await;
+                        println!("RELATE RESULT: {:?}", rel_res);
                     }
                 }
             }
@@ -289,7 +413,14 @@ impl SurrealBackend {
         }
 
         // Update in-memory term counts cache for search IDF acceleration
-        self.record_episode_tokens_for_cache(&scope_val, &episode.content).await;
+        self.record_episode_tokens_for_cache(&scope_val, &episode.content)
+            .await;
+
+        if !is_update {
+            if let Err(e) = self.update_idf_index_db(&new_ep_id, false).await {
+                println!("IDF ERROR: {:?}", e);
+            }
+        }
 
         Ok(new_ep_id)
     }
@@ -318,7 +449,8 @@ impl SurrealBackend {
 
         if !missing_texts.is_empty() && self.embedder.is_some() {
             if let Ok(generated) = self.embed_batch(&missing_texts).await {
-                for (midx, generated_emb) in missing_indices.into_iter().zip(generated.into_iter()) {
+                for (midx, generated_emb) in missing_indices.into_iter().zip(generated.into_iter())
+                {
                     let text = format!("{}: {}", episodes[midx].title, episodes[midx].content);
                     crate::embeddings::cache_embedding(text, generated_emb.clone());
                     embeddings[midx] = Some(generated_emb);
@@ -327,13 +459,16 @@ impl SurrealBackend {
         }
 
         // 2. Local session tracking to link followed_by temporal relationships in-memory/STM
-        let mut local_last_eps: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut local_last_eps: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         let mut relations = Vec::new();
 
         // 3. Map episodes to JSON objects for SurrealQL
         let mut mapped_json_array: Vec<serde_json::Value> = Vec::with_capacity(episodes.len());
+        let mut inserted_ids: Vec<String> = Vec::with_capacity(episodes.len());
         for (i, ep) in episodes.iter().enumerate() {
             let id_str = Uuid::new_v4().to_string();
+            inserted_ids.push(id_str.clone());
             let metrics_id_str = Uuid::new_v4().to_string();
             let embedding = embeddings.get(i).cloned().flatten();
             let word_count = crate::retrieval::bm25::tokenize(&ep.content).len() as u32;
@@ -350,7 +485,10 @@ impl SurrealBackend {
                 let map_key = format!("{}:{}", user_prefix, tracking_key);
 
                 if let Some(last_ep_id) = local_last_eps.get(&map_key).cloned() {
-                    let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(&last_ep_id).to_string();
+                    let last_uuid = last_ep_id
+                        .strip_prefix("episode:")
+                        .unwrap_or(&last_ep_id)
+                        .to_string();
                     relations.push(serde_json::json!({
                         "from_str": last_uuid,
                         "to_str": id_str.clone(),
@@ -359,7 +497,10 @@ impl SurrealBackend {
                     // Bounded check of STM database to bridge sequential batches
                     if let Ok(stm_map) = self.get_stm(user_prefix, Some(&tracking_key)).await {
                         if let Some(last_ep_id) = stm_map.get(&tracking_key) {
-                            let last_uuid = last_ep_id.strip_prefix("episode:").unwrap_or(last_ep_id).to_string();
+                            let last_uuid = last_ep_id
+                                .strip_prefix("episode:")
+                                .unwrap_or(last_ep_id)
+                                .to_string();
                             relations.push(serde_json::json!({
                                 "from_str": last_uuid,
                                 "to_str": id_str.clone(),
@@ -370,7 +511,17 @@ impl SurrealBackend {
                 local_last_eps.insert(map_key, format!("episode:{}", id_str));
             }
 
-            let created_at_val = ep.created_at.clone().unwrap_or_else(|| last_retrieved_at.clone());
+            let created_at_val = ep
+                .created_at
+                .clone()
+                .unwrap_or_else(|| last_retrieved_at.clone());
+
+            let content_hash = ep.content_hash.clone().unwrap_or_else(|| {
+                use sha2::Digest;
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(ep.content.as_bytes());
+                format!("{:x}", hasher.finalize())
+            });
 
             let mut ep_json = serde_json::json!({
                 "id_str": id_str,
@@ -382,7 +533,8 @@ impl SurrealBackend {
                 "utility": 50.0f32,
                 "last_retrieved_at": last_retrieved_at,
                 "word_count": word_count,
-                "created_at": created_at_val
+                "created_at": created_at_val,
+                "content_hash": content_hash
             });
 
             let ep_obj = ep_json.as_object_mut().unwrap();
@@ -392,7 +544,10 @@ impl SurrealBackend {
             if let Some(ref sess) = ep.session_id {
                 ep_obj.insert("session_id".to_string(), serde_json::json!(sess));
             }
-            let node_type_val = ep.node_type.clone().unwrap_or_else(|| "agent_thought".to_string());
+            let node_type_val = ep
+                .node_type
+                .clone()
+                .unwrap_or_else(|| "agent_thought".to_string());
             ep_obj.insert("node_type".to_string(), serde_json::json!(node_type_val));
 
             mapped_json_array.push(ep_json);
@@ -411,7 +566,7 @@ impl SurrealBackend {
             FOR $ep IN $episodes {
                 LET $ep_id = type::record('episode', $ep.id_str);
                 LET $met_id = type::record('metrics', $ep.metrics_id_str);
-                
+
                 CREATE $ep_id CONTENT {
                     title: $ep.title,
                     content: $ep.content,
@@ -425,9 +580,10 @@ impl SurrealBackend {
                     session_id: $ep.session_id ?? none,
                     word_count: $ep.word_count,
                     node_type: $ep.node_type,
-                    created_at: type::datetime($ep.created_at)
+                    created_at: type::datetime($ep.created_at),
+                    content_hash: $ep.content_hash
                 };
-                
+
                 CREATE $met_id CONTENT {
                     target_id: $ep_id,
                     utility_score: 50.0,
@@ -437,8 +593,17 @@ impl SurrealBackend {
             COMMIT TRANSACTION;
         "#;
 
-        let res = self.db.query(query).bind(("episodes", mapped_json_array)).await?;
-        res.check().context("SurrealDB save_episodes_batch transaction failed")?;
+        let res = self
+            .db
+            .query(query)
+            .bind(("episodes", mapped_json_array))
+            .await?;
+        res.check()
+            .context("SurrealDB save_episodes_batch transaction failed")?;
+
+        for id_str in inserted_ids {
+            let _ = self.update_idf_index_db(&id_str, false).await;
+        }
 
         // 6. Relate temporal followed_by connections
         for rel in relations {
@@ -449,8 +614,11 @@ impl SurrealBackend {
             let to_thing = parse_record_id(&format!("episode:{}", to_uuid));
 
             if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
-                let relate_query = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
-                if let Err(e) = self.db.query(relate_query)
+                let relate_query =
+                    "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
+                if let Err(e) = self
+                    .db
+                    .query(relate_query)
                     .bind(("from", from))
                     .bind(("to", to))
                     .await
@@ -466,7 +634,12 @@ impl SurrealBackend {
                 let user_prefix = &map_key[..colon_idx];
                 let tracking_key = &map_key[colon_idx + 1..];
                 if let Err(e) = self.save_stm(user_prefix, tracking_key, &last_ep_id).await {
-                    tracing::warn!("Failed to save STM for {} / {}: {:?}", user_prefix, tracking_key, e);
+                    tracing::warn!(
+                        "Failed to save STM for {} / {}: {:?}",
+                        user_prefix,
+                        tracking_key,
+                        e
+                    );
                 }
             }
         }
@@ -474,7 +647,8 @@ impl SurrealBackend {
         // 8. Update IDF token frequencies in memory
         for ep in episodes {
             let scope_val = ep.scope.clone().unwrap_or_else(|| "general".to_string());
-            self.record_episode_tokens_for_cache(&scope_val, &ep.content).await;
+            self.record_episode_tokens_for_cache(&scope_val, &ep.content)
+                .await;
         }
 
         Ok(())
@@ -494,7 +668,11 @@ impl SurrealBackend {
 
         if let Some(ref vp) = rule.vault_path {
             let check_query = "SELECT VALUE id FROM wisdom WHERE vault_path = $vault_path LIMIT 1;";
-            let mut response = self.db.query(check_query).bind(("vault_path", vp.as_str())).await?;
+            let mut response = self
+                .db
+                .query(check_query)
+                .bind(("vault_path", vp.as_str()))
+                .await?;
             let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
             if let Some(thing) = ids {
                 rule_uuid = match &thing.key {
@@ -526,11 +704,13 @@ impl SurrealBackend {
                         superseded_by: $superseded_by,
                         severity: $severity,
                         blocking: $blocking,
-                        rule_type: $rule_type
+                        rule_type: $rule_type,
+                        content_hash: $content_hash
                     };
                     UPDATE metrics SET utility_score = $utility_score WHERE target_id = $rule;
                     COMMIT TRANSACTION;
-                ".to_string()
+                "
+                .to_string()
             } else {
                 "
                     BEGIN TRANSACTION;
@@ -551,17 +731,19 @@ impl SurrealBackend {
                         superseded_by: $superseded_by,
                         severity: $severity,
                         blocking: $blocking,
-                        rule_type: $rule_type
+                        rule_type: $rule_type,
+                        content_hash: $content_hash
                     };
                     COMMIT TRANSACTION;
-                ".to_string()
+                "
+                .to_string()
             }
         } else {
             "
                 BEGIN TRANSACTION;
                 LET $rule = type::record('wisdom', $rule_uuid);
                 LET $met = type::record('metrics', $metrics_uuid);
-                
+
                 CREATE $rule CONTENT {
                     target_pattern: $target_pattern,
                     action_to_avoid: $action_to_avoid,
@@ -578,28 +760,40 @@ impl SurrealBackend {
                     superseded_by: $superseded_by,
                     severity: $severity,
                     blocking: $blocking,
-                    rule_type: $rule_type
+                    rule_type: $rule_type,
+                    content_hash: $content_hash
                 };
-                
+
                 CREATE $met CONTENT {
                     target_id: $rule,
                     utility_score: $utility_score,
                     access_count: 0
                 };
-                
+
                 COMMIT TRANSACTION;
-            ".to_string()
+            "
+            .to_string()
         };
 
         let metrics_uuid = Uuid::new_v4().to_string();
         let vp_val = rule.vault_path.clone().unwrap_or_default();
+        let content_hash = rule.content_hash.clone().unwrap_or_else(|| {
+            let full = format!("{}:{}:{}:{}", rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy);
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(full.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
 
         let embedding_val = if let Some(ref emb) = rule.embedding {
             Some(emb.clone())
         } else if let Some(ref _embedder) = self.embedder {
             let text_to_embed = format!(
                 "Pattern: {}\nAvoid: {}\nWhy: {}\nRemedy: {}",
-                rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy
+                rule.target_pattern,
+                rule.action_to_avoid,
+                rule.causal_explanation,
+                rule.prescribed_remedy
             );
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
@@ -614,7 +808,9 @@ impl SurrealBackend {
 
         let utility_val = rule.utility.unwrap_or(50.0);
 
-        let _ = self.db.query(query_str.as_str())
+        let _ = self
+            .db
+            .query(query_str.as_str())
             .bind(("rule_uuid", rule_uuid.as_str()))
             .bind(("metrics_uuid", metrics_uuid.as_str()))
             .bind(("target_pattern", rule.target_pattern.as_str()))
@@ -633,9 +829,14 @@ impl SurrealBackend {
             .bind(("superseded_by", rule.superseded_by.as_deref()))
             .bind(("severity", rule.severity.as_deref()))
             .bind(("blocking", rule.blocking.unwrap_or(false)))
-            .bind(("rule_type", rule.rule_type.as_deref().unwrap_or("aesthetic")))
+            .bind((
+                "rule_type",
+                rule.rule_type.as_deref().unwrap_or("aesthetic"),
+            ))
+            .bind(("content_hash", content_hash.as_str()))
             .await?
-            .check().context("SurrealDB save_wisdom_rule transaction failed")?;
+            .check()
+            .context("SurrealDB save_wisdom_rule transaction failed")?;
 
         // T1: Federated Promotion & Auto-Push
         if utility_val >= 50.0 && rule.scope != "general" {
@@ -670,7 +871,11 @@ impl SurrealBackend {
                                     if add_out.status.success() {
                                         // Git commit
                                         let commit_res = Command::new("git")
-                                            .args(&["commit", "-m", "mythrax: auto-promote wisdom rule"])
+                                            .args(&[
+                                                "commit",
+                                                "-m",
+                                                "mythrax: auto-promote wisdom rule",
+                                            ])
                                             .current_dir(&project_root_clone)
                                             .output();
                                         if let Ok(commit_out) = commit_res {
@@ -681,7 +886,9 @@ impl SurrealBackend {
                                                     .current_dir(&project_root_clone)
                                                     .output();
                                                 let hash = if let Ok(hash_out) = hash_res {
-                                                    String::from_utf8_lossy(&hash_out.stdout).trim().to_string()
+                                                    String::from_utf8_lossy(&hash_out.stdout)
+                                                        .trim()
+                                                        .to_string()
                                                 } else {
                                                     "unknown".to_string()
                                                 };
@@ -690,8 +897,12 @@ impl SurrealBackend {
                                                     .arg("push")
                                                     .current_dir(&project_root_clone)
                                                     .status();
-                                                
-                                                tracing::info!("[Mythrax Synapse: Auto-Promoted Wisdom Rule to GitHub -> committed as {}. To rollback, run: git revert {}]", hash, hash);
+
+                                                tracing::info!(
+                                                    "[Mythrax Synapse: Auto-Promoted Wisdom Rule to GitHub -> committed as {}. To rollback, run: git revert {}]",
+                                                    hash,
+                                                    hash
+                                                );
                                             }
                                         }
                                     }
@@ -711,7 +922,12 @@ impl SurrealBackend {
             return self.daemon_get("/v1/config/llm").await;
         }
         let sql = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms, model_tier_mappings FROM config:settings;";
-        let mut response = self.db.query(sql).await?.check().context("Get config query failed")?;
+        let mut response = self
+            .db
+            .query(sql)
+            .await?
+            .check()
+            .context("Get config query failed")?;
         let config_opt: Option<LlmConfigResponse> = response.take(0)?;
         let mut config = if let Some(mut c) = config_opt {
             if c.llm_post_inference_delay_ms.is_none() {
@@ -746,7 +962,12 @@ impl SurrealBackend {
             return Ok(());
         }
         let sql_select = "SELECT active_provider, model, cloud_provider, is_override, expires_at, llm_post_inference_delay_ms, model_tier_mappings FROM config:settings;";
-        let mut select_res = self.db.query(sql_select).await?.check().context("Get config query failed")?;
+        let mut select_res = self
+            .db
+            .query(sql_select)
+            .await?
+            .check()
+            .context("Get config query failed")?;
         let existing: Option<LlmConfigResponse> = select_res.take(0)?;
 
         let mut current_model = req.model.clone();
@@ -754,15 +975,28 @@ impl SurrealBackend {
 
         if current_model.is_none() || current_cloud_provider.is_none() {
             let (default_model, default_cloud_provider) = if req.provider == "local" {
-                ("mlx-community/Qwen3.6-35B-A3B-4bit".to_string(), "gemini".to_string())
+                (
+                    "mlx-community/Qwen3.6-35B-A3B-4bit".to_string(),
+                    "gemini".to_string(),
+                )
             } else {
                 ("gemini-1.5-flash".to_string(), "gemini".to_string())
             };
             if current_model.is_none() {
-                current_model = Some(existing.as_ref().map(|e| e.model.clone()).unwrap_or(default_model));
+                current_model = Some(
+                    existing
+                        .as_ref()
+                        .map(|e| e.model.clone())
+                        .unwrap_or(default_model),
+                );
             }
             if current_cloud_provider.is_none() {
-                current_cloud_provider = Some(existing.as_ref().map(|e| e.cloud_provider.clone()).unwrap_or(default_cloud_provider));
+                current_cloud_provider = Some(
+                    existing
+                        .as_ref()
+                        .map(|e| e.cloud_provider.clone())
+                        .unwrap_or(default_cloud_provider),
+                );
             }
         }
 
@@ -770,11 +1004,15 @@ impl SurrealBackend {
         let cloud_provider = current_cloud_provider.unwrap();
 
         let expires_at: Option<String> = None;
-        let delay = req.llm_post_inference_delay_ms
-            .or(existing.as_ref().and_then(|e| e.llm_post_inference_delay_ms))
+        let delay = req
+            .llm_post_inference_delay_ms
+            .or(existing
+                .as_ref()
+                .and_then(|e| e.llm_post_inference_delay_ms))
             .unwrap_or(5000);
-        let mappings = req.model_tier_mappings.clone()
-            .or(existing.as_ref().and_then(|e| e.model_tier_mappings.clone()));
+        let mappings = req.model_tier_mappings.clone().or(existing
+            .as_ref()
+            .and_then(|e| e.model_tier_mappings.clone()));
 
         let sql = "
             UPSERT config:settings CONTENT {
@@ -787,14 +1025,18 @@ impl SurrealBackend {
                 model_tier_mappings: $model_tier_mappings
             };
         ";
-        let _ = self.db.query(sql)
+        let _ = self
+            .db
+            .query(sql)
             .bind(("active_provider", req.provider.as_str()))
             .bind(("model", model.as_str()))
             .bind(("cloud_provider", cloud_provider.as_str()))
             .bind(("expires_at", expires_at.clone()))
             .bind(("llm_post_inference_delay_ms", delay))
             .bind(("model_tier_mappings", mappings))
-            .await?.check().context("UPSERT config failed")?;
+            .await?
+            .check()
+            .context("UPSERT config failed")?;
 
         let _ = crate::llm::router::reload_tier_mappings(self).await;
 
@@ -812,7 +1054,31 @@ impl SurrealBackend {
 
     pub async fn get_unprocessed_episodes_db(&self) -> Result<Vec<Episode>> {
         let sql = "SELECT * FROM episode WHERE processed_in_dream = false AND (node_type IS NONE OR node_type != 'experience');";
-        let mut response = self.db.query(sql).await?.check().context("Query unprocessed episodes failed")?;
+        let mut response = self
+            .db
+            .query(sql)
+            .await?
+            .check()
+            .context("Query unprocessed episodes failed")?;
+        let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
+    pub async fn get_unprocessed_episodes_paginated_db(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>> {
+        let sql = "SELECT * FROM episode WHERE processed_in_dream = false AND (node_type IS NONE OR node_type != 'experience') LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Query paginated unprocessed episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
         let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
@@ -822,13 +1088,61 @@ impl SurrealBackend {
         let thing_id = parse_record_id(id)?;
 
         let sql = "UPDATE $id SET processed_in_dream = true;";
-        let _ = self.db.query(sql).bind(("id", thing_id)).await?.check().context("Mark episode processed failed")?;
+        let _ = self
+            .db
+            .query(sql)
+            .bind(("id", thing_id))
+            .await?
+            .check()
+            .context("Mark episode processed failed")?;
+        Ok(())
+    }
+
+    pub async fn update_episode_metadata_db(
+        &self,
+        id: &str,
+        title: &str,
+        summary: &str,
+    ) -> Result<()> {
+        let thing_id = parse_record_id(id)?;
+        let sql = "UPDATE $id SET title = $title, summary = $summary, distilled_at = time::now();";
+        self.db
+            .query(sql)
+            .bind(("id", thing_id))
+            .bind(("title", title))
+            .bind(("summary", summary))
+            .await?
+            .check()
+            .context("Update episode metadata failed")?;
         Ok(())
     }
 
     pub async fn get_all_episodes_db(&self) -> Result<Vec<Episode>> {
         let sql = "SELECT * FROM episode;";
-        let mut response = self.db.query(sql).await?.check().context("Query all episodes failed")?;
+        let mut response = self
+            .db
+            .query(sql)
+            .await?
+            .check()
+            .context("Query all episodes failed")?;
+        let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
+    /// Retrieves a paginated subset of episodes from SurrealDB (`LIMIT $limit START $offset`).
+    ///
+    /// Memory Safety Invariant: Bounds memory allocation by returning at most `limit` items per query.
+    pub async fn get_episodes_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        let sql = "SELECT * FROM episode LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Query paginated episodes failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
         let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
@@ -836,9 +1150,29 @@ impl SurrealBackend {
 
     pub async fn get_episodes_by_node_type_db(&self, node_type: &str) -> Result<Vec<Episode>> {
         let sql = "SELECT * FROM episode WHERE node_type = $node_type;";
-        let mut response = self.db.query(sql)
+        let mut response = self
+            .db
+            .query(sql)
             .bind(("node_type", node_type))
-            .await?.check().context("Query episodes by node type failed")?;
+            .await?
+            .check()
+            .context("Query episodes by node type failed")?;
+        let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
+    pub async fn get_episodes_by_node_type_paginated_db(&self, node_type: &str, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        let sql = "SELECT * FROM episode WHERE node_type = $node_type LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("node_type", node_type))
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Query paginated episodes by node type failed")?;
         let raw_episodes: Vec<EpisodeRaw> = response.take(0)?;
         let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
@@ -858,12 +1192,17 @@ impl SurrealBackend {
                 value: $value
             };
         ";
-        let _ = self.db.query(sql)
+        let _ = self
+            .db
+            .query(sql)
             .bind(("key", key))
             .bind(("value", value))
-            .await?.check().context("UPSERT profile failed")?;
+            .await?
+            .check()
+            .context("UPSERT profile failed")?;
 
-        let cache = PROFILE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+        let cache =
+            PROFILE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
         if let Ok(mut write_guard) = cache.write() {
             write_guard.insert(key.to_string(), Some(value.to_string()));
         }
@@ -872,7 +1211,8 @@ impl SurrealBackend {
     }
 
     pub async fn get_profile_key_db(&self, key: &str) -> Result<Option<String>> {
-        let cache = PROFILE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+        let cache =
+            PROFILE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
         if let Ok(read_guard) = cache.read() {
             if let Some(val) = read_guard.get(key) {
                 return Ok(val.clone());
@@ -884,9 +1224,13 @@ impl SurrealBackend {
             value: String,
         }
         let sql = "SELECT `value` FROM `profile` WHERE id = type::record('profile', $key);";
-        let mut response = self.db.query(sql)
+        let mut response = self
+            .db
+            .query(sql)
             .bind(("key", key))
-            .await?.check().context("SELECT profile failed")?;
+            .await?
+            .check()
+            .context("SELECT profile failed")?;
         let res: Vec<ProfileRaw> = response.take(0)?;
         let val = res.first().map(|r| r.value.clone());
 
@@ -921,34 +1265,63 @@ impl SurrealBackend {
             };
             COMMIT TRANSACTION;
         ";
-        self.db.query(query)
+        self.db
+            .query(query)
             .bind(("id", id_str.clone()))
             .bind(("parent", handoff.parent_conversation_id.as_str()))
             .bind(("subagent", handoff.subagent_conversation_id.as_str()))
             .bind(("summary", handoff.summary.as_str()))
             .bind(("path", handoff.handoff_file_path.as_str()))
-            .bind(("target_scope", handoff.scope.as_deref().unwrap_or("general")))
-            .bind(("include_tool_execution", handoff.include_tool_execution.unwrap_or(false)))
-            .await?.check()?;
+            .bind((
+                "target_scope",
+                handoff.scope.as_deref().unwrap_or("general"),
+            ))
+            .bind((
+                "include_tool_execution",
+                handoff.include_tool_execution.unwrap_or(false),
+            ))
+            .await?
+            .check()?;
 
         // Copy all STM entries from parent to subagent session
         if let Ok(parent_stm) = self.get_stm(&handoff.parent_conversation_id, None).await {
             for (k, v) in parent_stm {
-                if let Err(e) = self.save_stm(&handoff.subagent_conversation_id, &k, &v).await {
-                    tracing::warn!("Failed to copy STM entry '{}' from {} to {} during handoff: {:?}", k, handoff.parent_conversation_id, handoff.subagent_conversation_id, e);
+                if let Err(e) = self
+                    .save_stm(&handoff.subagent_conversation_id, &k, &v)
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to copy STM entry '{}' from {} to {} during handoff: {:?}",
+                        k,
+                        handoff.parent_conversation_id,
+                        handoff.subagent_conversation_id,
+                        e
+                    );
                 }
             }
         }
 
         // Retrieve distilled context nodes from STM of either parent or subagent
         let mut stm_nodes_str = None;
-        if let Ok(map) = self.get_stm(&handoff.parent_conversation_id, Some("distilled_context_nodes")).await {
+        if let Ok(map) = self
+            .get_stm(
+                &handoff.parent_conversation_id,
+                Some("distilled_context_nodes"),
+            )
+            .await
+        {
             if let Some(val) = map.get("distilled_context_nodes") {
                 stm_nodes_str = Some(val.clone());
             }
         }
         if stm_nodes_str.is_none() {
-            if let Ok(map) = self.get_stm(&handoff.subagent_conversation_id, Some("distilled_context_nodes")).await {
+            if let Ok(map) = self
+                .get_stm(
+                    &handoff.subagent_conversation_id,
+                    Some("distilled_context_nodes"),
+                )
+                .await
+            {
                 if let Some(val) = map.get("distilled_context_nodes") {
                     stm_nodes_str = Some(val.clone());
                 }
@@ -967,7 +1340,8 @@ impl SurrealBackend {
                 }
             } else {
                 // Try parsing comma-separated list or raw single ID
-                let cleaned = nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
+                let cleaned =
+                    nodes_str.trim_matches(|c| c == '[' || c == ']' || c == '"' || c == ' ');
                 for part in cleaned.split(',') {
                     let part = part.trim().trim_matches('"');
                     if !part.is_empty() {
@@ -979,11 +1353,22 @@ impl SurrealBackend {
             let handoff_id = format!("handoff:{}", id_str);
             for node_id in resolved_node_ids {
                 if parse_record_id(&node_id).is_ok() {
-                    if let Err(e) = self.relate_nodes(&handoff_id, &node_id, None, None, None).await {
-                        tracing::warn!("Failed to relate handoff {} to context node {}: {:?}", handoff_id, node_id, e);
+                    if let Err(e) = self
+                        .relate_nodes(&handoff_id, &node_id, None, None, None)
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to relate handoff {} to context node {}: {:?}",
+                            handoff_id,
+                            node_id,
+                            e
+                        );
                     }
                 } else {
-                    tracing::warn!("Handoff context node ID is not a valid record ID: {}", node_id);
+                    tracing::warn!(
+                        "Handoff context node ID is not a valid record ID: {}",
+                        node_id
+                    );
                 }
             }
         }
@@ -998,8 +1383,14 @@ impl SurrealBackend {
         let mut node_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
 
-        let check_query = "SELECT VALUE id FROM wiki_node WHERE name = $name LIMIT 1;";
-        let mut response = self.db.query(check_query).bind(("name", node.name.as_str())).await?;
+        let check_query =
+            "SELECT VALUE id FROM wiki_node WHERE name = $name AND scope = $scope LIMIT 1;";
+        let mut response = self
+            .db
+            .query(check_query)
+            .bind(("name", node.name.as_str()))
+            .bind(("scope", node.scope.as_str()))
+            .await?;
         let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
         if let Some(thing) = ids {
             node_uuid = match &thing.key {
@@ -1008,6 +1399,13 @@ impl SurrealBackend {
             };
             is_update = true;
         }
+
+        let content_hash = node.content_hash.clone().unwrap_or_else(|| {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(node.content.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
 
         let query_str = if is_update {
             "
@@ -1023,6 +1421,7 @@ impl SurrealBackend {
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
                     node_type: $node_type,
+                    content_hash: $content_hash,
                     updated_at: time::now()
                 };
                 COMMIT TRANSACTION;
@@ -1041,6 +1440,7 @@ impl SurrealBackend {
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
                     node_type: $node_type,
+                    content_hash: $content_hash,
                     created_at: time::now(),
                     updated_at: time::now()
                 };
@@ -1064,7 +1464,9 @@ impl SurrealBackend {
             None
         };
 
-        let response = self.db.query(query_str)
+        let response = self
+            .db
+            .query(query_str)
             .bind(("node_uuid", node_uuid.as_str()))
             .bind(("name", node.name.as_str()))
             .bind(("content", node.content.as_str()))
@@ -1075,9 +1477,12 @@ impl SurrealBackend {
             .bind(("temporal_range_end", node.temporal_range_end))
             .bind(("metacognitive_confidence", node.metacognitive_confidence))
             .bind(("node_type", node.node_type.as_deref().unwrap_or("insight")))
+            .bind(("content_hash", content_hash.as_str()))
             .await?;
 
-        response.check().context("SurrealDB save_wiki_node transaction failed")?;
+        response
+            .check()
+            .context("SurrealDB save_wiki_node transaction failed")?;
 
         Ok(format!("wiki_node:{}", node_uuid))
     }
@@ -1097,22 +1502,24 @@ impl SurrealBackend {
         }
         let from_thing = parse_record_id(from_id)?;
         let to_thing = parse_record_id(to_id)?;
-        
+
         let sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
             created_at: time::now(),
             valid_from: $valid_from,
             valid_to: $valid_to,
             confidence: $confidence
         };";
-        
-        self.db.query(sql)
+
+        self.db
+            .query(sql)
             .bind(("from", from_thing))
             .bind(("to", to_thing))
             .bind(("valid_from", valid_from))
             .bind(("valid_to", valid_to))
             .bind(("confidence", confidence.unwrap_or(1.0)))
             .await?
-            .check().context("Failed to relate nodes")?;
+            .check()
+            .context("Failed to relate nodes")?;
         Ok(())
     }
 
@@ -1120,11 +1527,13 @@ impl SurrealBackend {
         let from_thing = parse_record_id(from_id)?;
         let to_thing = parse_record_id(to_id)?;
         let sql = "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
-        self.db.query(sql)
+        self.db
+            .query(sql)
             .bind(("from", from_thing))
             .bind(("to", to_thing))
             .await?
-            .check().context("Failed to relate followed_by")?;
+            .check()
+            .context("Failed to relate followed_by")?;
         Ok(())
     }
 
@@ -1137,14 +1546,16 @@ impl SurrealBackend {
         let from_thing = parse_record_id(from_id)?;
         let to_thing = parse_record_id(to_id)?;
         let end_time = ended.unwrap_or_else(chrono::Utc::now);
-        
+
         let sql = "UPDATE relates_to SET valid_to = $end_time WHERE in = $from AND out = $to;";
-        self.db.query(sql)
+        self.db
+            .query(sql)
             .bind(("from", from_thing))
             .bind(("to", to_thing))
             .bind(("end_time", end_time))
             .await?
-            .check().context("Failed to invalidate edge")?;
+            .check()
+            .context("Failed to invalidate edge")?;
         Ok(())
     }
 
@@ -1154,32 +1565,43 @@ impl SurrealBackend {
         as_of: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<String>> {
         let from_thing = parse_record_id(node_id)?;
-        
+
         let sql = "
-            SELECT VALUE out FROM relates_to 
-            WHERE in = $from 
-              AND (valid_from = NONE OR valid_from <= $as_of) 
-              AND (valid_to = NONE OR valid_to >= $as_of);
+            SELECT VALUE out FROM relates_to
+            WHERE in = $from
+              AND (valid_from = NONE OR valid_from <= $as_of)
+              AND (valid_to = NONE OR valid_to >= $as_of) LIMIT 50;
         ";
-        
-        let mut response = self.db.query(sql)
+
+        let mut response = self
+            .db
+            .query(sql)
             .bind(("from", from_thing))
             .bind(("as_of", as_of))
             .await?;
-            
+
         let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-        Ok(ids.into_iter().map(|thing| format_record_id(&thing)).collect())
+        Ok(ids
+            .into_iter()
+            .map(|thing| format_record_id(&thing))
+            .collect())
     }
 
     pub async fn get_related_node_ids_db(&self, from_id: &str) -> Result<Vec<String>> {
         let from_thing = parse_record_id(from_id)?;
-        let sql = "SELECT VALUE out FROM relates_to WHERE in = $from;";
+        let sql = "SELECT VALUE out FROM relates_to WHERE in = $from LIMIT 50;";
         let mut response = self.db.query(sql).bind(("from", from_thing)).await?;
         let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-        Ok(ids.into_iter().map(|thing| format_record_id(&thing)).collect())
+        Ok(ids
+            .into_iter()
+            .map(|thing| format_record_id(&thing))
+            .collect())
     }
 
-    pub async fn get_wiki_node_id_by_vault_path_db(&self, vault_path: &str) -> Result<Option<String>> {
+    pub async fn get_wiki_node_id_by_vault_path_db(
+        &self,
+        vault_path: &str,
+    ) -> Result<Option<String>> {
         let sql = "SELECT VALUE id FROM wiki_node WHERE vault_path = $vault_path LIMIT 1;";
         let mut response = self.db.query(sql).bind(("vault_path", vault_path)).await?;
         let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
@@ -1196,28 +1618,439 @@ impl SurrealBackend {
         Ok(scopes)
     }
 
+    pub async fn delete_episode_db(&self, id: &str) -> Result<()> {
+        let ep_opt = self.get_episode_db(id).await.ok().flatten();
+        let clean_id = id.strip_prefix("episode:").unwrap_or(id);
+        let q_ep = "SELECT VALUE id FROM type::record('episode', $id);";
+        let mut res_ep = self.db.query(q_ep).bind(("id", clean_id)).await?.check()?;
+        let mut ep_ids: Vec<surrealdb::types::RecordId> = res_ep.take(0)?;
+        if ep_ids.is_empty() {
+            if let Ok(rec_id) = parse_record_id(&format!("episode:{}", clean_id)) {
+                ep_ids.push(rec_id);
+            }
+        }
+        for rec_id in ep_ids {
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            self.db.query(cascade_sql).bind(("id", rec_id)).await?.check()?;
+        }
+        if let Some(ep) = ep_opt {
+            let _ = self.update_idf_index_for_episode(&ep, true).await;
+        }
+        Ok(())
+    }
+
+    pub async fn get_episode_db(&self, id: &str) -> Result<Option<Episode>> {
+        let clean_id = id.strip_prefix("episode:").unwrap_or(id);
+        let sql = "SELECT *, type::string(id) AS id, type::string(created_at) AS created_at, type::string(last_retrieved_at) AS last_retrieved_at FROM type::record('episode', $id);";
+        let mut response = self.db.query(sql).bind(("id", clean_id)).await?;
+        let episode: Option<Episode> = response.take(0)?;
+        Ok(episode)
+    }
+
+    /// Increments or decrements term document frequencies in the `idf_index` SurrealDB table using a given episode.
+    pub async fn update_idf_index_for_episode(&self, ep: &Episode, is_delete: bool) -> Result<()> {
+        let tokens = crate::retrieval::bm25::tokenize(&ep.content);
+        let mut unique_terms = std::collections::HashSet::new();
+        for t in tokens {
+            unique_terms.insert(t);
+        }
+        let scope = &ep.scope;
+        for term in unique_terms {
+            if is_delete {
+                let sql = "UPDATE idf_index SET document_frequency -= 1 WHERE term = $term AND scope = $scope;";
+                self.db.query(sql).bind(("term", term)).bind(("scope", scope.clone())).await?.check()?;
+            } else {
+                let update_sql = "UPDATE idf_index SET document_frequency += 1 WHERE term = $term AND scope = $scope;";
+                let mut res = self.db.query(update_sql).bind(("term", term.clone())).bind(("scope", scope.clone())).await?;
+                let updated: Vec<serde_json::Value> = res.take(0).unwrap_or_default();
+                if updated.is_empty() {
+                    let insert_sql = "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: 1 };";
+                    self.db.query(insert_sql).bind(("term", term)).bind(("scope", scope.clone())).await?.check()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Increments or decrements term document frequencies in the `idf_index` SurrealDB table.
+    ///
+    /// Memory Safety Invariant: Avoids bulk in-memory TF-IDF dictionary accumulation by persisting token statistics incrementally.
+    pub async fn update_idf_index_db(&self, episode_id: &str, is_delete: bool) -> Result<()> {
+        let ep = match self.get_episode_db(episode_id).await {
+            Ok(Some(ep)) => ep,
+            res => {
+                println!("EARLY RETURN in update_idf_index_db for id {}: {:?}", episode_id, res);
+                return Ok(());
+            }
+        };
+        self.update_idf_index_for_episode(&ep, is_delete).await
+    }
+
+    /// Backfills document term frequencies into the `idf_index` SurrealDB table using paginated episode iteration.
+    ///
+    /// Memory Safety Invariant: Drops processed episode batches from memory during backfill traversal.
+    pub async fn backfill_idf_index_db(&self) -> Result<()> {
+        self.db.query("DELETE FROM idf_index;").await?.check()?;
+        let mut offset = 0;
+        let limit = 1000;
+        let mut idf_map: std::collections::HashMap<(String, String), i64> = std::collections::HashMap::new();
+
+        loop {
+            let episodes = self.get_episodes_paginated_db(limit, offset).await?;
+            if episodes.is_empty() {
+                break;
+            }
+            for ep in &episodes {
+                let tokens = crate::retrieval::bm25::tokenize(&ep.content);
+                let mut unique_terms = std::collections::HashSet::new();
+                for t in tokens {
+                    unique_terms.insert(t);
+                }
+                let scope = ep.scope.as_deref().unwrap_or("general").to_string();
+                for term in unique_terms {
+                    *idf_map.entry((term, scope.clone())).or_insert(0) += 1;
+                }
+            }
+            offset += limit;
+        }
+
+        for ((term, scope), df) in idf_map {
+            let sql = "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $df };";
+            self.db.query(sql).bind(("term", term)).bind(("scope", scope)).bind(("df", df)).await?.check()?;
+        }
+        Ok(())
+    }
+
+    fn parse_val_id(&self, v: &serde_json::Value) -> String {
+        if let Some(s) = v.as_str() {
+            s.trim_matches('`').to_string()
+        } else if let Some(obj) = v.as_object() {
+            if let (Some(tb), Some(id)) = (obj.get("tb").and_then(|x| x.as_str()), obj.get("id")) {
+                if let Some(id_str) = id.as_str() {
+                    format!("{}:{}", tb, id_str.trim_matches('`'))
+                } else {
+                    format!("{}:{}", tb, id.to_string().trim_matches('"').trim_matches('`'))
+                }
+            } else {
+                v.to_string().trim_matches('"').trim_matches('`').to_string()
+            }
+        } else {
+            v.to_string().trim_matches('"').trim_matches('`').to_string()
+        }
+    }
+
+    /// Computes and populates missing SHA-256 `content_hash` fields for episodes and wisdom rules in zero-offset `LIMIT 50` chunks.
+    ///
+    /// Memory Safety Invariant: Uses non-offset `LIMIT 50` queries on unhashed records to eliminate unbounded result accumulation.
+    pub async fn backfill_content_hashes_db(&self) -> Result<()> {
+        let limit = 50;
+        loop {
+            let sql = "SELECT id, content FROM episode WHERE content_hash IS NONE LIMIT $limit;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).await?;
+            let batch: Vec<serde_json::Value> = res.take(0)?;
+            if batch.is_empty() {
+                break;
+            }
+            let mut updated_any = false;
+            for row in &batch {
+                if let (Some(id_val), Some(content)) = (row.get("id"), row.get("content").and_then(|v| v.as_str())) {
+                    let id_str = self.parse_val_id(id_val);
+                    if !id_str.is_empty() {
+                        use sha2::Digest;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(content.as_bytes());
+                        let hash = format!("{:x}", hasher.finalize());
+                        if let Ok(rec_id) = parse_record_id(&id_str) {
+                            if let Ok(mut u_res) = self.db.query("UPDATE $id SET content_hash = $hash;")
+                                .bind(("id", rec_id))
+                                .bind(("hash", hash))
+                                .await {
+                                    if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                        if !updated_rows.is_empty() {
+                                            updated_any = true;
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+            if !updated_any {
+                break;
+            }
+        }
+
+        loop {
+            let sql = "SELECT id, target_pattern, action_to_avoid, causal_explanation, prescribed_remedy FROM wisdom WHERE content_hash IS NONE LIMIT $limit;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).await?;
+            let batch: Vec<serde_json::Value> = res.take(0)?;
+            if batch.is_empty() {
+                break;
+            }
+            let mut updated_any = false;
+            for row in &batch {
+                if let Some(id_val) = row.get("id") {
+                    let id_str = self.parse_val_id(id_val);
+                    if !id_str.is_empty() {
+                        let t1 = row.get("target_pattern").and_then(|v| v.as_str()).unwrap_or("");
+                        let t2 = row.get("action_to_avoid").and_then(|v| v.as_str()).unwrap_or("");
+                        let t3 = row.get("causal_explanation").and_then(|v| v.as_str()).unwrap_or("");
+                        let t4 = row.get("prescribed_remedy").and_then(|v| v.as_str()).unwrap_or("");
+                        let full = format!("{}:{}:{}:{}", t1, t2, t3, t4);
+                        use sha2::Digest;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(full.as_bytes());
+                        let hash = format!("{:x}", hasher.finalize());
+                        if let Ok(rec_id) = parse_record_id(&id_str) {
+                            if let Ok(mut u_res) = self.db.query("UPDATE $id SET content_hash = $hash;")
+                                .bind(("id", rec_id))
+                                .bind(("hash", hash))
+                                .await {
+                                    if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                        if !updated_rows.is_empty() {
+                                            updated_any = true;
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+            if !updated_any {
+                break;
+            }
+        }
+
+        self.backfill_wiki_node_content_hashes_db().await?;
+        Ok(())
+    }
+
+    /// Computes and populates missing SHA-256 `content_hash` fields for `WikiNode` records in zero-offset `LIMIT 50` chunks.
+    ///
+    /// Memory Safety Invariant: Uses non-offset `LIMIT 50` loops on unhashed records to bound batch execution memory.
+    pub async fn backfill_wiki_node_content_hashes_db(&self) -> Result<()> {
+        let limit = 50;
+        loop {
+            let sql = "SELECT id, content FROM wiki_node WHERE content_hash IS NONE LIMIT $limit;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).await?;
+            let batch: Vec<serde_json::Value> = res.take(0)?;
+            if batch.is_empty() {
+                break;
+            }
+            let mut updated_any = false;
+            for row in &batch {
+                if let (Some(id_val), Some(content)) = (row.get("id"), row.get("content").and_then(|v| v.as_str())) {
+                    let id_str = self.parse_val_id(id_val);
+                    if !id_str.is_empty() {
+                        use sha2::Digest;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(content.as_bytes());
+                        let hash = format!("{:x}", hasher.finalize());
+                        if let Ok(rec_id) = parse_record_id(&id_str) {
+                            if let Ok(mut u_res) = self
+                                .db
+                                .query("UPDATE $id SET content_hash = $hash;")
+                                .bind(("id", rec_id))
+                                .bind(("hash", hash))
+                                .await
+                            {
+                                if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                    if !updated_rows.is_empty() {
+                                        updated_any = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !updated_any {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Searches for a `WikiNode` matching a specific SHA-256 content hash and scope.
+    ///
+    /// Memory Safety Invariant: Uses the indexed `idx_wiki_node_hash` field for O(1) duplicate checks.
+    pub async fn find_wiki_node_by_hash_db(&self, content_hash: &str, scope: &str) -> Result<Option<WikiNode>> {
+        let check_query = "SELECT * FROM wiki_node WHERE content_hash = $content_hash AND scope = $scope LIMIT 1;";
+        let mut response = self
+            .db
+            .query(check_query)
+            .bind(("content_hash", content_hash))
+            .bind(("scope", scope))
+            .await?;
+        let raws: Vec<WikiNodeRaw> = response.take(0)?;
+        Ok(raws.into_iter().next().map(|r| r.into_wiki_node()))
+    }
+
+    pub async fn get_wisdom_tier_db(&self, id: &str) -> Result<Option<crate::contracts::Tier>> {
+        if let Ok(parse_id) = parse_record_id(id) {
+            let check_query = "SELECT VALUE tier FROM $id;";
+            let mut res = self.db.query(check_query).bind(("id", parse_id)).await?.check()?;
+            let raw_tiers: Vec<String> = res.take(0).unwrap_or_default();
+            if let Some(s) = raw_tiers.into_iter().next() {
+                if let Ok(t) = s.parse::<crate::contracts::Tier>() {
+                    return Ok(Some(t));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn find_duplicate_by_content_hash_db(&self, content_hash: &str) -> Result<Option<String>> {
+        let check_query = "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
+        let mut response = self.db.query(check_query).bind(("content_hash", content_hash)).await?;
+        let ep_id: Option<surrealdb::types::RecordId> = response.take(0)?;
+        if let Some(thing) = ep_id {
+            let id = match &thing.key {
+                surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                other => unescape_id_part(&record_key_to_string(other)),
+            };
+            return Ok(Some(format!("episode:{}", id)));
+        }
+
+        let wisdom_query = "SELECT VALUE id FROM wisdom WHERE content_hash = $content_hash LIMIT 1;";
+        let mut response_w = self.db.query(wisdom_query).bind(("content_hash", content_hash)).await?;
+        let w_id: Option<surrealdb::types::RecordId> = response_w.take(0)?;
+        if let Some(thing) = w_id {
+            let id = match &thing.key {
+                surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                other => unescape_id_part(&record_key_to_string(other)),
+            };
+            return Ok(Some(format!("wisdom:{}", id)));
+        }
+
+        Ok(None)
+    }
+
+    /// Persists an ephemeral DBSCAN cluster assignment to the SurrealDB `pipeline_cluster` temporary table.
+    ///
+    /// Memory Safety Invariant: Replaces in-memory cluster arrays with database table records.
+    pub async fn save_cluster_assignment_db(&self, run_id: &str, cluster_id: i32, entity_id: &str, scope: Option<&str>) -> Result<()> {
+        let ep_thing = if let Ok(rec_id) = parse_record_id(entity_id) {
+            rec_id
+        } else if entity_id.starts_with("wiki") || entity_id.contains(".md") || entity_id.contains("/") {
+            surrealdb::types::RecordId::new("wiki_node", entity_id)
+        } else {
+            surrealdb::types::RecordId::new("episode", entity_id)
+        };
+        let sc = scope.unwrap_or("general");
+        let sql = "CREATE pipeline_cluster CONTENT { run_id: $run_id, cluster_id: $cluster_id, episode_id: $ep, scope: $scope };";
+        self.db.query(sql)
+            .bind(("run_id", run_id))
+            .bind(("cluster_id", cluster_id))
+            .bind(("ep", ep_thing))
+            .bind(("scope", sc))
+            .await?.check()?;
+        Ok(())
+    }
+
+    /// Retrieves a paginated subset of cluster member episodes from the `pipeline_cluster` temporary table.
+    ///
+    /// Memory Safety Invariant: Bounds memory consumption during cognitive synthesis by returning at most `limit` members.
+    pub async fn get_cluster_members_paginated_db(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+        let sql = "SELECT VALUE episode_id FROM pipeline_cluster WHERE run_id = $run_id AND cluster_id = $cluster_id LIMIT $limit START $offset;";
+        let mut res = self.db.query(sql)
+            .bind(("run_id", run_id))
+            .bind(("cluster_id", cluster_id))
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?.check()?;
+        let ep_ids: Vec<surrealdb::types::RecordId> = res.take(0)?;
+        if ep_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let get_ep_sql = "SELECT * FROM episode WHERE id IN $ep_ids;";
+        let mut ep_res = self.db.query(get_ep_sql).bind(("ep_ids", ep_ids)).await?.check()?;
+        let raw_episodes: Vec<EpisodeRaw> = ep_res.take(0)?;
+        let episodes = raw_episodes.into_iter().map(Episode::from).collect();
+        Ok(episodes)
+    }
+
+    /// Deletes all ephemeral DBSCAN state associated with a pipeline run from `pipeline_cluster`.
+    ///
+    /// Memory Safety Invariant: Invoked via RAII scope guards to guarantee purge on completion or failure.
+    pub async fn delete_pipeline_run_db(&self, run_id: &str) -> Result<()> {
+        let sql = "DELETE FROM pipeline_cluster WHERE run_id = $run_id;";
+        self.db.query(sql).bind(("run_id", run_id)).await?.check()?;
+        Ok(())
+    }
+
+    /// Deletes records across `episode`, `wisdom`, and `wiki_node` matching the given `vault_path`.
+    ///
+    /// Memory Safety Invariant: Surgically purges deleted vault records without loading table contents into memory.
     pub async fn delete_by_vault_path_db(&self, vault_path: &str) -> Result<()> {
-        let sql1 = "DELETE FROM episode WHERE vault_path = $vault_path;";
-        let sql2 = "DELETE FROM wisdom WHERE vault_path = $vault_path;";
-        let sql3 = "DELETE FROM wiki_node WHERE vault_path = $vault_path;";
-        
-        self.db.query(sql1).bind(("vault_path", vault_path)).await?.check()?;
-        self.db.query(sql2).bind(("vault_path", vault_path)).await?.check()?;
-        self.db.query(sql3).bind(("vault_path", vault_path)).await?.check()?;
+        let q_ep = "SELECT VALUE id FROM episode WHERE vault_path = $vault_path;";
+        let q_wis = "SELECT VALUE id FROM wisdom WHERE vault_path = $vault_path;";
+        let q_wiki = "SELECT VALUE id FROM wiki_node WHERE vault_path = $vault_path;";
+
+        let mut res_ep = self.db.query(q_ep).bind(("vault_path", vault_path)).await?.check()?;
+        let ep_ids: Vec<surrealdb::types::RecordId> = res_ep.take(0)?;
+
+        let mut res_wis = self.db.query(q_wis).bind(("vault_path", vault_path)).await?.check()?;
+        let wis_ids: Vec<surrealdb::types::RecordId> = res_wis.take(0)?;
+
+        let mut res_wiki = self.db.query(q_wiki).bind(("vault_path", vault_path)).await?.check()?;
+        let wiki_ids: Vec<surrealdb::types::RecordId> = res_wiki.take(0)?;
+
+        let all_ids: Vec<surrealdb::types::RecordId> = ep_ids.into_iter().chain(wis_ids).chain(wiki_ids).collect();
+
+        for id in all_ids {
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            self.db.query(cascade_sql).bind(("id", id)).await?.check()?;
+        }
+
         Ok(())
     }
 
     pub async fn delete_wiki_node_db(&self, name: &str, scope: &str) -> Result<()> {
-        let sql = "DELETE FROM wiki_node WHERE name = $name AND scope = $scope;";
-        self.db.query(sql)
+        let q_wiki = "SELECT VALUE id FROM wiki_node WHERE name = $name AND scope = $scope;";
+        let mut res = self
+            .db
+            .query(q_wiki)
             .bind(("name", name))
             .bind(("scope", scope))
             .await?
             .check()?;
+        let ids: Vec<surrealdb::types::RecordId> = res.take(0)?;
+        for id in ids {
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            self.db.query(cascade_sql).bind(("id", id)).await?.check()?;
+        }
         Ok(())
     }
 
-        pub async fn save_stm_db(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
+    pub async fn save_stm_db(&self, session_id: &str, key: &str, value: &str) -> Result<()> {
         if std::env::var("MYTHRAX_BENCH").is_ok() {
             let sql = "
                 BEGIN TRANSACTION;
@@ -1229,11 +2062,13 @@ impl SurrealBackend {
                 };
                 COMMIT TRANSACTION;
             ";
-            self.db.query(sql)
+            self.db
+                .query(sql)
                 .bind(("session_id", session_id))
                 .bind(("key", key))
                 .bind(("value", value))
-                .await?.check()?;
+                .await?
+                .check()?;
             return Ok(());
         }
         let mut final_key = key.to_string();
@@ -1261,12 +2096,14 @@ impl SurrealBackend {
             };
             COMMIT TRANSACTION;
         ";
-        self.db.query(sql)
+        self.db
+            .query(sql)
             .bind(("session_id", session_id))
             .bind(("key", final_key.as_str()))
             .bind(("value", value))
             .bind(("expires_at", expires_at))
-            .await?.check()?;
+            .await?
+            .check()?;
 
         // Dual-write to local JSON file unless running a benchmark
         if std::env::var("MYTHRAX_BENCH").is_err() {
@@ -1275,14 +2112,21 @@ impl SurrealBackend {
         Ok(())
     }
 
-    pub async fn get_stm_db(&self, session_id: &str, key: Option<&str>) -> Result<std::collections::HashMap<String, String>> {
+    pub async fn get_stm_db(
+        &self,
+        session_id: &str,
+        key: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, String>> {
         if std::env::var("MYTHRAX_BENCH").is_ok() {
             if let Some(k) = key {
                 let sql = "SELECT VALUE value FROM type::record('short_term_memory', [$session_id, $key]);";
-                let mut response = self.db.query(sql)
+                let mut response = self
+                    .db
+                    .query(sql)
                     .bind(("session_id", session_id))
                     .bind(("key", k))
-                    .await?.check()?;
+                    .await?
+                    .check()?;
                 let value: Option<String> = response.take(0)?;
                 let mut map = std::collections::HashMap::new();
                 if let Some(v) = value {
@@ -1290,10 +2134,14 @@ impl SurrealBackend {
                 }
                 return Ok(map);
             } else {
-                let sql = "SELECT key, value FROM short_term_memory WHERE session_id = $session_id;";
-                let mut response = self.db.query(sql)
+                let sql =
+                    "SELECT key, value FROM short_term_memory WHERE session_id = $session_id;";
+                let mut response = self
+                    .db
+                    .query(sql)
                     .bind(("session_id", session_id))
-                    .await?.check()?;
+                    .await?
+                    .check()?;
                 #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
                 struct StmRecord {
                     key: String,
@@ -1309,9 +2157,15 @@ impl SurrealBackend {
         }
         if let Some(k) = key {
             let (sql, is_broadcast) = if k.starts_with("broadcast:") {
-                ("SELECT VALUE value FROM short_term_memory WHERE key = $key AND (expires_at = NONE OR expires_at > time::now()) ORDER BY updated_at DESC LIMIT 1;", true)
+                (
+                    "SELECT VALUE value FROM short_term_memory WHERE key = $key AND (expires_at = NONE OR expires_at > time::now()) ORDER BY updated_at DESC LIMIT 1;",
+                    true,
+                )
             } else {
-                ("SELECT VALUE value FROM short_term_memory WHERE session_id = $session_id AND key = $key AND (expires_at = NONE OR expires_at > time::now()) LIMIT 1;", false)
+                (
+                    "SELECT VALUE value FROM short_term_memory WHERE session_id = $session_id AND key = $key AND (expires_at = NONE OR expires_at > time::now()) LIMIT 1;",
+                    false,
+                )
             };
 
             let mut query = self.db.query(sql);
@@ -1328,10 +2182,13 @@ impl SurrealBackend {
         } else {
             // Fetch session specific non-expired STM keys
             let sql_sess = "SELECT key, value FROM short_term_memory WHERE session_id = $session_id AND (expires_at = NONE OR expires_at > time::now());";
-            let mut response = self.db.query(sql_sess)
+            let mut response = self
+                .db
+                .query(sql_sess)
                 .bind(("session_id", session_id))
-                .await?.check()?;
-            
+                .await?
+                .check()?;
+
             #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
             struct StmRecord {
                 key: String,
@@ -1357,9 +2214,11 @@ impl SurrealBackend {
 
     pub async fn clear_stm_db(&self, session_id: &str) -> Result<()> {
         let sql = "DELETE FROM short_term_memory WHERE session_id = $session_id;";
-        self.db.query(sql)
+        self.db
+            .query(sql)
             .bind(("session_id", session_id))
-            .await?.check()?;
+            .await?
+            .check()?;
 
         // Delete local JSON file
         crate::store::delete_stm_file(session_id)?;
@@ -1368,37 +2227,54 @@ impl SurrealBackend {
 
     pub async fn update_handoff_status_db(&self, id: &str, status: &str) -> Result<()> {
         let thing_id = parse_record_id(id)?;
+        let select_sql = "SELECT * FROM type::record('handoff', $id);";
+        let mut response = self
+            .db
+            .query(select_sql)
+            .bind(("id", record_key_to_string(&thing_id.key)))
+            .await?
+            .check()?;
+        let handoff_opt: Option<HandoffRaw> = response.take(0)?;
+        if handoff_opt.is_none() {
+            anyhow::bail!("Handoff record not found: {}", id);
+        }
+
         let sql = "UPDATE $id SET status = $status;";
-        self.db.query(sql)
+        self.db
+            .query(sql)
             .bind(("id", thing_id))
             .bind(("status", status))
-            .await?.check()?;
+            .await?
+            .check()?;
         Ok(())
     }
 
     pub async fn delete_stale_handoffs_db(&self, pruning_days: i64) -> Result<()> {
         let select_sql = "
-            SELECT 
-                id, 
-                parent_conversation_id, 
-                subagent_conversation_id, 
-                summary, 
-                handoff_file_path, 
-                scope, 
-                status, 
+            SELECT
+                id,
+                parent_conversation_id,
+                subagent_conversation_id,
+                summary,
+                handoff_file_path,
+                scope,
+                status,
                 created_at,
                 include_tool_execution
-            FROM handoff 
-            WHERE (status = 'COMPLETED' OR status = 'FAILED') 
+            FROM handoff
+            WHERE (status = 'COMPLETED' OR status = 'FAILED')
               AND created_at < time::now() - <duration> $duration;
         ";
         let duration_str = format!("{}d", pruning_days);
-        let mut response = self.db.query(select_sql)
+        let mut response = self
+            .db
+            .query(select_sql)
             .bind(("duration", duration_str.as_str()))
-            .await?.check()?;
+            .await?
+            .check()?;
         let raw_handoffs: Vec<HandoffRaw> = response.take(0)?;
         tracing::debug!("delete_stale_handoffs raw_handoffs={:?}", raw_handoffs);
-        
+
         // Delete files from disk and matching STM DB records
         for h in &raw_handoffs {
             let path = std::path::Path::new(&h.handoff_file_path);
@@ -1415,23 +2291,34 @@ impl SurrealBackend {
                     let _ = std::fs::remove_file(stm_file_parent);
                 }
             }
-            
+
             // Delete matching short term memory records from SurrealDB
             let clean_stm_sql = "DELETE FROM short_term_memory WHERE session_id = $parent OR session_id = $subagent;";
-            let _ = self.db.query(clean_stm_sql)
+            let _ = self
+                .db
+                .query(clean_stm_sql)
                 .bind(("parent", h.parent_conversation_id.as_str()))
                 .bind(("subagent", h.subagent_conversation_id.as_str()))
-                .await?.check()?;
-        }
+                .await?
+                .check()?;
 
-        let delete_sql = "
-            DELETE FROM handoff 
-            WHERE (status = 'COMPLETED' OR status = 'FAILED') 
-              AND created_at < time::now() - <duration> $duration;
-        ";
-        let _ = self.db.query(delete_sql)
-            .bind(("duration", duration_str.as_str()))
-            .await?.check()?;
+            let cascade_sql = "
+                BEGIN TRANSACTION;
+                DELETE relates_to WHERE in = $id OR out = $id;
+                DELETE followed_by WHERE in = $id OR out = $id;
+                DELETE mentions WHERE in = $id OR out = $id;
+                DELETE superseded_by WHERE in = $id OR out = $id;
+                DELETE metrics WHERE target_id = $id;
+                DELETE $id;
+                COMMIT TRANSACTION;
+            ";
+            let _ = self
+                .db
+                .query(cascade_sql)
+                .bind(("id", h.id.clone()))
+                .await?
+                .check()?;
+        }
 
         Ok(())
     }
@@ -1446,11 +2333,15 @@ impl SurrealBackend {
         };
 
         // Delete short_term_memory records older than pruning_days
-        let prune_stm_sql = "DELETE FROM short_term_memory WHERE updated_at < time::now() - <duration> $duration;";
+        let prune_stm_sql =
+            "DELETE FROM short_term_memory WHERE updated_at < time::now() - <duration> $duration;";
         let duration_str = format!("{}d", pruning_days);
-        let _ = self.db.query(prune_stm_sql)
+        let _ = self
+            .db
+            .query(prune_stm_sql)
             .bind(("duration", duration_str.as_str()))
-            .await?.check()?;
+            .await?
+            .check()?;
 
         // Clean up completed/failed handoffs and associated STMs
         self.delete_stale_handoffs(pruning_days).await?;
@@ -1467,7 +2358,8 @@ impl SurrealBackend {
                                 if let Ok(metadata) = entry.metadata() {
                                     if let Ok(modified) = metadata.modified() {
                                         if let Ok(elapsed) = modified.elapsed() {
-                                            if elapsed.as_secs() > (pruning_days as u64) * 24 * 3600 {
+                                            if elapsed.as_secs() > (pruning_days as u64) * 24 * 3600
+                                            {
                                                 let _ = std::fs::remove_file(&path);
                                                 tracing::info!("Pruned stale STM file: {:?}", path);
                                             }
@@ -1485,7 +2377,9 @@ impl SurrealBackend {
 
     pub async fn get_memory_nodes_db(&self, node_ids: &[String]) -> Result<GetMemoryNodesResponse> {
         if self.is_client_mode() {
-            let payload = crate::contracts::GetMemoryNodesRequest { node_ids: node_ids.to_vec() };
+            let payload = crate::contracts::GetMemoryNodesRequest {
+                node_ids: node_ids.to_vec(),
+            };
             return self.daemon_post("/v1/nodes", &payload).await;
         }
         let mut episodes = Vec::new();
@@ -1518,7 +2412,10 @@ impl SurrealBackend {
                     }
                 }
                 _ => {
-                    tracing::warn!("get_memory_nodes called with unknown table: {}", thing_id.table);
+                    tracing::warn!(
+                        "get_memory_nodes called with unknown table: {}",
+                        thing_id.table
+                    );
                 }
             }
         }
@@ -1533,11 +2430,47 @@ impl SurrealBackend {
     pub async fn get_all_wisdom_rules_db(&self) -> Result<Vec<WisdomRule>> {
         let sql = "
             SELECT *,
-                   (SELECT VALUE utility_score FROM metrics WHERE target_id = $parent.id LIMIT 1)[0] AS utility
+                   (utility ?? 50.0) AS utility
             FROM wisdom
             WHERE status != 'superseded';
         ";
-        let mut response = self.db.query(sql).await?.check().context("Get all wisdom rules query failed")?;
+        let mut response = self
+            .db
+            .query(sql)
+            .await?
+            .check()
+            .context("Get all wisdom rules query failed")?;
+        let raws: Vec<WisdomRaw> = response.take(0)?;
+        let mut rules: Vec<WisdomRule> = raws.into_iter().map(|r| r.into_wisdom_rule()).collect();
+        for w in &mut rules {
+            if let Some(id_str) = &w.id {
+                if let Ok(thing) = parse_record_id(id_str) {
+                    w.id = Some(format_record_id(&thing));
+                }
+            }
+        }
+        Ok(rules)
+    }
+
+    /// Retrieves a paginated subset of wisdom rules from SurrealDB (`LIMIT $limit START $offset`).
+    ///
+    /// Memory Safety Invariant: Prevents OOM by bounding query result size to `limit` entries.
+    pub async fn get_wisdom_rules_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>> {
+        let sql = "
+            SELECT *,
+                   (utility ?? 50.0) AS utility
+            FROM wisdom
+            WHERE status != 'superseded'
+            LIMIT $limit START $offset;
+        ";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Get paginated wisdom rules query failed")?;
         let raws: Vec<WisdomRaw> = response.take(0)?;
         let mut rules: Vec<WisdomRule> = raws.into_iter().map(|r| r.into_wisdom_rule()).collect();
         for w in &mut rules {
@@ -1552,7 +2485,30 @@ impl SurrealBackend {
 
     pub async fn get_all_wiki_nodes_db(&self) -> Result<Vec<WikiNode>> {
         let sql = "SELECT * FROM wiki_node;";
-        let mut response = self.db.query(sql).await?.check().context("Get all wiki nodes query failed")?;
+        let mut response = self
+            .db
+            .query(sql)
+            .await?
+            .check()
+            .context("Get all wiki nodes query failed")?;
+        let raws: Vec<WikiNodeRaw> = response.take(0)?;
+        let nodes: Vec<WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
+        Ok(nodes)
+    }
+
+    /// Retrieves a paginated subset of wiki nodes from SurrealDB (`LIMIT $limit START $offset`).
+    ///
+    /// Memory Safety Invariant: Prevents OOM by bounding query result size to `limit` entries.
+    pub async fn get_wiki_nodes_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WikiNode>> {
+        let sql = "SELECT * FROM wiki_node LIMIT $limit START $offset;";
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()
+            .context("Get paginated wiki nodes query failed")?;
         let raws: Vec<WikiNodeRaw> = response.take(0)?;
         let nodes: Vec<WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
         Ok(nodes)
@@ -1566,44 +2522,48 @@ impl SurrealBackend {
         as_of: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<crate::contracts::SymbolicHit>> {
         use std::collections::{HashMap, VecDeque};
-        
+
         let start_thing = parse_record_id(node_id)?;
         let limit_depth = max_depth.unwrap_or(3);
-        
+
         let mut queue = VecDeque::new();
         queue.push_back((start_thing.clone(), 0, 1.0f32));
-        
+
         let mut path_conf = HashMap::new();
         path_conf.insert(start_thing.clone(), 1.0f32);
-        
-        let mut hits = Vec::new();
-        
+
+        let mut hits: Vec<crate::contracts::SymbolicHit> = Vec::new();
+        let mut hit_index_map: HashMap<String, usize> = HashMap::new();
+
         while let Some((current, depth, current_conf)) = queue.pop_front() {
+            if hits.len() >= 1000 {
+                break;
+            }
             if depth >= limit_depth {
                 continue;
             }
-            
+
             let sql = if relation.is_some() {
                 if as_of.is_some() {
-                    "SELECT out, confidence FROM relates_to 
-                      WHERE in = $current 
+                    "SELECT out, confidence FROM relates_to
+                      WHERE in = $current
                         AND relation = $relation
                         AND (valid_from = NONE OR valid_from <= $as_of)
-                        AND (valid_to = NONE OR valid_to >= $as_of);"
+                        AND (valid_to = NONE OR valid_to >= $as_of) LIMIT 50;"
                 } else {
-                    "SELECT out, confidence FROM relates_to WHERE in = $current AND relation = $relation;"
+                    "SELECT out, confidence FROM relates_to WHERE in = $current AND relation = $relation LIMIT 50;"
                 }
             } else {
                 if as_of.is_some() {
-                    "SELECT out, confidence FROM relates_to 
-                      WHERE in = $current 
+                    "SELECT out, confidence FROM relates_to
+                      WHERE in = $current
                         AND (valid_from = NONE OR valid_from <= $as_of)
-                        AND (valid_to = NONE OR valid_to >= $as_of);"
+                        AND (valid_to = NONE OR valid_to >= $as_of) LIMIT 50;"
                 } else {
-                    "SELECT out, confidence FROM relates_to WHERE in = $current;"
+                    "SELECT out, confidence FROM relates_to WHERE in = $current LIMIT 50;"
                 }
             };
-            
+
             let mut query = self.db.query(sql).bind(("current", current.clone()));
             if let Some(rel) = relation {
                 query = query.bind(("relation", rel));
@@ -1611,15 +2571,15 @@ impl SurrealBackend {
             if let Some(t) = as_of {
                 query = query.bind(("as_of", t));
             }
-            
+
             let mut response = query.await?;
             let edges: Vec<ScoredEdge> = response.take(0)?;
-            
+
             for edge in edges {
                 let neighbor = edge.out;
                 let edge_conf = edge.confidence.unwrap_or(1.0f32);
                 let next_conf = current_conf * edge_conf;
-                
+
                 let mut should_visit = false;
                 if let Some(&existing_conf) = path_conf.get(&neighbor) {
                     if next_conf > existing_conf {
@@ -1630,35 +2590,50 @@ impl SurrealBackend {
                     path_conf.insert(neighbor.clone(), next_conf);
                     should_visit = true;
                 }
-                
+
                 if should_visit {
                     let neighbor_str = format_record_id(&neighbor);
-                    if let Some(hit) = hits.iter_mut().find(|h: &&mut crate::contracts::SymbolicHit| h.node_id == neighbor_str) {
-                        hit.path_confidence = next_conf;
-                        hit.hops = depth + 1;
+                    if let Some(&idx) = hit_index_map.get(&neighbor_str) {
+                        hits[idx].path_confidence = next_conf;
+                        hits[idx].hops = depth + 1;
                     } else {
+                        if hits.len() >= 1000 {
+                            break;
+                        }
+                        let idx = hits.len();
                         hits.push(crate::contracts::SymbolicHit {
-                            node_id: neighbor_str,
+                            node_id: neighbor_str.clone(),
                             path_confidence: next_conf,
                             hops: depth + 1,
                         });
+                        hit_index_map.insert(neighbor_str, idx);
                     }
                     queue.push_back((neighbor, depth + 1, next_conf));
                 }
             }
         }
-        
+
         Ok(hits)
     }
 
-    pub async fn query_symbolic_db(&self, node_id: &str, relation: Option<&str>, max_depth: Option<usize>) -> Result<Vec<String>> {
-        let hits = self.query_symbolic_scored(node_id, relation, max_depth, None).await?;
+    pub async fn query_symbolic_db(
+        &self,
+        node_id: &str,
+        relation: Option<&str>,
+        max_depth: Option<usize>,
+    ) -> Result<Vec<String>> {
+        let hits = self
+            .query_symbolic_scored(node_id, relation, max_depth, None)
+            .await?;
         Ok(hits.into_iter().map(|h| h.node_id).collect())
     }
 
-    pub async fn save_thought_node_db(&self, thought: &crate::contracts::ThoughtNode) -> Result<String> {
+    pub async fn save_thought_node_db(
+        &self,
+        thought: &crate::contracts::ThoughtNode,
+    ) -> Result<String> {
         let thought_uuid = uuid::Uuid::new_v4().to_string();
-        
+
         let embedding_val = if let Some(ref _embedder) = self.embedder {
             let text_to_embed = format!("{}: {}", thought.title, thought.content);
             match self.embed(&text_to_embed).await {
@@ -1687,7 +2662,9 @@ impl SurrealBackend {
         ";
 
         let vp_val = thought.vault_path.clone().unwrap_or_default();
-        let response = self.db.query(query_str)
+        let response = self
+            .db
+            .query(query_str)
             .bind(("thought_uuid", thought_uuid.as_str()))
             .bind(("title", thought.title.as_str()))
             .bind(("content", thought.content.as_str()))
@@ -1696,17 +2673,23 @@ impl SurrealBackend {
             .bind(("embedding", embedding_val))
             .await?;
 
-        response.check().context("SurrealDB save_thought_node transaction failed")?;
+        response
+            .check()
+            .context("SurrealDB save_thought_node transaction failed")?;
 
         Ok(format!("thought_node:{}", thought_uuid))
     }
 
-    pub async fn journal_state_db(&self, vault_root: &std::path::Path, session_id: Option<&str>) -> Result<()> {
+    pub async fn journal_state_db(
+        &self,
+        vault_root: &std::path::Path,
+        session_id: Option<&str>,
+    ) -> Result<()> {
         let workspace_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
             .ok()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        
+
         let task_md_path = workspace_root.join("task.md");
         let task_checklist = if task_md_path.exists() {
             std::fs::read_to_string(&task_md_path).unwrap_or_default()
@@ -1715,18 +2698,21 @@ impl SurrealBackend {
         };
 
         // Query HTR tree state (all hypothesis nodes)
-        let mut response = self.db.query("SELECT * FROM hypothesis_node;").await?;
+        let mut response = self.db.query("SELECT * FROM hypothesis_node LIMIT 100;").await?;
         let htr_tree_state: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
 
         // Query active STM keys
         let mut stm_response = if let Some(sid) = session_id {
-            self.db.query("SELECT key, value FROM short_term_memory WHERE session_id = $session_id;")
+            self.db
+                .query("SELECT key, value FROM short_term_memory WHERE session_id = $session_id LIMIT 100;")
                 .bind(("session_id", sid))
                 .await?
         } else {
-            self.db.query("SELECT key, value FROM short_term_memory;").await?
+            self.db
+                .query("SELECT key, value FROM short_term_memory LIMIT 100;")
+                .await?
         };
-        
+
         let stm_records: Vec<serde_json::Value> = stm_response.take(0).unwrap_or_default();
         let mut active_stm = serde_json::Map::new();
         for rec in stm_records {
@@ -1764,19 +2750,21 @@ impl SurrealBackend {
                 timestamp: time::now()
             };
         ";
-        self.db.query(sql)
+        self.db
+            .query(sql)
             .bind(("session_id", session_id_val))
             .bind(("task_checklist", task_checklist.clone()))
             .bind(("htr_tree_state", htr_tree_state.clone()))
             .bind(("active_stm", serde_json::Value::Object(active_stm.clone())))
             .bind(("git_commit", git_commit.clone()))
-            .await?.check()?;
+            .await?
+            .check()?;
 
         // Save to local JSON backup
         let mythrax_dir = vault_root.join(".mythrax");
         std::fs::create_dir_all(&mythrax_dir)?;
         let journal_path = mythrax_dir.join("session_journal.json");
-        
+
         let journal_json = serde_json::json!({
             "session_id": session_id_val,
             "task_checklist": task_checklist,
@@ -1806,14 +2794,22 @@ impl SurrealBackend {
         let thing_id = parse_record_id(id)?;
         let now_str = chrono::Utc::now().to_rfc3339();
 
-        let enable_access_reinforcement = match self.get_profile_key("search.enable_access_reinforcement").await {
+        let enable_access_reinforcement = match self
+            .get_profile_key("search.enable_access_reinforcement")
+            .await
+        {
             Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
             _ => false,
         };
 
         if enable_access_reinforcement {
             let ep_sql = "SELECT last_retrieved_at, created_at FROM $id;";
-            let mut ep_res = self.db.query(ep_sql).bind(("id", thing_id.clone())).await?.check()?;
+            let mut ep_res = self
+                .db
+                .query(ep_sql)
+                .bind(("id", thing_id.clone()))
+                .await?
+                .check()?;
             #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
             struct EpTime {
                 last_retrieved_at: Option<String>,
@@ -1822,7 +2818,9 @@ impl SurrealBackend {
             let ep_times: Vec<EpTime> = ep_res.take(0)?;
             let delta_t_days = if let Some(t) = ep_times.first() {
                 let last_t = if let Some(ref lr) = t.last_retrieved_at {
-                    chrono::DateTime::parse_from_rfc3339(lr).ok().map(|dt| dt.with_timezone(&chrono::Utc))
+                    chrono::DateTime::parse_from_rfc3339(lr)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
                 } else {
                     t.created_at
                 };
@@ -1837,7 +2835,12 @@ impl SurrealBackend {
             };
 
             let check_sql = "SELECT id, utility_score, access_count FROM metrics WHERE target_id = $id LIMIT 1;";
-            let mut check_res = self.db.query(check_sql).bind(("id", thing_id.clone())).await?.check()?;
+            let mut check_res = self
+                .db
+                .query(check_sql)
+                .bind(("id", thing_id.clone()))
+                .await?
+                .check()?;
             #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
             struct MetricsRow {
                 id: surrealdb::types::RecordId,
@@ -1853,10 +2856,13 @@ impl SurrealBackend {
                 let metrics_uuid = uuid::Uuid::new_v4().to_string();
                 let insert_sql = "LET $met = type::record('metrics', $metrics_uuid);
                                   INSERT INTO metrics (id, target_id, utility_score, access_count) VALUES ($met, $target_id, 50.0, 1);";
-                let _ = self.db.query(insert_sql)
+                let _ = self
+                    .db
+                    .query(insert_sql)
                     .bind(("metrics_uuid", metrics_uuid.as_str()))
                     .bind(("target_id", thing_id.clone()))
-                    .await?.check()?;
+                    .await?
+                    .check()?;
             } else {
                 let row = rows.pop().unwrap();
                 let new_count = row.access_count + 1;
@@ -1864,55 +2870,139 @@ impl SurrealBackend {
                 new_utility = 50.0 + (new_count as f64).log2() * decay;
 
                 let update_sql = "UPDATE $metrics_id SET access_count = $new_count, utility_score = $new_utility;";
-                let _ = self.db.query(update_sql)
+                let _ = self
+                    .db
+                    .query(update_sql)
                     .bind(("metrics_id", row.id))
                     .bind(("new_count", new_count))
                     .bind(("new_utility", new_utility))
-                    .await?.check()?;
+                    .await?
+                    .check()?;
             }
 
-            let ep_update_sql = "UPDATE $id MERGE { utility: $new_utility, last_retrieved_at: $now };";
-            let _ = self.db.query(ep_update_sql)
+            let ep_update_sql =
+                "UPDATE $id MERGE { utility: $new_utility, last_retrieved_at: $now };";
+            let _ = self
+                .db
+                .query(ep_update_sql)
                 .bind(("id", thing_id))
                 .bind(("new_utility", new_utility))
                 .bind(("now", now_str))
-                .await?.check()?;
+                .await?
+                .check()?;
         }
         Ok(())
     }
 
     pub async fn record_feedback_db(&self, id: &str, success: bool) -> Result<()> {
         if self.is_client_mode() {
-            let payload = crate::contracts::Feedback { id: id.to_string(), success };
+            let payload = crate::contracts::Feedback {
+                id: id.to_string(),
+                success,
+            };
             let _res: serde_json::Value = self.daemon_post("/v1/feedback", &payload).await?;
             return Ok(());
         }
         let thing_id = parse_record_id(id)?;
-        
-        let fetch_sql = "SELECT VALUE utility_score FROM metrics WHERE target_id = $target_id LIMIT 1;";
-        let mut response = self.db.query(fetch_sql).bind(("target_id", thing_id.clone())).await?.check().context("Fetch metrics query failed")?;
-        let utility_opt: Option<f64> = response.take(0)?;
 
-        let prev_utility = utility_opt.unwrap_or(1.0);
-        let reinforcement = if success { 1.0 } else { 0.0 };
-        
-        let new_utility = (0.3 * reinforcement) + (0.7 * prev_utility);
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
+        struct MetricRecord {
+            id: surrealdb::types::RecordId,
+            utility_score: f64,
+        }
 
-        let update_sql = "
-            UPDATE metrics 
-            SET utility_score = $new_utility, access_count = access_count + 1, last_accessed = time::now()
-            WHERE target_id = $target_id;
-        ";
-        let _ = self.db.query(update_sql)
-            .bind(("new_utility", new_utility))
+        let fetch_sql =
+            "SELECT id, utility_score FROM metrics WHERE target_id = $target_id LIMIT 1;";
+        let mut response = self
+            .db
+            .query(fetch_sql)
             .bind(("target_id", thing_id.clone()))
             .await?
-            .check().context("Update metrics query failed")?;
-        
+            .check()
+            .context("Fetch metrics query failed")?;
+        let rows: Vec<MetricRecord> = response.take(0).unwrap_or_default();
+
+        let (prev_utility, metric_id) = if let Some(row) = rows.into_iter().next() {
+            (row.utility_score, Some(row.id))
+        } else {
+            (50.0, None)
+        };
+
+        let reinforcement = if success { 100.0 } else { 0.0 };
+        let new_utility = (0.3 * reinforcement) + (0.7 * prev_utility);
+
+        if let Some(m_id) = metric_id {
+            let update_sql = "
+                UPDATE $metric_id SET
+                    utility_score = $new_utility,
+                    access_count = access_count + 1,
+                    last_accessed = time::now();
+            ";
+            let _ = self
+                .db
+                .query(update_sql)
+                .bind(("metric_id", m_id))
+                .bind(("new_utility", new_utility))
+                .await?
+                .check()
+                .context("Update metrics query failed")?;
+        } else {
+            let metrics_uuid = uuid::Uuid::new_v4().to_string();
+            let create_sql = "
+                LET $met = type::record('metrics', $metrics_uuid);
+                INSERT INTO metrics (id, target_id, utility_score, access_count, last_accessed)
+                VALUES ($met, $target_id, $new_utility, 1, time::now());
+            ";
+            let res = self
+                .db
+                .query(create_sql)
+                .bind(("metrics_uuid", metrics_uuid.as_str()))
+                .bind(("target_id", thing_id.clone()))
+                .bind(("new_utility", new_utility))
+                .await;
+
+            let insert_ok = match res {
+                Ok(resp) => resp.check().is_ok(),
+                Err(_) => false,
+            };
+
+            if !insert_ok {
+                let fallback_sql = "
+                    UPDATE metrics SET
+                        utility_score = $new_utility,
+                        access_count = access_count + 1,
+                        last_accessed = time::now()
+                    WHERE target_id = $target_id;
+                ";
+                let _ = self
+                    .db
+                    .query(fallback_sql)
+                    .bind(("target_id", thing_id.clone()))
+                    .bind(("new_utility", new_utility))
+                    .await?
+                    .check()
+                    .context("Fallback metrics update query failed")?;
+            }
+        }
+
+        let target_update_sql = "UPDATE $target MERGE { utility: $utility };";
+        let _ = self
+            .db
+            .query(target_update_sql)
+            .bind(("target", thing_id))
+            .bind(("utility", new_utility))
+            .await?
+            .check()
+            .context("Update target utility query failed")?;
+
         Ok(())
     }
 
-    pub async fn diagnose_error_internal_db(&self, stderr: &str, stdout: &str) -> Result<Option<(String, String)>> {
+    pub async fn diagnose_error_internal_db(
+        &self,
+        stderr: &str,
+        stdout: &str,
+    ) -> Result<Option<(String, String)>> {
         let combined = format!("{}\n{}", stderr, stdout);
 
         let mut matched_signature = None;
@@ -1925,8 +3015,16 @@ impl SurrealBackend {
 
         let rust_re = RUST_REGEX.get_or_init(|| regex::Regex::new(r"(E\d{4})").unwrap());
         let ts_re = TS_REGEX.get_or_init(|| regex::Regex::new(r"(TS\d{4})").unwrap());
-        let perm_re = PERM_REGEX.get_or_init(|| regex::Regex::new(r"(?i)(401\s+Unauthorized|403\s+Forbidden|Permission\s+denied|permission_denied)").unwrap());
-        let lock_re = LOCK_REGEX.get_or_init(|| regex::Regex::new(r"(?i)(lock\s+acquisition\s+failure|RocksDB\s+lock|lock\s+conflict)").unwrap());
+        let perm_re = PERM_REGEX.get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)(401\s+Unauthorized|403\s+Forbidden|Permission\s+denied|permission_denied)",
+            )
+            .unwrap()
+        });
+        let lock_re = LOCK_REGEX.get_or_init(|| {
+            regex::Regex::new(r"(?i)(lock\s+acquisition\s+failure|RocksDB\s+lock|lock\s+conflict)")
+                .unwrap()
+        });
 
         if let Some(caps) = rust_re.captures(&combined) {
             matched_signature = Some(caps.get(1).unwrap().as_str().to_string());
@@ -1962,37 +3060,41 @@ impl SurrealBackend {
                     &combined
                 };
                 if let Ok(q_vec) = self.embed(embed_text).await {
-                let sql = "
+                    let sql = "
                     SELECT causal_explanation, prescribed_remedy, vector::similarity::cosine(embedding, $query_embedding) AS similarity FROM wisdom
                     WHERE status != 'superseded' AND (embedding <|1, 10|> $query_embedding);
                 ";
-                let res = self.db.query(sql).bind(("query_embedding", q_vec.clone())).await?;
-                let mut res = res.check()?;
-                #[derive(serde::Deserialize, Debug, SurrealValue)]
-                struct WisdomVectorRaw {
-                    causal_explanation: String,
-                    prescribed_remedy: String,
-                    similarity: Option<f32>,
-                }
-                let rules: Vec<WisdomVectorRaw> = res.take(0)?;
-                let mut best_match = None;
-                let mut best_similarity = 0.0_f32;
-
-                for r in rules {
-                    let sim = r.similarity.unwrap_or(0.0);
-                    if sim > best_similarity {
-                        best_similarity = sim;
-                        best_match = Some(r);
+                    let res = self
+                        .db
+                        .query(sql)
+                        .bind(("query_embedding", q_vec.clone()))
+                        .await?;
+                    let mut res = res.check()?;
+                    #[derive(serde::Deserialize, Debug, SurrealValue)]
+                    struct WisdomVectorRaw {
+                        causal_explanation: String,
+                        prescribed_remedy: String,
+                        similarity: Option<f32>,
                     }
-                }
+                    let rules: Vec<WisdomVectorRaw> = res.take(0)?;
+                    let mut best_match = None;
+                    let mut best_similarity = 0.0_f32;
 
-                if best_similarity >= 0.70 {
-                    if let Some(r) = best_match {
-                        return Ok(Some((r.causal_explanation, r.prescribed_remedy)));
+                    for r in rules {
+                        let sim = r.similarity.unwrap_or(0.0);
+                        if sim > best_similarity {
+                            best_similarity = sim;
+                            best_match = Some(r);
+                        }
+                    }
+
+                    if best_similarity >= 0.70 {
+                        if let Some(r) = best_match {
+                            return Ok(Some((r.causal_explanation, r.prescribed_remedy)));
+                        }
                     }
                 }
             }
-        }
         }
 
         Ok(None)

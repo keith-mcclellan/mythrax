@@ -1,0 +1,21 @@
+# Embed Callers Audit (Phase 5)
+
+## 1. Async Context Callers (Safe to use `.await`)
+- `src/bin/prebuild_cache.rs:146` (`embed_batch().await?`)
+- `src/cognitive/forge.rs:111` (`embed_batch().await?`)
+- `src/cognitive/harvest.rs:101, 252` (`embed().await?`)
+- `src/cognitive/meta_skill.rs:268` (`embed().await?`)
+- `src/cognitive/synthesis.rs:2431, 2461` (`embed().await?`)
+- `src/db/backend.rs:1398` (`embed().await?`)
+- `src/db/crud_operations.rs:219, 370, 692, 1287, 2011, 2374` (`embed().await?`, `embed_batch().await?`)
+- `src/db/forge_pipeline.rs:205` (`embed_batch().await?`)
+- `src/db/search_pipeline.rs:586, 1007` (`embed().await?`, `embed_batch().await?`)
+
+## 2. Sync Context Callers (Requires Bubble-Up / `block_in_place`)
+- `src/cognitive/synthesis.rs:497, 677, 704, 1563` (`emb.embed()` - no `.await`)
+- `src/daemon.rs:135, 161, 187` (`embed()` - no `.await`)
+- `src/embeddings.rs:573, 920, 1107, 1108` (`embed_sub_batch()`, `embed()` tests - no `.await`)
+
+## 3. Trait Definitions & Implementations (Requires Signature Change)
+- `src/db/backend.rs:150, 151, 1716, 1764` (trait fn and impls for async)
+- `src/embeddings.rs:12, 13, 430, 552, 589, 730, 733, 803, 899, 936, 1047, 1050` (trait fn and sync impls)

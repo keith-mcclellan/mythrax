@@ -70,6 +70,8 @@ config.json
 /mythrax-core/bench_data/*
 !/mythrax-core/bench_data/BASELINE*
 embedding_cache.bin
+embedding_cache.bin.archive
+*.archive
 
 
 

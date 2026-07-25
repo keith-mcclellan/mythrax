@@ -157,8 +157,8 @@ fn expected_sha_for(filename: &str) -> Option<&'static str> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    unsafe { 
-        std::env::set_var("MYTHRAX_DAEMON_PORT", "54321"); 
+    unsafe {
+        std::env::set_var("MYTHRAX_DAEMON_PORT", "54321");
         std::env::set_var("MYTHRAX_SESSION_ISOLATION", "false");
     }
     let args = Args::parse();
@@ -404,14 +404,14 @@ async fn main() -> Result<()> {
             println!("Recall_All@{} (session):  {:.4}", K_RECALL, avg_recall_all_session);
             println!("--------------------------------------------------------");
             println!("Per-Question-Type R@{} (turn recall_any):", K_NDCG);
-            
+
             let mut type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
             let mut type_recall_at10: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
             for record in &records {
                 *type_counts.entry(record.question_type.clone()).or_insert(0) += 1;
                 *type_recall_at10.entry(record.question_type.clone()).or_insert(0.0) += record.recall_any_turn_at10;
             }
-            
+
             let mut type_keys: Vec<&String> = type_counts.keys().collect();
             type_keys.sort();
             for q_type in &type_keys {

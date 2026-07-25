@@ -1,24 +1,23 @@
-use serde_json::{json, Value};
-use anyhow::Result;
 use crate::api::ApiState;
-use crate::db::{StorageBackend, SurrealBackend, parse_record_id, backend::format_record_id};
 use crate::contracts::BeliefState;
+use crate::db::{StorageBackend, SurrealBackend, backend::format_record_id, parse_record_id};
+use anyhow::Result;
+use serde_json::{Value, json};
 
-pub mod read_handlers;
-pub mod write_handlers;
-pub mod manage_handlers;
-pub mod vault_handlers;
 pub mod htr_handlers;
+pub mod manage_handlers;
+pub mod read_handlers;
+pub mod vault_handlers;
+pub mod write_handlers;
 
-pub use read_handlers::{handle_read, handle_query_memory};
-pub use write_handlers::{handle_write, handle_record_memory, run_llm_critic};
-pub use manage_handlers::{
-    handle_manage, handle_pre_invocation_hook, handle_complete_code_task, handle_agent,
-    handle_manage_stm, handle_manage_file, handle_manage_config,
-};
-pub use vault_handlers::{handle_manage_vault, handle_ingest_knowledge};
 pub use htr_handlers::handle_manage_htr;
-
+pub use manage_handlers::{
+    handle_agent, handle_complete_code_task, handle_manage, handle_manage_config,
+    handle_manage_file, handle_manage_stm, handle_pre_invocation_hook,
+};
+pub use read_handlers::{handle_query_memory, handle_read};
+pub use vault_handlers::{handle_ingest_knowledge, handle_manage_vault};
+pub use write_handlers::{handle_record_memory, handle_write, run_llm_critic};
 
 pub fn strip_nulls(value: &mut Value) {
     match value {
@@ -54,9 +53,9 @@ pub fn strip_diffs(content: &str) -> String {
         if in_diff_block {
             continue;
         }
-        if trimmed.starts_with("diff --git ") 
-            || trimmed.starts_with("--- ") 
-            || trimmed.starts_with("+++ ") 
+        if trimmed.starts_with("diff --git ")
+            || trimmed.starts_with("--- ")
+            || trimmed.starts_with("+++ ")
             || trimmed.starts_with("@@ ")
         {
             continue;
@@ -84,7 +83,10 @@ pub async fn format_episode_or_parent(
 ) -> Result<String> {
     let ep_content = strip_diffs(ep_content);
     if let Ok(rec_id) = parse_record_id(ep_id) {
-        let mut parent_resp = db.query("SELECT VALUE out FROM relates_to WHERE in = $ep_id;").bind(("ep_id", rec_id)).await?;
+        let mut parent_resp = db
+            .query("SELECT VALUE out FROM relates_to WHERE in = $ep_id;")
+            .bind(("ep_id", rec_id))
+            .await?;
         let parent_ids: Vec<surrealdb::types::RecordId> = parent_resp.take(0)?;
         if !parent_ids.is_empty() {
             let mut parent_ids_strings = Vec::new();
@@ -102,7 +104,10 @@ pub async fn format_episode_or_parent(
             for p_wisdom in parents.wisdom_rules {
                 parts.push(format!(
                     "### 💡 Wisdom Rule: {}\n- **Avoid**: {}\n- **Causal**: {}\n- **Remedy**: {}\n",
-                    p_wisdom.target_pattern, p_wisdom.action_to_avoid, p_wisdom.causal_explanation, p_wisdom.prescribed_remedy
+                    p_wisdom.target_pattern,
+                    p_wisdom.action_to_avoid,
+                    p_wisdom.causal_explanation,
+                    p_wisdom.prescribed_remedy
                 ));
             }
             if !parts.is_empty() {
@@ -114,7 +119,11 @@ pub async fn format_episode_or_parent(
     let summary = truncate_summary(&ep_content);
     Ok(format!(
         "#### 📑 Memory Card: {}\n- **ID**: `{}`\n- **Scope**: `{}`\n- **Summary**: {}\n*For follow-up queries on this memory, use:* `get_memory_nodes [\"{}\"]`\n",
-        ep_title, ep_id, ep_scope.unwrap_or("general"), summary, ep_id
+        ep_title,
+        ep_id,
+        ep_scope.unwrap_or("general"),
+        summary,
+        ep_id
     ))
 }
 
@@ -169,7 +178,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["replace", "multi_replace", "save", "feedback", "thought", "put", "clear", "handoff", "set"] },
+                        "action": { "type": "string", "enum": ["replace", "multi_replace", "save", "feedback", "thought", "put", "clear", "handoff", "set", "cognitive_callback"] },
                         "path": { "type": "string" },
                         "AbsolutePath": { "type": "string" },
                         "TargetFile": { "type": "string" },
@@ -269,11 +278,7 @@ pub fn get_mcp_tools_schema() -> Value {
     })
 }
 
-pub async fn call_mcp_tool(
-    state: &ApiState,
-    name: &str,
-    args: Value,
-) -> Result<Value> {
+pub async fn call_mcp_tool(state: &ApiState, name: &str, args: Value) -> Result<Value> {
     let result = match name {
         "read" => read_handlers::handle_read(state, args.clone()).await,
         "write" => write_handlers::handle_write(state, args.clone()).await,
@@ -282,7 +287,8 @@ pub async fn call_mcp_tool(
         _ => anyhow::bail!("Tool not found: {}", name),
     };
 
-    let session_id_opt = args.get("session_id")
+    let session_id_opt = args
+        .get("session_id")
         .or_else(|| args.get("subagent_id"))
         .or_else(|| args.get("subagent_conversation_id"))
         .and_then(|v| v.as_str());
@@ -291,7 +297,11 @@ pub async fn call_mcp_tool(
     let resolved_action = if name == "manage" && action_opt.is_none() {
         if args.get("session_id").and_then(|v| v.as_str()).is_some() {
             "pre_invocation"
-        } else if args.get("workspace_path").and_then(|v| v.as_str()).is_some() {
+        } else if args
+            .get("workspace_path")
+            .and_then(|v| v.as_str())
+            .is_some()
+        {
             "audit_compliance"
         } else {
             ""
@@ -308,32 +318,39 @@ pub async fn call_mcp_tool(
                 let score_delta = if result.is_ok() { 0.02f32 } else { -0.05f32 };
 
                 if let Ok(ref val) = result {
-                    let content_str = if let Some(arr) = val.get("content").and_then(|c| c.as_array()) {
-                        let mut s = String::new();
-                        for item in arr {
-                            if let Some(txt) = item.get("text").and_then(|t| t.as_str()) {
-                                s.push_str(txt);
-                                s.push('\n');
+                    let content_str =
+                        if let Some(arr) = val.get("content").and_then(|c| c.as_array()) {
+                            let mut s = String::new();
+                            for item in arr {
+                                if let Some(txt) = item.get("text").and_then(|t| t.as_str()) {
+                                    s.push_str(txt);
+                                    s.push('\n');
+                                }
                             }
-                        }
-                        if s.is_empty() { val.to_string() } else { s.trim().to_string() }
-                    } else if let Some(txt) = val.get("text").and_then(|t| t.as_str()) {
-                        txt.to_string()
-                    } else {
-                        val.to_string()
-                    };
+                            if s.is_empty() {
+                                val.to_string()
+                            } else {
+                                s.trim().to_string()
+                            }
+                        } else if let Some(txt) = val.get("text").and_then(|t| t.as_str()) {
+                            txt.to_string()
+                        } else {
+                            val.to_string()
+                        };
 
                     let insert_sql = "INSERT INTO chat_history { session_id: $session_id, role: 'assistant', content: $content, created_at: time::now() };";
-                    let _ = surreal_backend.db.query(insert_sql)
+                    let _ = surreal_backend
+                        .db
+                        .query(insert_sql)
                         .bind(("session_id", session_id))
                         .bind(("content", content_str))
                         .await;
                 }
-                
+
                 let belief_res = surreal_backend.db.query("SELECT session_id, tasks_todo, hypotheses_tested, confidence_score, uncertainty_areas, updated_at FROM belief_state WHERE session_id = $session_id;")
                     .bind(("session_id", session_id))
                     .await;
-                
+
                 if let Ok(mut resp) = belief_res {
                     let belief_states: Vec<BeliefState> = resp.take(0).unwrap_or_default();
                     if let Some(mut bs) = belief_states.into_iter().next() {
@@ -342,8 +359,11 @@ pub async fn call_mcp_tool(
                             bs.hypotheses_tested.push(tool_name);
                         }
                         bs.updated_at = chrono::Utc::now().to_rfc3339();
-                        
-                        let _ = surreal_backend.db.query("
+
+                        let _ = surreal_backend
+                            .db
+                            .query(
+                                "
                             UPDATE type::record('belief_state', $session_id) CONTENT {
                                 session_id: $session_id,
                                 tasks_todo: $tasks_todo,
@@ -352,14 +372,15 @@ pub async fn call_mcp_tool(
                                 uncertainty_areas: $uncertainty_areas,
                                 updated_at: $updated_at
                             };
-                        ")
-                        .bind(("session_id", bs.session_id))
-                        .bind(("tasks_todo", bs.tasks_todo))
-                        .bind(("hypotheses_tested", bs.hypotheses_tested))
-                        .bind(("confidence_score", bs.confidence_score))
-                        .bind(("uncertainty_areas", bs.uncertainty_areas))
-                        .bind(("updated_at", bs.updated_at))
-                        .await;
+                        ",
+                            )
+                            .bind(("session_id", bs.session_id))
+                            .bind(("tasks_todo", bs.tasks_todo))
+                            .bind(("hypotheses_tested", bs.hypotheses_tested))
+                            .bind(("confidence_score", bs.confidence_score))
+                            .bind(("uncertainty_areas", bs.uncertainty_areas))
+                            .bind(("updated_at", bs.updated_at))
+                            .await;
                     } else {
                         let new_bs = BeliefState {
                             id: Some(format!("belief_state:{}", session_id)),
@@ -370,8 +391,11 @@ pub async fn call_mcp_tool(
                             uncertainty_areas: vec![],
                             updated_at: chrono::Utc::now().to_rfc3339(),
                         };
-                        
-                        let _ = surreal_backend.db.query("
+
+                        let _ = surreal_backend
+                            .db
+                            .query(
+                                "
                             UPSERT type::record('belief_state', $session_id) CONTENT {
                                 session_id: $session_id,
                                 tasks_todo: $tasks_todo,
@@ -380,27 +404,34 @@ pub async fn call_mcp_tool(
                                 uncertainty_areas: $uncertainty_areas,
                                 updated_at: $updated_at
                             };
-                        ")
-                        .bind(("session_id", new_bs.session_id))
-                        .bind(("tasks_todo", new_bs.tasks_todo))
-                        .bind(("hypotheses_tested", new_bs.hypotheses_tested))
-                        .bind(("confidence_score", new_bs.confidence_score))
-                        .bind(("uncertainty_areas", new_bs.uncertainty_areas))
-                        .bind(("updated_at", new_bs.updated_at))
-                        .await;
+                        ",
+                            )
+                            .bind(("session_id", new_bs.session_id))
+                            .bind(("tasks_todo", new_bs.tasks_todo))
+                            .bind(("hypotheses_tested", new_bs.hypotheses_tested))
+                            .bind(("confidence_score", new_bs.confidence_score))
+                            .bind(("uncertainty_areas", new_bs.uncertainty_areas))
+                            .bind(("updated_at", new_bs.updated_at))
+                            .await;
                     }
                 }
             }
         }
     }
 
-    if result.is_ok() && (name == "read" || name == "write" || name == "manage" || name == "agent") {
-        let session_id_opt = args.get("session_id")
+    if result.is_ok() && (name == "read" || name == "write" || name == "manage" || name == "agent")
+    {
+        let session_id_opt = args
+            .get("session_id")
             .or_else(|| args.get("subagent_id"))
             .or_else(|| args.get("subagent_conversation_id"))
             .or_else(|| args.get("scope"))
             .and_then(|v| v.as_str());
-        if let Err(e) = state.backend.journal_state(&state.store.vault_root, session_id_opt).await {
+        if let Err(e) = state
+            .backend
+            .journal_state(&state.store.vault_root, session_id_opt)
+            .await
+        {
             tracing::error!("Failed to write dual-durability journal: {:?}", e);
         }
     }

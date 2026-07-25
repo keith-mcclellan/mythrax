@@ -92,7 +92,12 @@ impl<S: FsmState> ContextGovernor<S> {
     }
 
     // Localized Personalized PageRank (PPR) implementation
-    pub fn calculate_ppr_weights(&self, edges: &[(String, String)], damping_factor: f32, max_iterations: usize) -> HashMap<String, f32> {
+    pub fn calculate_ppr_weights(
+        &self,
+        edges: &[(String, String)],
+        damping_factor: f32,
+        max_iterations: usize,
+    ) -> HashMap<String, f32> {
         let mut nodes = HashSet::new();
         for (u, v) in edges {
             nodes.insert(u.clone());
@@ -109,10 +114,16 @@ impl<S: FsmState> ContextGovernor<S> {
             *out_degree.entry(u.clone()).or_insert(0) += 1;
         }
 
-        let mut ranks: HashMap<String, f32> = nodes.iter().map(|node_id| (node_id.clone(), 1.0 / n as f32)).collect();
+        let mut ranks: HashMap<String, f32> = nodes
+            .iter()
+            .map(|node_id| (node_id.clone(), 1.0 / n as f32))
+            .collect();
 
         for _ in 0..max_iterations {
-            let mut new_ranks: HashMap<String, f32> = nodes.iter().map(|node_id| (node_id.clone(), (1.0 - damping_factor) / n as f32)).collect();
+            let mut new_ranks: HashMap<String, f32> = nodes
+                .iter()
+                .map(|node_id| (node_id.clone(), (1.0 - damping_factor) / n as f32))
+                .collect();
 
             for (u, v) in edges {
                 let deg = *out_degree.get(u).unwrap_or(&1) as f32;
@@ -141,7 +152,7 @@ mod tests {
 
         let validating = executing.transition_to_validating();
         assert_eq!(validating.confidence, 0.9);
-        
+
         let exploring_again = validating.transition_to_exploring();
         assert_eq!(exploring_again.confidence, 0.9);
     }
@@ -186,7 +197,7 @@ mod tests {
         assert!(ranks.contains_key("A"));
         assert!(ranks.contains_key("B"));
         assert!(ranks.contains_key("C"));
-        
+
         // Sum should be close to 1.0 (some precision loss is expected but relative orders apply)
         let sum: f32 = ranks.values().sum();
         assert!((sum - 1.0).abs() < 0.05);

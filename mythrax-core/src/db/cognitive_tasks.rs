@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
-use anyhow::Result;
 use crate::db::backend::{SurrealBackend, format_record_id};
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use surrealdb_types::SurrealValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,7 +207,9 @@ impl SurrealBackend {
         } else {
             task.id.clone()
         };
-        let mut response = self.db.query(query_str)
+        let mut response = self
+            .db
+            .query(query_str)
             .bind(("id_val", id_val.as_str()))
             .bind(("task_type", task.task_type.as_str()))
             .bind(("prompt", task.prompt.as_str()))
@@ -221,7 +223,7 @@ impl SurrealBackend {
             .bind(("injected_at", task.injected_at))
             .bind(("session_id", task.session_id.as_deref()))
             .await?;
-        
+
         let created: Option<CognitiveTaskRaw> = response.take(0)?;
         if let Some(c) = created {
             Ok(format_record_id(&c.id))
@@ -238,28 +240,36 @@ impl SurrealBackend {
         };
         let query_str = "SELECT * FROM type::record('cognitive_task', $id_val) LIMIT 1;";
         let id_val = rec_id.splitn(2, ':').collect::<Vec<&str>>()[1].to_string();
-        let mut response = self.db.query(query_str)
+        let mut response = self
+            .db
+            .query(query_str)
             .bind(("id_val", id_val.as_str()))
             .await?;
         let task_raw: Option<CognitiveTaskRaw> = response.take(0)?;
         Ok(task_raw.map(CognitiveTask::from))
     }
 
-    pub async fn update_cognitive_task_status(&self, id: &str, status: TaskStatus, result: Option<String>) -> Result<()> {
+    pub async fn update_cognitive_task_status(
+        &self,
+        id: &str,
+        status: TaskStatus,
+        result: Option<String>,
+    ) -> Result<()> {
         let rec_id = if id.contains(':') {
             id.to_string()
         } else {
             format!("cognitive_task:{}", id)
         };
         let id_val = rec_id.splitn(2, ':').collect::<Vec<&str>>()[1].to_string();
-        
+
         let query_str = if status == TaskStatus::Injected {
             "UPDATE type::record('cognitive_task', $id_val) SET status = $status, injected_at = time::now();"
         } else {
             "UPDATE type::record('cognitive_task', $id_val) SET status = $status, result = $result;"
         };
 
-        self.db.query(query_str)
+        self.db
+            .query(query_str)
             .bind(("id_val", id_val.as_str()))
             .bind(("status", status.to_string()))
             .bind(("result", result.as_deref()))
@@ -269,7 +279,8 @@ impl SurrealBackend {
     }
 
     pub async fn get_pending_cognitive_tasks(&self) -> Result<Vec<CognitiveTask>> {
-        let query_str = "SELECT * FROM cognitive_task WHERE status = 'Pending' ORDER BY created_at ASC;";
+        let query_str =
+            "SELECT * FROM cognitive_task WHERE status = 'Pending' ORDER BY created_at ASC;";
         let mut response = self.db.query(query_str).await?;
         let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
         Ok(tasks.into_iter().map(CognitiveTask::from).collect())
@@ -279,9 +290,10 @@ impl SurrealBackend {
         let query_str = "SELECT * FROM cognitive_task WHERE status = 'Injected';";
         let mut response = self.db.query(query_str).await?;
         let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
-        
+
         let now = Utc::now();
-        let expired_tasks = tasks.into_iter()
+        let expired_tasks = tasks
+            .into_iter()
             .map(CognitiveTask::from)
             .filter(|t| {
                 if let Some(injected) = t.injected_at {
@@ -291,7 +303,7 @@ impl SurrealBackend {
                 }
             })
             .collect();
-        
+
         Ok(expired_tasks)
     }
 
@@ -302,7 +314,8 @@ impl SurrealBackend {
                 created_at: time::now()
             };
         ";
-        self.db.query(query_str)
+        self.db
+            .query(query_str)
             .bind(("callback_id", callback_id))
             .bind(("state_json", state_json))
             .await?
@@ -311,8 +324,11 @@ impl SurrealBackend {
     }
 
     pub async fn get_pipeline_state(&self, callback_id: &str) -> Result<Option<String>> {
-        let query_str = "SELECT VALUE state_json FROM type::record('pipeline_state', $callback_id) LIMIT 1;";
-        let mut response = self.db.query(query_str)
+        let query_str =
+            "SELECT VALUE state_json FROM type::record('pipeline_state', $callback_id) LIMIT 1;";
+        let mut response = self
+            .db
+            .query(query_str)
             .bind(("callback_id", callback_id))
             .await?;
         let state_opt: Option<String> = response.take(0)?;
@@ -321,7 +337,8 @@ impl SurrealBackend {
 
     pub async fn delete_pipeline_state(&self, callback_id: &str) -> Result<()> {
         let query_str = "DELETE type::record('pipeline_state', $callback_id);";
-        self.db.query(query_str)
+        self.db
+            .query(query_str)
             .bind(("callback_id", callback_id))
             .await?
             .check()?;
@@ -336,16 +353,23 @@ impl SurrealBackend {
         };
         let id_val = rec_id.splitn(2, ':').collect::<Vec<&str>>()[1].to_string();
         let query_str = "DELETE type::record('cognitive_task', $id_val);";
-        self.db.query(query_str)
+        self.db
+            .query(query_str)
             .bind(("id_val", id_val.as_str()))
             .await?
             .check()?;
         Ok(())
     }
 
-    pub async fn get_completed_cognitive_tasks(&self, task_type: &str) -> Result<Vec<CognitiveTask>> {
-        let query_str = "SELECT * FROM cognitive_task WHERE status = 'Completed' AND task_type = $task_type;";
-        let mut response = self.db.query(query_str)
+    pub async fn get_completed_cognitive_tasks(
+        &self,
+        task_type: &str,
+    ) -> Result<Vec<CognitiveTask>> {
+        let query_str =
+            "SELECT * FROM cognitive_task WHERE status = 'Completed' AND task_type = $task_type;";
+        let mut response = self
+            .db
+            .query(query_str)
             .bind(("task_type", task_type))
             .await?;
         let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;

@@ -1,14 +1,14 @@
 use anyhow::Result;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::contracts::{EpisodeSave, Tier, WisdomRule};
+use crate::db::CognitiveTask;
 use crate::db::StorageBackend;
 use crate::db::SurrealBackend;
-use crate::db::CognitiveTask;
-use crate::contracts::{EpisodeSave, WisdomRule, Tier};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ToolCall {
@@ -108,7 +108,7 @@ Return JSON format matching:
     );
 
     let system_instruction = "You are a transcript distillation agent that outputs JSON only.";
-    
+
     if let Some(surreal_backend) = backend.as_any().downcast_ref::<SurrealBackend>() {
         let task_id = format!("cognitive_task:{}", Uuid::new_v4());
         let task = CognitiveTask {
@@ -137,7 +137,7 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
     let mut res = backend.db.query(sql).await?;
     let tasks_raw: Vec<crate::db::cognitive_tasks::CognitiveTaskRaw> = res.take(0)?;
     let tasks: Vec<CognitiveTask> = tasks_raw.into_iter().map(CognitiveTask::from).collect();
-    
+
     for task in tasks {
         if let Some(ref result_str) = task.result {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(result_str) {
@@ -151,9 +151,15 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                         }
                     }
                 }
-                
-                let title = format!("Session Reflection: {}", task.session_id.as_deref().unwrap_or("Unknown"));
-                let content = format!("Lessons:\n{:?}\nError Patterns:\n{:?}", parsed["lessons"], parsed["error_patterns"]);
+
+                let title = format!(
+                    "Session Reflection: {}",
+                    task.session_id.as_deref().unwrap_or("Unknown")
+                );
+                let content = format!(
+                    "Lessons:\n{:?}\nError Patterns:\n{:?}",
+                    parsed["lessons"], parsed["error_patterns"]
+                );
 
                 let ep = EpisodeSave::builder(title, content)
                     .node_type(Some("experience".to_string()))
@@ -167,19 +173,27 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
 
                 if outcome.as_deref() == Some("failure") {
                     if let Some(embedder) = &backend.embedder {
-                        let text_to_embed = format!("{} {:?}", causal.unwrap_or_default(), parsed["lessons"]);
-                        if let Ok(vec) = embedder.embed(&text_to_embed) {
+                        let text_to_embed =
+                            format!("{} {:?}", causal.unwrap_or_default(), parsed["lessons"]);
+                        if let Ok(vec) = embedder.embed(&text_to_embed).await {
                             let rule_sql = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active';";
-                             if let Ok(mut rule_res) = backend.db.query(rule_sql).await {
-                                if let Ok(rules_raw) = rule_res.take::<Vec<crate::db::backend::WisdomRaw>>(0) {
-                                    let rules: Vec<WisdomRule> = rules_raw.into_iter().map(|r| r.into_wisdom_rule()).collect();
+                            if let Ok(mut rule_res) = backend.db.query(rule_sql).await {
+                                if let Ok(rules_raw) =
+                                    rule_res.take::<Vec<crate::db::backend::WisdomRaw>>(0)
+                                {
+                                    let rules: Vec<WisdomRule> = rules_raw
+                                        .into_iter()
+                                        .map(|r| r.into_wisdom_rule())
+                                        .collect();
                                     let mut matched = false;
                                     for mut rule in rules {
                                         if let Some(ref rule_emb) = rule.embedding {
-                                            let sim = crate::math::cosine_similarity(&vec, rule_emb);
+                                            let sim =
+                                                crate::math::cosine_similarity(&vec, rule_emb);
                                             if sim >= 0.80 {
                                                 let current_imp = rule.importance.unwrap_or(0.0);
-                                                rule.importance = Some((current_imp + 0.2).min(1.0));
+                                                rule.importance =
+                                                    Some((current_imp + 0.2).min(1.0));
                                                 let _ = backend.save_wisdom_rule_db(&rule).await;
                                                 matched = true;
                                                 break;
@@ -187,9 +201,15 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                         }
                                     }
                                     if !matched {
-                                        let causal_str = parsed["causal_explanation"].as_str().unwrap_or("").to_string();
-                                        let lessons_str = if let Some(arr) = parsed["lessons"].as_array() {
-                                            let items: Vec<String> = arr.iter()
+                                        let causal_str = parsed["causal_explanation"]
+                                            .as_str()
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let lessons_str = if let Some(arr) =
+                                            parsed["lessons"].as_array()
+                                        {
+                                            let items: Vec<String> = arr
+                                                .iter()
                                                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                                                 .collect();
                                             items.join(", ")
@@ -221,11 +241,11 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
                                         let _ = backend.save_wisdom_rule_db(&new_rule).await;
                                     }
                                 }
-                             }
+                            }
                         }
                     }
                 }
-                
+
                 let del_sql = "DELETE type::record('cognitive_task', $id);";
                 if let Some(id_part) = task.id.strip_prefix("cognitive_task:") {
                     let _ = backend.db.query(del_sql).bind(("id", id_part)).await;

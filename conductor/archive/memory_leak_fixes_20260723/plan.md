@@ -1,0 +1,414 @@
+# Implementation Plan: Memory Leak Remediation & OOM Crash Prevention
+
+> **Phase ordering rationale:** Memory leaks are fixed before async throughput improvements. Unlocking concurrency while memory bombs exist would accelerate OOM crashes. Architecture documentation is updated first (Phase 0) per workflow.md Principle #2 — changes to the tech stack must be documented before implementation.
+>
+> **Phase gate protocol:** Every phase ends with the **complete 14-step Phase Completion Protocol** defined in `conductor/workflow.md` (unit tests → dev50 → manual verification → user confirmation → conductor-review → adversarial CTO review → conditional commit → git notes → checkpoint SHA). No phase may bypass any step.
+
+## Phase 0: Architecture & Data Flow Documentation Update
+
+Update project documentation to reflect the new design before writing any code. This establishes the architectural contract that all subsequent phases implement against.
+
+- [x] Task: Update ARCHITECTURE.md with new design
+  - [x] Update Section 2 (Dual-Engine Storage): document planned SQLite embedding cache migration, incremental IDF indexer with `idf_index` table, `pipeline_cluster` temporary table for DBSCAN state, `content_hash` field for hash-based deduplication. **Remove all references to RocksDB** — the SurrealDB backend is SurrealKV exclusively. Rename the section if needed to reflect this.
+  - [x] Update Section 3 (Three-Tiered Model Broker): document MLX `.eval()` requirements for KV caches, weight casts, and cross-encoder logits (joint eval pattern)
+  - [x] Update Section 4 (Cognitive Scheduling): document streaming-to-disk pipeline architecture (vault md for human-readable artifacts, SurrealDB for machine state), bounded pagination for all DB queries, temporal traversal LIMIT constraints
+  - [x] Update Section 5 (Graceful Shutdown): document planned CancellationToken lifecycle for background tasks, async semaphore model replacing blocking spin-loops
+  - [x] Update Section 6 (End-to-End Data Flow): update data flow diagram to reflect streaming pipeline stages, IDF indexer, hash-based deduplication, and bounded graph traversals
+  - [x] Add new Section: Memory Safety Invariants (pipeline stage memory cap ≤50 items, no `get_all_*` unbounded queries, all MLX operations evaluated before caching, hash-based deduplication for content comparison)
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
+## Phase 1: Critical MLX Graph Fixes (FR-1, FR-6)
+
+Surgical fixes to the primary OOM crash triggers. Safe, isolated, no dependency chain.
+
+- [x] Task: Add `.eval()` to KV cache concatenation in `Qwen2Attention::forward`
+  - [x] Write test: Verify KV cache tensors are evaluated after concatenation (mock MLX arrays)
+  - [x] Add `k.eval()?` and `v.eval()?` after `concatenate_axis_device` calls in `llm/qwen2_mlx.rs` L182-183
+  - [x] Run tests and confirm pass
+
+- [x] Task: Add `.eval()` to weight dtype casts in `load_model_weights`
+  - [x] Write test: Verify weight HashMap contains evaluated (non-lazy) arrays after loading
+  - [x] Add `cast_v.eval().unwrap()` after `as_dtype` in `llm/mlx_weights.rs` at both shard path (L224) and single-file path (L239)
+  - [x] Run tests and confirm pass
+
+- [x] Task: Add joint eval to mxbai cross-encoder logit access
+  - [x] Write test: Verify cross-encoder score function evaluates logits jointly (single forward pass)
+  - [x] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L446-449
+  - [x] Add `mlx_rs::eval(&[&logit_0, &logit_1])?` before `as_slice()` calls in `llm/mxbai_mlx.rs` L492-493
+  - [x] Run tests and confirm pass
+
+- [x] Task: Implement SQLite flush path and FIFO eviction for embedding cache
+  - [x] Write test: Verify `flush_dirty` with SQLite path correctly persists and retrieves dirty entries without loading entire cache
+  - [x] Write test: Verify cache capacity is enforced during flush via FIFO eviction (oldest entries by `created_at` are deleted first)
+  - [x] Remove binary `flush_dirty` **write/flush** code path (embeddings.rs L303-375). **Retain** the legacy binary deserialization structs and read logic solely for the one-time migration
+  - [x] Update `flush_dirty_default()` to always use SQLite path
+  - [x] Add `created_at` timestamp column to the SQLite embedding cache schema, populated on insert
+  - [x] Implement FIFO eviction in the SQLite flush path: enforce max cache capacity by deleting oldest entries (by `created_at`) before writing new ones. FIFO is chosen over LRU because write-on-read to update `last_accessed` is too expensive for the embedding cache hot path
+  - [x] Run tests and confirm pass
+
+- [x] Task: Implement one-time binary-to-SQLite embedding cache migration
+  - [x] Write test: Verify one-time migration reads existing `embedding_cache.bin` and writes all entries to SQLite
+  - [x] Write test: Verify migration safely skips deserialization if `embedding_cache.bin` exceeds 1GB size threshold
+  - [x] Add migration: on first run, detect `embedding_cache.bin`. If file size exceeds 1GB, log a warning, archive/delete the binary file, and start with a fresh SQLite cache (do NOT attempt to deserialize — it will OOM). Otherwise, deserialize using retained legacy structs, write entries to SQLite in bounded transactional batches (1,000–5,000 records per transaction to prevent memory and journal spikes), then rename/delete the binary file
+  - [x] After migration is confirmed working, mark legacy deserialization structs with `#[deprecated]` for removal in a future release
+  - [x] Run tests and confirm pass
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
+## Phase 2: Search Pipeline Memory Safety (FR-2)
+
+The TF-IDF cache-miss bomb is the largest single memory allocation in the codebase. Must be fixed before any concurrency improvements. Paginated CRUD primitives are built first since backfill tasks depend on them.
+
+- [x] Task: Implement paginated query variants in CRUD layer
+  - [x] Write test: Verify `get_episodes_paginated(limit, offset)` returns correct subset with proper offset/limit
+  - [x] Write test: Verify `get_wiki_nodes_paginated(limit, offset)` returns correct subset
+  - [x] Write test: Verify `get_wisdom_rules_paginated(limit, offset)` returns correct subset
+  - [x] Write test: Verify `get_episodes_by_node_type_paginated(type, limit, offset)` returns correct subset
+  - [x] Write test: Verify `get_registered_transcripts_paginated(limit, offset)` returns correct subset
+  - [x] Add paginated variants to `crud_operations.rs` and `backend.rs` trait
+  - [x] Run tests and confirm pass
+
+- [x] Task: Create `idf_index` table and initialization logic
+  - [x] Write test: Verify `idf_index` table is created during daemon startup INIT_SCHEMA step
+  - [x] Add `idf_index` table definition (term: String, document_frequency: i64, scope: String) to `src/db/surreal_init.rs` INIT_SCHEMA. **Do NOT store `total_docs` per row** — total document count must be queried dynamically via `SELECT count() FROM episode WHERE scope = $scope` or maintained in a separate single-row `scope_metadata` table to avoid O(N) updates on every episode insert/delete
+  - [x] Add `DEFINE INDEX idx_idf_term ON idf_index FIELDS term, scope UNIQUE` to INIT_SCHEMA for efficient term lookups
+  - [x] Run tests and confirm pass
+
+- [x] Task: Build incremental IDF update function
+  - [x] Write test: Verify `update_idf_index(episode_id)` correctly increments term document frequencies on episode insert
+  - [x] Write test: Verify `update_idf_index` correctly decrements term document frequencies on episode delete
+  - [x] Add `update_idf_index` to `crud_operations.rs`
+  - [x] Wire `update_idf_index` into `save_episode`, `save_episodes_batch`, **and `delete_episode`** code paths in `backend.rs`
+  - [x] Run tests and confirm pass
+
+- [x] Task: Backfill IDF index for existing episodes
+  - [x] Write test: Verify backfill migration computes correct term frequencies for a known set of existing episodes
+  - [x] Write test: Verify backfill is idempotent (running twice produces identical IDF counts)
+  - [x] Implement `backfill_idf_index()` function that processes existing episodes in bounded chunks (paginate episodes, tokenize chunk, update IDF counts in DB, **drop chunk from memory**, fetch next) without accumulating all episodes into memory
+  - [x] Wire backfill into daemon startup: run once if `idf_index` table is empty, log progress
+  - [x] Run tests and confirm pass
+
+- [x] Task: Replace TF-IDF cache-miss bulk load with IDF index lookup
+  - [x] Write test: Verify FTS search uses pre-computed IDF index on cache miss (no `SELECT VALUE content FROM episode`)
+  - [x] Refactor `search_pipeline.rs` L1927 to read from `idf_index` table instead of loading all episode content
+  - [x] Run tests and confirm pass
+
+- [x] Task: Add LIMIT constraints to temporal neighbor graph traversals
+  - [x] Write test: Verify temporal expansion returns at most 50 results per hop level
+  - [x] Write test: Verify depth-3 traversal on dense graph does not exceed memory bounds
+  - [x] Add `LIMIT 50` to each hop level in `search_pipeline.rs` L2323-2328 (preds_1/2/3, succs_1/2/3)
+  - [x] Add `LIMIT 50` to the secondary temporal expansion query at L2341-2346
+  - [x] Run tests and confirm pass
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
+## Phase 3: Pagination Migration — Standalone Callers (FR-3, FR-8)
+
+Migrate non-cognitive-pipeline callers to paginated queries. Cognitive pipeline callers (`synthesis.rs`, `compactor.rs`, `precompact.rs`) are deferred to Phase 4 where they are structurally rewritten for streaming-to-disk, avoiding double-touch.
+
+- [x] Task: Add `content_hash` schema, index, and hash-based deduplication queries
+  - [x] Write test: Verify `content_hash` is computed (SHA-256 of normalized content) and stored on episode and wisdom_rule save
+  - [x] Write test: Verify `find_duplicate_by_content_hash(hash)` returns matching record without full table scan
+  - [x] Add `DEFINE FIELD content_hash` and `DEFINE INDEX idx_content_hash ON episode FIELDS content_hash` (and same for `wisdom_rule`) to INIT_SCHEMA in `src/db/surreal_init.rs`
+  - [x] Add `content_hash` field computation to episode and wisdom_rule save paths in `backend.rs`
+  - [x] Add `find_duplicate_by_content_hash` query to `crud_operations.rs` using DB index lookup
+  - [x] Run tests and confirm pass
+
+- [x] Task: Backfill `content_hash` for existing episodes and wisdom rules
+  - [x] Write test: Verify backfill computes correct SHA-256 hash for a known set of existing records
+  - [x] Write test: Verify backfill is idempotent (running twice does not corrupt hashes)
+  - [x] Implement `backfill_content_hashes()` function that uses `LIMIT 50` loops **without** `OFFSET` (query `WHERE content_hash IS NONE LIMIT 50`, compute SHA-256 hashes, **save the updated records back to the database**, repeat until 0 results)
+  - [x] Wire backfill into daemon startup: run once if records with null `content_hash` exist, log progress
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate `get_all_episodes()` callers — HTTP handlers (2 files)
+  - [x] Write test: Verify `vault_handlers` streams all paginated results to the HTTP response without accumulating into a single `Vec` (bounded memory)
+  - [x] Refactor `vault_handlers.rs` L41, L72 to use chunked JSON stream response directly from paginated DB cursor
+  - [x] Refactor `manage_handlers.rs` L338, L1214 to use chunked JSON stream response directly from paginated DB cursor
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate `get_all_episodes()` callers — internal pipelines (2 files)
+  - [x] Write test: Verify `blackboard` and `ingestion` process paginated results one chunk at a time without accumulating all episodes into memory
+  - [x] Refactor `vault/ingestion.rs` L606 to process episodes in bounded chunks (process chunk, drop, fetch next) — do NOT accumulate into a single `Vec`
+  - [x] Refactor `blackboard.rs` L189 to process episodes in bounded chunks. If full accumulation is strictly required by the logic, fetch only lightweight projections (e.g., `id` and `content_hash`, excluding the large `content` payload)
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate standalone `get_all_wiki_nodes()` callers (2 files)
+  - [x] Write test: Verify `harvest` and `meta_skill` process paginated wiki nodes in bounded chunks without accumulating all into memory. If full accumulation is required by the algorithm, fetch only lightweight projections (e.g., `id` and required fields, excluding large `content` payloads)
+  - [x] Refactor `harvest.rs` L297 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
+  - [x] Refactor `meta_skill.rs` L127 to process wiki nodes in bounded chunks (process chunk, drop, fetch next)
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate standalone `get_all_wisdom_rules()` callers (1 file)
+  - [x] Write test: Verify `harvest` processes paginated wisdom rules in bounded chunks without accumulating all into memory
+  - [x] Refactor `harvest.rs` L342 to process wisdom rules in bounded chunks (process chunk, drop, fetch next)
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate `get_all_registered_transcripts()` and `get_all_episodes()` in meta_skill (2 files)
+  - [x] Write test: Verify transcript and episode pagination loops process in bounded chunks without accumulating all into memory
+  - [x] Refactor `synthesis.rs` L781 (standalone transcript query, not cognitive pipeline rewrite) to process in bounded chunks
+  - [x] Refactor `meta_skill.rs` L126 to process in bounded chunks
+  - [x] Run tests and confirm pass
+
+- [x] Task: Paginate startup missing-embedding backfill
+  - [x] Write test: Verify startup backfill processes records in bounded batches without skipping any records
+  - [x] Refactor daemon.rs L126, L152, L178 to use `LIMIT 50` loops **without** `OFFSET` (query `WHERE embedding IS NONE LIMIT 50`, process batch, repeat until 0 results — OFFSET would skip records as they're updated)
+  - [x] Run tests and confirm pass
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
+## Phase 4: Streaming-to-Disk Cognitive Pipeline (FR-4)
+
+Convert the cognitive pipeline from in-memory accumulation to incremental vault writes. Each streaming task below natively replaces `get_all_*` calls with paginated DB queries as part of the structural rewrite — no separate pagination migration needed, avoiding double-touch.
+
+### Storage Routing
+
+| Artifact | Destination | Rationale |
+|----------|-------------|-----------|
+| Unprocessed episode chunks | Vault md (`vault/episodes/*.md`) | Human-readable, written during ingestion before cognitive processing |
+| Episode summaries | Vault md (`wiki/<scope>/episodes/*.md`) | Human-readable, version-controlled |
+| DBSCAN cluster assignments | SurrealDB `pipeline_cluster` table | Ephemeral machine state, needs transaction safety, avoids FS watcher re-ingestion |
+| Synthesized insights | Vault md (`wiki/<scope>/insights/*.md`) | Human-readable, version-controlled |
+| Direction promotions | Vault md (`wiki/<scope>/directions/*.md`) | Human-readable, version-controlled |
+| Wisdom rules | Vault md (`wisdom/*.md`) + DB `wisdom_rule` | Human-readable + queryable |
+| Pruned/archived nodes | Vault `archive/` | Human-readable audit trail |
+| Compaction summaries | Vault md (`wiki/<scope>/compactions/*.md`) | Human-readable, version-controlled |
+
+- [x] Task: Migrate cognitive pipeline deduplication to hash-based lookups (deferred from Phase 3)
+  - [x] Refactor wisdom deduplication in `synthesis.rs` L2440 to use `find_duplicate_by_content_hash` instead of paginated comparison
+  - [x] Refactor near-duplicate detection in `compactor.rs` L253 to use hash pre-filter before embedding comparison
+  - [x] Run tests and confirm pass
+
+- [x] Task: Create `pipeline_cluster` temporary table for DBSCAN state
+  - [x] Write test: Verify `pipeline_cluster` records can be inserted, queried by run_id, and bulk-deleted after synthesis
+  - [x] Write test: Verify orphaned `pipeline_cluster` records are purged on daemon startup
+  - [x] Add `pipeline_cluster` table definition to INIT_SCHEMA (fields: run_id, cluster_id, episode_id, scope, created_at)
+  - [x] Add startup cleanup query `DELETE pipeline_cluster;` in `surreal_init.rs` to purge orphaned ephemeral state from previous terminated runs
+  - [x] Add `save_cluster_assignment`, `get_cluster_members_paginated(run_id, cluster_id, limit, offset)`, and `delete_pipeline_run(run_id)` to CRUD layer. `get_cluster_members` must be paginated to enforce the ≤50 items in-memory constraint for large clusters
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream unprocessed episode chunks to vault with bounded batch inserts
+  - [x] Write test: Verify episode chunks are written to `vault/episodes/*.md` incrementally during ingestion, not accumulated in `Vec<Episode>` across the full batch
+  - [x] Write test: Verify ingestion of 1000+ episodes does not exceed bounded memory (≤50 episodes in memory at any time)
+  - [x] Refactor `vault/ingestion.rs` bulk ingestion loop: accumulate parsed chunks into a bounded buffer (max 50), write each chunk to vault md file, flush the buffer via `save_episodes_batch`, clear buffer, repeat until all chunks processed
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream episode summaries to vault during dreaming
+  - [x] Write test: Verify episode summaries are flushed to `wiki/<scope>/episodes/*.md` immediately after LLM generation, not held in batch Vec
+  - [x] Refactor `synthesis.rs` dreaming loop (L869-883): process unprocessed episodes in bounded chunks, write each summary to vault md file before processing next chunk
+  - [x] Drop `all_episodes` cache (L891) — replace with paginated DB queries for centroid calculation using running mean
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream DBSCAN cluster assignments to SurrealDB
+  - [x] Write test: Verify cluster assignments are stored in `pipeline_cluster` table with unique run_id and individual members retrieved during synthesis
+  - [x] Write test: Verify `pipeline_cluster` records are deleted after successful synthesis completion
+  - [x] Refactor `synthesis.rs` DBSCAN flow (L1256-1258): write cluster assignments to `pipeline_cluster` table, then query members per-cluster during insight synthesis
+  - [x] Refactor `compactor.rs` hierarchical DBSCAN (L848-856): write cluster assignments to `pipeline_cluster` table, process clusters sequentially by querying from DB
+  - [x] Call `delete_pipeline_run(run_id)` at the conclusion of both the synthesis and compaction pipelines to clean up the temporary table. **Cleanup must be guaranteed even on error paths** — use a RAII scope guard (e.g., `scopeguard::defer!` or a custom `Drop` impl on the run context) so that `delete_pipeline_run` executes on early returns, `Err(?)`, and panics
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream insight synthesis to vault incrementally
+  - [x] Write test: Verify each synthesized insight is written to `wiki/<scope>/insights/*.md` immediately and dropped from memory before next cluster
+  - [x] Write test: Verify no more than 50 insights are held in memory simultaneously
+  - [x] Refactor cluster-to-insight synthesis loop in `synthesis.rs` (L1258-1400): write insight md, drop from memory, proceed to next cluster
+  - [x] Refactor scope insights loading (L977-978, L1505): implement chunked directory reading in `load_insights()` using `fs::read_dir` to load, process, and drop markdown files in bounded batches of 50
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream direction promotion to vault incrementally
+  - [x] Write test: Verify direction nodes are written to `wiki/<scope>/directions/*.md` immediately after promotion evaluation
+  - [x] Refactor direction backpropagation (synthesis.rs L2988-3002): load directions paginated from DB, process one-at-a-time, write result to vault, drop, next
+  - [x] Refactor direction promotion drift metrics (L3060-3155): evaluate and write one candidate at a time
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream wisdom graduation to vault incrementally
+  - [x] Write test: Verify graduated wisdom rules are written to `wisdom/*.md` immediately after cross-scope matching
+  - [x] Refactor graduation candidates (synthesis.rs L1946): load candidates paginated instead of `get_all_wiki_nodes()`
+  - [x] Refactor graduation clusters (L2168-2182): process one cluster at a time, write wisdom rule to vault, drop, next
+  - [x] Refactor wisdom deduplication (L2440): use hash-based lookup (Phase 3) for comparison
+  - [x] Refactor direction-to-wisdom graduation (L3203-3246): process one direction pair at a time
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream pruned nodes — GC and procedural trimming
+  - [x] Write test: Verify pruned nodes are moved to `vault/archive/` and dropped from memory immediately, not batched
+  - [x] Refactor GC candidates (compactor.rs L140): process one node at a time — archive file, delete from DB, drop reference
+  - [x] Refactor procedural episode trimming (compactor.rs L180): paginate active procs, archive excess one-at-a-time
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream pruned nodes — near-duplicate merging and decay archival
+  - [x] Write test: Verify near-duplicate merging archives each pair immediately, not in batch
+  - [x] Write test: Verify decayed episodes are archived and dropped from memory per-batch
+  - [x] Refactor near-duplicate merging (compactor.rs L253): compare pairs using paginated iteration, merge+archive immediately per pair
+  - [x] Refactor decayed episode archival (compactor.rs L1195-1211): paginate episodes, compute decay per batch, archive immediately
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream compaction summaries one cluster at a time
+  - [x] Write test: Verify compaction loop writes each cluster summary to `wiki/<scope>/compactions/*.md` and releases prompt buffer before next cluster
+  - [x] Write test: Verify outlier insights are written individually, not accumulated in batch Vec
+  - [x] Refactor compaction loop (compactor.rs L861-1013): flush prompt_content and LLM response after each cluster write
+  - [x] Refactor outlier handling (compactor.rs L1018-1090): write each outlier insight individually
+  - [x] Run tests and confirm pass
+
+- [x] Task: Cap synthesis cluster prompt concatenation
+  - [x] Write test: Verify `insights_with_scope_labels` string is truncated at 32K token budget
+  - [x] Write test: Verify prompt building stops fetching additional cluster members from DB once 32K token budget is reached (no post-hoc truncation of an unbounded string)
+  - [x] Refactor synthesis.rs L2204-2210: when incrementally building the prompt, stop paginating and fetching cluster members from the database as soon as the 32K token budget is reached, preventing unbounded memory accumulation
+  - [x] Run tests and confirm pass
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+  - Phase 4 Complete (Commit: `c9052551499716699f1d8d1d795876fa405c33f6`, CTO Review: APPROVED)
+
+## Phase 5: Async Runtime Safety (FR-5, FR-7)
+
+Now safe to unlock concurrency — all memory bombs are fixed.
+
+- [x] Task: Identify and categorize all callers of blocking embed functions
+  - [x] Audit all callers of `embed()`, `embed_batch()`, `embed_sub_batch()` across the codebase
+  - [x] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
+  - [x] Document the categorized caller list in a scratch note before proceeding
+  - [x] Run tests and confirm pass (no code changes, audit only)
+
+- [x] Task: Add async embed function variants with async semaphores (strangler pattern)
+  - [x] Write test: Verify new async embed variants return identical results to legacy sync variants
+  - [x] Write test: Verify embedding semaphore acquisition in async variants is non-blocking and yields to tokio runtime
+  - [x] Add `embed_async()`, `embed_batch_async()`, `embed_sub_batch_async()` as new async functions alongside the existing synchronous versions
+  - [x] In the new async variants, use `tokio::sync::Semaphore::acquire().await` instead of `try_acquire()` spin-loops (the old sync variants retain `try_acquire` until deleted)
+  - [x] Add async trait variants if needed for category (c) callers
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate async-context embed callers to new async variants
+  - [x] Migrate all category (a) callers (async context) to call the new `*_async()` functions
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate sync-context embed callers and remove deprecated sync functions
+  - [x] For category (b) callers (sync context called from within tokio runtime): bubble `async` up the call stack to the nearest async context. If bubbling is structurally impossible (e.g., restricted by external sync trait), use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** use bare `block_on()` which panics inside a tokio runtime
+  - [x] Update any remaining trait signatures identified in category (c)
+  - [x] Delete the old synchronous `embed()`, `embed_batch()`, `embed_sub_batch()` functions
+  - [x] Rename `*_async()` functions to `embed()`, `embed_batch()`, `embed_sub_batch()` (drop the `_async` suffix)
+  - [x] Update all callers to use the renamed functions
+  - [x] Run tests and confirm pass
+
+- [x] Task: Replace blocking sleeps in daemon.rs and executor.rs
+  - [x] Write test: Verify daemon startup/retry loops use async sleep
+  - [x] Write test: Verify `run_git_command_with_retry` does not block the tokio runtime
+  - [x] Replace `std::thread::sleep` at daemon.rs L631 and L638 with `tokio::time::sleep`
+  - [x] Refactor `executor.rs` L40 `run_git_command_with_retry`: convert to async using `tokio::process::Command` and `tokio::time::sleep`, or wrap with `tokio::task::block_in_place` if async conversion is structurally blocked
+  - [x] Run tests and confirm pass
+
+- [x] Task: Add CancellationToken to all daemon background tasks
+  - [x] Write test: Verify all background tasks terminate within 5 seconds when cancellation is signaled
+  - [x] Create shared `CancellationToken` in daemon startup
+  - [x] Pass token to all 5 `tokio::spawn` loops (daemon.rs L228, L238, L249, L261, L268)
+  - [x] Replace bare `loop {}` with `loop { tokio::select! { _ = token.cancelled() => break, ... } }`
+  - [x] Wire token cancellation into the graceful shutdown sequence
+  - [x] Run tests and confirm pass
+
+- [x] Task: Audit and categorize blocking inference/generation functions
+  - [x] Audit all blocking inference functions (text generation, completion loops, reranking) across `llm/` modules
+  - [x] Categorize each caller as: (a) already in async context, (b) in sync context requiring async bubble-up or `block_in_place` bridge, or (c) in trait impl requiring signature change
+  - [x] Document the categorized caller list in a scratch note before proceeding
+  - [x] Run tests and confirm pass (no code changes, audit only)
+
+- [x] Task: Add async inference function variants with async semaphores (strangler pattern)
+  - [x] Write test: Verify new async inference variants return identical results to legacy sync variants
+  - [x] Add async variants of blocking inference/generation functions alongside existing synchronous versions
+  - [x] In the new async variants, use async semaphore acquisition where applicable (the old sync variants retain blocking paths until deleted)
+  - [x] Add async trait variants if needed for category (c) callers
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate async-context inference callers to new async variants
+  - [x] Migrate all category (a) callers (async context) to the new async variants
+  - [x] Run tests and confirm pass
+
+- [x] Task: Migrate sync-context inference callers and remove deprecated sync functions
+  - [x] For category (b) callers: bubble `async` up the call stack. If structurally impossible, use `tokio::task::block_in_place(|| handle.block_on(...))` — **never** bare `block_on()`
+  - [x] Update any remaining trait signatures identified in category (c)
+  - [x] Delete the old synchronous inference/generation functions
+  - [x] Rename async variants to drop `_async` suffix
+  - [x] Update all callers to use the renamed functions
+  - [x] Run tests and confirm pass
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
+## Phase 6: Proportional Growth Mitigations (FR-9)
+
+Address remaining medium-severity memory scaling issues.
+
+- [x] Task: Add sliding window to transcript mining tool sequence
+  - [x] Write test: Verify `mine_transcript` tool_sequence Vec does not exceed window size
+  - [x] Implement sliding window or periodic flush for `tool_sequence` in `precompact.rs` L125-160
+  - [x] Run tests and confirm pass
+
+- [x] Task: Stream chunk processing in Forge pipeline
+  - [x] Write test: Verify forge pipeline processes document chunks in bounded batches, not loading entire document into memory
+  - [x] Refactor `forge.rs` to use streaming chunk iteration with bounded buffer (identify specific accumulation points via `Vec<Chunk>` patterns)
+  - [x] Run tests and confirm pass
+
+- [x] Task: Add payload size limits to API batch endpoint
+  - [x] Write test: Verify `save_episodes_batch_handler` rejects payloads exceeding limit
+  - [x] Add size check to api.rs L120
+  - [x] Run tests and confirm pass
+
+- [x] Task: Fix VRAM tracking state desync
+  - [x] Write test: Verify `acquire_llm` updates `active_tier` and `last_weak_ref` on cache hit
+  - [x] Update early-return path in `llm/mod.rs` L1528 to set `active_tier` and `last_weak_ref`
+  - [x] Run tests and confirm pass
+
+- [x] Task: Bound completions proxy chat history concatenation
+  - [x] Write test: Verify prompt string is bounded by max token limit
+  - [x] Add truncation logic to `completions_proxy_handler` in api.rs L613-622
+  - [x] Run tests and confirm pass
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
+## Phase 6b: Workspace & Project Documentation Vault Mirroring
+
+Automate boundary-isolated mirroring, SHA-256 deduplicated indexing, and MOC linking of workspace-root and Conductor documentation assets (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into the Mythrax human-readable vault (`vault_root/reference/`) and retrieval index.
+
+- [x] Task: Add `content_hash` deduplication support & backfill for `WikiNode` & `wiki_node_history`
+  - [x] Add `content_hash` field to `WikiNode` struct in `contracts.rs`
+  - [x] Update `WikiNodeRaw` struct and `From<WikiNodeRaw> for WikiNode` in `backend.rs` to include `content_hash`
+  - [x] Add `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node TYPE option<string>;`, `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node_history TYPE option<string>;`, `DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;`, and update `wiki_node_update_history` trigger in `src/db/schema.rs`
+  - [x] Add `content_hash` SQL field bindings to `UPDATE` and `CREATE` query paths in `save_wiki_node_db` (`crud_operations.rs`)
+  - [x] Add `find_wiki_node_by_hash(hash)` query to CRUD layer
+  - [x] Implement `backfill_wiki_node_content_hashes()` daemon startup task
+  - [x] Run tests and confirm pass
+
+- [x] Task: Implement workspace document mirror engine with boundary isolation, path normalization & watcher suppression
+  - [x] Add `reference/`, `MOC.md`, and `*.tmp` file extension exclusions to `watcher.rs` main event filtering loop to prevent cascading LLM dreaming passes
+  - [x] Write test: Verify workspace scan ignores build/VCS dirs (`target/`, `.git/`, `.venv/`, `.cargo/`, `.trash/`, `node_modules/`) and `vault_root` when `vault_root` is inside `workspace_root`
+  - [x] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved with forward-slash (`/`) path normalization on all platforms without collisions
+  - [x] Write test: Verify SHA-256 hash comparison skips identical files without disk re-writes or DB queries
+  - [x] Write test: Verify deletion or re-indexing of source workspace docs prunes mirrored vault files, DB `WikiNode` records, and connected `relates_to` / `followed_by` graph edges using zero-offset `LIMIT 50` loops
+  - [x] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` wrapped in `spawn_blocking` with `IS_SYNCING_WORKSPACE_DOCS` `AtomicBool` guard, `cancel_token` checks, `WatchIgnoreList` event suppression, SHA-256 diffing, and atomic `.tmp` writes
+  - [x] Wire `sync_workspace_docs_to_vault` into daemon startup and 600s checkpointing loop with `CancellationToken` select guards
+  - [x] Run tests and confirm pass
+
+- [x] Task: Index reference docs without heavy LLM concept/rule extraction
+  - [x] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) with unique chunk naming (`relative/path.md#part-N`) preventing SurrealDB `(name, scope)` UNIQUE constraint collisions
+  - [x] Implement lightweight reference chunker and embedding indexer in `vault/ingestion.rs`
+  - [x] Run tests and confirm pass
+
+- [x] Task: Surgical atomic `MOC.md` rebuild with fallback creation
+  - [x] Write test: Verify `rebuild_reference_moc` surgically updates `## Reference` section with nested wikilinks (`[[reference/specs/foo/bar|specs / foo / bar]]`) atomically via `.tmp` swap, creating missing `MOC.md` or `## Reference` headers safely without overwriting top-level MOC sections
+  - [x] Implement `rebuild_reference_moc` in `store.rs` and trigger post-sync
+  - [x] Run tests and confirm pass
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+
+## Phase 7: Final Documentation Reconciliation
+
+Reconcile ARCHITECTURE.md with actual implementation (Phase 0 documented the design; this phase reconciles any deviations discovered during implementation).
+
+- [x] Task: Reconcile ARCHITECTURE.md with implemented changes
+  - [x] Diff Phase 0 ARCHITECTURE.md against actual implementation across Phases 1-6
+  - [x] Update any sections where implementation deviated from the Phase 0 design
+  - [x] Verify all code examples and diagrams match the final codebase state
+
+- [x] Task: Update inline code documentation
+  - [x] Add doc comments to all new paginated query functions in `crud_operations.rs` and `backend.rs`
+  - [x] Add doc comments to `update_idf_index`, `pipeline_cluster` CRUD functions, and streaming pipeline functions
+  - [x] Add safety comments at all `.eval()` call sites explaining the lazy graph accumulation risk
+
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+

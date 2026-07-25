@@ -87,7 +87,7 @@ pub enum Commands {
         #[arg(short, long)]
         source: String,
         /// Harness type (e.g. 'antigravity', 'claude', 'cursor', etc.)
-        #[arg(short, long)]
+        #[arg(short = 'H', long)]
         harness: String,
         /// Optional scope (defaults to 'general')
         #[arg(long, default_value = "general")]
@@ -95,6 +95,9 @@ pub enum Commands {
         /// Batch size for chunked ingestion
         #[arg(long, default_value_t = 50)]
         batch_size: usize,
+        /// Skip LLM title generation
+        #[arg(long)]
+        skip_llm: bool,
     },
     /// Run the pre-invocation hook (reads stdin, queries daemon, prints stdout)
     PreInvocation,
@@ -194,9 +197,7 @@ pub enum StmAction {
         key: Option<String>,
     },
     /// Clear all short-term memory variables for a session
-    Clear {
-        session_id: String,
-    },
+    Clear { session_id: String },
     /// Save a parent-to-subagent task handoff and link context
     Handoff {
         parent_conversation_id: String,
@@ -232,7 +233,7 @@ pub enum VaultAction {
         #[arg(short, long)]
         source: String,
         /// Harness type (e.g. 'antigravity', 'claude', 'cursor', etc.)
-        #[arg(short, long)]
+        #[arg(short = 'H', long)]
         harness: String,
         /// Optional scope
         #[arg(long)]

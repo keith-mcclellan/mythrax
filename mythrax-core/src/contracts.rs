@@ -101,6 +101,8 @@ pub struct Episode {
     pub title: String,
     pub content: String,
     #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
     pub source: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
@@ -136,6 +138,8 @@ pub struct Episode {
     pub archived_at: Option<String>,
     #[serde(default)]
     pub node_type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,6 +156,8 @@ pub struct Episode {
     pub causal_explanation: Option<String>,
     #[serde(default)]
     pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -197,6 +203,8 @@ pub struct EpisodeSave {
     pub causal_explanation: Option<String>,
     #[serde(default)]
     pub parent_task_id: Option<String>,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +231,7 @@ pub struct EpisodeSaveBuilder {
     pub outcome: Option<String>,
     pub causal_explanation: Option<String>,
     pub parent_task_id: Option<String>,
+    pub content_hash: Option<String>,
 }
 
 impl EpisodeSaveBuilder {
@@ -250,6 +259,7 @@ impl EpisodeSaveBuilder {
             outcome: None,
             causal_explanation: None,
             parent_task_id: None,
+            content_hash: None,
         }
     }
 
@@ -377,6 +387,7 @@ impl EpisodeSaveBuilder {
             outcome: self.outcome,
             causal_explanation: self.causal_explanation,
             parent_task_id: self.parent_task_id,
+            content_hash: self.content_hash,
         }
     }
 }
@@ -386,7 +397,6 @@ impl EpisodeSave {
         EpisodeSaveBuilder::new(title, content)
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResult {
@@ -449,6 +459,8 @@ pub struct WisdomRule {
     pub blocking: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub importance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -477,6 +489,7 @@ pub struct LlmConfigRequest {
     pub cloud_provider: Option<String>,
     pub api_key: Option<String>,
     pub llm_post_inference_delay_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_tier_mappings: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -535,8 +548,6 @@ pub struct ContractField {
     pub enum_values: Option<Vec<String>>,
 }
 
-
-
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct WikiNode {
     pub id: Option<String>,
@@ -553,6 +564,8 @@ pub struct WikiNode {
     pub metacognitive_confidence: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -739,18 +752,54 @@ impl SearchParams {
         }
     }
     // Builder methods
-    pub fn scope(mut self, scope: impl Into<String>) -> Self { self.scope = Some(scope.into()); self }
-    pub fn deep_insight(mut self, val: bool) -> Self { self.deep_insight = val; self }
-    pub fn limit(mut self, val: usize) -> Self { self.limit = val; self }
-    pub fn offset(mut self, val: usize) -> Self { self.offset = val; self }
-    pub fn threshold(mut self, val: f32) -> Self { self.threshold = val; self }
-    pub fn token_budget(mut self, val: usize) -> Self { self.token_budget = Some(val); self }
-    pub fn allow_downward(mut self, val: bool) -> Self { self.allow_downward = val; self }
-    pub fn include_episodes(mut self, val: bool) -> Self { self.include_episodes = val; self }
-    pub fn include_artifacts(mut self, val: bool) -> Self { self.include_artifacts = val; self }
-    pub fn session_id(mut self, id: impl Into<String>) -> Self { self.session_id = Some(id.into()); self }
-    pub fn include_archived(mut self, val: bool) -> Self { self.include_archived = val; self }
-    pub fn temporal_anchor(mut self, anchor: impl Into<String>) -> Self { self.temporal_anchor = Some(anchor.into()); self }
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = Some(scope.into());
+        self
+    }
+    pub fn deep_insight(mut self, val: bool) -> Self {
+        self.deep_insight = val;
+        self
+    }
+    pub fn limit(mut self, val: usize) -> Self {
+        self.limit = val;
+        self
+    }
+    pub fn offset(mut self, val: usize) -> Self {
+        self.offset = val;
+        self
+    }
+    pub fn threshold(mut self, val: f32) -> Self {
+        self.threshold = val;
+        self
+    }
+    pub fn token_budget(mut self, val: usize) -> Self {
+        self.token_budget = Some(val);
+        self
+    }
+    pub fn allow_downward(mut self, val: bool) -> Self {
+        self.allow_downward = val;
+        self
+    }
+    pub fn include_episodes(mut self, val: bool) -> Self {
+        self.include_episodes = val;
+        self
+    }
+    pub fn include_artifacts(mut self, val: bool) -> Self {
+        self.include_artifacts = val;
+        self
+    }
+    pub fn session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = Some(id.into());
+        self
+    }
+    pub fn include_archived(mut self, val: bool) -> Self {
+        self.include_archived = val;
+        self
+    }
+    pub fn temporal_anchor(mut self, anchor: impl Into<String>) -> Self {
+        self.temporal_anchor = Some(anchor.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -798,4 +847,3 @@ impl TaskProfile {
         self
     }
 }
-

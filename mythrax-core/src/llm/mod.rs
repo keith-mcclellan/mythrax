@@ -1,29 +1,29 @@
 use crate::db::StorageBackend;
 use anyhow::{Context, Result};
-use std::sync::OnceLock;
-use tokio::sync::Semaphore;
-use std::sync::{Arc, Mutex, Weak};
-use std::sync::atomic::{AtomicBool, Ordering};
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use async_trait::async_trait;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use tokio::sync::Semaphore;
 
 #[cfg(feature = "mlx")]
-use tokenizers::Tokenizer;
-#[cfg(feature = "mlx")]
 use mlx_rs::{Array, StreamOrDevice};
+#[cfg(feature = "mlx")]
+use tokenizers::Tokenizer;
 
 #[cfg(feature = "mlx")]
 pub mod mlx_weights;
 #[cfg(feature = "mlx")]
+pub mod mxbai_mlx;
+#[cfg(feature = "mlx")]
 pub mod nomic_mlx;
 #[cfg(feature = "mlx")]
 pub mod qwen2_mlx;
-#[cfg(feature = "mlx")]
-pub mod mxbai_mlx;
 
 #[cfg(feature = "mlx")]
-pub use mxbai_mlx::MxbaiReranker;
+pub use mxbai_mlx::{MxbaiReranker, evict_global_reranker};
 
 pub mod router;
 
@@ -34,9 +34,19 @@ pub struct Tokenizer;
 #[cfg(not(feature = "mlx"))]
 pub struct MxbaiReranker;
 
+#[cfg(not(feature = "mlx"))]
+impl MxbaiReranker {
+    pub fn evict(&mut self) {}
+}
+
+#[cfg(not(feature = "mlx"))]
+pub async fn evict_global_reranker() {}
+
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
-pub static IS_HIBERNATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-pub static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static IS_HIBERNATING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+pub static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 pub fn is_hibernating() -> bool {
     IS_HIBERNATING.load(std::sync::atomic::Ordering::SeqCst)
@@ -155,7 +165,9 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        self.provider.completion(db, system_instruction, prompt).await
+        self.provider
+            .completion(db, system_instruction, prompt)
+            .await
     }
 
     pub async fn routed_completion(
@@ -165,7 +177,9 @@ impl LLMClient {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        self.provider.routed_completion(db, profile, system_instruction, prompt).await
+        self.provider
+            .routed_completion(db, profile, system_instruction, prompt)
+            .await
     }
 
     pub async fn completion_explicit(
@@ -178,15 +192,17 @@ impl LLMClient {
         prompt: &str,
         enable_thinking: bool,
     ) -> Result<String> {
-        self.provider.completion_explicit(
-            db,
-            active_provider,
-            cloud_provider,
-            model,
-            system_instruction,
-            prompt,
-            enable_thinking,
-        ).await
+        self.provider
+            .completion_explicit(
+                db,
+                active_provider,
+                cloud_provider,
+                model,
+                system_instruction,
+                prompt,
+                enable_thinking,
+            )
+            .await
     }
 }
 
@@ -207,7 +223,8 @@ impl RealLlmProvider {
             prompt,
             false,
             false,
-        ).await
+        )
+        .await
     }
 
     pub async fn routed_completion(
@@ -222,21 +239,17 @@ impl RealLlmProvider {
             _ => false,
         };
         if mock_llm {
-            return self.completion_explicit(
-                db,
-                "mock",
-                "",
-                "",
-                system_instruction,
-                prompt,
-                false,
-                true,
-            ).await;
+            return self
+                .completion_explicit(db, "mock", "", "", system_instruction, prompt, false, true)
+                .await;
         }
 
         // --- 1. PRIORITY 1: COGNITIVE CALLBACK ---
         if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
-            if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+            if let Some(surreal_backend) = db
+                .as_any()
+                .downcast_ref::<crate::db::backend::SurrealBackend>()
+            {
                 let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
                 let task = crate::db::CognitiveTask {
                     id: task_id.clone(),
@@ -248,11 +261,14 @@ impl RealLlmProvider {
                     created_at: chrono::Utc::now(),
                     status: "Pending".to_string(),
                     result: None,
-                    ttl_minutes: 10,
+                    ttl_minutes: std::env::var("MYTHRAX_CALLBACK_TTL_MINUTES")
+                        .ok()
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(30),
                     injected_at: None,
                     session_id: None,
                 };
-                
+
                 if surreal_backend.create_cognitive_task(&task).await.is_ok() {
                     let start = std::time::Instant::now();
                     let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
@@ -263,7 +279,9 @@ impl RealLlmProvider {
                     let mut completed_opt = None;
                     while start.elapsed() < timeout {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                        if let Ok(Some(updated)) =
+                            surreal_backend.get_cognitive_task(&task_id).await
+                        {
                             if updated.status == "Completed" {
                                 if let Some(res) = updated.result {
                                     completed_opt = Some(res);
@@ -275,7 +293,20 @@ impl RealLlmProvider {
                     if let Some(res) = completed_opt {
                         return Ok(res);
                     }
-                    tracing::warn!("Cognitive callback timed out, falling back to direct cloud / local models");
+
+                    if std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok() {
+                        anyhow::bail!(
+                            "Cognitive callback for cloud model timed out and fallbacks are disabled"
+                        );
+                    }
+
+                    tracing::warn!(
+                        "Cognitive callback timed out, falling back to direct cloud / local models"
+                    );
+                } else {
+                    if std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok() {
+                        anyhow::bail!("Failed to create cognitive task and fallbacks are disabled");
+                    }
                 }
             }
         }
@@ -345,22 +376,26 @@ impl RealLlmProvider {
                 CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
             }
 
-            let cloud_model = if config.cloud_provider == "gemini" && (config.model.contains("Qwen") || config.model.is_empty()) {
+            let cloud_model = if config.cloud_provider == "gemini"
+                && (config.model.contains("Qwen") || config.model.is_empty())
+            {
                 "gemini-1.5-flash"
             } else {
                 &config.model
             };
 
-            let cloud_res = self.completion_explicit(
-                db,
-                "cloud",
-                &config.cloud_provider,
-                cloud_model,
-                system_instruction,
-                prompt,
-                false,
-                false,
-            ).await;
+            let cloud_res = self
+                .completion_explicit(
+                    db,
+                    "cloud",
+                    &config.cloud_provider,
+                    cloud_model,
+                    system_instruction,
+                    prompt,
+                    false,
+                    false,
+                )
+                .await;
 
             match &cloud_res {
                 Ok(_) => {
@@ -375,7 +410,7 @@ impl RealLlmProvider {
                             .ok()
                             .and_then(|v| v.parse::<u64>().ok())
                             .unwrap_or(3600);
-                        
+
                         tracing::warn!(
                             phase = "hibernation",
                             progress = "sleeping",
@@ -383,7 +418,7 @@ impl RealLlmProvider {
                             e,
                             retry_secs
                         );
-                        
+
                         tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
                         IS_HIBERNATING.store(false, Ordering::SeqCst);
                         CONSECUTIVE_FAILURES.store(0, Ordering::SeqCst);
@@ -412,7 +447,8 @@ impl RealLlmProvider {
             prompt,
             false,
             false,
-        ).await
+        )
+        .await
     }
 }
 
@@ -434,7 +470,8 @@ impl LlmProvider for RealLlmProvider {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        self.routed_completion(db, profile, system_instruction, prompt).await
+        self.routed_completion(db, profile, system_instruction, prompt)
+            .await
     }
 
     async fn completion_explicit(
@@ -456,7 +493,8 @@ impl LlmProvider for RealLlmProvider {
             prompt,
             enable_thinking,
             false,
-        ).await
+        )
+        .await
     }
 
     fn is_mock(&self) -> bool {
@@ -472,16 +510,9 @@ impl LlmProvider for MockLlmProvider {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        self.real.completion_explicit(
-            db,
-            "mock",
-            "",
-            "",
-            system_instruction,
-            prompt,
-            false,
-            true,
-        ).await
+        self.real
+            .completion_explicit(db, "mock", "", "", system_instruction, prompt, false, true)
+            .await
     }
 
     async fn routed_completion(
@@ -491,16 +522,9 @@ impl LlmProvider for MockLlmProvider {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        self.real.completion_explicit(
-            db,
-            "mock",
-            "",
-            "",
-            system_instruction,
-            prompt,
-            false,
-            true,
-        ).await
+        self.real
+            .completion_explicit(db, "mock", "", "", system_instruction, prompt, false, true)
+            .await
     }
 
     async fn completion_explicit(
@@ -513,16 +537,18 @@ impl LlmProvider for MockLlmProvider {
         prompt: &str,
         enable_thinking: bool,
     ) -> Result<String> {
-        self.real.completion_explicit(
-            db,
-            active_provider,
-            cloud_provider,
-            model,
-            system_instruction,
-            prompt,
-            enable_thinking,
-            true,
-        ).await
+        self.real
+            .completion_explicit(
+                db,
+                active_provider,
+                cloud_provider,
+                model,
+                system_instruction,
+                prompt,
+                enable_thinking,
+                true,
+            )
+            .await
     }
 
     fn is_mock(&self) -> bool {
@@ -531,7 +557,6 @@ impl LlmProvider for MockLlmProvider {
 }
 
 impl RealLlmProvider {
-
     pub async fn completion_explicit(
         &self,
         db: &dyn StorageBackend,
@@ -544,48 +569,66 @@ impl RealLlmProvider {
         is_mock: bool,
     ) -> Result<String> {
         if active_provider == "mock" || is_mock {
-                if prompt.contains("Analyze the following dialog") {
-                    return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
-                } else if prompt.contains("Validate if these should merge") {
-                    if std::env::var("MYTHRAX_MOCK_MALFORMED_MERGE").is_ok() {
-                        return Ok(r#"{"should_merge": true}"#.to_string());
-                    }
-                    return Ok(r#"{"should_merge": true, "suggested_name": "git-workflow", "reason": "Redundant playbooks"}"#.to_string());
-                } else if prompt.contains("Playbooks to Merge") {
-                    return Ok("---\nname: meta-git-workflow\ndescription: Consolidated git meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nConsolidated instructions here.\n".to_string());
-                } else if prompt.contains("meta-skill synthesizer") || prompt.contains("Context Data:") {
-                    return Ok("---\nname: meta-test-scope\ndescription: Synthesized meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nSynthesized instructions here.\n".to_string());
-                } else if prompt.contains("Wisdom") || prompt.contains("rules") || prompt.contains("Wisdom Rules") {
-                    if prompt.contains("aesthetic") || prompt.contains("procedural") || prompt.contains("rule_type") || prompt.contains("Events:") {
-                        return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy", "rule_type": "procedural"}]"#.to_string());
-                    } else {
-                        return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]"#.to_string());
-                    }
-                } else if prompt.contains("TOC") || prompt.contains("Table of Contents") {
-                    return Ok(r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string());
-                } else if prompt.contains("Insights:") {
-                    return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
-                } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {
-                    return Ok(r#"{"contradicts": true, "conflicting_field": "database", "resolution": "We should use SurrealDB for the database because Postgres was deprecated.", "confidence": 0.95}"#.to_string());
-                } else if prompt.contains("Please merge and generalize these two similar rules") {
-                    return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test"}"#.to_string());
-                } else if prompt.contains("knowledge generalizer") || prompt.contains("emerged independently") {
-                    return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test", "confidence": 0.95}"#.to_string());
-                } else if prompt.contains("Please analyze these events:") {
-                    if prompt.contains("Episode 1") || prompt.contains("Episode 2") {
-                        return Ok(r#"{"title": "Split Analysis One", "summary": "Summary of cluster 1", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
-                    } else if prompt.contains("Episode 3") || prompt.contains("Episode 4") {
-                        return Ok(r#"{"title": "Split Analysis Two", "summary": "Summary of cluster 2", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
-                    } else {
-                        return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
-                    }
-                } else {
-                    return Ok(r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string());
+            if prompt.contains("Analyze the following dialog") {
+                return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
+            } else if prompt.contains("Validate if these should merge") {
+                if std::env::var("MYTHRAX_MOCK_MALFORMED_MERGE").is_ok() {
+                    return Ok(r#"{"should_merge": true}"#.to_string());
                 }
+                return Ok(r#"{"should_merge": true, "suggested_name": "git-workflow", "reason": "Redundant playbooks"}"#.to_string());
+            } else if prompt.contains("Playbooks to Merge") {
+                return Ok("---\nname: meta-git-workflow\ndescription: Consolidated git meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nConsolidated instructions here.\n".to_string());
+            } else if prompt.contains("meta-skill synthesizer") || prompt.contains("Context Data:")
+            {
+                return Ok("---\nname: meta-test-scope\ndescription: Synthesized meta skill\ngenerator_name: MetaSkillSynthesizer\n---\n\nSynthesized instructions here.\n".to_string());
+            } else if prompt.contains("Wisdom")
+                || prompt.contains("rules")
+                || prompt.contains("Wisdom Rules")
+            {
+                if prompt.contains("aesthetic")
+                    || prompt.contains("procedural")
+                    || prompt.contains("rule_type")
+                    || prompt.contains("Events:")
+                {
+                    return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy", "rule_type": "procedural"}]"#.to_string());
+                } else {
+                    return Ok(r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]"#.to_string());
+                }
+            } else if prompt.contains("TOC") || prompt.contains("Table of Contents") {
+                return Ok(
+                    r#"[{"title": "test_title", "start_phrase": "Some document"}]"#.to_string(),
+                );
+            } else if prompt.contains("direction synthesizer")
+                || prompt.contains("Existing Direction Content:")
+            {
+                return Ok("This is a refined direction content containing Backpropagated Evidence and Child Insight.".to_string());
+            } else if prompt.contains("Insights:") {
+                return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
+            } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {
+                return Ok(r#"{"contradicts": true, "conflicting_field": "database", "resolution": "We should use SurrealDB for the database because Postgres was deprecated.", "confidence": 0.95}"#.to_string());
+            } else if prompt.contains("Please merge and generalize these two similar rules") {
+                return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test"}"#.to_string());
+            } else if prompt.contains("knowledge generalizer")
+                || prompt.contains("emerged independently")
+            {
+                return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test", "confidence": 0.95}"#.to_string());
+            } else if prompt.contains("Please analyze these events:") {
+                if prompt.contains("Episode 1") || prompt.contains("Episode 2") {
+                    return Ok(r#"{"title": "Split Analysis One", "summary": "Summary of cluster 1", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                } else if prompt.contains("Episode 3") || prompt.contains("Episode 4") {
+                    return Ok(r#"{"title": "Split Analysis Two", "summary": "Summary of cluster 2", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                } else {
+                    return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                }
+            } else {
+                return Ok(
+                    r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string(),
+                );
             }
+        }
 
         let config = db.get_llm_config().await?;
-        
+
         let response_text = match active_provider {
             "local" => {
                 #[cfg(feature = "mlx")]
@@ -594,18 +637,38 @@ impl RealLlmProvider {
                     if !is_external {
                         if let Some(broker) = DYNAMIC_MODEL_BROKER.get() {
                             let tier = match model {
-                                m if m.contains("0.5B") || m.contains("1.5B") || m.contains("Tier1") => ModelTier::Tier1,
-                                m if m.contains("35B") || m.contains("3.6") || m.contains("Tier3") || m.contains("Tier2") || m.contains("a3b") || m.contains("a4b") => ModelTier::Tier3,
+                                m if m.contains("0.5B")
+                                    || m.contains("1.5B")
+                                    || m.contains("Tier1") =>
+                                {
+                                    ModelTier::Tier1
+                                }
+                                m if m.contains("35B")
+                                    || m.contains("3.6")
+                                    || m.contains("Tier3")
+                                    || m.contains("Tier2")
+                                    || m.contains("a3b")
+                                    || m.contains("a4b") =>
+                                {
+                                    ModelTier::Tier3
+                                }
                                 _ => ModelTier::Tier2,
                             };
-                            let _permit = metal_inference_semaphore().acquire().await
+                            let _permit = metal_inference_semaphore()
+                                .acquire()
+                                .await
                                 .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
-                            tracing::info!("mlx feature active: routing local inference in-process via DynamicModelBroker for tier {:?}", tier);
+                            tracing::info!(
+                                "mlx feature active: routing local inference in-process via DynamicModelBroker for tier {:?}",
+                                tier
+                            );
                             let engine = broker.acquire_llm(tier).await?;
                             let raw = engine.generate(prompt, system_instruction).await?;
                             let result = strip_think_block(&raw);
                             if is_repetition_failure(&result) {
-                                anyhow::bail!("Local MLX model generated corrupted repeating output");
+                                anyhow::bail!(
+                                    "Local MLX model generated corrupted repeating output"
+                                );
                             }
                             return Ok(result);
                         }
@@ -613,7 +676,9 @@ impl RealLlmProvider {
                 }
 
                 // Fallback to HTTP request when mlx feature is disabled or broker is uninitialized
-                tracing::debug!("mlx feature disabled or broker not initialized: routing local inference to completions URL");
+                tracing::debug!(
+                    "mlx feature disabled or broker not initialized: routing local inference to completions URL"
+                );
 
                 let url_str = std::env::var("MYTHRAX_COMPLETIONS_URL")
                     .unwrap_or_else(|_| "http://127.0.0.1:8090/v1/chat/completions".to_string());
@@ -625,7 +690,11 @@ impl RealLlmProvider {
                     prompt.to_string()
                 };
 
-                let thinking_directive = if enable_thinking { "/think" } else { "/no_think" };
+                let thinking_directive = if enable_thinking {
+                    "/think"
+                } else {
+                    "/no_think"
+                };
                 let effective_system = match system_instruction {
                     Some(sys) => format!("{thinking_directive}\n{sys}"),
                     None => thinking_directive.to_string(),
@@ -645,7 +714,9 @@ impl RealLlmProvider {
                     "max_tokens": 8192
                 });
 
-                let _permit = metal_inference_semaphore().acquire().await
+                let _permit = metal_inference_semaphore()
+                    .acquire()
+                    .await
                     .map_err(|e| anyhow::anyhow!("LLM semaphore error: {}", e))?;
 
                 let req = self.client.post(url).json(&payload);
@@ -653,7 +724,7 @@ impl RealLlmProvider {
                 let json: serde_json::Value = resp.json().await?;
                 tracing::debug!("Local LLM raw response: {}", json);
                 let content = json["choices"][0]["message"]["content"].clone();
-                
+
                 let raw = if content.is_null() {
                     let alt = json["choices"][0]["message"]["reasoning"]
                         .as_str()
@@ -665,8 +736,11 @@ impl RealLlmProvider {
                         anyhow::bail!("Invalid local completion response. Raw JSON: {}", json);
                     }
                 } else {
-                    content.as_str()
-                        .with_context(|| format!("Invalid local completion response. Raw JSON: {}", json))?
+                    content
+                        .as_str()
+                        .with_context(|| {
+                            format!("Invalid local completion response. Raw JSON: {}", json)
+                        })?
                         .to_string()
                 };
 
@@ -675,11 +749,13 @@ impl RealLlmProvider {
                     anyhow::bail!("Local HTTP model generated corrupted repeating output");
                 }
 
-                let delay_ms = db.get_llm_config().await
+                let delay_ms = db
+                    .get_llm_config()
+                    .await
                     .map(|cfg| cfg.llm_post_inference_delay_ms.unwrap_or(5000))
                     .unwrap_or(5000);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                
+
                 result
             }
             "cloud" => {
@@ -688,12 +764,15 @@ impl RealLlmProvider {
                 }
                 match cloud_provider {
                     "gemini" => {
-                        let api_key = config.api_key.clone().unwrap_or_else(|| std::env::var("GEMINI_API_KEY").unwrap_or_default());
+                        let api_key = config
+                            .api_key
+                            .clone()
+                            .unwrap_or_else(|| std::env::var("GEMINI_API_KEY").unwrap_or_default());
                         let url = format!(
                             "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
                             model, api_key
                         );
-                        
+
                         let mut payload = serde_json::json!({
                             "contents": [
                                 {
@@ -728,9 +807,11 @@ impl RealLlmProvider {
                             .to_string()
                     }
                     "anthropic" | "claude" => {
-                        let api_key = config.api_key.clone().unwrap_or_else(|| std::env::var("ANTHROPIC_API_KEY").unwrap_or_default());
+                        let api_key = config.api_key.clone().unwrap_or_else(|| {
+                            std::env::var("ANTHROPIC_API_KEY").unwrap_or_default()
+                        });
                         let url = "https://api.anthropic.com/v1/messages";
-                        
+
                         let mut payload = serde_json::json!({
                             "model": model,
                             "max_tokens": 4096,
@@ -747,7 +828,9 @@ impl RealLlmProvider {
                             payload["system"] = serde_json::json!(sys);
                         }
 
-                        let req = self.client.post(url)
+                        let req = self
+                            .client
+                            .post(url)
                             .header("x-api-key", api_key)
                             .header("anthropic-version", "2023-06-01")
                             .json(&payload);
@@ -785,8 +868,14 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
 
         // Query Wisdom Rules semantically for all tiers
         let mut rules = Vec::new();
-        for tier in &[crate::contracts::Tier::Wisdom, crate::contracts::Tier::Project] {
-            if let Ok(res) = db.get_wisdom(parent_hypothesis, Some(*tier), 5, 0, 0.55).await {
+        for tier in &[
+            crate::contracts::Tier::Wisdom,
+            crate::contracts::Tier::Project,
+        ] {
+            if let Ok(res) = db
+                .get_wisdom(parent_hypothesis, Some(*tier), 5, 0, 0.55)
+                .await
+            {
                 rules.extend(res.results);
             }
         }
@@ -794,24 +883,34 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
         rules.sort_by(|a, b| {
             let score_a = a.similarity.unwrap_or(1.0) * (0.7 + 0.3 * a.utility.unwrap_or(1.0));
             let score_b = b.similarity.unwrap_or(1.0) * (0.7 + 0.3 * b.utility.unwrap_or(1.0));
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         rules.truncate(5);
 
         let mut wisdom_injection = String::new();
         if !rules.is_empty() {
-            wisdom_injection.push_str("\n\nHere are some relevant Wisdom Rules to follow during code generation:\n");
+            wisdom_injection.push_str(
+                "\n\nHere are some relevant Wisdom Rules to follow during code generation:\n",
+            );
             for (idx, r) in rules.iter().enumerate() {
                 wisdom_injection.push_str(&format!(
                     "{}. [Rule: {}]\n   - Action to Avoid: {}\n   - Why: {}\n   - Remedy: {}\n",
-                    idx + 1, r.target_pattern, r.action_to_avoid, r.causal_explanation, r.prescribed_remedy
+                    idx + 1,
+                    r.target_pattern,
+                    r.action_to_avoid,
+                    r.causal_explanation,
+                    r.prescribed_remedy
                 ));
             }
         }
 
         let mut constraints_injection = String::new();
         if !constraints.is_empty() {
-            constraints_injection.push_str("\n\nYou MUST respect the following constraints during code generation:\n");
+            constraints_injection.push_str(
+                "\n\nYou MUST respect the following constraints during code generation:\n",
+            );
             for c in constraints {
                 constraints_injection.push_str(&format!("- {}\n", c));
             }
@@ -819,7 +918,8 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
 
         let mut stm_injection = String::new();
         if !stm_anchors.is_empty() {
-            stm_injection.push_str("\n\nActive Short Term Memory (STM) anchors to guide your ideation:\n");
+            stm_injection
+                .push_str("\n\nActive Short Term Memory (STM) anchors to guide your ideation:\n");
             for anchor in stm_anchors {
                 stm_injection.push_str(&format!("- {}\n", anchor));
             }
@@ -851,24 +951,46 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             wisdom_injection, constraints_injection, stm_injection
         );
 
-        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code), Some(&system_prompt), &prompt).await
+        self.routed_completion(
+            db,
+            &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Code),
+            Some(&system_prompt),
+            &prompt,
+        )
+        .await
     }
 
     async fn evaluate_run(&self, db: &dyn StorageBackend, run_logs: &str) -> Result<String> {
-        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning), Some("You are a critic assistant that evaluates run logs and outputs JSON."), run_logs).await
+        self.routed_completion(
+            db,
+            &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning),
+            Some("You are a critic assistant that evaluates run logs and outputs JSON."),
+            run_logs,
+        )
+        .await
     }
 
-    async fn abstract_insights(&self, db: &dyn StorageBackend, parent_insight: Option<&str>, child_insight: &str) -> Result<String> {
+    async fn abstract_insights(
+        &self,
+        db: &dyn StorageBackend,
+        parent_insight: Option<&str>,
+        child_insight: &str,
+    ) -> Result<String> {
         let prompt = format!(
             "Parent context/insight: {:?}\n\
              Child run insight: {}\n\
              Summarize and merge these into a single updated insight containing all key takeaways.",
             parent_insight, child_insight
         );
-        self.routed_completion(db, &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization), Some("You are a summarization assistant."), &prompt).await
+        self.routed_completion(
+            db,
+            &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Summarization),
+            Some("You are a summarization assistant."),
+            &prompt,
+        )
+        .await
     }
 }
-
 
 pub fn strip_code_fences(content: &str) -> String {
     let mut cleaned = content.trim();
@@ -922,7 +1044,9 @@ async fn send_with_retry(
 ) -> Result<reqwest::Response> {
     let mut attempt = 0;
     loop {
-        let req = req_builder.try_clone().ok_or_else(|| anyhow::anyhow!("Request builder not cloneable"))?;
+        let req = req_builder
+            .try_clone()
+            .ok_or_else(|| anyhow::anyhow!("Request builder not cloneable"))?;
         match req.send().await {
             Ok(resp) if resp.status().is_success() => return Ok(resp),
             Ok(resp) => {
@@ -941,7 +1065,9 @@ async fn send_with_retry(
             }
             Err(e) => {
                 let err_str = e.to_string();
-                let is_connection_refused = e.is_connect() || err_str.contains("Connection refused") || err_str.contains("connection refused");
+                let is_connection_refused = e.is_connect()
+                    || err_str.contains("Connection refused")
+                    || err_str.contains("connection refused");
                 if is_connection_refused {
                     tracing::warn!(
                         "WARNING: Local LLM connection refused. Please ensure completions server is running or check MYTHRAX_COMPLETIONS_URL."
@@ -970,7 +1096,9 @@ async fn send_with_retry(
 
 pub fn calculate_lcg_jitter(attempt: i32, ns: u128) -> f64 {
     let mut x = (ns ^ (attempt as u128)) as u64;
-    x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    x = x
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (x % 100) as f64
 }
 
@@ -1007,15 +1135,15 @@ fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
     if s.chars().count() <= max_chars {
         return s;
     }
-    
+
     // Find the byte index at the character limit
     let limit_byte_idx = match s.char_indices().nth(max_chars) {
         Some((idx, _)) => idx,
         None => return s,
     };
-    
+
     let candidate = &s[..limit_byte_idx];
-    
+
     // Scan backward to find a clean boundary
     // 1. Try paragraph boundary (\n\n) within the last 5000 characters
     if let Some(para_idx) = candidate.rfind("\n\n") {
@@ -1023,21 +1151,21 @@ fn truncate_to_boundary(s: &str, max_chars: usize) -> &str {
             return &candidate[..para_idx];
         }
     }
-    
+
     // 2. Try line boundary (\n) within the last 2000 characters
     if let Some(line_idx) = candidate.rfind('\n') {
         if limit_byte_idx - line_idx < 2000 {
             return &candidate[..line_idx];
         }
     }
-    
+
     // 3. Try word boundary (space) within the last 500 characters
     if let Some(space_idx) = candidate.rfind(' ') {
         if limit_byte_idx - space_idx < 500 {
             return &candidate[..space_idx];
         }
     }
-    
+
     // Fallback to exact character boundary truncation
     candidate
 }
@@ -1056,9 +1184,15 @@ pub trait InferenceEngine: Send + Sync {
     fn is_warmed_up(&self) -> bool;
     fn stop_tokens(&self) -> Vec<String>;
     fn execution_mode(&self) -> String;
-    fn generate(&self, _prompt: &str, _system_instruction: Option<&str>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+    fn generate(
+        &self,
+        _prompt: &str,
+        _system_instruction: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
         Box::pin(async move {
-            Err(anyhow::anyhow!("Local inference is not enabled on this platform"))
+            Err(anyhow::anyhow!(
+                "Local inference is not enabled on this platform"
+            ))
         })
     }
 }
@@ -1086,10 +1220,10 @@ impl InProcessMlxEngine {
         warmed_up: bool,
         stop_tokens: Vec<String>,
         execution_mode: String,
-        #[cfg(feature = "mlx")]
-        model: Option<std::sync::Arc<tokio::sync::Mutex<qwen2_mlx::Qwen2Model>>>,
-        #[cfg(feature = "mlx")]
-        tokenizer: Option<std::sync::Arc<Tokenizer>>,
+        #[cfg(feature = "mlx")] model: Option<
+            std::sync::Arc<tokio::sync::Mutex<qwen2_mlx::Qwen2Model>>,
+        >,
+        #[cfg(feature = "mlx")] tokenizer: Option<std::sync::Arc<Tokenizer>>,
     ) -> Self {
         Self {
             name,
@@ -1122,7 +1256,11 @@ impl InferenceEngine for InProcessMlxEngine {
     }
 
     #[cfg(feature = "mlx")]
-    fn generate(&self, prompt: &str, system_instruction: Option<&str>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
+    fn generate(
+        &self,
+        prompt: &str,
+        system_instruction: Option<&str>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> {
         let model_opt = self.model.clone();
         let tokenizer_opt = self.tokenizer.clone();
         let prompt = prompt.to_string();
@@ -1149,7 +1287,8 @@ impl InferenceEngine for InProcessMlxEngine {
             };
 
             // Tokenize prompt
-            let tokens = tokenizer.encode(formatted_prompt, true)
+            let tokens = tokenizer
+                .encode(formatted_prompt, true)
                 .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?
                 .get_ids()
                 .to_vec();
@@ -1164,10 +1303,20 @@ impl InferenceEngine for InProcessMlxEngine {
             let mut kv_cache = Vec::with_capacity(num_layers);
             for layer in &model.layers {
                 let kv = (
-                    mlx_rs::ops::zeros::<f32>(&[1, layer.self_attn.num_kv_heads, 0, layer.self_attn.head_dim])
-                        .map_err(|e| anyhow::anyhow!("zeros cached_k build failed: {:?}", e))?,
-                    mlx_rs::ops::zeros::<f32>(&[1, layer.self_attn.num_kv_heads, 0, layer.self_attn.head_dim])
-                        .map_err(|e| anyhow::anyhow!("zeros cached_v build failed: {:?}", e))?,
+                    mlx_rs::ops::zeros::<f32>(&[
+                        1,
+                        layer.self_attn.num_kv_heads,
+                        0,
+                        layer.self_attn.head_dim,
+                    ])
+                    .map_err(|e| anyhow::anyhow!("zeros cached_k build failed: {:?}", e))?,
+                    mlx_rs::ops::zeros::<f32>(&[
+                        1,
+                        layer.self_attn.num_kv_heads,
+                        0,
+                        layer.self_attn.head_dim,
+                    ])
+                    .map_err(|e| anyhow::anyhow!("zeros cached_v build failed: {:?}", e))?,
                 );
                 kv_cache.push(kv);
             }
@@ -1197,21 +1346,31 @@ impl InferenceEngine for InProcessMlxEngine {
                 let last_logits = logits.try_index((0, (seq_len - 1) as i32))?;
 
                 // Argmax to sample the most likely token (greedy)
-                let next_token_arr = mlx_rs::ops::indexing::argmax_axis_device(last_logits, 0, false, StreamOrDevice::gpu())?;
-                next_token_arr.eval()
+                let next_token_arr = mlx_rs::ops::indexing::argmax_axis_device(
+                    last_logits,
+                    0,
+                    false,
+                    StreamOrDevice::gpu(),
+                )?;
+                next_token_arr
+                    .eval()
                     .map_err(|e| anyhow::anyhow!("MLX logits eval failed: {:?}", e))?;
-                
+
                 let next_token = next_token_arr.as_slice::<u32>()[0];
                 input_ids.push(next_token);
 
                 // Decode and check stop tokens
-                let decoded = tokenizer.decode(&[next_token], true)
+                let decoded = tokenizer
+                    .decode(&[next_token], true)
                     .map_err(|e| anyhow::anyhow!("Tokenizer decode error: {}", e))?;
-                
-                if decoded.contains("<|im_end|>") || decoded.contains("<|endoftext|>") || decoded.is_empty() {
+
+                if decoded.contains("<|im_end|>")
+                    || decoded.contains("<|endoftext|>")
+                    || decoded.is_empty()
+                {
                     break;
                 }
-                
+
                 generated_text.push_str(&decoded);
             }
 
@@ -1239,7 +1398,8 @@ pub struct ModelConfig {
     pub max_context_window: usize,
 }
 
-pub static DYNAMIC_MODEL_BROKER: std::sync::OnceLock<Arc<DynamicModelBroker>> = std::sync::OnceLock::new();
+pub static DYNAMIC_MODEL_BROKER: std::sync::OnceLock<Arc<DynamicModelBroker>> =
+    std::sync::OnceLock::new();
 
 /// DynamicModelBroker manages the lifecycle of LLM models.
 pub struct DynamicModelBroker {
@@ -1284,15 +1444,103 @@ impl DynamicModelBroker {
             return Err(anyhow::anyhow!("Mock corruption: Failed to acquire model"));
         }
 
+        if crate::is_test_mock() {
+            let model_name = match tier {
+                ModelTier::Tier1 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
+                ModelTier::Tier2 => {
+                    let config_model = self.config_model.lock().unwrap();
+                    config_model
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| "mlx-community/Qwen3.6-35B-A3B-4bit".to_string())
+                }
+                ModelTier::Tier3 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
+            };
+
+            // 1. Identify and evict all other LLM models to free VRAM
+            let mut evict_list = Vec::new();
+            {
+                let mut models = self.models.lock().unwrap();
+                if let Some(model) = models.get(&tier) {
+                    let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                    *last_weak_ref = Some(Arc::downgrade(model));
+                    let mut active_tier = self.active_tier.lock().unwrap();
+                    *active_tier = Some(tier);
+                    return Ok(model.clone());
+                }
+
+                for (t, m) in models.iter() {
+                    if *t != tier {
+                        evict_list.push((*t, Arc::downgrade(m)));
+                    }
+                }
+                for (t, _) in &evict_list {
+                    models.remove(t);
+                }
+            }
+
+            // 1.5. Block until the strong reference count of all evicted mock models drops to 0
+            for (t, weak_ref) in evict_list {
+                let start_wait = tokio::time::Instant::now();
+                while weak_ref.upgrade().is_some() {
+                    if start_wait.elapsed() >= std::time::Duration::from_secs(30) {
+                        tracing::warn!(
+                            "Timeout waiting for evicted mock model tier {:?} to deallocate from VRAM",
+                            t
+                        );
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+
+            // 2. Load the mock model safely under lock
+            let mut models = self.models.lock().unwrap();
+            let model = if let Some(model) = models.get(&tier) {
+                model.clone()
+            } else {
+                #[cfg(feature = "mlx")]
+                let engine = InProcessMlxEngine::new(
+                    model_name,
+                    true,
+                    vec!["<|eot_id|>".to_string()],
+                    "mock".to_string(),
+                    None,
+                    None,
+                );
+                #[cfg(not(feature = "mlx"))]
+                let engine = InProcessMlxEngine::new(
+                    model_name,
+                    true,
+                    vec!["<|eot_id|>".to_string()],
+                    "mock".to_string(),
+                );
+                let arc = Arc::new(engine) as Arc<dyn InferenceEngine>;
+                models.insert(tier, arc.clone());
+                arc
+            };
+
+            let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+            *last_weak_ref = Some(Arc::downgrade(&model));
+            let mut active_tier = self.active_tier.lock().unwrap();
+            *active_tier = Some(tier);
+
+            return Ok(model);
+        }
+
         // 1. Identify and evict all other LLM models to free VRAM
         let mut evict_list = Vec::new();
         {
             let mut models = self.models.lock().unwrap();
             // If the requested tier is already loaded, we can just return it immediately
             if let Some(model) = models.get(&tier) {
+                let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                *last_weak_ref = Some(Arc::downgrade(model));
+                let mut active_tier = self.active_tier.lock().unwrap();
+                *active_tier = Some(tier);
                 return Ok(model.clone());
             }
-            
+
             // Otherwise, we evict all other models
             for (t, m) in models.iter() {
                 if *t != tier {
@@ -1309,13 +1557,19 @@ impl DynamicModelBroker {
             let start_wait = tokio::time::Instant::now();
             while weak_ref.upgrade().is_some() {
                 if start_wait.elapsed() >= std::time::Duration::from_secs(30) {
-                    tracing::warn!("Timeout waiting for evicted model tier {:?} to deallocate from VRAM", t);
+                    tracing::warn!(
+                        "Timeout waiting for evicted model tier {:?} to deallocate from VRAM",
+                        t
+                    );
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
             if weak_ref.upgrade().is_none() {
-                tracing::info!("Evicted model tier {:?} successfully deallocated from VRAM", t);
+                tracing::info!(
+                    "Evicted model tier {:?} successfully deallocated from VRAM",
+                    t
+                );
             }
         }
 
@@ -1324,7 +1578,10 @@ impl DynamicModelBroker {
             ModelTier::Tier1 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
             ModelTier::Tier2 => {
                 let config_model = self.config_model.lock().unwrap();
-                config_model.as_ref().cloned().unwrap_or_else(|| "mlx-community/Qwen3.6-35B-A3B-4bit".to_string())
+                config_model
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| "mlx-community/Qwen3.6-35B-A3B-4bit".to_string())
             }
             ModelTier::Tier3 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
         };
@@ -1336,54 +1593,72 @@ impl DynamicModelBroker {
 
         #[cfg(feature = "mlx")]
         {
+            // 1. Download config.json if missing
+            let config_path = model_subdir.join("config.json");
+            if !config_path.exists() {
+                let config_url = format!(
+                    "https://huggingface.co/{}/resolve/main/config.json",
+                    model_name
+                );
+                download_file_if_missing(&config_url, &config_path).await?;
+            }
 
-                // 1. Download config.json if missing
-                let config_path = model_subdir.join("config.json");
-                if !config_path.exists() {
-                    let config_url = format!("https://huggingface.co/{}/resolve/main/config.json", model_name);
-                    download_file_if_missing(&config_url, &config_path).await?;
-                }
+            // 2. Download tokenizer.json if missing
+            let tokenizer_path = model_subdir.join("tokenizer.json");
+            if !tokenizer_path.exists() {
+                let tokenizer_url = format!(
+                    "https://huggingface.co/{}/resolve/main/tokenizer.json",
+                    model_name
+                );
+                download_file_if_missing(&tokenizer_url, &tokenizer_path).await?;
+            }
 
-                // 2. Download tokenizer.json if missing
-                let tokenizer_path = model_subdir.join("tokenizer.json");
-                if !tokenizer_path.exists() {
-                    let tokenizer_url = format!("https://huggingface.co/{}/resolve/main/tokenizer.json", model_name);
-                    download_file_if_missing(&tokenizer_url, &tokenizer_path).await?;
-                }
+            // 3. Check for model.safetensors.index.json
+            let index_path = model_subdir.join("model.safetensors.index.json");
+            let index_url = format!(
+                "https://huggingface.co/{}/resolve/main/model.safetensors.index.json",
+                model_name
+            );
 
-                // 3. Check for model.safetensors.index.json
-                let index_path = model_subdir.join("model.safetensors.index.json");
-                let index_url = format!("https://huggingface.co/{}/resolve/main/model.safetensors.index.json", model_name);
-                
-                let is_sharded = match reqwest::Client::new().head(&index_url).send().await {
-                    Ok(resp) => resp.status().is_success(),
-                    Err(_) => false,
-                };
+            let is_sharded = match reqwest::Client::new().head(&index_url).send().await {
+                Ok(resp) => resp.status().is_success(),
+                Err(_) => false,
+            };
 
-                if is_sharded {
-                    download_file_if_missing(&index_url, &index_path).await?;
-                    let content = std::fs::read_to_string(&index_path)?;
-                    let index: serde_json::Value = serde_json::from_str(&content)?;
-                    let weight_map = index.get("weight_map").context("weight_map not found in index")?;
-                    let weight_map = weight_map.as_object().context("weight_map is not a JSON object")?;
+            if is_sharded {
+                download_file_if_missing(&index_url, &index_path).await?;
+                let content = std::fs::read_to_string(&index_path)?;
+                let index: serde_json::Value = serde_json::from_str(&content)?;
+                let weight_map = index
+                    .get("weight_map")
+                    .context("weight_map not found in index")?;
+                let weight_map = weight_map
+                    .as_object()
+                    .context("weight_map is not a JSON object")?;
 
-                    let mut shard_files = std::collections::HashSet::new();
-                    for shard_val in weight_map.values() {
-                        if let Some(shard_str) = shard_val.as_str() {
-                            shard_files.insert(shard_str.to_string());
-                        }
+                let mut shard_files = std::collections::HashSet::new();
+                for shard_val in weight_map.values() {
+                    if let Some(shard_str) = shard_val.as_str() {
+                        shard_files.insert(shard_str.to_string());
                     }
-
-                    for shard in shard_files {
-                        let shard_path = model_subdir.join(&shard);
-                        let shard_url = format!("https://huggingface.co/{}/resolve/main/{}", model_name, shard);
-                        download_file_if_missing(&shard_url, &shard_path).await?;
-                    }
-                } else {
-                    let safetensors_path = model_subdir.join("model.safetensors");
-                    let safetensors_url = format!("https://huggingface.co/{}/resolve/main/model.safetensors", model_name);
-                    download_file_if_missing(&safetensors_url, &safetensors_path).await?;
                 }
+
+                for shard in shard_files {
+                    let shard_path = model_subdir.join(&shard);
+                    let shard_url = format!(
+                        "https://huggingface.co/{}/resolve/main/{}",
+                        model_name, shard
+                    );
+                    download_file_if_missing(&shard_url, &shard_path).await?;
+                }
+            } else {
+                let safetensors_path = model_subdir.join("model.safetensors");
+                let safetensors_url = format!(
+                    "https://huggingface.co/{}/resolve/main/model.safetensors",
+                    model_name
+                );
+                download_file_if_missing(&safetensors_url, &safetensors_path).await?;
+            }
         }
 
         // 4. Now load the new model safely under lock
@@ -1394,73 +1669,113 @@ impl DynamicModelBroker {
         } else {
             #[cfg(feature = "mlx")]
             let (model_opt, tok_opt) = {
-                    tracing::info!("Loading Qwen2 model from {} onto Metal", model_subdir.display());
-                    let config_content = std::fs::read_to_string(&model_subdir.join("config.json"))?;
-                    let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
+                tracing::info!(
+                    "Loading Qwen2 model from {} onto Metal",
+                    model_subdir.display()
+                );
+                let config_content = std::fs::read_to_string(&model_subdir.join("config.json"))?;
+                let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
 
-                    let num_layers = config_json.get("num_hidden_layers").and_then(|v| v.as_i64()).unwrap_or(28) as i32;
-                    let num_heads = config_json.get("num_attention_heads").and_then(|v| v.as_i64()).unwrap_or(12) as i32;
-                    let num_kv_heads = config_json.get("num_key_value_heads").and_then(|v| v.as_i64()).unwrap_or(2) as i32;
-                    let hidden_size = config_json.get("hidden_size").and_then(|v| v.as_i64()).unwrap_or(1536) as i32;
-                    let head_dim = hidden_size / num_heads;
-                    let rms_norm_eps = config_json.get("rms_norm_eps").and_then(|v| v.as_f64()).unwrap_or(1e-6) as f32;
-                    let vocab_size = config_json.get("vocab_size").and_then(|v| v.as_i64()).unwrap_or(151936) as i32;
+                let num_layers = config_json
+                    .get("num_hidden_layers")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(28) as i32;
+                let num_heads = config_json
+                    .get("num_attention_heads")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(12) as i32;
+                let num_kv_heads = config_json
+                    .get("num_key_value_heads")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(2) as i32;
+                let hidden_size = config_json
+                    .get("hidden_size")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(1536) as i32;
+                let head_dim = hidden_size / num_heads;
+                let rms_norm_eps = config_json
+                    .get("rms_norm_eps")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1e-6) as f32;
+                let vocab_size = config_json
+                    .get("vocab_size")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(151936) as i32;
 
-                    let rope_theta = config_json.get("rope_theta")
-                        .and_then(|v| v.as_f64())
-                        .or_else(|| {
-                            config_json.get("rope_parameters")
-                                .and_then(|p| p.get("rope_theta"))
-                                .and_then(|v| v.as_f64())
-                        })
-                        .unwrap_or(1000000.0) as f32;
+                let rope_theta = config_json
+                    .get("rope_theta")
+                    .and_then(|v| v.as_f64())
+                    .or_else(|| {
+                        config_json
+                            .get("rope_parameters")
+                            .and_then(|p| p.get("rope_theta"))
+                            .and_then(|v| v.as_f64())
+                    })
+                    .unwrap_or(1000000.0) as f32;
 
-                    let quantization = config_json.get("quantization")
-                        .or_else(|| config_json.get("quantization_config"));
-                    let bits = quantization.and_then(|q| q.get("bits").and_then(|v| v.as_i64())).unwrap_or(4) as i32;
-                    let group_size = quantization.and_then(|q| q.get("group_size").and_then(|v| v.as_i64())).unwrap_or(64) as i32;
+                let quantization = config_json
+                    .get("quantization")
+                    .or_else(|| config_json.get("quantization_config"));
+                let bits = quantization
+                    .and_then(|q| q.get("bits").and_then(|v| v.as_i64()))
+                    .unwrap_or(4) as i32;
+                let group_size = quantization
+                    .and_then(|q| q.get("group_size").and_then(|v| v.as_i64()))
+                    .unwrap_or(64) as i32;
 
-                    let num_experts = config_json.get("num_experts").and_then(|v| v.as_i64()).map(|x| x as i32);
-                    let num_experts_per_tok = config_json.get("num_experts_per_tok").and_then(|v| v.as_i64()).map(|x| x as i32);
+                let num_experts = config_json
+                    .get("num_experts")
+                    .and_then(|v| v.as_i64())
+                    .map(|x| x as i32);
+                let num_experts_per_tok = config_json
+                    .get("num_experts_per_tok")
+                    .and_then(|v| v.as_i64())
+                    .map(|x| x as i32);
 
-                    let weights = mlx_weights::load_model_weights(&model_subdir)?;
-                    let weights_model = qwen2_mlx::Qwen2Model::new(
-                        &weights,
-                        num_layers,
-                        num_heads,
-                        num_kv_heads,
-                        head_dim,
-                        rope_theta,
-                        rms_norm_eps,
-                        vocab_size,
-                        hidden_size,
-                        group_size,
-                        bits,
-                        num_experts,
-                        num_experts_per_tok,
-                    )?;
-                    
-                    let tokenizer = Tokenizer::from_file(&model_subdir.join("tokenizer.json"))
-                        .map_err(|e| anyhow::anyhow!("Tokenizer load error: {}", e))?;
-                    
-                    (Some(std::sync::Arc::new(tokio::sync::Mutex::new(weights_model))), Some(std::sync::Arc::new(tokenizer)))
+                let weights = mlx_weights::load_model_weights(&model_subdir)?;
+                let weights_model = qwen2_mlx::Qwen2Model::new(
+                    &weights,
+                    num_layers,
+                    num_heads,
+                    num_kv_heads,
+                    head_dim,
+                    rope_theta,
+                    rms_norm_eps,
+                    vocab_size,
+                    hidden_size,
+                    group_size,
+                    bits,
+                    num_experts,
+                    num_experts_per_tok,
+                )?;
+
+                let tokenizer = Tokenizer::from_file(&model_subdir.join("tokenizer.json"))
+                    .map_err(|e| anyhow::anyhow!("Tokenizer load error: {}", e))?;
+
+                (
+                    Some(std::sync::Arc::new(tokio::sync::Mutex::new(weights_model))),
+                    Some(std::sync::Arc::new(tokenizer)),
+                )
             };
 
             #[cfg(not(feature = "mlx"))]
-            let (_model_opt, _tok_opt): (Option<std::sync::Arc<tokio::sync::Mutex<Qwen2Model>>>, Option<std::sync::Arc<Tokenizer>>) = (None, None);
+            let (_model_opt, _tok_opt): (
+                Option<std::sync::Arc<tokio::sync::Mutex<Qwen2Model>>>,
+                Option<std::sync::Arc<Tokenizer>>,
+            ) = (None, None);
 
             // Create a new model instance
             let engine = Arc::new(InProcessMlxEngine::new(
                 model_name.clone(),
-                true, // warmed_up: true
+                true,                                               // warmed_up: true
                 vec!["<|eot_id|>".to_string(), "\"\"".to_string()], // stop_tokens
-                "gpu".to_string(), // execution_mode
+                "gpu".to_string(),                                  // execution_mode
                 #[cfg(feature = "mlx")]
                 model_opt,
                 #[cfg(feature = "mlx")]
                 tok_opt,
             ));
-            
+
             // Store the model
             models.insert(tier, engine.clone());
             engine
@@ -1469,11 +1784,11 @@ impl DynamicModelBroker {
         // Update the last weak reference
         let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
         *last_weak_ref = Some(Arc::downgrade(&model));
-        
+
         // Update the active tier
         let mut active_tier = self.active_tier.lock().unwrap();
         *active_tier = Some(tier);
-        
+
         Ok(model)
     }
 
@@ -1490,8 +1805,23 @@ impl DynamicModelBroker {
 
     /// Evicts unused models from the cache.
     pub async fn evict_unused_models(&self) {
-        let mut models = self.models.lock().unwrap();
-        models.retain(|_, model| Arc::strong_count(model) > 1);
+        let first_tier_and_model = {
+            let mut models = self.models.lock().unwrap();
+            models.retain(|_, model| Arc::strong_count(model) > 1);
+            models
+                .iter()
+                .map(|(tier, model)| (*tier, Arc::downgrade(model)))
+                .next()
+        };
+        if let Some((tier, weak_ref)) = first_tier_and_model {
+            *self.active_tier.lock().unwrap() = Some(tier);
+            *self.last_weak_ref.lock().unwrap() = Some(weak_ref);
+        } else {
+            *self.active_tier.lock().unwrap() = None;
+            *self.last_weak_ref.lock().unwrap() = None;
+        }
+        crate::embeddings::evict_global_embedder();
+        evict_global_reranker().await;
     }
 
     /// Updates the configuration model name.
@@ -1516,14 +1846,17 @@ impl DynamicModelBroker {
     }
 
     /// Acquires an LLM model with a warmup fallback mechanism.
-    pub async fn acquire_llm_with_warmup_fallback(&self, tier: ModelTier) -> Result<Arc<dyn InferenceEngine>> {
+    pub async fn acquire_llm_with_warmup_fallback(
+        &self,
+        tier: ModelTier,
+    ) -> Result<Arc<dyn InferenceEngine>> {
         match self.acquire_llm(tier).await {
             Ok(model) => Ok(model),
             #[cfg(any(test, debug_assertions))]
             Err(_e) => {
                 let mut models = self.models.lock().unwrap();
                 models.clear();
-                
+
                 let fallback_model: Arc<dyn InferenceEngine> = Arc::new(InProcessMlxEngine::new(
                     "fallback-cpu-model".to_string(),
                     true,
@@ -1534,12 +1867,12 @@ impl DynamicModelBroker {
                     #[cfg(feature = "mlx")]
                     None,
                 ));
-                
+
                 models.insert(tier, fallback_model.clone());
-                
+
                 let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
                 *last_weak_ref = Some(Arc::downgrade(&fallback_model));
-                
+
                 Ok(fallback_model)
             }
             #[cfg(not(any(test, debug_assertions)))]
@@ -1562,6 +1895,23 @@ mod tests {
         let expected_no_lang = "some non-json content";
         assert_eq!(strip_code_fences(input_no_lang), expected_no_lang);
     }
+
+    #[tokio::test]
+    async fn test_acquire_llm_cache_hit_updates_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let broker = DynamicModelBroker::new(temp.path().to_path_buf()).await.unwrap();
+
+        let model1 = broker.acquire_llm(ModelTier::Tier1).await.unwrap();
+        assert_eq!(broker.active_tier(), Some(ModelTier::Tier1));
+        assert!(broker.get_weak_llm_reference().unwrap().upgrade().is_some());
+
+        // Cache hit call
+        let model2 = broker.acquire_llm(ModelTier::Tier1).await.unwrap();
+        assert_eq!(broker.active_tier(), Some(ModelTier::Tier1));
+        let weak_ref = broker.get_weak_llm_reference().expect("Weak ref should exist");
+        assert!(Arc::ptr_eq(&model1, &model2));
+        assert!(weak_ref.upgrade().is_some());
+    }
 }
 
 #[cfg(feature = "mlx")]
@@ -1573,7 +1923,11 @@ async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<(
             }
         }
     }
-    tracing::info!("Downloading model asset from {} to {}...", url, path.display());
+    tracing::info!(
+        "Downloading model asset from {} to {}...",
+        url,
+        path.display()
+    );
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1584,7 +1938,9 @@ async fn download_file_if_missing(url: &str, path: &std::path::Path) -> Result<(
         anyhow::bail!(
             "Failed to download model from {}. HTTP status: {}. \
              Supply a pre-downloaded model asset file at {}.",
-            url, status, path.display()
+            url,
+            status,
+            path.display()
         );
     }
     let mut file = std::fs::File::create(path)?;

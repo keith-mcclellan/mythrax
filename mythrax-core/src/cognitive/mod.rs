@@ -1,14 +1,14 @@
-pub mod synthesis;
-pub mod compactor;
-pub mod harvest;
-pub mod executor;
-pub mod critic;
 pub mod arbor;
+pub mod compactor;
+pub mod critic;
+pub mod executor;
 pub mod forge;
+pub mod governor;
+pub mod harvest;
+pub mod memory_os;
 pub mod meta_skill;
 pub mod paging;
-pub mod memory_os;
-pub mod governor;
+pub mod synthesis;
 
 pub use arbor::*;
 pub use governor::*;

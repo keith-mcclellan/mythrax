@@ -3,7 +3,12 @@
 ## Parallel Test Execution
 - **Mandate**: Always run test suites in parallel using `cargo nextest run` or the `cargo t` alias.
 - **Why**: The default `cargo test` runs test suites sequentially which triggers database lock contentions and significantly slows down the E2E verification loop.
-- **Fast Mocking**: Always specify the `MYTHRAX_TEST_MOCK=1` environment variable when running unit and integration tests (e.g., `MYTHRAX_TEST_MOCK=1 cargo nextest run`). Do NOT specify `--features mlx` for mock tests, to avoid heavy Metal compiler/JIT loading and compilation overhead. If JIT compile errors or startup hangs occur on macOS, ensure `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` is exported.
+- **Isolation Mandate**: When running parallel subagents or concurrent test suites, each subagent MUST execute in a separate git worktree or specify a unique `CARGO_TARGET_DIR` (e.g., `CARGO_TARGET_DIR=target/track_a`) and isolated temp DB directory (e.g., `/tmp/track_a`) to prevent cargo target lock contention and database lock conflicts.
+- **Fast Mocking & Fast Domain Iteration**: Always specify `MYTHRAX_TEST_MOCK=1` when running tests. During iterative coding/debugging loops, agents MUST NOT run the full 310-test suite. Agents MUST run ONLY the specific targeted domain harness (`cargo nextest run -p mythrax-core domain_<subsystem>`) or a single test filter (`-E 'test(test_name)'`). Run the full test suite ONLY once at the very end of task execution.
+  - `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core domain_cognitive` (Cognitive & Compactor changes)
+  - `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core domain_search_retrieval` (Search, BM25, & Scored Retrieval)
+  - `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core domain_vault_storage` (Vault, CRUD, & Ingestion)
+  - `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core domain_hooks_models` (Hooks, Broker, & Routing)
 
 ## Core System Goals & Objectives
 
@@ -32,4 +37,14 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
   - **Use positive form**: Make definite assertions instead of evasive/negative qualifiers.
   - **Use definite, specific, concrete language**: Avoid vague generalizations.
   - **Keep paragraphs focused**: Stick to one topic per paragraph.
+
+## Rust Coding Standards & Architecture Directives
+- **Strict Anti-Lazy Implementation Mandate**: Coding subagents are strictly forbidden from taking lazy design shortcuts, writing temporary sync/async bridge wrappers, inserting `// TODO` or placeholder stubs, omitting error handling on edge cases, or applying band-aid patches to pass individual tests. All implementations must be fully written out, architecturally sound, type-safe, and natively integrated across all downstream callsites.
+- **Direct Native Async Refactoring (Anti-Bridge Rule)**: Coding subagents MUST NOT create parallel `_async` methods alongside existing sync methods, nor use `futures::executor::block_on` or `tokio::task::block_in_place` fallbacks inside default trait methods. When converting a trait or subsystem to async, subagents MUST update the trait definition directly with `async fn` and refactor all downstream callsites natively.
+- **Top-Level Scoping & Safe RAII Guards**: Operational status guards (e.g. `IS_INGESTING`) and cleanup routines MUST be scoped at the outermost public entry point of a function, covering all match arms, harness types, and execution branches. All temporary database state (e.g. `pipeline_cluster`) or filesystem resources MUST use safe RAII scope guards (implementing `Drop` with `Arc<dyn Trait>` handles) so cleanup is guaranteed on early `?` error returns, panics, and scope drops. Unsafe raw pointer transmutes (`*const dyn Trait`) are strictly forbidden.
+- **Strict Lock Ordering & Contention Prevention**: Subagents MUST NOT hold a primary lock (e.g., `EMBEDDING_CACHE` or `term_counts_cache`) while acquiring a secondary lock (e.g., `SQLITE_CACHE_CONN` or inner scope locks). Always extract required data into local variables, drop the primary lock completely, and then acquire secondary locks or execute I/O operations.
+- **Algorithmic Complexity & Bulk Operations (No $O(N)$ Hot-Path Scans)**: Subagents MUST NOT perform $O(N)$ linear iteration scans (e.g. `.min_by_key()`) inside hot-path loops or per-element insertions. Use constant-time $O(1)$ data structures (e.g. `lru::LruCache`) or perform bulk pruning (evicting the bottom 10% of items in a single pass when capacity is reached).
+- **Complete Resource Lifecycle & Write-on-Evict Safety**: Any component that loads GPU VRAM weights or allocates heavy in-memory buffers MUST implement a public `evict()` method and register it with the background idle eviction loop (`daemon.rs`). Any cache eviction mechanism (such as `LruCache::push` or `resize`) MUST inspect evicted items and immediately persist dirty entries to disk before dropping them from memory (Write-on-Evict).
+- **Incremental Per-Phase Git Commit & Push Mandate**: Agents MUST execute a git commit and `git push origin <branch_name>` immediately upon completing each phase of a track (after verifying unit tests and build status) before proceeding to subsequent phases or triggering code reviews. This prevents multi-commit push backlogs and keeps remotes continuously up to date.
+
 
