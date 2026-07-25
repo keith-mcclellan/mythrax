@@ -365,36 +365,36 @@ Address remaining medium-severity memory scaling issues.
 
 Automate boundary-isolated mirroring, SHA-256 deduplicated indexing, and MOC linking of workspace-root and Conductor documentation assets (`ARCHITECTURE.md`, `REINITIALIZATION.md`, `conductor/tracks/**/*.md`, `specs/**/*.md`) into the Mythrax human-readable vault (`vault_root/reference/`) and retrieval index.
 
-- [ ] Task: Add `content_hash` deduplication support & backfill for `WikiNode` & `wiki_node_history`
-  - [ ] Add `content_hash` field to `WikiNode` struct in `contracts.rs`
-  - [ ] Update `WikiNodeRaw` struct and `From<WikiNodeRaw> for WikiNode` in `backend.rs` to include `content_hash`
-  - [ ] Add `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node TYPE option<string>;`, `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node_history TYPE option<string>;`, `DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;`, and update `wiki_node_update_history` trigger in `src/db/schema.rs`
-  - [ ] Add `content_hash` SQL field bindings to `UPDATE` and `CREATE` query paths in `save_wiki_node_db` (`crud_operations.rs`)
-  - [ ] Add `find_wiki_node_by_hash(hash)` query to CRUD layer
-  - [ ] Implement `backfill_wiki_node_content_hashes()` daemon startup task
-  - [ ] Run tests and confirm pass
+- [x] Task: Add `content_hash` deduplication support & backfill for `WikiNode` & `wiki_node_history`
+  - [x] Add `content_hash` field to `WikiNode` struct in `contracts.rs`
+  - [x] Update `WikiNodeRaw` struct and `From<WikiNodeRaw> for WikiNode` in `backend.rs` to include `content_hash`
+  - [x] Add `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node TYPE option<string>;`, `DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node_history TYPE option<string>;`, `DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;`, and update `wiki_node_update_history` trigger in `src/db/schema.rs`
+  - [x] Add `content_hash` SQL field bindings to `UPDATE` and `CREATE` query paths in `save_wiki_node_db` (`crud_operations.rs`)
+  - [x] Add `find_wiki_node_by_hash(hash)` query to CRUD layer
+  - [x] Implement `backfill_wiki_node_content_hashes()` daemon startup task
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Implement workspace document mirror engine with boundary isolation, path normalization & watcher suppression
-  - [ ] Add `reference/`, `MOC.md`, and `*.tmp` file extension exclusions to `watcher.rs` main event filtering loop to prevent cascading LLM dreaming passes
-  - [ ] Write test: Verify workspace scan ignores build/VCS dirs (`target/`, `.git/`, `.venv/`, `.cargo/`, `.trash/`, `node_modules/`) and `vault_root` when `vault_root` is inside `workspace_root`
-  - [ ] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved with forward-slash (`/`) path normalization on all platforms without collisions
-  - [ ] Write test: Verify SHA-256 hash comparison skips identical files without disk re-writes or DB queries
-  - [ ] Write test: Verify deletion or re-indexing of source workspace docs prunes mirrored vault files, DB `WikiNode` records, and connected `relates_to` / `followed_by` graph edges using zero-offset `LIMIT 50` loops
-  - [ ] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` wrapped in `spawn_blocking` with `IS_SYNCING_WORKSPACE_DOCS` `AtomicBool` guard, `cancel_token` checks, `WatchIgnoreList` event suppression, SHA-256 diffing, and atomic `.tmp` writes
-  - [ ] Wire `sync_workspace_docs_to_vault` into daemon startup and 600s checkpointing loop with `CancellationToken` select guards
-  - [ ] Run tests and confirm pass
+- [x] Task: Implement workspace document mirror engine with boundary isolation, path normalization & watcher suppression
+  - [x] Add `reference/`, `MOC.md`, and `*.tmp` file extension exclusions to `watcher.rs` main event filtering loop to prevent cascading LLM dreaming passes
+  - [x] Write test: Verify workspace scan ignores build/VCS dirs (`target/`, `.git/`, `.venv/`, `.cargo/`, `.trash/`, `node_modules/`) and `vault_root` when `vault_root` is inside `workspace_root`
+  - [x] Write test: Verify relative directory structure (`specs/arbor_htr/test-plan.md` -> `vault_root/reference/specs/arbor_htr/test-plan.md`) is preserved with forward-slash (`/`) path normalization on all platforms without collisions
+  - [x] Write test: Verify SHA-256 hash comparison skips identical files without disk re-writes or DB queries
+  - [x] Write test: Verify deletion or re-indexing of source workspace docs prunes mirrored vault files, DB `WikiNode` records, and connected `relates_to` / `followed_by` graph edges using zero-offset `LIMIT 50` loops
+  - [x] Implement `sync_workspace_docs_to_vault(workspace_root, store, backend)` wrapped in `spawn_blocking` with `IS_SYNCING_WORKSPACE_DOCS` `AtomicBool` guard, `cancel_token` checks, `WatchIgnoreList` event suppression, SHA-256 diffing, and atomic `.tmp` writes
+  - [x] Wire `sync_workspace_docs_to_vault` into daemon startup and 600s checkpointing loop with `CancellationToken` select guards
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Index reference docs without heavy LLM concept/rule extraction
-  - [ ] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) with unique chunk naming (`relative/path.md#part-N`) preventing SurrealDB `(name, scope)` UNIQUE constraint collisions
-  - [ ] Implement lightweight reference chunker and embedding indexer in `vault/ingestion.rs`
-  - [ ] Run tests and confirm pass
+- [x] Task: Index reference docs without heavy LLM concept/rule extraction
+  - [x] Write test: Verify mirrored reference docs generate direct `WikiNode` records (`node_type: "reference"`, `scope: "workspace_ref"`) with unique chunk naming (`relative/path.md#part-N`) preventing SurrealDB `(name, scope)` UNIQUE constraint collisions
+  - [x] Implement lightweight reference chunker and embedding indexer in `vault/ingestion.rs`
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Surgical atomic `MOC.md` rebuild with fallback creation
-  - [ ] Write test: Verify `rebuild_reference_moc` surgically updates `## Reference` section with nested wikilinks (`[[reference/specs/foo/bar|specs / foo / bar]]`) atomically via `.tmp` swap, creating missing `MOC.md` or `## Reference` headers safely without overwriting top-level MOC sections
-  - [ ] Implement `rebuild_reference_moc` in `store.rs` and trigger post-sync
-  - [ ] Run tests and confirm pass
+- [x] Task: Surgical atomic `MOC.md` rebuild with fallback creation
+  - [x] Write test: Verify `rebuild_reference_moc` surgically updates `## Reference` section with nested wikilinks (`[[reference/specs/foo/bar|specs / foo / bar]]`) atomically via `.tmp` swap, creating missing `MOC.md` or `## Reference` headers safely without overwriting top-level MOC sections
+  - [x] Implement `rebuild_reference_moc` in `store.rs` and trigger post-sync
+  - [x] Run tests and confirm pass
 
-- [ ] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
+- [x] Task: Execute Phase Completion Protocol (workflow.md Steps 1-14)
 
 ## Phase 7: Final Documentation Reconciliation
 
