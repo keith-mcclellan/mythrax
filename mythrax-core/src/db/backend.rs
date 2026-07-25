@@ -233,10 +233,7 @@ pub struct SurrealBackend {
     pub client_port: Option<u16>,
     pub write_lock: Arc<tokio::sync::Mutex<()>>,
     pub db_path: Option<std::path::PathBuf>,
-    pub active_embeddings: Arc<std::sync::atomic::AtomicUsize>,
-    pub max_concurrent_embeddings: Arc<std::sync::atomic::AtomicUsize>,
     pub indexing_writes: Arc<tokio::sync::Mutex<std::collections::HashMap<String, usize>>>,
-    pub embedding_semaphore: Arc<tokio::sync::Mutex<Option<(usize, Arc<tokio::sync::Semaphore>)>>>,
     pub term_counts_cache: Arc<
         tokio::sync::RwLock<
             std::collections::HashMap<
@@ -460,6 +457,19 @@ impl SurrealBackend {
         let unique_tokens: std::collections::HashSet<String> = tokens.into_iter().collect();
         let now = std::time::Instant::now();
         let mut outer_write = self.term_counts_cache.write().await;
+
+        while outer_write.len() >= 1000 && !outer_write.contains_key(scope) {
+            if let Some(key_to_remove) = outer_write
+                .keys()
+                .find(|k| *k != "general" && *k != scope)
+                .cloned()
+            {
+                outer_write.remove(&key_to_remove);
+            } else {
+                break;
+            }
+        }
+
         let inner_lock = outer_write
             .entry(scope.to_string())
             .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())))
@@ -467,12 +477,27 @@ impl SurrealBackend {
         drop(outer_write);
 
         let mut inner_write = inner_lock.write().await;
+        // Purge expired entries where expires_at < Instant::now()
+        inner_write.retain(|key, entry| key == "__total_n__" || entry.expires_at >= now);
+
         for token in unique_tokens {
+            if inner_write.len() >= 10000 && !inner_write.contains_key(&token) {
+                let mut entries: Vec<(String, usize, std::time::Instant)> = inner_write
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "__total_n__")
+                    .map(|(k, v)| (k.clone(), v.count, v.expires_at))
+                    .collect();
+                entries.sort_unstable_by_key(|(_, count, exp)| (*count, *exp));
+                for (k, _, _) in entries.into_iter().take(1000) {
+                    inner_write.remove(&k);
+                }
+            }
             let entry = inner_write.entry(token).or_insert_with(|| CacheEntry {
                 count: 0,
                 expires_at: now + std::time::Duration::from_secs(3600),
             });
             entry.count += 1;
+            entry.expires_at = now + std::time::Duration::from_secs(3600);
         }
 
         let entry = inner_write
@@ -482,6 +507,7 @@ impl SurrealBackend {
                 expires_at: now + std::time::Duration::from_secs(3600),
             });
         entry.count += 1;
+        entry.expires_at = now + std::time::Duration::from_secs(3600);
     }
 
     pub async fn record_episodes_batch_tokens_for_cache(&self, episodes: &[EpisodeSave]) {
@@ -497,22 +523,51 @@ impl SurrealBackend {
         }
 
         let now = std::time::Instant::now();
-        let mut outer_write = self.term_counts_cache.write().await;
         for (scope, list) in scope_tokens {
+            let mut outer_write = self.term_counts_cache.write().await;
+            while outer_write.len() >= 1000 && !outer_write.contains_key(&scope) {
+                if let Some(key_to_remove) = outer_write
+                    .keys()
+                    .find(|k| *k != "general" && *k != &scope)
+                    .cloned()
+                {
+                    outer_write.remove(&key_to_remove);
+                } else {
+                    break;
+                }
+            }
+
             let inner_lock = outer_write
                 .entry(scope)
                 .or_insert_with(|| {
                     Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()))
                 })
                 .clone();
+            drop(outer_write);
+
             let mut inner_write = inner_lock.write().await;
+            // Purge expired entries where expires_at < Instant::now()
+            inner_write.retain(|key, entry| key == "__total_n__" || entry.expires_at >= now);
+
             for unique_tokens in list {
                 for token in unique_tokens {
+                    if inner_write.len() >= 10000 && !inner_write.contains_key(&token) {
+                        let mut entries: Vec<(String, usize, std::time::Instant)> = inner_write
+                            .iter()
+                            .filter(|(k, _)| k.as_str() != "__total_n__")
+                            .map(|(k, v)| (k.clone(), v.count, v.expires_at))
+                            .collect();
+                        entries.sort_unstable_by_key(|(_, count, exp)| (*count, *exp));
+                        for (k, _, _) in entries.into_iter().take(1000) {
+                            inner_write.remove(&k);
+                        }
+                    }
                     let entry = inner_write.entry(token).or_insert_with(|| CacheEntry {
                         count: 0,
                         expires_at: now + std::time::Duration::from_secs(3600),
                     });
                     entry.count += 1;
+                    entry.expires_at = now + std::time::Duration::from_secs(3600);
                 }
                 let entry = inner_write
                     .entry("__total_n__".to_string())
@@ -521,6 +576,7 @@ impl SurrealBackend {
                         expires_at: now + std::time::Duration::from_secs(3600),
                     });
                 entry.count += 1;
+                entry.expires_at = now + std::time::Duration::from_secs(3600);
             }
         }
     }
@@ -615,10 +671,7 @@ impl SurrealBackend {
         // 4. Initialize write lock
         let write_lock = Arc::new(tokio::sync::Mutex::new(()));
 
-        let active_embeddings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let max_concurrent_embeddings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let indexing_writes = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-        let embedding_semaphore = Arc::new(tokio::sync::Mutex::new(None));
 
         let backend = Self {
             db,
@@ -626,10 +679,7 @@ impl SurrealBackend {
             client_port,
             write_lock,
             db_path,
-            active_embeddings,
-            max_concurrent_embeddings,
             indexing_writes,
-            embedding_semaphore,
             term_counts_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             global_cache_size: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -649,10 +699,7 @@ impl SurrealBackend {
             client_port: None,
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
             db_path: None,
-            active_embeddings: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            max_concurrent_embeddings: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             indexing_writes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
-            embedding_semaphore: Arc::new(tokio::sync::Mutex::new(None)),
             term_counts_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             global_cache_size: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -702,6 +749,15 @@ impl SurrealBackend {
                     *writes.entry(filename.to_string()).or_insert(0) += 1;
                 }
             }
+            if writes.len() > 1000 {
+                let num_to_remove = writes.len() - 1000;
+                let mut candidates: Vec<(String, usize)> =
+                    writes.iter().map(|(k, v)| (k.clone(), *v)).collect();
+                candidates.sort_by_key(|(_k, v)| *v);
+                for (k, _) in candidates.into_iter().take(num_to_remove) {
+                    writes.remove(&k);
+                }
+            }
         }
     }
 
@@ -713,19 +769,6 @@ impl SurrealBackend {
             }
         }
         2 // Default fallback
-    }
-
-    pub async fn get_embedding_semaphore(&self) -> Arc<tokio::sync::Semaphore> {
-        let limit = self.get_max_concurrent_tasks().await;
-        let mut guard = self.embedding_semaphore.lock().await;
-        if let Some((current_limit, ref sem)) = *guard {
-            if current_limit == limit {
-                return sem.clone();
-            }
-        }
-        let sem = Arc::new(tokio::sync::Semaphore::new(limit));
-        *guard = Some((limit, sem.clone()));
-        sem
     }
 
     /// Helper to load the auth token from the standard location or fallback
@@ -1819,110 +1862,16 @@ impl StorageBackend for SurrealBackend {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No embedder configured"))?;
 
-        if let Some(cached) = crate::embeddings::get_cached_embedding(text) {
-            return Ok(cached);
-        }
-
-        let sem = self.get_embedding_semaphore().await;
-        let _permit = sem
-            .acquire()
-            .await
-            .context("Failed to acquire embedding permit")?;
-
-        let active = self
-            .active_embeddings
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            + 1;
-        let mut max = self
-            .max_concurrent_embeddings
-            .load(std::sync::atomic::Ordering::SeqCst);
-        while active > max {
-            match self.max_concurrent_embeddings.compare_exchange_weak(
-                max,
-                active,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            ) {
-                Ok(_) => break,
-                Err(actual) => max = actual,
-            }
-        }
-
-        let res = emp.embed_async(text).await;
-
-        self.active_embeddings
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        let vec = res?;
-        crate::embeddings::cache_embedding(text.to_string(), vec.clone());
-        Ok(vec)
+        emp.embed(text).await
     }
 
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut results = vec![None; texts.len()];
-        let mut missing_indices = Vec::new();
-        let mut missing_texts = Vec::new();
+        let emp = self
+            .embedder
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No embedding model loaded"))?;
 
-        for (i, text) in texts.iter().enumerate() {
-            if let Some(cached) = crate::embeddings::get_cached_embedding(text) {
-                results[i] = Some(cached);
-            } else {
-                missing_indices.push(i);
-                missing_texts.push(text.clone());
-            }
-        }
-
-        if !missing_texts.is_empty() {
-            let emp = self
-                .embedder
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("No embedding model loaded"))?;
-
-            let sem = self.get_embedding_semaphore().await;
-            let _permit = sem
-                .acquire()
-                .await
-                .context("Failed to acquire embedding permit")?;
-
-            let active = self
-                .active_embeddings
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                + 1;
-            let mut max = self
-                .max_concurrent_embeddings
-                .load(std::sync::atomic::Ordering::SeqCst);
-            while active > max {
-                match self.max_concurrent_embeddings.compare_exchange_weak(
-                    max,
-                    active,
-                    std::sync::atomic::Ordering::SeqCst,
-                    std::sync::atomic::Ordering::SeqCst,
-                ) {
-                    Ok(_) => break,
-                    Err(actual) => max = actual,
-                }
-            }
-
-            let res = emp.embed_batch_async(&missing_texts).await;
-
-            self.active_embeddings
-                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-
-            let embedded = res?;
-            for (idx, emb) in missing_indices.into_iter().zip(embedded) {
-                crate::embeddings::cache_embedding(texts[idx].clone(), emb.clone());
-                results[idx] = Some(emb);
-            }
-        }
-        let mut final_results = Vec::with_capacity(results.len());
-        for opt in results {
-            match opt {
-                Some(vec) => final_results.push(vec),
-                None => anyhow::bail!(
-                    "Embedding batch returned mismatched results or missing embedding"
-                ),
-            }
-        }
-        Ok(final_results)
+        emp.embed_batch(texts).await
     }
 
     async fn get_all_wisdom_rules(&self) -> Result<Vec<WisdomRule>> {
@@ -1987,9 +1936,7 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn get_max_concurrent_background_embeddings(&self) -> Result<usize> {
-        Ok(self
-            .max_concurrent_embeddings
-            .load(std::sync::atomic::Ordering::SeqCst))
+        Ok(0)
     }
 }
 

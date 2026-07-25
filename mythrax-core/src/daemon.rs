@@ -151,7 +151,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         }
                                         if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
                                             let text_to_embed = format!("{}: {}", ep.title, ep.content);
-                                            if let Ok(vec) = embedder.embed_async(&text_to_embed).await
+                                            if let Ok(vec) = embedder.embed(&text_to_embed).await
                                                 && let Ok(thing) = crate::db::parse_record_id(id_str) {
                                                     let update_sql = "UPDATE $id SET embedding = $embedding;";
                                                     if let Ok(mut u_res) = backend_startup.db.query(update_sql)
@@ -197,7 +197,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         }
                                         if let (Some(id_str), Some(embedder)) = (&r.id, &backend_startup.embedder) {
                                             let text_to_embed = format!("{}: {}", r.target_pattern, r.prescribed_remedy);
-                                            if let Ok(vec) = embedder.embed_async(&text_to_embed).await
+                                            if let Ok(vec) = embedder.embed(&text_to_embed).await
                                                 && let Ok(thing) = crate::db::parse_record_id(id_str) {
                                                     let update_sql = "UPDATE $id SET embedding = $embedding;";
                                                     if let Ok(mut u_res) = backend_startup.db.query(update_sql)
@@ -243,7 +243,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         }
                                         if let (Some(id_str), Some(embedder)) = (&node.id, &backend_startup.embedder) {
                                             let text_to_embed = format!("{}: {}", node.name, node.content);
-                                            if let Ok(vec) = embedder.embed_async(&text_to_embed).await
+                                            if let Ok(vec) = embedder.embed(&text_to_embed).await
                                                 && let Ok(thing) = crate::db::parse_record_id(id_str) {
                                                     let update_sql = "UPDATE $id SET embedding = $embedding;";
                                                     if let Ok(mut u_res) = backend_startup.db.query(update_sql)

@@ -23,7 +23,7 @@ pub mod nomic_mlx;
 pub mod qwen2_mlx;
 
 #[cfg(feature = "mlx")]
-pub use mxbai_mlx::MxbaiReranker;
+pub use mxbai_mlx::{MxbaiReranker, evict_global_reranker};
 
 pub mod router;
 
@@ -33,6 +33,14 @@ pub struct Qwen2Model;
 pub struct Tokenizer;
 #[cfg(not(feature = "mlx"))]
 pub struct MxbaiReranker;
+
+#[cfg(not(feature = "mlx"))]
+impl MxbaiReranker {
+    pub fn evict(&mut self) {}
+}
+
+#[cfg(not(feature = "mlx"))]
+pub async fn evict_global_reranker() {}
 
 /// Process-global semaphores that limit concurrent GPU inference and embedding requests.
 pub static IS_HIBERNATING: std::sync::atomic::AtomicBool =
@@ -1793,8 +1801,11 @@ impl DynamicModelBroker {
 
     /// Evicts unused models from the cache.
     pub async fn evict_unused_models(&self) {
-        let mut models = self.models.lock().unwrap();
-        models.retain(|_, model| Arc::strong_count(model) > 1);
+        {
+            let mut models = self.models.lock().unwrap();
+            models.retain(|_, model| Arc::strong_count(model) > 1);
+        }
+        evict_global_reranker().await;
     }
 
     /// Updates the configuration model name.

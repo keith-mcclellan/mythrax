@@ -2041,8 +2041,8 @@ use std::sync::Mutex;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
-#[test]
-fn test_batch_embedding_equivalence() {
+#[tokio::test]
+async fn test_batch_embedding_equivalence() {
     let _lock = match TEST_MUTEX.lock() {
         Ok(guard) => guard,
         Err(p) => p.into_inner(),
@@ -2068,13 +2068,14 @@ fn test_batch_embedding_equivalence() {
         })
         .collect();
 
-    let sequential_embeddings: Vec<Vec<f32>> = texts
-        .iter()
-        .map(|text| embedder.embed(text).expect("Failed to embed text"))
-        .collect();
+    let mut sequential_embeddings = Vec::with_capacity(texts.len());
+    for text in &texts {
+        sequential_embeddings.push(embedder.embed(text).await.expect("Failed to embed text"));
+    }
 
     let batch_embeddings = embedder
         .embed_batch(&texts)
+        .await
         .expect("Failed to get batch embeddings");
 
     assert_eq!(

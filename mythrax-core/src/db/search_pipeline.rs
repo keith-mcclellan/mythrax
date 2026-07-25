@@ -2833,8 +2833,6 @@ impl SurrealBackend {
                         let mut pool = candidates.drain(0..pool_len).collect::<Vec<SearchResult>>();
                         let passages: Vec<&str> = pool.iter().map(|c| c.content.as_str()).collect();
 
-                        let _sem = crate::llm::metal_embedding_semaphore().acquire().await;
-
                         let home =
                             std::env::var("HOME").unwrap_or_else(|_| "/Users/keith".to_string());
                         let mut model_dir = std::path::PathBuf::from(&home)

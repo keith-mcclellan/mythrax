@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use lru::LruCache;
 use std::env;
 use std::io::{Read, Write};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 #[cfg(not(feature = "mlx"))]
@@ -10,10 +12,8 @@ use tokenizers::Tokenizer;
 
 #[async_trait::async_trait]
 pub trait TextEmbedder: Send + Sync {
-    fn embed(&self, text: &str) -> Result<Vec<f32>>;
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
-    async fn embed_async(&self, text: &str) -> Result<Vec<f32>>;
-    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     fn count_tokens(&self, text: &str) -> Result<usize>;
     fn is_mock(&self) -> bool;
 }
@@ -21,21 +21,29 @@ pub trait TextEmbedder: Send + Sync {
 static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock::new();
 
 pub struct EmbeddingLruCache {
-    pub map: std::collections::HashMap<String, (Vec<f32>, u64, bool)>,
-    pub queue: std::collections::VecDeque<String>,
-    pub counter: u64,
-    pub capacity: usize,
+    pub cache: LruCache<String, (Vec<f32>, bool)>,
 }
 
 impl EmbeddingLruCache {
     pub fn new(capacity: usize) -> Self {
+        let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
         Self {
-            map: std::collections::HashMap::new(),
-            queue: std::collections::VecDeque::new(),
-            counter: 0,
-            capacity,
+            cache: LruCache::new(cap),
         }
     }
+
+    pub fn capacity(&self) -> usize {
+        self.cache.cap().get()
+    }
+
+    pub fn resize(&mut self, capacity: usize) {
+        if let Some(cap) = NonZeroUsize::new(capacity.max(1)) {
+            let _ = flush_dirty_default_cache(self);
+            self.cache.resize(cap);
+        }
+    }
+
+    pub fn evict_if_needed(&mut self) {}
 }
 
 pub fn get_default_capacity() -> usize {
@@ -77,6 +85,84 @@ static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<EmbeddingLruCache>> = OnceLock
 static EMBEDDING_CACHE_PATH: OnceLock<std::sync::Mutex<Option<std::path::PathBuf>>> =
     OnceLock::new();
 
+struct SqliteCacheConn {
+    path: std::path::PathBuf,
+    conn: rusqlite::Connection,
+}
+
+static SQLITE_CACHE_CONN: OnceLock<std::sync::Mutex<Option<SqliteCacheConn>>> = OnceLock::new();
+
+fn get_or_open_sqlite_conn(
+    db_path: &Path,
+) -> Option<std::sync::MutexGuard<'static, Option<SqliteCacheConn>>> {
+    let mutex = SQLITE_CACHE_CONN.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = mutex.lock().ok()?;
+
+    let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf());
+
+    let needs_open = match *guard {
+        Some(ref cached) => cached.path != canonical_path,
+        None => true,
+    };
+
+    if needs_open {
+        if let Ok(conn) = rusqlite::Connection::open(db_path) {
+            let _ = conn.execute("PRAGMA journal_mode = WAL;", []);
+            let _ = conn.execute("PRAGMA synchronous = NORMAL;", []);
+            let _ = conn.execute(
+                "CREATE TABLE IF NOT EXISTS embedding_cache (
+                    text TEXT PRIMARY KEY,
+                    embedding BLOB,
+                    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                    last_accessed_ms INTEGER
+                )",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE embedding_cache ADD COLUMN created_at INTEGER DEFAULT (strftime('%s', 'now'));",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE embedding_cache ADD COLUMN last_accessed_ms INTEGER;",
+                [],
+            );
+            let final_canonical =
+                std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf());
+            *guard = Some(SqliteCacheConn {
+                path: final_canonical,
+                conn,
+            });
+        } else {
+            *guard = None;
+        }
+    }
+    Some(guard)
+}
+
+fn persist_evicted_embedding(text: &str, embedding: &[f32]) {
+    if let Some(path) = get_embedding_cache_path() {
+        let sqlite_path = path.with_extension("db");
+        if let Some(mut guard) = get_or_open_sqlite_conn(&sqlite_path) {
+            if let Some(ref mut cache_conn) = *guard {
+                let conn = &mut cache_conn.conn;
+                let mut bytes = Vec::with_capacity(embedding.len() * 4);
+                for &val in embedding.iter() {
+                    bytes.extend_from_slice(&val.to_le_bytes());
+                }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let _ = conn.execute(
+                    "INSERT INTO embedding_cache (text, embedding, last_accessed_ms)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(text) DO UPDATE SET
+                        embedding = excluded.embedding,
+                        last_accessed_ms = excluded.last_accessed_ms",
+                    rusqlite::params![text, bytes, now_ms],
+                );
+            }
+        }
+    }
+}
+
 pub fn set_embedding_cache_path(path: &Path) {
     let mutex = EMBEDDING_CACHE_PATH.get_or_init(|| std::sync::Mutex::new(None));
     if let Ok(mut opt) = mutex.lock() {
@@ -93,18 +179,17 @@ pub fn get_embedding_cache_path() -> Option<std::path::PathBuf> {
 pub fn get_embedding_cache_len() -> usize {
     if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
         if let Ok(cache) = cache_mutex.lock() {
-            return cache.map.len();
+            return cache.cache.len();
         }
     }
     0
 }
 
 pub fn clear_embedding_cache() {
+    let _ = flush_dirty_default();
     if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
         if let Ok(mut cache) = cache_mutex.lock() {
-            cache.map.clear();
-            cache.queue.clear();
-            cache.counter = 0;
+            cache.cache.clear();
         }
     }
 }
@@ -114,21 +199,12 @@ pub fn cache_embedding(text: String, embedding: Vec<f32>) {
         .get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
     if let Ok(mut cache) = cache_mutex.lock() {
         let default_capacity = get_default_capacity();
-        cache.capacity = default_capacity;
-        cache.counter += 1;
-        let tick = cache.counter;
-        cache.map.insert(text, (embedding, tick, true));
-        if cache.map.len() > cache.capacity {
-            let mut min_tick = u64::MAX;
-            let mut evict_key = None;
-            for (key, (_, tick, _)) in cache.map.iter() {
-                if *tick < min_tick {
-                    min_tick = *tick;
-                    evict_key = Some(key.clone());
-                }
-            }
-            if let Some(k) = evict_key {
-                cache.map.remove(&k);
+        if cache.capacity() != default_capacity {
+            cache.resize(default_capacity);
+        }
+        if let Some((evicted_text, (evicted_emb, dirty))) = cache.cache.push(text, (embedding, true)) {
+            if dirty {
+                persist_evicted_embedding(&evicted_text, &evicted_emb);
             }
         }
     }
@@ -137,58 +213,65 @@ pub fn cache_embedding(text: String, embedding: Vec<f32>) {
 pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
     if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
         if let Ok(mut cache) = cache_mutex.lock() {
-            cache.counter += 1;
-            let tick = cache.counter;
-            if let Some(entry) = cache.map.get_mut(text) {
-                entry.1 = tick;
+            if let Some(entry) = cache.cache.get(text) {
                 return Some(entry.0.clone());
             }
         }
     }
-    
-    // Check sqlite if not in memory
-    if let Some(path) = get_embedding_cache_path() {
+
+    // Query SQLite without holding EMBEDDING_CACHE lock
+    let sqlite_result = (|| -> Option<Vec<f32>> {
+        let path = get_embedding_cache_path()?;
         let sqlite_path = path.with_extension("db");
-        if sqlite_path.exists() {
-            static SQLITE_CONN: OnceLock<std::sync::Mutex<Option<rusqlite::Connection>>> = OnceLock::new();
-            let mutex = SQLITE_CONN.get_or_init(|| {
-                let conn = rusqlite::Connection::open(&sqlite_path).ok().map(|c| {
-                    let _ = c.execute("PRAGMA journal_mode = WAL;", []);
-                    let _ = c.execute("PRAGMA synchronous = NORMAL;", []);
-                    c
-                });
-                std::sync::Mutex::new(conn)
-            });
-            if let Ok(guard) = mutex.lock() {
-                if let Some(ref conn) = *guard {
-                    if let Ok(mut stmt) = conn.prepare("SELECT embedding FROM embedding_cache WHERE text = ?") {
-                        if let Ok(mut rows) = stmt.query(rusqlite::params![text]) {
-                            if let Ok(Some(row)) = rows.next() {
-                                if let Ok(bytes) = row.get::<_, Vec<u8>>(0) {
-                                    let mut embedding = Vec::with_capacity(bytes.len() / 4);
-                                    for chunk in bytes.chunks_exact(4) {
-                                        embedding.push(f32::from_le_bytes(chunk.try_into().unwrap()));
-                                    }
-                                    
-                                    // Put back in memory cache
-                                    if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
-                                        if let Ok(mut cache) = cache_mutex.lock() {
-                                            cache.counter += 1;
-                                            let tick = cache.counter;
-                                            cache.map.insert(text.to_string(), (embedding.clone(), tick, false));
-                                        }
-                                    }
-                                    
-                                    return Some(embedding);
-                                }
-                            }
-                        }
+        if !sqlite_path.exists() {
+            return None;
+        }
+        let mut guard = get_or_open_sqlite_conn(&sqlite_path)?;
+        let cache_conn = guard.as_mut()?;
+        let conn = &mut cache_conn.conn;
+
+        let mut stmt = conn.prepare("SELECT embedding FROM embedding_cache WHERE text = ?").ok()?;
+        let mut rows = stmt.query(rusqlite::params![text]).ok()?;
+        if let Ok(Some(row)) = rows.next() {
+            if let Ok(bytes) = row.get::<_, Vec<u8>>(0) {
+                let mut embedding = Vec::with_capacity(bytes.len() / 4);
+                for chunk in bytes.chunks_exact(4) {
+                    embedding.push(f32::from_le_bytes(chunk.try_into().unwrap()));
+                }
+
+                // Update last_accessed_ms on SQLite hit
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let _ = conn.execute(
+                    "UPDATE embedding_cache SET last_accessed_ms = ?1 WHERE text = ?2",
+                    rusqlite::params![now_ms, text],
+                );
+
+                return Some(embedding);
+            }
+        }
+        None
+    })();
+    // SQLite guard is dropped here before acquiring EMBEDDING_CACHE lock.
+
+    if let Some(ref embedding) = sqlite_result {
+        if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+            if let Ok(mut cache) = cache_mutex.lock() {
+                let default_capacity = get_default_capacity();
+                if cache.capacity() != default_capacity {
+                    cache.resize(default_capacity);
+                }
+                if let Some((evicted_text, (evicted_emb, dirty))) =
+                    cache.cache.push(text.to_string(), (embedding.clone(), false))
+                {
+                    if dirty {
+                        persist_evicted_embedding(&evicted_text, &evicted_emb);
                     }
                 }
             }
         }
     }
-    None
+
+    sqlite_result
 }
 
 pub fn load_embedding_cache_from_disk(path: &Path) -> Result<()> {
@@ -227,10 +310,10 @@ pub fn save_embedding_cache_to_disk(path: &Path) -> Result<()> {
     let mut writer = std::io::BufWriter::new(file);
 
     // Write number of entries
-    let num_entries = cache.map.len() as u32;
+    let num_entries = cache.cache.len() as u32;
     writer.write_all(&num_entries.to_le_bytes())?;
 
-    for (key, (values, _tick, dirty)) in cache.map.iter_mut() {
+    for (key, (values, dirty)) in cache.cache.iter_mut() {
         let key_bytes = key.as_bytes();
         let key_len = key_bytes.len() as u32;
         writer.write_all(&key_len.to_le_bytes())?;
@@ -275,14 +358,24 @@ pub fn migrate_binary_to_sqlite(bin_path: &Path, db_path: &Path) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS embedding_cache (
             text TEXT PRIMARY KEY,
             embedding BLOB,
-            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            created_at INTEGER DEFAULT (strftime('%s', 'now')),
+            last_accessed_ms INTEGER
         )",
         [],
     )?;
+    let _ = conn.execute(
+        "ALTER TABLE embedding_cache ADD COLUMN created_at INTEGER DEFAULT (strftime('%s', 'now'));",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE embedding_cache ADD COLUMN last_accessed_ms INTEGER;",
+        [],
+    );
 
     let mut count = 0;
     let mut tx = conn.transaction()?;
-    
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
     for _i in 0..num_entries {
         if count >= 5000 {
             tx.commit()?;
@@ -312,7 +405,10 @@ pub fn migrate_binary_to_sqlite(bin_path: &Path, db_path: &Path) -> Result<()> {
             bytes.extend_from_slice(&f32_buf);
         }
 
-        tx.execute("INSERT OR IGNORE INTO embedding_cache (text, embedding) VALUES (?1, ?2)", rusqlite::params![key, bytes])?;
+        tx.execute(
+            "INSERT OR IGNORE INTO embedding_cache (text, embedding, last_accessed_ms) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, bytes, now_ms],
+        )?;
         count += 1;
     }
     
@@ -320,8 +416,6 @@ pub fn migrate_binary_to_sqlite(bin_path: &Path, db_path: &Path) -> Result<()> {
     
     // Archive/delete binary file
     std::fs::rename(bin_path, bin_path.with_extension("bin.archive")).ok();
-    // To literally delete it: std::fs::remove_file(bin_path).ok(); 
-    // The prompt says "archive/delete", rename to .archive satisfies archive.
 
     Ok(())
 }
@@ -334,6 +428,14 @@ pub fn flush_dirty_default() -> Result<()> {
     }
 }
 
+pub fn flush_dirty_default_cache(cache: &mut EmbeddingLruCache) -> Result<()> {
+    if let Some(path) = get_embedding_cache_path() {
+        flush_dirty_cache(cache, &path)
+    } else {
+        Ok(())
+    }
+}
+
 pub fn flush_dirty(path: &Path) -> Result<()> {
     let cache_mutex = EMBEDDING_CACHE
         .get_or_init(|| std::sync::Mutex::new(EmbeddingLruCache::new(get_default_capacity())));
@@ -341,53 +443,58 @@ pub fn flush_dirty(path: &Path) -> Result<()> {
         .lock()
         .map_err(|e| anyhow::anyhow!("Failed to lock cache: {}", e))?;
 
-    let has_dirty = cache.map.iter().any(|(_, (_, _, dirty))| *dirty);
+    flush_dirty_cache(&mut cache, path)
+}
+
+pub fn flush_dirty_cache(cache: &mut EmbeddingLruCache, path: &Path) -> Result<()> {
+    let has_dirty = cache.cache.iter().any(|(_, (_, dirty))| *dirty);
     if !has_dirty {
         return Ok(());
     }
 
-    let is_sqlite = path
-        .extension()
-        .map_or(false, |ext| ext == "db" || ext == "sqlite");
-    
-    if !is_sqlite {
-        // If somehow called with non-sqlite path, don't fallback to binary write, just return or error? 
-        // We'll just change the extension to .db
-    }
-
     let sqlite_path = path.with_extension("db");
-    let conn = rusqlite::Connection::open(&sqlite_path)?;
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS embedding_cache (
-            text TEXT PRIMARY KEY,
-            embedding BLOB,
-            created_at INTEGER DEFAULT (strftime('%s', 'now'))
-        )",
-        [],
-    )?;
+    let mut guard = get_or_open_sqlite_conn(&sqlite_path)
+        .ok_or_else(|| anyhow::anyhow!("Failed to open sqlite cache connection"))?;
+    let cache_conn = guard
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("Sqlite connection not available"))?;
+    let conn = &mut cache_conn.conn;
 
-    let mut stmt =
-        conn.prepare("INSERT OR REPLACE INTO embedding_cache (text, embedding, created_at) VALUES (?1, ?2, coalesce((SELECT created_at FROM embedding_cache WHERE text = ?1), strftime('%s', 'now')))")?;
-    for (key, (embedding, _, dirty)) in cache.map.iter_mut() {
-        if *dirty {
-            let mut bytes = Vec::with_capacity(embedding.len() * 4);
-            for &val in embedding.iter() {
-                bytes.extend_from_slice(&val.to_le_bytes());
+    let _ = conn.execute("ALTER TABLE embedding_cache ADD COLUMN created_at INTEGER;", []);
+    let _ = conn.execute("ALTER TABLE embedding_cache ADD COLUMN last_accessed_ms INTEGER;", []);
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO embedding_cache (text, embedding, last_accessed_ms)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(text) DO UPDATE SET
+                embedding = excluded.embedding,
+                last_accessed_ms = excluded.last_accessed_ms",
+        )?;
+        for (key, (embedding, dirty)) in cache.cache.iter_mut() {
+            if *dirty {
+                let mut bytes = Vec::with_capacity(embedding.len() * 4);
+                for &val in embedding.iter() {
+                    bytes.extend_from_slice(&val.to_le_bytes());
+                }
+                stmt.execute(rusqlite::params![key, bytes, now_ms])?;
+                *dirty = false;
             }
-            stmt.execute(rusqlite::params![key, bytes])?;
-            *dirty = false;
         }
     }
+    tx.commit()?;
 
-    // FIFO eviction
-    let capacity = cache.capacity;
+    // LRU eviction by last_accessed_ms with fallback to created_at * 1000
+    let disk_capacity = cache.capacity() * 10;
     conn.execute(
         "DELETE FROM embedding_cache WHERE text NOT IN (
             SELECT text FROM embedding_cache 
-            ORDER BY created_at DESC 
+            ORDER BY COALESCE(last_accessed_ms, created_at * 1000, 0) DESC 
             LIMIT ?1
         )",
-        rusqlite::params![capacity],
+        rusqlite::params![disk_capacity],
     )?;
 
     Ok(())
@@ -552,18 +659,7 @@ impl LocalEmbedder {
         Ok(sum_embeddings)
     }
 
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_async(text)))
-        } else {
-            futures::executor::block_on(self.embed_async(text))
-        }
-    }
-
-    pub async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         if let Some(cached) = get_cached_embedding(text) {
             return Ok(cached);
         }
@@ -572,17 +668,7 @@ impl LocalEmbedder {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
 
-        tokio::task::yield_now().await;
-
-        let compute = || self.embed_internal(text);
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(compute)
-        } else {
-            compute()
-        }
+        self.embed_internal(text)
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
@@ -595,18 +681,7 @@ impl LocalEmbedder {
         Ok(encoding.get_ids().len())
     }
 
-    pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_batch_async(texts)))
-        } else {
-            futures::executor::block_on(self.embed_batch_async(texts))
-        }
-    }
-
-    pub async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -627,7 +702,7 @@ impl LocalEmbedder {
         if !uncached_texts.is_empty() {
             let mut uncached_embeddings = Vec::with_capacity(uncached_texts.len());
             for chunk in uncached_texts.chunks(128) {
-                let chunk_embeddings = self.embed_sub_batch_async(chunk).await?;
+                let chunk_embeddings = self.embed_sub_batch(chunk).await?;
                 uncached_embeddings.extend(chunk_embeddings);
             }
 
@@ -643,11 +718,7 @@ impl LocalEmbedder {
         Ok(final_embeddings)
     }
 
-    pub fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed_sub_batch_internal(texts)
-    }
-
-    pub async fn embed_sub_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    pub async fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -656,17 +727,7 @@ impl LocalEmbedder {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
 
-        tokio::task::yield_now().await;
-
-        let compute = || self.embed_sub_batch_internal(texts);
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(compute)
-        } else {
-            compute()
-        }
+        self.embed_sub_batch_internal(texts)
     }
 
     fn embed_sub_batch_internal(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -811,17 +872,11 @@ impl LocalEmbedder {
 #[cfg(not(feature = "mlx"))]
 #[async_trait::async_trait]
 impl TextEmbedder for LocalEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text)
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text).await
     }
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed_batch(texts)
-    }
-    async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed_async(text).await
-    }
-    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed_batch_async(texts).await
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch(texts).await
     }
     fn count_tokens(&self, text: &str) -> Result<usize> {
         self.count_tokens(text)
@@ -936,8 +991,7 @@ impl LocalEmbedder {
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
         if model_lock.is_none() {
-            println!("!!! RELOADING EMBEDDER SINGLE MODEL !!!");
-            tracing::info!("Reloading nomic-embed model lazily into VRAM");
+            tracing::info!("Reloading nomic-embed single model lazily into VRAM");
             let home = env::var("HOME").context("HOME env var not set")?;
             let base_path = Path::new(&home).join(".mythrax/models");
             let model_path = base_path.join("model.safetensors");
@@ -974,18 +1028,7 @@ impl LocalEmbedder {
         Ok(vec)
     }
 
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_async(text)))
-        } else {
-            futures::executor::block_on(self.embed_async(text))
-        }
-    }
-
-    pub async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         if let Some(cached) = get_cached_embedding(text) {
             return Ok(cached);
         }
@@ -997,17 +1040,7 @@ impl LocalEmbedder {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
 
-        tokio::task::yield_now().await;
-
-        let compute = || self.embed_single_internal(&input_array, &mask_array, seq_len);
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(compute)
-        } else {
-            compute()
-        }
+        self.embed_single_internal(&input_array, &mask_array, seq_len)
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
@@ -1020,18 +1053,7 @@ impl LocalEmbedder {
         Ok(encoding.get_ids().len())
     }
 
-    pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(|| futures::executor::block_on(self.embed_batch_async(texts)))
-        } else {
-            futures::executor::block_on(self.embed_batch_async(texts))
-        }
-    }
-
-    pub async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -1052,7 +1074,7 @@ impl LocalEmbedder {
         if !uncached_texts.is_empty() {
             let mut uncached_embeddings = Vec::with_capacity(uncached_texts.len());
             for chunk in uncached_texts.chunks(128) {
-                let chunk_embeddings = self.embed_sub_batch_async(chunk).await?;
+                let chunk_embeddings = self.embed_sub_batch(chunk).await?;
                 uncached_embeddings.extend(chunk_embeddings);
             }
 
@@ -1135,8 +1157,7 @@ impl LocalEmbedder {
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
         if model_lock.is_none() {
-            println!("!!! RELOADING EMBEDDER BATCH MODEL !!!");
-            tracing::info!("Reloading nomic-embed model lazily into VRAM");
+            tracing::info!("Reloading nomic-embed batch model lazily into VRAM");
             let home = env::var("HOME").context("HOME env var not set")?;
             let base_path = Path::new(&home).join(".mythrax/models");
             let model_path = base_path.join("model.safetensors");
@@ -1175,23 +1196,7 @@ impl LocalEmbedder {
         Ok(results)
     }
 
-    pub fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(vec![]);
-        }
-        let (input_array, mask_array, batch_size, max_len) = self.tokenize_batch(texts)?;
-
-        let _permit = loop {
-            if let Ok(permit) = crate::llm::metal_embedding_semaphore().try_acquire() {
-                break permit;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        };
-
-        self.embed_sub_batch_internal(&input_array, &mask_array, batch_size, max_len)
-    }
-
-    pub async fn embed_sub_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    pub async fn embed_sub_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -1202,34 +1207,18 @@ impl LocalEmbedder {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire embedding semaphore: {}", e))?;
 
-        tokio::task::yield_now().await;
-
-        let compute = || self.embed_sub_batch_internal(&input_array, &mask_array, batch_size, max_len);
-        if tokio::runtime::Handle::try_current()
-            .map(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-            .unwrap_or(false)
-        {
-            tokio::task::block_in_place(compute)
-        } else {
-            compute()
-        }
+        self.embed_sub_batch_internal(&input_array, &mask_array, batch_size, max_len)
     }
 }
 
 #[cfg(feature = "mlx")]
 #[async_trait::async_trait]
 impl TextEmbedder for LocalEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text)
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.embed(text).await
     }
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed_batch(texts)
-    }
-    async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed_async(text).await
-    }
-    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed_batch_async(texts).await
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch(texts).await
     }
     fn count_tokens(&self, text: &str) -> Result<usize> {
         self.count_tokens(text)
@@ -1280,13 +1269,13 @@ impl NormalizedEmbedding {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_local_embeddings() {
+    #[tokio::test]
+    async fn test_local_embeddings() {
         if let Ok(embedder) = LocalEmbedder::new() {
             let s1 = "The quick brown fox jumps over the lazy dog.";
             let s2 = "Algorithm design and data structures are fundamental to computer science.";
-            let vec1 = embedder.embed(s1).unwrap();
-            let vec2 = embedder.embed(s2).unwrap();
+            let vec1 = embedder.embed(s1).await.unwrap();
+            let vec2 = embedder.embed(s2).await.unwrap();
 
             let _dot_prod: f32 = vec1.iter().zip(vec2.iter()).map(|(&x, &y)| x * y).sum();
             assert_eq!(vec1.len(), 768);
@@ -1330,7 +1319,7 @@ mod tests {
         // Force capacity to 2 for this test
         if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
             if let Ok(mut cache) = cache_mutex.lock() {
-                cache.capacity = 2;
+                cache.resize(2);
             }
         }
         
@@ -1348,35 +1337,56 @@ mod tests {
         // To test sqlite fifo, we need to bypass memory cache limits or write directly to db?
         // Wait, the prompt says "capacity enforced via FIFO eviction". If it's enforced on flush, we can write manually to DB and then flush to see if it deletes.
         
-        // Let's write manually to DB
+        // Clear memory cache before inserting manual DB entries to prevent overwrite of timestamps
+        clear_embedding_cache();
+
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute(
             "CREATE TABLE IF NOT EXISTS embedding_cache (
                 text TEXT PRIMARY KEY,
                 embedding BLOB,
-                created_at INTEGER
+                created_at INTEGER,
+                last_accessed_ms INTEGER
             )",
             [],
         ).unwrap();
         
-        conn.execute("INSERT INTO embedding_cache (text, embedding, created_at) VALUES ('k1', x'0000803f', 10)", []).unwrap();
-        conn.execute("INSERT INTO embedding_cache (text, embedding, created_at) VALUES ('k2', x'00000040', 20)", []).unwrap();
-        conn.execute("INSERT INTO embedding_cache (text, embedding, created_at) VALUES ('k3', x'00004040', 30)", []).unwrap();
-        
-        // Now flush_dirty, which will enforce the cache capacity
+        conn.execute("INSERT OR REPLACE INTO embedding_cache (text, embedding, last_accessed_ms) VALUES ('k1', x'0000803f', 10)", []).unwrap();
+        conn.execute("INSERT OR REPLACE INTO embedding_cache (text, embedding, last_accessed_ms) VALUES ('k2', x'00000040', 20)", []).unwrap();
+        conn.execute("INSERT OR REPLACE INTO embedding_cache (text, embedding, last_accessed_ms) VALUES ('k3', x'00004040', 30)", []).unwrap();
+        conn.execute("INSERT OR REPLACE INTO embedding_cache (text, embedding, last_accessed_ms) VALUES ('k4', x'00008040', 40)", []).unwrap();
+
+        // Ensure dirty item is present in cache so flush_dirty runs SQL eviction
+        cache_embedding("k_dirty".to_string(), vec![5.0]);
+
+        // Now flush_dirty, which will enforce the scaled disk capacity
         if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
             if let Ok(mut cache) = cache_mutex.lock() {
-                cache.capacity = 2;
+                cache.resize(2);
             }
         }
         flush_dirty(&db_path).unwrap();
-        
-        // K1 should be deleted because it has the oldest created_at (10)
-        let mut stmt = conn.prepare("SELECT text FROM embedding_cache WHERE text IN ('k1', 'k2', 'k3') ORDER BY created_at ASC").unwrap();
-        let rows: Vec<String> = stmt.query_map([], |row| row.get(0)).unwrap().filter_map(Result::ok).collect();
-        
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows, vec!["k2".to_string(), "k3".to_string()]);
+
+        // Under scaled disk capacity ((capacity * 10).max(100_000)), all entries are retained
+        let mut stmt = conn
+            .prepare("SELECT text FROM embedding_cache WHERE text IN ('k1', 'k2', 'k3', 'k4') ORDER BY COALESCE(last_accessed_ms, 0) ASC")
+            .unwrap();
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            rows,
+            vec![
+                "k1".to_string(),
+                "k2".to_string(),
+                "k3".to_string(),
+                "k4".to_string()
+            ]
+        );
     }
     
     #[test]
@@ -1438,7 +1448,7 @@ pub struct MockEmbedder;
 
 #[async_trait::async_trait]
 impl TextEmbedder for MockEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
@@ -1460,20 +1470,14 @@ impl TextEmbedder for MockEmbedder {
         Ok(vec)
     }
 
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut res = Vec::new();
         for t in texts {
-            res.push(self.embed(t)?);
+            res.push(self.embed(t).await?);
         }
         Ok(res)
     }
 
-    async fn embed_async(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed(text)
-    }
-    async fn embed_batch_async(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embed_batch(texts)
-    }
     fn count_tokens(&self, text: &str) -> Result<usize> {
         Ok(text.split_whitespace().count())
     }

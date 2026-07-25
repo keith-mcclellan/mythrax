@@ -2988,7 +2988,7 @@ async fn test_harvest_completed_reflections() {
     let lessons_val = serde_json::json!(["Monitor token usage"]);
     let text_to_embed = format!("Ran out of tokens {:?}", lessons_val);
     let embedding_vec =
-        mythrax_core::embeddings::TextEmbedder::embed(&embedder, &text_to_embed).unwrap();
+        mythrax_core::embeddings::TextEmbedder::embed(&embedder, &text_to_embed).await.unwrap();
 
     let rule = mythrax_core::contracts::WisdomRule {
         id: None,

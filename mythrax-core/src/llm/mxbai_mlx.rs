@@ -322,50 +322,59 @@ impl Qwen2Model {
     }
 }
 
+fn load_qwen2_model(model_dir: &Path) -> Result<Qwen2Model> {
+    let config_path = model_dir.join("config.json");
+    let config_str = std::fs::read_to_string(config_path)?;
+    let config: serde_json::Value = serde_json::from_str(&config_str)?;
+
+    let num_layers = config["num_hidden_layers"]
+        .as_i64()
+        .context("num_hidden_layers not found")? as i32;
+    let num_heads = config["num_attention_heads"]
+        .as_i64()
+        .context("num_attention_heads not found")? as i32;
+    let num_kv_heads = config["num_key_value_heads"]
+        .as_i64()
+        .context("num_key_value_heads not found")? as i32;
+    let hidden_size = config["hidden_size"]
+        .as_i64()
+        .context("hidden_size not found")? as i32;
+    let head_dim = match config["head_dim"].as_i64() {
+        Some(hd) => hd as i32,
+        None => hidden_size / num_heads,
+    };
+    let rope_theta = config["rope_theta"].as_f64().unwrap_or(1000000.0) as f32;
+    let rms_norm_eps = config["rms_norm_eps"].as_f64().unwrap_or(1e-6) as f32;
+
+    let weights = load_model_weights(model_dir)?;
+    Qwen2Model::new(
+        &weights,
+        num_layers,
+        num_heads,
+        num_kv_heads,
+        head_dim,
+        rope_theta,
+        rms_norm_eps,
+    )
+}
+
 pub struct MxbaiReranker {
-    pub model: Qwen2Model,
+    pub model: Option<Qwen2Model>,
     pub tokenizer: Tokenizer,
+    pub model_dir: std::path::PathBuf,
 }
 
 impl MxbaiReranker {
+    pub fn evict(&mut self) {
+        if self.model.is_some() {
+            tracing::info!("Evicting MxbaiReranker model weights from VRAM");
+            self.model = None;
+        }
+    }
+
     pub fn load(model_dir: &Path) -> Result<Self> {
-        println!(
-            "!!! LOADING CROSS-ENCODER MODEL FROM DISK: {:?} !!!",
-            model_dir
-        );
-        let config_path = model_dir.join("config.json");
-        let config_str = std::fs::read_to_string(config_path)?;
-        let config: serde_json::Value = serde_json::from_str(&config_str)?;
-
-        let num_layers = config["num_hidden_layers"]
-            .as_i64()
-            .context("num_hidden_layers not found")? as i32;
-        let num_heads = config["num_attention_heads"]
-            .as_i64()
-            .context("num_attention_heads not found")? as i32;
-        let num_kv_heads = config["num_key_value_heads"]
-            .as_i64()
-            .context("num_key_value_heads not found")? as i32;
-        let hidden_size = config["hidden_size"]
-            .as_i64()
-            .context("hidden_size not found")? as i32;
-        let head_dim = match config["head_dim"].as_i64() {
-            Some(hd) => hd as i32,
-            None => hidden_size / num_heads,
-        };
-        let rope_theta = config["rope_theta"].as_f64().unwrap_or(1000000.0) as f32;
-        let rms_norm_eps = config["rms_norm_eps"].as_f64().unwrap_or(1e-6) as f32;
-
-        let weights = load_model_weights(model_dir)?;
-        let model = Qwen2Model::new(
-            &weights,
-            num_layers,
-            num_heads,
-            num_kv_heads,
-            head_dim,
-            rope_theta,
-            rms_norm_eps,
-        )?;
+        tracing::info!("Loading cross-encoder model from disk: {:?}", model_dir);
+        let model = load_qwen2_model(model_dir)?;
 
         let tokenizer = match Tokenizer::from_file(model_dir.join("tokenizer.json")) {
             Ok(t) => t,
@@ -388,7 +397,11 @@ impl MxbaiReranker {
             }
         };
 
-        Ok(Self { model, tokenizer })
+        Ok(Self {
+            model: Some(model),
+            tokenizer,
+            model_dir: model_dir.to_path_buf(),
+        })
     }
 
     pub async fn score_pairs(&mut self, query: &str, passages: &[&str]) -> Result<Vec<f32>> {
@@ -397,6 +410,20 @@ impl MxbaiReranker {
         if passages.is_empty() {
             return Ok(Vec::new());
         }
+
+        if self.model.is_none() {
+            tracing::info!(
+                "Lazily reloading MxbaiReranker model weights from disk: {:?}",
+                self.model_dir
+            );
+            let model = load_qwen2_model(&self.model_dir)?;
+            self.model = Some(model);
+        }
+
+        let model = self
+            .model
+            .as_mut()
+            .context("MxbaiReranker model weights missing")?;
 
         let _permit = crate::llm::metal_embedding_semaphore()
             .acquire()
@@ -430,10 +457,10 @@ impl MxbaiReranker {
         let null_mask_4d = null_causal_mask
             .reshape(&[1, 1, null_seq_len_i32, null_seq_len_i32])
             .map_err(|e| anyhow::anyhow!("Reshape failed: {:?}", e))?;
-        let null_out = self.model.forward(&null_ids_array, Some(&null_mask_4d))?;
+        let null_out = model.forward(&null_ids_array, Some(&null_mask_4d))?;
         let null_last_hidden = null_out.try_index((0, (null_seq_len - 1) as i32, ..))?;
 
-        let embed_w = self.model.embed_tokens.weight.value.clone();
+        let embed_w = model.embed_tokens.weight.value.clone();
         let w_0 = embed_w.try_index((15, ..))?; // "0" token
         let w_1 = embed_w.try_index((16, ..))?; // "1" token
 
@@ -484,7 +511,7 @@ impl MxbaiReranker {
             let mask_4d = causal_mask
                 .reshape(&[1, 1, seq_len_i32, seq_len_i32])
                 .map_err(|e| anyhow::anyhow!("Reshape failed: {:?}", e))?;
-            let out = self.model.forward(&ids_array, Some(&mask_4d))?;
+            let out = model.forward(&ids_array, Some(&mask_4d))?;
             let last_hidden = out.try_index((0, (seq_len - 1) as i32, ..))?;
 
             let logit_0 = last_hidden.multiply(&w_0)?.sum_axes(&[-1], false)?;
@@ -508,4 +535,12 @@ impl MxbaiReranker {
 
         Ok(scores)
     }
+}
+
+pub async fn evict_global_reranker() {
+    let mut lock = crate::db::backend::GLOBAL_RERANKER.lock().await;
+    if let Some(ref mut reranker) = *lock {
+        reranker.evict();
+    }
+    *lock = None;
 }

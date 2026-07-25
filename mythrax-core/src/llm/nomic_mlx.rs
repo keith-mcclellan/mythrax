@@ -15,33 +15,42 @@ pub struct NomicBertAttention {
     sin_cached: Array,
 }
 
+fn create_rope_cache() -> Result<(Array, Array)> {
+    let max_len = 2048usize;
+    let head_dim = 64usize;
+    let half = 32usize;
+    let mut cos_val = vec![0.0f32; max_len * head_dim];
+    let mut sin_val = vec![0.0f32; max_len * head_dim];
+    for pos in 0..max_len {
+        for i in 0..half {
+            let exponent = -2.0 * (i as f32) / (head_dim as f32);
+            let theta = 10000.0f32.powf(exponent);
+            let angle = (pos as f32) * theta;
+            let c = angle.cos();
+            let s = angle.sin();
+
+            cos_val[pos * head_dim + i] = c;
+            sin_val[pos * head_dim + i] = s;
+            cos_val[pos * head_dim + half + i] = c;
+            sin_val[pos * head_dim + half + i] = s;
+        }
+    }
+    let cos_cached = Array::from_slice(&cos_val, &[1, max_len as i32, 1, head_dim as i32]);
+    let sin_cached = Array::from_slice(&sin_val, &[1, max_len as i32, 1, head_dim as i32]);
+    cos_cached.eval()?;
+    sin_cached.eval()?;
+    Ok((cos_cached, sin_cached))
+}
+
 impl NomicBertAttention {
-    pub fn new(weights: &HashMap<String, Array>, prefix: &str) -> Result<Self> {
+    pub fn new(
+        weights: &HashMap<String, Array>,
+        prefix: &str,
+        cos_cached: Array,
+        sin_cached: Array,
+    ) -> Result<Self> {
         let wqkv = get_linear(weights, &format!("{}.Wqkv", prefix), false)?;
         let out_proj = get_linear(weights, &format!("{}.out_proj", prefix), false)?;
-
-        // Precompute RoPE cos and sin for max length (2048)
-        let max_len = 2048usize;
-        let head_dim = 64usize;
-        let half = 32usize;
-        let mut cos_val = vec![0.0f32; max_len * head_dim];
-        let mut sin_val = vec![0.0f32; max_len * head_dim];
-        for pos in 0..max_len {
-            for i in 0..half {
-                let exponent = -2.0 * (i as f32) / (head_dim as f32);
-                let theta = 1000.0f32.powf(exponent);
-                let angle = (pos as f32) * theta;
-                let c = angle.cos();
-                let s = angle.sin();
-
-                cos_val[pos * head_dim + i] = c;
-                sin_val[pos * head_dim + i] = s;
-                cos_val[pos * head_dim + half + i] = c;
-                sin_val[pos * head_dim + half + i] = s;
-            }
-        }
-        let cos_cached = Array::from_slice(&cos_val, &[1, max_len as i32, 1, head_dim as i32]);
-        let sin_cached = Array::from_slice(&sin_val, &[1, max_len as i32, 1, head_dim as i32]);
 
         Ok(Self {
             wqkv,
@@ -233,8 +242,18 @@ pub struct NomicBertLayer {
 }
 
 impl NomicBertLayer {
-    pub fn new(weights: &HashMap<String, Array>, prefix: &str) -> Result<Self> {
-        let attn = NomicBertAttention::new(weights, &format!("{}.attn", prefix))?;
+    pub fn new(
+        weights: &HashMap<String, Array>,
+        prefix: &str,
+        cos_cached: Array,
+        sin_cached: Array,
+    ) -> Result<Self> {
+        let attn = NomicBertAttention::new(
+            weights,
+            &format!("{}.attn", prefix),
+            cos_cached,
+            sin_cached,
+        )?;
         let mlp = NomicBertMLP::new(weights, &format!("{}.mlp", prefix))?;
         let norm1 = get_layer_norm(weights, &format!("{}.norm1", prefix), 1e-5)?;
         let norm2 = get_layer_norm(weights, &format!("{}.norm2", prefix), 1e-5)?;
@@ -289,9 +308,16 @@ impl NomicBertModel {
 
         let emb_ln = get_layer_norm(weights, "emb_ln", 1e-5)?;
 
+        let (cos_cached, sin_cached) = create_rope_cache()?;
+
         let mut layers = Vec::new();
         for i in 0..12 {
-            let layer = NomicBertLayer::new(weights, &format!("encoder.layers.{}", i))?;
+            let layer = NomicBertLayer::new(
+                weights,
+                &format!("encoder.layers.{}", i),
+                cos_cached.clone(),
+                sin_cached.clone(),
+            )?;
             layers.push(layer);
         }
 
