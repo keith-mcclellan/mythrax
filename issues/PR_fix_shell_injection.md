@@ -1,0 +1,7 @@
+# 🛡️ Sentinel: [CRITICAL] Fix shell injection in Arbor HTR Parallel Verification Loop
+
+🚨 **Severity:** CRITICAL
+💡 **Vulnerability:** The Arbor HTR Parallel Verification Loop executed test commands using a raw POSIX shell invocation (`sh -c`) within git worktrees. This introduced a shell injection vulnerability, as `test_command` containing shell operators (`&`, `|`, `>`, `<`, `;`) would be blindly passed to the shell. This allowed escaping the intended execution context and broke isolation boundaries.
+🎯 **Impact:** If exploited via user-controlled input injected into `test_command`, an attacker could achieve arbitrary command execution on the host machine running the Mythrax daemon. This breaks intended agent isolation and could lead to full system compromise.
+🔧 **Fix:** Replaced the `sh -c` fallback mechanism in both `mythrax-core/src/cognitive/arbor.rs` and `mythrax-core/src/cognitive/executor.rs` with direct argument parsing using `std::process::Command`. The `test_command` is now strictly parsed into arguments without a shell layer, as per the `mythrax-2.0` specification ("std::process::Command direct execution, no shell").
+✅ **Verification:** Verified by compiling the `mythrax-core` library and running unit tests for `cognitive::arbor` and `cognitive::executor` to ensure no functionality regressions.
