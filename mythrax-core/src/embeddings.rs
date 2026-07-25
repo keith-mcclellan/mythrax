@@ -19,6 +19,7 @@ static GLOBAL_EMBEDDER: OnceLock<Result<Arc<LocalEmbedder>, String>> = OnceLock:
 
 pub struct EmbeddingLruCache {
     pub map: std::collections::HashMap<String, (Vec<f32>, u64, bool)>,
+    pub queue: std::collections::VecDeque<String>,
     pub counter: u64,
     pub capacity: usize,
 }
@@ -27,6 +28,7 @@ impl EmbeddingLruCache {
     pub fn new(capacity: usize) -> Self {
         Self {
             map: std::collections::HashMap::new(),
+            queue: std::collections::VecDeque::new(),
             counter: 0,
             capacity,
         }
@@ -34,35 +36,38 @@ impl EmbeddingLruCache {
 }
 
 pub fn get_default_capacity() -> usize {
-    if let Ok(val) = std::env::var("MYTHRAX_EMBEDDING_CACHE_CAPACITY") {
-        if let Ok(capacity) = val.parse::<usize>() {
-            return capacity;
+    static DEFAULT_CAPACITY: OnceLock<usize> = OnceLock::new();
+    *DEFAULT_CAPACITY.get_or_init(|| {
+        if let Ok(val) = std::env::var("MYTHRAX_EMBEDDING_CACHE_CAPACITY") {
+            if let Ok(capacity) = val.parse::<usize>() {
+                return capacity;
+            }
         }
-    }
 
-    // Check tuned params json robustly
-    let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
-    if !tuned_path.exists() {
-        tuned_path = std::path::PathBuf::from("../bench_data/tuned_params.json");
-    }
-    if !tuned_path.exists() {
-        tuned_path = std::path::PathBuf::from("mythrax-core/bench_data/tuned_params.json");
-    }
-    if tuned_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&tuned_path) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(val_str) = json
-                    .get("search.embedding_cache_capacity")
-                    .and_then(|v| v.as_str())
-                {
-                    if let Ok(capacity) = val_str.parse::<usize>() {
-                        return capacity;
+        // Check tuned params json robustly
+        let mut tuned_path = std::path::PathBuf::from("bench_data/tuned_params.json");
+        if !tuned_path.exists() {
+            tuned_path = std::path::PathBuf::from("../bench_data/tuned_params.json");
+        }
+        if !tuned_path.exists() {
+            tuned_path = std::path::PathBuf::from("mythrax-core/bench_data/tuned_params.json");
+        }
+        if tuned_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&tuned_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(val_str) = json
+                        .get("search.embedding_cache_capacity")
+                        .and_then(|v| v.as_str())
+                    {
+                        if let Ok(capacity) = val_str.parse::<usize>() {
+                            return capacity;
+                        }
                     }
                 }
             }
         }
-    }
-    10000
+        10000
+    })
 }
 
 static EMBEDDING_CACHE: OnceLock<std::sync::Mutex<EmbeddingLruCache>> = OnceLock::new();
@@ -95,6 +100,7 @@ pub fn clear_embedding_cache() {
     if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
         if let Ok(mut cache) = cache_mutex.lock() {
             cache.map.clear();
+            cache.queue.clear();
             cache.counter = 0;
         }
     }
@@ -141,26 +147,37 @@ pub fn get_cached_embedding(text: &str) -> Option<Vec<f32>> {
     if let Some(path) = get_embedding_cache_path() {
         let sqlite_path = path.with_extension("db");
         if sqlite_path.exists() {
-            if let Ok(conn) = rusqlite::Connection::open(&sqlite_path) {
-                if let Ok(mut stmt) = conn.prepare("SELECT embedding FROM embedding_cache WHERE text = ?") {
-                    if let Ok(mut rows) = stmt.query(rusqlite::params![text]) {
-                        if let Ok(Some(row)) = rows.next() {
-                            if let Ok(bytes) = row.get::<_, Vec<u8>>(0) {
-                                let mut embedding = Vec::with_capacity(bytes.len() / 4);
-                                for chunk in bytes.chunks_exact(4) {
-                                    embedding.push(f32::from_le_bytes(chunk.try_into().unwrap()));
-                                }
-                                
-                                // Put back in memory cache
-                                if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
-                                    if let Ok(mut cache) = cache_mutex.lock() {
-                                        cache.counter += 1;
-                                        let tick = cache.counter;
-                                        cache.map.insert(text.to_string(), (embedding.clone(), tick, false));
+            static SQLITE_CONN: OnceLock<std::sync::Mutex<Option<rusqlite::Connection>>> = OnceLock::new();
+            let mutex = SQLITE_CONN.get_or_init(|| {
+                let conn = rusqlite::Connection::open(&sqlite_path).ok().map(|c| {
+                    let _ = c.execute("PRAGMA journal_mode = WAL;", []);
+                    let _ = c.execute("PRAGMA synchronous = NORMAL;", []);
+                    c
+                });
+                std::sync::Mutex::new(conn)
+            });
+            if let Ok(guard) = mutex.lock() {
+                if let Some(ref conn) = *guard {
+                    if let Ok(mut stmt) = conn.prepare("SELECT embedding FROM embedding_cache WHERE text = ?") {
+                        if let Ok(mut rows) = stmt.query(rusqlite::params![text]) {
+                            if let Ok(Some(row)) = rows.next() {
+                                if let Ok(bytes) = row.get::<_, Vec<u8>>(0) {
+                                    let mut embedding = Vec::with_capacity(bytes.len() / 4);
+                                    for chunk in bytes.chunks_exact(4) {
+                                        embedding.push(f32::from_le_bytes(chunk.try_into().unwrap()));
                                     }
+                                    
+                                    // Put back in memory cache
+                                    if let Some(cache_mutex) = EMBEDDING_CACHE.get() {
+                                        if let Ok(mut cache) = cache_mutex.lock() {
+                                            cache.counter += 1;
+                                            let tick = cache.counter;
+                                            cache.map.insert(text.to_string(), (embedding.clone(), tick, false));
+                                        }
+                                    }
+                                    
+                                    return Some(embedding);
                                 }
-                                
-                                return Some(embedding);
                             }
                         }
                     }
