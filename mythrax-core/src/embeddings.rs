@@ -487,7 +487,7 @@ pub fn flush_dirty_cache(cache: &mut EmbeddingLruCache, path: &Path) -> Result<(
     tx.commit()?;
 
     // LRU eviction by last_accessed_ms with fallback to created_at * 1000
-    let disk_capacity = cache.capacity() * 10;
+    let disk_capacity = (cache.capacity() * 10).max(100_000);
     conn.execute(
         "DELETE FROM embedding_cache WHERE text NOT IN (
             SELECT text FROM embedding_cache 
