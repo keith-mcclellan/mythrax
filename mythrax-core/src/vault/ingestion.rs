@@ -2,6 +2,7 @@ use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+use surrealdb_types::SurrealValue;
 use uuid::Uuid;
 
 pub static IS_INGESTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1772,6 +1773,134 @@ mod tests {
         let parsed = parse_batched_titles(resp, 3);
         assert!(parsed.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_sync_workspace_docs_boundary_and_sha256_diffing() {
+        let ws_dir = tempdir().unwrap();
+        let ws_path = ws_dir.path();
+
+        let vault_dir = ws_path.join("mythrax-vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+
+        // Create ignored subdirs inside workspace
+        let target_dir = ws_path.join("target");
+        let git_dir = ws_path.join(".git");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(target_dir.join("ignored.md"), "ignored build content").unwrap();
+        std::fs::write(git_dir.join("git.md"), "ignored git content").unwrap();
+        std::fs::write(vault_dir.join("vault_note.md"), "ignored inner vault content").unwrap();
+
+        // Create valid workspace docs
+        let specs_dir = ws_path.join("specs").join("foo");
+        std::fs::create_dir_all(&specs_dir).unwrap();
+        let doc1_path = specs_dir.join("bar.md");
+        std::fs::write(&doc1_path, "# Specs Foo Bar\nContent for bar.").unwrap();
+
+        let store = MarkdownStore::new(&vault_dir).unwrap();
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        // Sync workspace docs
+        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+
+        let ref_doc = vault_dir.join("reference").join("specs").join("foo").join("bar.md");
+        assert!(ref_doc.exists(), "Mirrored reference file should exist in vault/reference");
+
+        let ignored_ref = vault_dir.join("reference").join("target").join("ignored.md");
+        assert!(!ignored_ref.exists(), "Target directory files should be ignored");
+
+        let vault_inner_ref = vault_dir.join("reference").join("mythrax-vault");
+        assert!(!vault_inner_ref.exists(), "Inner vault directory should be ignored");
+
+        // Verify WikiNode in DB
+        let node = backend.find_wiki_node_by_hash_db("dummy", "workspace_ref").await.unwrap();
+        assert!(node.is_none());
+
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"# Specs Foo Bar\nContent for bar.");
+        let expected_hash = format!("{:x}", hasher.finalize());
+
+        let node_found = backend.find_wiki_node_by_hash_db(&expected_hash, "workspace_ref").await.unwrap();
+        assert!(node_found.is_some());
+        let found = node_found.unwrap();
+        assert_eq!(found.name, "specs/foo/bar.md");
+        assert_eq!(found.scope, "workspace_ref");
+
+        // Re-sync without changes: SHA-256 diffing skips re-write
+        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_sync_workspace_docs_deletion_pruning() {
+        let ws_dir = tempdir().unwrap();
+        let ws_path = ws_dir.path();
+        let vault_dir = ws_path.join("mythrax-vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+
+        let doc_path = ws_path.join("temp_doc.md");
+        std::fs::write(&doc_path, "# Temporary Document\nWill be deleted.").unwrap();
+
+        let store = MarkdownStore::new(&vault_dir).unwrap();
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+
+        let ref_doc = vault_dir.join("reference").join("temp_doc.md");
+        assert!(ref_doc.exists());
+
+        // Delete from workspace
+        std::fs::remove_file(&doc_path).unwrap();
+
+        // Re-sync to trigger deletion pruning
+        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+
+        assert!(!ref_doc.exists(), "Mirrored file should be pruned when deleted from workspace");
+    }
+
+    #[test]
+    fn test_moc_rebuild_nested_wikilinks() {
+        let vault_dir = tempdir().unwrap();
+        let store = MarkdownStore::new(vault_dir.path()).unwrap();
+
+        let ref_specs = vault_dir.path().join("reference").join("specs").join("foo");
+        std::fs::create_dir_all(&ref_specs).unwrap();
+        std::fs::write(ref_specs.join("bar.md"), "# Bar Spec").unwrap();
+        std::fs::write(vault_dir.path().join("reference").join("architecture.md"), "# Architecture").unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+            store.rebuild_reference_moc(&backend).unwrap();
+        });
+
+        let moc_content = std::fs::read_to_string(vault_dir.path().join("MOC.md")).unwrap();
+        assert!(moc_content.contains("## Reference"));
+        assert!(moc_content.contains("- [[reference/architecture|architecture]]"));
+        assert!(moc_content.contains("- [[reference/specs/foo/bar|specs / foo / bar]]"));
+    }
+
+    #[tokio::test]
+    async fn test_wiki_node_content_hash_backfill() {
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let sql = "CREATE wiki_node CONTENT { name: 'test_node', content: 'hello world content', scope: 'general' };";
+        backend.db.query(sql).await.unwrap();
+
+        backend.backfill_wiki_node_content_hashes_db().await.unwrap();
+
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"hello world content");
+        let hash = format!("{:x}", hasher.finalize());
+
+        let found = backend.find_wiki_node_by_hash_db(&hash, "general").await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "test_node");
+    }
 }
 
 pub fn parse_batched_titles(resp: &str, expected_count: usize) -> Vec<String> {
@@ -1792,4 +1921,235 @@ pub fn parse_batched_titles(resp: &str, expected_count: usize) -> Vec<String> {
         );
         Vec::new()
     }
+}
+
+pub struct WorkspaceDocFile {
+    pub rel_path: String,
+    pub content: String,
+    pub hash: String,
+}
+
+pub async fn sync_workspace_docs_to_vault(
+    workspace_root: &Path,
+    store: &MarkdownStore,
+    backend: &dyn StorageBackend,
+) -> Result<()> {
+    let _guard = match crate::daemon::SyncWorkspaceDocsGuard::new() {
+        Some(g) => g,
+        None => {
+            tracing::info!("Workspace docs sync already in progress, skipping.");
+            return Ok(());
+        }
+    };
+
+    let ws_root = workspace_root.to_path_buf();
+    let vault_root = store.vault_root.clone();
+
+    let workspace_files = tokio::task::spawn_blocking(move || -> Result<Vec<WorkspaceDocFile>> {
+        let mut results = Vec::new();
+        let canonical_ws = ws_root.canonicalize().unwrap_or_else(|_| ws_root.clone());
+        let canonical_vault = vault_root.canonicalize().unwrap_or_else(|_| vault_root.clone());
+
+        fn collect_docs(
+            dir: &Path,
+            ws_root: &Path,
+            canonical_vault: &Path,
+            results: &mut Vec<WorkspaceDocFile>,
+            depth: usize,
+        ) -> Result<()> {
+            if depth > 10 {
+                return Ok(());
+            }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_symlink()).unwrap_or(false) {
+                        continue;
+                    }
+                    let path = entry.path();
+                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if path.is_dir() {
+                        if file_name == "target"
+                            || file_name == ".git"
+                            || file_name == ".venv"
+                            || file_name == ".cargo"
+                            || file_name == ".trash"
+                            || file_name == "node_modules"
+                        {
+                            continue;
+                        }
+                        if let Ok(canon) = path.canonicalize() {
+                            if canon == *canonical_vault || canon.starts_with(canonical_vault) {
+                                continue;
+                            }
+                        }
+                        collect_docs(&path, ws_root, canonical_vault, results, depth + 1)?;
+                    } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                        if file_name.ends_with(".tmp") || file_name == "MOC.md" {
+                            continue;
+                        }
+                        if let Ok(rel) = path.strip_prefix(ws_root) {
+                            let rel_str = rel.to_string_lossy().replace('\\', "/");
+                            if let Ok(raw_content) = std::fs::read_to_string(&path) {
+                                use sha2::Digest;
+                                let mut hasher = sha2::Sha256::new();
+                                hasher.update(raw_content.as_bytes());
+                                let hash = format!("{:x}", hasher.finalize());
+                                results.push(WorkspaceDocFile {
+                                    rel_path: rel_str,
+                                    content: raw_content,
+                                    hash,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        collect_docs(&canonical_ws, &canonical_ws, &canonical_vault, &mut results, 0)?;
+        Ok(results)
+    })
+    .await??;
+
+    let mut active_vault_paths = std::collections::HashSet::new();
+
+    for file in &workspace_files {
+        let vault_rel_path = format!("reference/{}", file.rel_path);
+        active_vault_paths.insert(vault_rel_path.clone());
+        let dest_disk_path = store.vault_root.join(&vault_rel_path);
+
+        let mut needs_write = true;
+        if dest_disk_path.exists() {
+            if let Ok(disk_content) = std::fs::read_to_string(&dest_disk_path) {
+                use sha2::Digest;
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(disk_content.as_bytes());
+                let disk_hash = format!("{:x}", hasher.finalize());
+                if disk_hash == file.hash {
+                    if let Ok(Some(_)) = backend.find_wiki_node_by_hash(&file.hash, "workspace_ref").await {
+                        needs_write = false;
+                    }
+                }
+            }
+        }
+
+        if needs_write {
+            store.write_file(&vault_rel_path, &file.content)?;
+            index_reference_doc(&file.rel_path, &vault_rel_path, &file.content, &file.hash, backend).await?;
+        }
+    }
+
+    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct WikiNodePathRef {
+            id: surrealdb::types::RecordId,
+            vault_path: Option<String>,
+        }
+
+        let mut stale_nodes: Vec<(surrealdb::types::RecordId, Option<String>)> = Vec::new();
+        let mut offset = 0;
+        loop {
+            let sql = "SELECT id, vault_path FROM wiki_node WHERE scope = 'workspace_ref' LIMIT 50 START $offset;";
+            let mut response = surreal.db.query(sql).bind(("offset", offset)).await?;
+            let refs: Vec<WikiNodePathRef> = response.take(0).unwrap_or_default();
+            if refs.is_empty() {
+                break;
+            }
+
+            for node in refs {
+                let is_stale = match &node.vault_path {
+                    Some(vp) => !active_vault_paths.contains(vp),
+                    None => true,
+                };
+
+                if is_stale {
+                    stale_nodes.push((node.id, node.vault_path));
+                }
+            }
+
+            offset += 50;
+        }
+
+        for (thing, vault_path) in stale_nodes {
+            if let Some(ref vp) = vault_path {
+                let fpath = store.vault_root.join(vp);
+                if fpath.exists() {
+                    let _ = std::fs::remove_file(fpath);
+                }
+            }
+            let _ = surreal
+                .db
+                .query("DELETE relates_to WHERE in = $id OR out = $id;")
+                .bind(("id", thing.clone()))
+                .await;
+            let _ = surreal
+                .db
+                .query("DELETE followed_by WHERE in = $id OR out = $id;")
+                .bind(("id", thing.clone()))
+                .await;
+            let _ = surreal
+                .db
+                .query("DELETE $id;")
+                .bind(("id", thing.clone()))
+                .await;
+        }
+    }
+
+    store.rebuild_reference_moc(backend)?;
+    Ok(())
+}
+
+async fn index_reference_doc(
+    rel_path: &str,
+    vault_rel_path: &str,
+    content: &str,
+    content_hash: &str,
+    backend: &dyn StorageBackend,
+) -> Result<()> {
+    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let sql = "SELECT * FROM wiki_node WHERE vault_path = $vault_path AND scope = 'workspace_ref';";
+        let mut response = surreal
+            .db
+            .query(sql)
+            .bind(("vault_path", vault_rel_path.to_string()))
+            .await?;
+        let raws: Vec<crate::db::WikiNodeRaw> = response.take(0).unwrap_or_default();
+        let nodes: Vec<crate::contracts::WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
+        for node in nodes {
+            if let Some(ref id_str) = node.id {
+                if let Ok(thing) = crate::db::parse_record_id(id_str) {
+                    let _ = surreal.db.query("DELETE relates_to WHERE in = $id OR out = $id;").bind(("id", thing.clone())).await;
+                    let _ = surreal.db.query("DELETE followed_by WHERE in = $id OR out = $id;").bind(("id", thing.clone())).await;
+                    let _ = surreal.db.query("DELETE $id;").bind(("id", thing.clone())).await;
+                }
+            }
+        }
+    }
+
+    let chunks = chunk_parsed_content(content, 2000);
+    let total_chunks = chunks.len();
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        let node_name = if total_chunks > 1 {
+            format!("{}#part-{}", rel_path, idx + 1)
+        } else {
+            rel_path.to_string()
+        };
+
+        let node = crate::contracts::WikiNode {
+            id: None,
+            name: node_name,
+            content: chunk,
+            scope: "workspace_ref".to_string(),
+            vault_path: Some(vault_rel_path.to_string()),
+            embedding: None,
+            temporal_range_start: None,
+            temporal_range_end: None,
+            metacognitive_confidence: Some(100),
+            node_type: Some("reference".to_string()),
+            content_hash: Some(content_hash.to_string()),
+        };
+        backend.save_wiki_node(&node).await?;
+    }
+    Ok(())
 }

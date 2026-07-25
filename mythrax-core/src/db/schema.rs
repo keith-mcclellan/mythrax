@@ -79,8 +79,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS graduated_to ON wiki_node TYPE option<record<wisdom>>;
     DEFINE FIELD IF NOT EXISTS metacognitive_confidence ON wiki_node TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS node_type ON wiki_node TYPE option<string> DEFAULT 'insight';
+    DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node TYPE option<string>;
     DEFINE INDEX OVERWRITE wiki_node_name ON TABLE wiki_node FIELDS name, scope UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
+    DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;
     DEFINE INDEX OVERWRITE wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
@@ -234,6 +236,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON wiki_node_history TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON wiki_node_history TYPE datetime DEFAULT time::now();
     DEFINE FIELD IF NOT EXISTS utility ON wiki_node_history TYPE option<float>;
+    DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node_history TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS changed_at ON wiki_node_history TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS wiki_node_history_node ON wiki_node_history FIELDS node_id;
     DEFINE INDEX IF NOT EXISTS wiki_node_history_scope ON wiki_node_history FIELDS scope;
@@ -250,6 +253,7 @@ pub const INIT_SCHEMA: &str = "
             last_retrieved_at: $value.last_retrieved_at,
             created_at: $value.created_at,
             utility: $value.utility,
+            content_hash: $value.content_hash,
             changed_at: time::now()
         }
     );

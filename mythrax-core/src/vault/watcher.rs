@@ -85,7 +85,7 @@ fn count_files_recursive(path: &Path, depth: usize) -> usize {
         return 0;
     }
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name == ".trash" || name == "target" || name == ".git" || name == ".mythrax" {
+        if name == ".trash" || name == "target" || name == ".git" || name == ".mythrax" || name == "reference" || name == "MOC.md" || name.ends_with(".tmp") {
             return 0;
         }
     }
@@ -93,6 +93,9 @@ fn count_files_recursive(path: &Path, depth: usize) -> usize {
         let mut count = 0;
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_symlink()).unwrap_or(false) {
+                    continue;
+                }
                 count += count_files_recursive(&entry.path(), depth + 1);
             }
         }
@@ -311,8 +314,20 @@ pub fn start_watching(
                                 || comp_str == "target"
                                 || comp_str == ".git"
                                 || comp_str == ".mythrax"
+                                || comp_str == "reference"
                         });
                         if has_ignored_comp {
+                            return false;
+                        }
+
+                        let norm_path = path.to_string_lossy().replace('\\', "/");
+                        if norm_path.starts_with("reference/")
+                            || norm_path.contains("/reference/")
+                            || norm_path == "reference"
+                            || norm_path == "MOC.md"
+                            || norm_path.ends_with("MOC.md")
+                            || norm_path.ends_with(".tmp")
+                        {
                             return false;
                         }
 

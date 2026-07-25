@@ -564,6 +564,8 @@ pub struct WikiNode {
     pub metacognitive_confidence: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

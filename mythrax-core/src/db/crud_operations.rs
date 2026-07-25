@@ -1397,6 +1397,13 @@ impl SurrealBackend {
             is_update = true;
         }
 
+        let content_hash = node.content_hash.clone().unwrap_or_else(|| {
+            use sha2::Digest;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(node.content.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
+
         let query_str = if is_update {
             "
                 BEGIN TRANSACTION;
@@ -1411,6 +1418,7 @@ impl SurrealBackend {
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
                     node_type: $node_type,
+                    content_hash: $content_hash,
                     updated_at: time::now()
                 };
                 COMMIT TRANSACTION;
@@ -1429,6 +1437,7 @@ impl SurrealBackend {
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
                     node_type: $node_type,
+                    content_hash: $content_hash,
                     created_at: time::now(),
                     updated_at: time::now()
                 };
@@ -1465,6 +1474,7 @@ impl SurrealBackend {
             .bind(("temporal_range_end", node.temporal_range_end))
             .bind(("metacognitive_confidence", node.metacognitive_confidence))
             .bind(("node_type", node.node_type.as_deref().unwrap_or("insight")))
+            .bind(("content_hash", content_hash.as_str()))
             .await?;
 
         response
@@ -1780,7 +1790,64 @@ impl SurrealBackend {
                 break;
             }
         }
+
+        self.backfill_wiki_node_content_hashes_db().await?;
         Ok(())
+    }
+
+    pub async fn backfill_wiki_node_content_hashes_db(&self) -> Result<()> {
+        let limit = 50;
+        loop {
+            let sql = "SELECT id, content FROM wiki_node WHERE content_hash IS NONE LIMIT $limit;";
+            let mut res = self.db.query(sql).bind(("limit", limit)).await?;
+            let batch: Vec<serde_json::Value> = res.take(0)?;
+            if batch.is_empty() {
+                break;
+            }
+            let mut updated_any = false;
+            for row in &batch {
+                if let (Some(id_val), Some(content)) = (row.get("id"), row.get("content").and_then(|v| v.as_str())) {
+                    let id_str = self.parse_val_id(id_val);
+                    if !id_str.is_empty() {
+                        use sha2::Digest;
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(content.as_bytes());
+                        let hash = format!("{:x}", hasher.finalize());
+                        if let Ok(rec_id) = parse_record_id(&id_str) {
+                            if let Ok(mut u_res) = self
+                                .db
+                                .query("UPDATE $id SET content_hash = $hash;")
+                                .bind(("id", rec_id))
+                                .bind(("hash", hash))
+                                .await
+                            {
+                                if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                    if !updated_rows.is_empty() {
+                                        updated_any = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !updated_any {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn find_wiki_node_by_hash_db(&self, content_hash: &str, scope: &str) -> Result<Option<WikiNode>> {
+        let check_query = "SELECT * FROM wiki_node WHERE content_hash = $content_hash AND scope = $scope LIMIT 1;";
+        let mut response = self
+            .db
+            .query(check_query)
+            .bind(("content_hash", content_hash))
+            .bind(("scope", scope))
+            .await?;
+        let raws: Vec<WikiNodeRaw> = response.take(0)?;
+        Ok(raws.into_iter().next().map(|r| r.into_wiki_node()))
     }
 
     pub async fn get_wisdom_tier_db(&self, id: &str) -> Result<Option<crate::contracts::Tier>> {

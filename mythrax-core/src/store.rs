@@ -151,6 +151,115 @@ Welcome to the Mythrax Vault.
         self.write_file(file_path, &content)?;
         Ok(())
     }
+
+    pub fn rebuild_reference_moc(&self, _backend: &dyn crate::db::StorageBackend) -> Result<()> {
+        let ref_dir = self.vault_root.join("reference");
+        let mut links = Vec::new();
+
+        if ref_dir.exists() {
+            let mut files = Vec::new();
+            self.collect_md_files_recursive(&ref_dir, &mut files)?;
+            files.sort();
+
+            for full_path in files {
+                if let Ok(rel_path) = full_path.strip_prefix(&self.vault_root) {
+                    let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+                    let rel_no_ext = rel_str.strip_suffix(".md").unwrap_or(&rel_str).to_string();
+                    let inside_ref = rel_str.strip_prefix("reference/").unwrap_or(&rel_str);
+                    let inside_no_ext = inside_ref.strip_suffix(".md").unwrap_or(inside_ref);
+                    let label = inside_no_ext.replace('/', " / ");
+                    let link = format!("- [[{}|{}]]", rel_no_ext, label);
+                    links.push(link);
+                }
+            }
+        }
+
+        let moc_path = self.vault_root.join("MOC.md");
+        let content = if moc_path.exists() {
+            fs::read_to_string(&moc_path)?
+        } else {
+            r#"# Map of Content (MOC)
+
+Welcome to the Mythrax Vault.
+
+## Vault Folders
+- [[directions/|Directions]]
+- [[insights/|Insights]]
+- [[pruned/|Pruned]]
+- [[wisdom/|Wisdom]]
+- [[reference/|Reference]]
+"#.to_string()
+        };
+
+        let mut ref_section_text = "## Reference\n".to_string();
+        if !links.is_empty() {
+            ref_section_text.push_str(&links.join("\n"));
+            ref_section_text.push('\n');
+        }
+
+        let lines: Vec<&str> = content.lines().collect();
+        let mut header_start = None;
+        let mut header_end = None;
+
+        for (i, line) in lines.iter().enumerate() {
+            if header_start.is_none() {
+                if line.trim() == "## Reference" {
+                    header_start = Some(i);
+                }
+            } else {
+                if line.trim().starts_with('#') {
+                    header_end = Some(i);
+                    break;
+                }
+            }
+        }
+
+        let final_content = if let Some(start) = header_start {
+            let end = header_end.unwrap_or(lines.len());
+            let mut new_lines = Vec::new();
+            new_lines.extend(lines[..start].iter().copied());
+            new_lines.push(ref_section_text.trim_end());
+            if end < lines.len() {
+                new_lines.extend(lines[end..].iter().copied());
+            }
+            let mut res = new_lines.join("\n");
+            if !res.ends_with('\n') {
+                res.push('\n');
+            }
+            res
+        } else {
+            let mut res = content;
+            if !res.ends_with('\n') {
+                res.push('\n');
+            }
+            res.push('\n');
+            res.push_str(&ref_section_text);
+            if !res.ends_with('\n') {
+                res.push('\n');
+            }
+            res
+        };
+
+        self.write_file("MOC.md", &final_content)?;
+        Ok(())
+    }
+
+    fn collect_md_files_recursive(&self, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)?.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    self.collect_md_files_recursive(&path, files)?;
+                } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if !name.ends_with(".tmp") && name != "MOC.md" {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 use std::sync::RwLock;

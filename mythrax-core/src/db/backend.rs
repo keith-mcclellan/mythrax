@@ -123,6 +123,7 @@ pub trait StorageBackend: Send + Sync {
     async fn save_handoff(&self, handoff: &HandoffSave) -> Result<String>;
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String>;
     async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()>;
+    async fn find_wiki_node_by_hash(&self, hash: &str, scope: &str) -> Result<Option<WikiNode>>;
     async fn delete_episode(&self, id: &str) -> Result<()>;
     async fn update_idf_index(&self, episode_id: &str, is_delete: bool) -> Result<()>;
     async fn find_duplicate_by_content_hash(&self, content_hash: &str) -> Result<Option<String>>;
@@ -1232,7 +1233,7 @@ pub(crate) struct HandoffRaw {
 }
 
 #[derive(serde::Deserialize, Debug, SurrealValue)]
-pub(crate) struct WikiNodeRaw {
+pub struct WikiNodeRaw {
     pub(crate) id: surrealdb::types::RecordId,
     pub(crate) name: String,
     pub(crate) content: String,
@@ -1245,23 +1246,32 @@ pub(crate) struct WikiNodeRaw {
     pub(crate) metacognitive_confidence: Option<f64>,
     #[serde(default)]
     pub(crate) node_type: Option<String>,
+    #[serde(default)]
+    pub(crate) content_hash: Option<String>,
+}
+
+impl From<WikiNodeRaw> for WikiNode {
+    fn from(raw: WikiNodeRaw) -> Self {
+        let id_str = format_record_id(&raw.id);
+        WikiNode {
+            id: Some(id_str),
+            name: raw.name,
+            content: raw.content,
+            scope: raw.scope,
+            vault_path: raw.vault_path,
+            embedding: raw.embedding,
+            temporal_range_start: raw.temporal_range_start,
+            temporal_range_end: raw.temporal_range_end,
+            metacognitive_confidence: raw.metacognitive_confidence.map(|v| v as i32),
+            node_type: raw.node_type,
+            content_hash: raw.content_hash,
+        }
+    }
 }
 
 impl WikiNodeRaw {
     pub(crate) fn into_wiki_node(self) -> WikiNode {
-        let id_str = format_record_id(&self.id);
-        WikiNode {
-            id: Some(id_str),
-            name: self.name,
-            content: self.content,
-            scope: self.scope,
-            vault_path: self.vault_path,
-            embedding: self.embedding,
-            temporal_range_start: self.temporal_range_start,
-            temporal_range_end: self.temporal_range_end,
-            metacognitive_confidence: self.metacognitive_confidence.map(|v| v as i32),
-            node_type: self.node_type,
-        }
+        WikiNode::from(self)
     }
 }
 
@@ -1745,6 +1755,10 @@ impl StorageBackend for SurrealBackend {
         } else {
             self.delete_wiki_node_db(name, scope).await
         }
+    }
+
+    async fn find_wiki_node_by_hash(&self, hash: &str, scope: &str) -> Result<Option<WikiNode>> {
+        self.find_wiki_node_by_hash_db(hash, scope).await
     }
 
     async fn relate_nodes(

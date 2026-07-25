@@ -14,6 +14,32 @@ use std::time::{Duration, Instant};
 use sysinfo::{Pid, Signal, System};
 
 pub static LAST_ACTIVITY_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static IS_SYNCING_WORKSPACE_DOCS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub struct SyncWorkspaceDocsGuard;
+impl SyncWorkspaceDocsGuard {
+    pub fn new() -> Option<Self> {
+        if IS_SYNCING_WORKSPACE_DOCS
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            Some(Self)
+        } else {
+            None
+        }
+    }
+}
+impl Drop for SyncWorkspaceDocsGuard {
+    fn drop(&mut self) {
+        IS_SYNCING_WORKSPACE_DOCS.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 pub fn update_last_activity() {
     let now = std::time::SystemTime::now()
@@ -306,6 +332,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
                 // Spawn background checkpointing daemon
                 let backend_chk = backend.clone();
+                let store_chk = store.clone();
                 let vault_chk = vault_path.clone();
                 let cancel_token_chk = cancel_token.clone();
                 tokio::spawn(async move {
@@ -320,6 +347,34 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                 if let Err(e) = run_checkpoint(&*backend_chk, &vault_chk).await {
                                     tracing::error!("Checkpointing daemon error: {:?}", e);
                                 }
+                                let ws_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+                                    .ok()
+                                    .map(PathBuf::from)
+                                    .unwrap_or_else(|| crate::store::get_workspace_root().unwrap_or_else(|| std::env::current_dir().unwrap_or_default()));
+                                if let Err(e) = crate::vault::ingestion::sync_workspace_docs_to_vault(&ws_root, &store_chk, &*backend_chk).await {
+                                    tracing::error!("Checkpoint workspace docs sync failed: {:?}", e);
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Run workspace docs sync on startup
+                let backend_ws = backend.clone();
+                let store_ws = store.clone();
+                let cancel_token_ws = cancel_token.clone();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        _ = cancel_token_ws.cancelled() => {
+                            tracing::info!("Startup workspace docs sync received cancellation signal, stopping");
+                        }
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                            let ws_root = std::env::var("MYTHRAX_WORKSPACE_ROOT")
+                                .ok()
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| crate::store::get_workspace_root().unwrap_or_else(|| std::env::current_dir().unwrap_or_default()));
+                            if let Err(e) = crate::vault::ingestion::sync_workspace_docs_to_vault(&ws_root, &store_ws, &*backend_ws).await {
+                                tracing::error!("Startup workspace docs sync failed: {:?}", e);
                             }
                         }
                     }
