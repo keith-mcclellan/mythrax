@@ -76,3 +76,5 @@ embedding_cache.bin.archive
 
 
 .handoffs/
+issues/
+audit_output.log
