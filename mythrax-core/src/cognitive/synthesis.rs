@@ -92,12 +92,19 @@ pub fn dbscan(embeddings: &[&[f32]], eps: f32, min_samples: usize) -> Vec<Option
     let mut labels = vec![None; n];
     let mut cluster_id = 0;
 
+    // Precompute norms for O(1) norm lookup in the inner clustering loop
+    let mut norms = Vec::with_capacity(n);
+    for emb in embeddings {
+        let norm = emb.iter().map(|&x| x * x).sum::<f32>().sqrt();
+        norms.push(norm);
+    }
+
     for i in 0..n {
         if labels[i].is_some() {
             continue;
         }
 
-        let mut neighbors = find_neighbors(i, embeddings, eps);
+        let mut neighbors = find_neighbors(i, embeddings, &norms, eps);
         if neighbors.len() < min_samples {
             continue;
         }
@@ -108,7 +115,7 @@ pub fn dbscan(embeddings: &[&[f32]], eps: f32, min_samples: usize) -> Vec<Option
             let neighbor_idx = neighbors[j];
             if labels[neighbor_idx].is_none() {
                 labels[neighbor_idx] = Some(cluster_id);
-                let neighbor_neighbors = find_neighbors(neighbor_idx, embeddings, eps);
+                let neighbor_neighbors = find_neighbors(neighbor_idx, embeddings, &norms, eps);
                 if neighbor_neighbors.len() >= min_samples {
                     for &nn in &neighbor_neighbors {
                         if !neighbors.contains(&nn) {
@@ -153,11 +160,29 @@ pub fn find_elbow_point(k_distances: &[f32]) -> f32 {
     k_distances[elbow_idx]
 }
 
-fn find_neighbors(i: usize, embeddings: &[&[f32]], eps: f32) -> Vec<usize> {
+fn find_neighbors(i: usize, embeddings: &[&[f32]], norms: &[f32], eps: f32) -> Vec<usize> {
     let mut neighbors = Vec::new();
     let target = embeddings[i];
+    let target_norm = norms[i];
+
+    if target.is_empty() || target_norm == 0.0 {
+        return neighbors;
+    }
+
     for (idx, &emb) in embeddings.iter().enumerate() {
-        if cosine_distance(target, emb) <= eps {
+        let emb_norm = norms[idx];
+        if target.len() != emb.len() || emb_norm == 0.0 {
+            continue;
+        }
+
+        let mut dot = 0.0;
+        for k in 0..target.len() {
+            dot += target[k] * emb[k];
+        }
+        let sim = dot / (target_norm * emb_norm);
+        let dist = 1.0 - sim;
+
+        if dist <= eps {
             neighbors.push(idx);
         }
     }
