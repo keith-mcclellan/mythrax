@@ -1,0 +1,7 @@
+{
+  "id": "arbor_alignment_20260726",
+  "type": "Refactor / Feature",
+  "status": "new",
+  "created_at": "2026-07-26T19:40:00Z",
+  "description": "Full Arbor Framework Alignment & Single-Pass Chunked Ingestion Engine"
+}
