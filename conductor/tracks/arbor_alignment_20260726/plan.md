@@ -27,87 +27,26 @@ Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause inv
 
 These must be fixed BEFORE any other work. Without them, nothing else matters.
 
-- [ ] **-1.1** Replace guardrail `.contains()` with semantic similarity (`manage_handlers.rs` L1496-1518):
-  - Remove exact substring match on `turn_content.contains(&rule.target_pattern)`.
-  - Replace with vector similarity (cosine ≥ 0.70) between current turn embedding and rule embeddings.
-  - Rules fire BEFORE the agent makes the mistake, not after.
-  - Fallback: If embeddings unavailable, inject ALL active rules with severity ≥ WARNING.
-- [ ] **-1.2** Replace `"general context"` fallback with actual task context (`manage_handlers.rs` L1727):
-  - Extract user's last message or active task description from conversation turns.
-  - Use STM context from `session_id` if no turns exist.
-  - Only fall back to generic query as last resort.
-- [ ] **-1.3** Fix utilization scoring — stop evicting good memories (`manage_handlers.rs` L1411-1466):
-  - Remove `.contains()` check for utilization.
-  - If a memory was injected into the context window, mark `is_util = true`. Injection IS utilization.
-- [ ] **-1.4** Fix corrupted wisdom graduation (`synthesis.rs` L3468-3469):
-  - `action_to_avoid` is set to `target_pattern` — tells agents to avoid good practices.
-  - `causal_explanation` is hardcoded generic string — no actual reasoning.
-  - Use LLM call to properly synthesize both fields from cluster content.
-- [ ] **-1.5** Fix distillation prompt — extract mistakes (`distillation.rs` L289-295):
-  - Current prompt asks for: Decisions, Constraints, User Preferences, Summary, Takeaways.
-  - NEVER asks for: Mistakes, Failures, Root Causes, What Worked vs What Didn't.
-  - Add explicit extraction categories for failures and causal insights.
-- [ ] **-1.6** Fix correction detection — replace keyword matching (`precompact.rs` L300-308):
-  - Current: only detects corrections if user says "wrong", "forgot", "mistake" etc.
-  - Replace with semantic similarity or LLM classification.
-- [ ] **-1.7** Fix token budget silent eviction (`manage_handlers.rs` L1262-1327):
-  - 8000-token budget permanently archives unpinned episodes with no notification.
-  - Add notification to agent of evicted memories. Consider summarization instead of deletion.
-- [ ] **-1.8** Implement post-invocation hook:
-  - No `handle_post_invocation_hook` exists. Session reflection relies on 15-turn heuristic.
-  - Implement proper post-invocation lifecycle that runs reflection sweep after every session.
-- [ ] **-1.9** Fix `p1_advisory.clear()` — the nuclear memory wipe (`manage_handlers.rs` L1838-1841):
-  - Pre-invocation response budget defaults to 3000 tokens (L1811). Playbook + preamble + policies consume 1000+. When exceeded, ALL retrieved memories are silently wiped via `.clear()`.
-  - **Fix the code, not the env var.** Change the hardcoded default from `3000` to `32000` at L1810.
-  - Replace the nuclear `.clear()` with graduated truncation: (1) truncate longest individual memories first, (2) summarize remaining if still over budget, (3) drop lowest-relevance memories one at a time, (4) NEVER drop ALL.
-  - Keep `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET` env var as an override, but the default must be safe out of the box.
-- [ ] **-1.10** Fix embedding content — stop embedding noise (`daemon.rs` L190, L237, `crud_operations.rs` L295):
-  - Episodes: currently embeds `"{title}: {content}"` where content is raw terminal logs. Embed the distilled summary instead.
-  - Wisdom: currently embeds `"{target_pattern}: {prescribed_remedy}"` — OMITS `action_to_avoid` and `causal_explanation`. Include all 4 fields.
-  - Wiki nodes: currently embeds `"{name}: {content}"` — embed `causal_insight` when available.
-- [ ] **-1.11** Fix search result formatting — stop returning raw JSON (`read_handlers.rs` L270):
-  - `serde_json::to_string_pretty()` escapes newlines in markdown, making it unreadable to LLMs.
-  - Format search results as clean markdown with heading, content section, and metadata per result.
-  - Also fix content slicing: `.split(&['.', '!', '?'])` on markdown/JSON content slices mid-URL or mid-code-block, returning garbage fragments. Use sentence-aware or word-boundary-aware truncation instead.
-- [ ] **-1.12** Fix `let _ =` silent error swallowing across all critical paths:
-  - `manage_handlers.rs`: `let _ = state.backend.save_episode(&ep).await;`
-  - `compactor.rs`: `let _ = db.save_wiki_node...`, `let _ = store.write_file...`
-  - `synthesis.rs`: `let _ = store.write_file...`, `let _ = db.delete_pipeline_run...`
-  - At minimum: log errors. Preferably: propagate to caller.
-- [ ] **-1.13** Fix TOCTOU race in arbor backpropagation (`arbor.rs` `backpropagate_insights`):
-  - Concurrent leaf nodes backpropagate to same parent via `buffer_unordered(2)`.
-  - `select` → `update` race overwrites insights. Use atomic update or parent-level lock.
-- [ ] **-1.14** Fix STM handoff truncation (`manage_handlers.rs` L98):
-  - 1000-character hardcoded limit truncates agent-to-agent payloads.
-  - Appends "Consult contract file directly" but never provides the file path.
-  - Raise to 32,000 chars or inject contract file path into subagent context.
-- [ ] **-1.15** Fix RAPTOR embedding gap (`compactor.rs` L1536):
-  - RAPTOR summaries saved with `embedding: None`, relying on watcher to async-embed.
-  - If watcher misses event, summary is permanently invisible to search.
-  - Embed synchronously after saving.
-- [ ] **-1.16** Fix wisdom extraction trap — agents can't proactively save rules (`write_handlers.rs` L213-228):
-  - No `save_wisdom` MCP action exists. Agents cannot explicitly save a wisdom rule.
-  - Rules only created if episode content contains one of 9 hardcoded strings ("you forgot", "that was a mistake", etc.).
-  - Professional post-mortems without those exact phrases are silently ignored.
-  - Add `save_wisdom` action to `write` MCP tool accepting `target_pattern`, `action_to_avoid`, `causal_explanation`, `prescribed_remedy`.
-- [ ] **-1.17** Add missing embedding reprocessor (`crud_operations.rs` L456):
-  - `MYTHRAX_ASYNC_EMBEDDINGS` env var skips inline embedding generation, but there is NO background catch-up worker. `grep reprocess_missing_embeddings` = 0 hits.
-  - Implement background reconciliation sweep: query all records where `embedding IS NONE`, generate embeddings, update records.
-  - This also closes the RAPTOR embedding gap (-1.15) by providing a general-purpose catch-up mechanism.
-- [ ] **-1.18** Fix cognitive task queue polling bottleneck (`distillation.rs` L187-198):
-  - `run_summarization_task` spawns a tight 50ms polling loop per task waiting for cognitive callbacks.
-  - During bulk summarization, hundreds of concurrent loops hammer SurrealDB simultaneously.
-  - Replace with channel/notification mechanism or use `tokio::sync::watch` for task completion.
-- [ ] **-1.19** Add MCP route handler integration tests:
-  - Test `handle_pre_invocation_hook` end-to-end with a wisdom rule and verify it appears in response.
-  - Test guardrail triggering via semantic similarity (not `.contains()`).
-  - Test utilization scoring after session with injected memories.
-  - Test search result formatting returns readable markdown.
-  - Test pre-invocation with large context does NOT drop all memories.
-  - These are the ONLY tests that matter — backend functions are already tested.
-- [ ] **-1.20** FINAL VERIFICATION — end-to-end test of entire memory lifecycle:
-  1. Create wisdom rule via new `save_wisdom` action
-  2. Start new session → rule appears in pre-invocation (via semantic similarity, not `.contains()`)
+- [x] **-1.1** Replace guardrail `.contains()` with semantic similarity (`manage_handlers.rs` L1496-1518)
+- [x] **-1.2** Replace `"general context"` fallback with actual task context (`manage_handlers.rs` L1727)
+- [x] **-1.3** Fix utilization scoring — stop evicting good memories (`manage_handlers.rs` L1411-1466)
+- [x] **-1.4** Fix corrupted wisdom graduation (`synthesis.rs` L3468-3469)
+- [x] **-1.5** Fix distillation prompt — extract mistakes (`distillation.rs` L289-295)
+- [x] **-1.6** Fix correction detection — replace keyword matching (`precompact.rs` L300-308)
+- [x] **-1.7** Fix token budget silent eviction (`manage_handlers.rs` L1262-1327)
+- [x] **-1.8** Implement post-invocation hook (`manage_handlers.rs` L1159)
+- [x] **-1.9** Fix `p1_advisory.clear()` — the nuclear memory wipe (`manage_handlers.rs` L1838-1841)
+- [x] **-1.10** Fix embedding content — stop embedding noise (`daemon.rs` L190, L237)
+- [x] **-1.11** Fix search result formatting — stop returning raw JSON (`read_handlers.rs` L270)
+- [x] **-1.12** Fix `let _ =` silent error swallowing across all critical paths
+- [x] **-1.13** Fix TOCTOU race in arbor backpropagation (`arbor.rs` `backpropagate_insights`)
+- [x] **-1.14** Fix STM handoff truncation (`manage_handlers.rs` L98)
+- [x] **-1.15** Fix RAPTOR embedding gap (`compactor.rs` L1536)
+- [x] **-1.16** Fix wisdom extraction trap — add `save_wisdom` MCP action (`write_handlers.rs` L15)
+- [x] **-1.17** Add missing embedding reprocessor (`daemon.rs` L172, L218)
+- [x] **-1.18** Fix cognitive task queue polling bottleneck (`distillation.rs` L345)
+- [x] **-1.19** Add MCP route handler integration tests (`tests/domain_hooks_models.rs`)
+- [x] **-1.20** FINAL VERIFICATION — end-to-end test of entire memory lifecycle (`tests/domain_e2e_harness.rs`)
   3. Verify importance does NOT decay (injected = utilized)
   4. Verify graduated rules have correct `action_to_avoid` ≠ `target_pattern`
   5. Verify distilled episodes contain "Mistakes & Failures" section
