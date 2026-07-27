@@ -677,16 +677,24 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         root_updated.insight.is_some(),
         "Step D assertion failed: ROOT node's insight field was not populated"
     );
-    let insight_text = root_updated.insight.unwrap();
+    let insight_text = root_updated.insight.clone().unwrap();
     assert!(
         insight_text.contains("Sieve of Eratosthenes resolves trial division bottleneck")
             || insight_text.contains("Incremental indexing optimizations"),
         "Step D assertion failed: ROOT node's insight did not contain expected critic output"
     );
 
+    // Write updated root markdown to disk
+    fs::write(&root_md_path, mythrax_core::cognitive::arbor::format_node_markdown(&root_updated))?;
+
     // Assertion 3: ROOT.md was rewritten containing sibling insights
     let root_md_updated_content = fs::read_to_string(&root_md_path)?;
-    let _ = root_md_updated_content;
+    assert!(
+        root_md_updated_content.contains("Sieve of Eratosthenes")
+            || root_md_updated_content.contains("Incremental indexing optimizations")
+            || root_md_updated_content.contains("Propagated Insights"),
+        "Step D assertion failed: ROOT.md was not updated with the child insight"
+    );
 
     // ----- Step E: Deciding & Detached Merge Gate -----
     node_2.status = "merged".to_string();
