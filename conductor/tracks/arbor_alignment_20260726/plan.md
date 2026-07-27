@@ -1,6 +1,6 @@
 # Implementation Plan: Arbor Framework Alignment & Single-Pass Chunked Ingestion
 
-Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause investigation + 1 vault/graph UX audit + 1 deep architectural investigation.
+Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause investigation + 1 vault/graph UX audit + 5 rounds of deep architectural investigation. **20 Phase -1 emergency tasks** before any Arbor work.
 
 ---
 
@@ -58,15 +58,17 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
   - Implement proper post-invocation lifecycle that runs reflection sweep after every session.
 - [ ] **-1.9** Fix `p1_advisory.clear()` — the nuclear memory wipe (`manage_handlers.rs` L1838-1841):
   - Pre-invocation response budget defaults to 3000 tokens (L1811). Playbook + preamble + policies consume 1000+. When exceeded, ALL retrieved memories are silently wiped via `.clear()`.
-  - Replace with proper truncation: summarize long memories, keep most relevant, never drop ALL.
-  - Increase default budget to at least 8000 (or make it configurable via env var `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET`).
+  - **Fix the code, not the env var.** Change the hardcoded default from `3000` to `32000` at L1810.
+  - Replace the nuclear `.clear()` with graduated truncation: (1) truncate longest individual memories first, (2) summarize remaining if still over budget, (3) drop lowest-relevance memories one at a time, (4) NEVER drop ALL.
+  - Keep `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET` env var as an override, but the default must be safe out of the box.
 - [ ] **-1.10** Fix embedding content — stop embedding noise (`daemon.rs` L190, L237, `crud_operations.rs` L295):
   - Episodes: currently embeds `"{title}: {content}"` where content is raw terminal logs. Embed the distilled summary instead.
   - Wisdom: currently embeds `"{target_pattern}: {prescribed_remedy}"` — OMITS `action_to_avoid` and `causal_explanation`. Include all 4 fields.
   - Wiki nodes: currently embeds `"{name}: {content}"` — embed `causal_insight` when available.
 - [ ] **-1.11** Fix search result formatting — stop returning raw JSON (`read_handlers.rs` L270):
   - `serde_json::to_string_pretty()` escapes newlines in markdown, making it unreadable to LLMs.
-  - Format search results as clean markdown with sections for each result.
+  - Format search results as clean markdown with heading, content section, and metadata per result.
+  - Also fix content slicing: `.split(&['.', '!', '?'])` on markdown/JSON content slices mid-URL or mid-code-block, returning garbage fragments. Use sentence-aware or word-boundary-aware truncation instead.
 - [ ] **-1.12** Fix `let _ =` silent error swallowing across all critical paths:
   - `manage_handlers.rs`: `let _ = state.backend.save_episode(&ep).await;`
   - `compactor.rs`: `let _ = db.save_wiki_node...`, `let _ = store.write_file...`
@@ -83,27 +85,37 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
   - RAPTOR summaries saved with `embedding: None`, relying on watcher to async-embed.
   - If watcher misses event, summary is permanently invisible to search.
   - Embed synchronously after saving.
-- [ ] **-1.16** IMMEDIATE FIX (no code change): Set `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET=128000` in daemon environment. This prevents `p1_advisory.clear()` from firing.
-- [ ] **-1.17** Add MCP route handler integration tests:
-  - Test `handle_pre_invocation_hook` end-to-end with a wisdom rule and verify it appears in response.
-  - Test guardrail triggering via semantic similarity (not `.contains()`).
-  - Test utilization scoring after session with injected memories.
-  - These are the ONLY tests that matter — backend functions are already tested.
-- [ ] **-1.18** Fix wisdom extraction trap — agents can't proactively save rules (`write_handlers.rs` L213-228):
+- [ ] **-1.16** Fix wisdom extraction trap — agents can't proactively save rules (`write_handlers.rs` L213-228):
   - No `save_wisdom` MCP action exists. Agents cannot explicitly save a wisdom rule.
   - Rules only created if episode content contains one of 9 hardcoded strings ("you forgot", "that was a mistake", etc.).
   - Professional post-mortems without those exact phrases are silently ignored.
   - Add `save_wisdom` action to `write` MCP tool accepting `target_pattern`, `action_to_avoid`, `causal_explanation`, `prescribed_remedy`.
-- [ ] **-1.19** FINAL VERIFICATION — end-to-end test of entire memory lifecycle:
-  1. Set `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET=128000`
-  2. Create wisdom rule via new `save_wisdom` action
-  3. Start new session → rule appears in pre-invocation (via semantic similarity, not `.contains()`)
-  4. Verify importance does NOT decay (injected = utilized)
-  5. Verify graduated rules have correct `action_to_avoid` ≠ `target_pattern`
-  6. Verify distilled episodes contain "Mistakes & Failures" section
-  7. Verify search results return readable markdown (not escaped JSON)
-  8. Verify STM passes large payloads between agents
-  9. Verify RAPTOR summaries have embeddings
+- [ ] **-1.17** Add missing embedding reprocessor (`crud_operations.rs` L456):
+  - `MYTHRAX_ASYNC_EMBEDDINGS` env var skips inline embedding generation, but there is NO background catch-up worker. `grep reprocess_missing_embeddings` = 0 hits.
+  - Implement background reconciliation sweep: query all records where `embedding IS NONE`, generate embeddings, update records.
+  - This also closes the RAPTOR embedding gap (-1.15) by providing a general-purpose catch-up mechanism.
+- [ ] **-1.18** Fix cognitive task queue polling bottleneck (`distillation.rs` L187-198):
+  - `run_summarization_task` spawns a tight 50ms polling loop per task waiting for cognitive callbacks.
+  - During bulk summarization, hundreds of concurrent loops hammer SurrealDB simultaneously.
+  - Replace with channel/notification mechanism or use `tokio::sync::watch` for task completion.
+- [ ] **-1.19** Add MCP route handler integration tests:
+  - Test `handle_pre_invocation_hook` end-to-end with a wisdom rule and verify it appears in response.
+  - Test guardrail triggering via semantic similarity (not `.contains()`).
+  - Test utilization scoring after session with injected memories.
+  - Test search result formatting returns readable markdown.
+  - Test pre-invocation with large context does NOT drop all memories.
+  - These are the ONLY tests that matter — backend functions are already tested.
+- [ ] **-1.20** FINAL VERIFICATION — end-to-end test of entire memory lifecycle:
+  1. Create wisdom rule via new `save_wisdom` action
+  2. Start new session → rule appears in pre-invocation (via semantic similarity, not `.contains()`)
+  3. Verify importance does NOT decay (injected = utilized)
+  4. Verify graduated rules have correct `action_to_avoid` ≠ `target_pattern`
+  5. Verify distilled episodes contain "Mistakes & Failures" section
+  6. Verify search results return readable markdown (not escaped JSON)
+  7. Verify STM passes large payloads between agents
+  8. Verify RAPTOR summaries have embeddings (reprocessor catches `None`)
+  9. Verify pre-invocation with 50k tokens of context doesn't nuclear-wipe memories
+  10. Verify bulk summarization doesn't spawn hundreds of polling loops
 
 ---
 
