@@ -453,7 +453,29 @@ pub async fn distill_transcript_file(
             key_takeaways: parsed.key_takeaways.unwrap_or_default(),
             hypothesis: parsed.hypothesis,
             raw_evidence: parsed.raw_evidence.unwrap_or_default(),
-            causal_insight: parsed.causal_insight,
+            causal_insight: parsed.causal_insight.or_else(|| {
+                let mut parts = Vec::new();
+                if let Some(ref m) = parsed.mistakes_failures {
+                    if !m.is_empty() {
+                        parts.push(format!("Mistakes: {}", m.join("; ")));
+                    }
+                }
+                if let Some(ref r) = parsed.root_causes {
+                    if !r.is_empty() {
+                        parts.push(format!("Root Causes: {}", r.join("; ")));
+                    }
+                }
+                if let Some(ref a) = parsed.actions_to_avoid {
+                    if !a.is_empty() {
+                        parts.push(format!("Actions to Avoid: {}", a.join("; ")));
+                    }
+                }
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join(" | "))
+                }
+            }),
             artifact_refs: parsed.artifact_refs.unwrap_or_default(),
         };
 

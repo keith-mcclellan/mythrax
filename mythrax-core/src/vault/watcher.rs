@@ -734,18 +734,50 @@ pub async fn sync_file_to_db_with_cache(
         {
             if let Ok(from_id) = crate::db::parse_record_id(&db_id) {
                 let body_links = crate::parser::extract_wiki_links(&body);
+                let mut desired: Vec<surrealdb::types::RecordId> = Vec::new();
                 for link in body_links {
                     if let Some(target_id) =
                         resolve_target_to_id(&link, surreal_backend, cache).await
                     {
-                        let relate_query =
-                            "RELATE $from -> relates_to -> $to CONTENT { relation: 'related', created_at: time::now() };";
-                        let _ = surreal_backend
-                            .db
-                            .query(relate_query)
-                            .bind(("from", from_id.clone()))
-                            .bind(("to", target_id))
-                            .await;
+                        if !desired.contains(&target_id) {
+                            desired.push(target_id);
+                        }
+                    }
+                }
+
+                if let Ok(mut existing_resp) = surreal_backend
+                    .db
+                    .query("SELECT id, out FROM relates_to WHERE in = $from;")
+                    .bind(("from", from_id.clone()))
+                    .await
+                {
+                    #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                    struct RelatesToRawLight {
+                        id: surrealdb::types::RecordId,
+                        out: surrealdb::types::RecordId,
+                    }
+                    if let Ok(existing) = existing_resp.take::<Vec<RelatesToRawLight>>(0) {
+                        for ext in &existing {
+                            if !desired.contains(&ext.out) {
+                                let _ = surreal_backend
+                                    .db
+                                    .query("DELETE FROM relates_to WHERE id = $rel_id;")
+                                    .bind(("rel_id", ext.id.clone()))
+                                    .await;
+                            }
+                        }
+                        for des in &desired {
+                            if !existing.iter().any(|ext| &ext.out == des) {
+                                let relate_query =
+                                    "RELATE $from -> relates_to -> $to CONTENT { relation: 'related', created_at: time::now() };";
+                                let _ = surreal_backend
+                                    .db
+                                    .query(relate_query)
+                                    .bind(("from", from_id.clone()))
+                                    .bind(("to", des.clone()))
+                                    .await;
+                            }
+                        }
                     }
                 }
             }
