@@ -159,8 +159,8 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 9: Integration & Ship
 
-- [ ] **9.1** Full integration: 1,000+ episodes → dreaming → Arbor HTR → all systems.
-- [ ] **9.2** CRITICAL TEST: Create wisdom rule → new session → rule appears WITHOUT agent mentioning it → importance does NOT decay.
-- [ ] **9.3** Obsidian verification: Open vault, graph view shows wiki clusters not episode noise.
-- [ ] **9.4** Full test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core`.
-- [ ] **9.5** Git commit and push.
+- [x] **9.1** Full integration: 1,000+ episodes → dreaming → Arbor HTR → all systems.
+- [x] **9.2** CRITICAL TEST: Create wisdom rule → new session → rule appears WITHOUT agent mentioning it → importance does NOT decay.
+- [x] **9.3** Obsidian verification: Open vault, graph view shows wiki clusters not episode noise.
+- [x] **9.4** Full test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core`.
+- [x] **9.5** Git commit and push.
