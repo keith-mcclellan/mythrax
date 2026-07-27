@@ -681,6 +681,10 @@ pub async fn sync_file_to_db_with_cache(
     store: &Arc<MarkdownStore>,
     cache: Option<&TargetResolveCache>,
 ) -> Result<()> {
+    if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+
     let content = std::fs::read_to_string(path).context("Failed to read file for sync")?;
 
     let (yaml_opt, body) = parse_frontmatter(&content);

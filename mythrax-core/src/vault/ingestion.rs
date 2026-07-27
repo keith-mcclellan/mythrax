@@ -610,7 +610,6 @@ pub async fn bulk_ingest_vault(
 ) -> Result<(usize, Vec<String>, bool)> {
     let _ingestion_guard = IngestionGuard::new();
     crate::daemon::update_last_activity();
-    let _ = skip_llm;
     let mut success_count = 0;
     let mut errors = Vec::new();
     let mut has_more = false;
