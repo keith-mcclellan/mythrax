@@ -60,10 +60,10 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 0: Immediate Safety Clamps
 
-- [ ] **0.1** Add `IS_INGESTING` guard to `sync_file_to_db` (`watcher.rs` L670).
-- [ ] **0.2** Restrict `dispatch_batch` (`arbor.rs` L588) to `buffer_unordered(1)`.
-- [ ] **0.3** Wire `skip_llm` parameter (`ingestion.rs` L613).
-- [ ] **0.4** Verify: `cargo build --release --features mlx`. No panics or OOM.
+- [x] **0.1** Add `IS_INGESTING` guard to `sync_file_to_db` (`watcher.rs` L670).
+- [x] **0.2** Restrict `dispatch_batch` (`arbor.rs` L588) to `buffer_unordered(1)`.
+- [x] **0.3** Wire `skip_llm` parameter (`ingestion.rs` L613).
+- [x] **0.4** Verify: `cargo build --release --features mlx`. No panics or OOM.
 
 ---
 
