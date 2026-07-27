@@ -23,6 +23,10 @@ pub struct DistilledConversation {
     pub user_preferences: Vec<String>,
     pub summary: String,
     pub key_takeaways: Vec<String>,
+    pub hypothesis: Option<String>,
+    pub raw_evidence: Vec<String>,
+    pub causal_insight: Option<String>,
+    pub artifact_refs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -308,7 +312,7 @@ pub async fn distill_transcript_file(
             }
         }
 
-        // Formulate LLM distillation prompt to parse semantic elements
+        // Formulate LLM distillation prompt to parse semantic elements and 4 Arbor fields
         let prompt = format!(
             "Analyze the following segment of a coding transcript. Extract:
             1. Decisions: key design, architecture, or scope decisions.
@@ -319,6 +323,10 @@ pub async fn distill_transcript_file(
             6. Actions to Avoid: Specific actions, patterns, or commands to avoid in the future.
             7. Summary: a one paragraph summary.
             8. Takeaways: key takeaways.
+            9. Hypothesis (h_n): core problem statement or goal.
+            10. Raw Evidence (r_n): list of concrete log lines, errors, or evidence snippets.
+            11. Causal Insight (iota_n): root cause mechanism and preventative rule.
+            12. Artifact Refs (mu_n): list of files modified or referenced.
 
             Transcript Content:
             {}
@@ -327,6 +335,10 @@ pub async fn distill_transcript_file(
             {{
               \"title\": \"Segment Title\",
               \"scope\": \"general\",
+              \"hypothesis\": \"Core task goal or hypothesis\",
+              \"raw_evidence\": [\"evidence snippet 1\"],
+              \"causal_insight\": \"Causal explanation and rule\",
+              \"artifact_refs\": [\"src/file.rs\"],
               \"decisions\": [\"dec1\"],
               \"constraints_discovered\": [\"con1\"],
               \"user_preferences\": [\"pref1\"],
@@ -439,6 +451,10 @@ pub async fn distill_transcript_file(
             user_preferences: parsed.user_preferences.unwrap_or_default(),
             summary: parsed.summary.unwrap_or_default(),
             key_takeaways: parsed.key_takeaways.unwrap_or_default(),
+            hypothesis: parsed.hypothesis,
+            raw_evidence: parsed.raw_evidence.unwrap_or_default(),
+            causal_insight: parsed.causal_insight,
+            artifact_refs: parsed.artifact_refs.unwrap_or_default(),
         };
 
         distilled_chunks.push(distilled);

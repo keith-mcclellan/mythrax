@@ -608,8 +608,12 @@ fn test_episode_raw_conversion() {
         importance: Some(5.0),
         temporal_range_start: None,
         temporal_range_end: None,
-        created_at: None,
         status: Some("active".to_string()),
+        created_at: None,
+        hypothesis: None,
+        raw_evidence: None,
+        causal_insight: None,
+        artifact_refs: None,
     };
 
     let episode = Episode::from(raw);

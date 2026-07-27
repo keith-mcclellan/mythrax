@@ -1194,6 +1194,14 @@ pub struct EpisodeRaw {
     pub temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
     pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub hypothesis: Option<String>,
+    #[serde(default)]
+    pub raw_evidence: Option<Vec<String>>,
+    #[serde(default)]
+    pub causal_insight: Option<String>,
+    #[serde(default)]
+    pub artifact_refs: Option<Vec<String>>,
 }
 
 impl From<EpisodeRaw> for Episode {
@@ -1227,6 +1235,10 @@ impl From<EpisodeRaw> for Episode {
             created_at: raw.created_at.map(|t| t.to_rfc3339()),
             temporal_range_start: raw.temporal_range_start,
             temporal_range_end: raw.temporal_range_end,
+            hypothesis: raw.hypothesis,
+            raw_evidence: raw.raw_evidence,
+            causal_insight: raw.causal_insight,
+            artifact_refs: raw.artifact_refs,
             ..Default::default()
         }
     }
@@ -1263,6 +1275,14 @@ pub struct WikiNodeRaw {
     pub(crate) node_type: Option<String>,
     #[serde(default)]
     pub(crate) content_hash: Option<String>,
+    #[serde(default)]
+    pub(crate) hypothesis: Option<String>,
+    #[serde(default)]
+    pub(crate) raw_evidence: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) causal_insight: Option<String>,
+    #[serde(default)]
+    pub(crate) artifact_refs: Option<Vec<String>>,
 }
 
 impl From<WikiNodeRaw> for WikiNode {
@@ -1280,6 +1300,10 @@ impl From<WikiNodeRaw> for WikiNode {
             metacognitive_confidence: raw.metacognitive_confidence.map(|v| v as i32),
             node_type: raw.node_type,
             content_hash: raw.content_hash,
+            hypothesis: raw.hypothesis,
+            raw_evidence: raw.raw_evidence,
+            causal_insight: raw.causal_insight,
+            artifact_refs: raw.artifact_refs,
         }
     }
 }
