@@ -150,10 +150,10 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 8: Post-Ingestion Compaction & Vault Cleanup
 
-- [ ] **8.1** After `bulk_ingest_vault` completes, auto-trigger scope compaction.
-- [ ] **8.2** After compaction, physically move archived episodes to `archive/`.
-- [ ] **8.3** Regenerate MOC.md with wiki/ scope links.
-- [ ] **8.4** Verify: Episodes archived, MOC.md links to wiki, Obsidian graph clean.
+- [x] **8.1** After `bulk_ingest_vault` completes, auto-trigger scope compaction.
+- [x] **8.2** After compaction, physically move archived episodes to `archive/`.
+- [x] **8.3** Regenerate MOC.md with wiki/ scope links.
+- [x] **8.4** Verify: Episodes archived, MOC.md links to wiki, Obsidian graph clean.
 
 ---
 
