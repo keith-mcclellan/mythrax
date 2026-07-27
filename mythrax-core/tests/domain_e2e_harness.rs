@@ -664,22 +664,6 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
     )
     .await?;
 
-    let node_2_done: HypothesisNode = db
-        .select(("hypothesis_node", "2"))
-        .await?
-        .expect("Node 2 should exist");
-
-    let mut root_node: HypothesisNode = db
-        .select(("hypothesis_node", "ROOT"))
-        .await?
-        .expect("ROOT node should exist");
-    let _ = root_node.propagate_upward(&[node_2_done.clone()]).await;
-    let _: Option<HypothesisNode> = db
-        .update(("hypothesis_node", "ROOT"))
-        .content(root_node.clone())
-        .await?;
-    fs::write(&root_md_path, mythrax_core::cognitive::arbor::format_node_markdown(&root_node))?;
-
     let compactor = mythrax_core::cognitive::compactor::Compactor::new();
     compactor
         .compact_scope(surreal_arc, &api_state.store, "math-testing", None)
@@ -740,7 +724,6 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         node_2_final.status, "merged",
         "Step E assertion failed: Node 2 status should be 'merged' in SurrealDB"
     );
-    fs::write(&node_2_md, mythrax_core::cognitive::arbor::format_node_markdown(&node_2_final))?;
 
     // Assertion 2: Node 2's status in the vault is 'merged'
     let node_2_md_content = fs::read_to_string(&node_2_md)?;

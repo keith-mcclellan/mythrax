@@ -553,6 +553,8 @@ pub struct LlmConfigRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct HypothesisNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<surrealdb::types::RecordId>,
     pub node_id: String,
     pub parent_id: Option<String>,
     pub children_ids: Vec<String>,

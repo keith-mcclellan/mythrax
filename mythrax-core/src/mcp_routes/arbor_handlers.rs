@@ -89,6 +89,7 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                 node.status = s.to_string();
             }
 
+            node.id = None;
             let _: Option<HypothesisNode> = surreal_backend
                 .db
                 .update(("hypothesis_node", node_id))
@@ -96,8 +97,9 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                 .await?;
 
             let md = crate::cognitive::arbor::format_node_markdown(&node);
-            let rel_path = format!("arbor/nodes/{}.md", node_id);
-            state.store.write_file(&rel_path, &md)?;
+            let default_path = format!("arbor/nodes/{}.md", node_id);
+            let rel_path = node.vault_path.as_deref().unwrap_or(&default_path);
+            state.store.write_file(rel_path, &md)?;
 
             Ok(json!({
                 "content": [{

@@ -911,10 +911,7 @@ impl Compactor {
             .filter(|ins| ins.scope == scope)
             .collect();
 
-        if scope_insights.is_empty() {
-            return Ok(());
-        }
-
+        if !scope_insights.is_empty() {
         // 1. Load embeddings for all insights in the scope by resolving their DB record IDs
         let mut node_ids = Vec::new();
         let mut ins_by_id = std::collections::HashMap::new();
@@ -1311,47 +1308,51 @@ impl Compactor {
                 scope
             );
         }
+        }
 
         // Propagate tree insights upward for arbor hypothesis nodes
         if let Some(surreal_backend) = db
             .as_any()
             .downcast_ref::<crate::db::backend::SurrealBackend>()
         {
-            if let Ok(mut resp) = surreal_backend
+            if let Ok(all_nodes) = surreal_backend
                 .db
-                .query("SELECT * FROM hypothesis_node WHERE parent_id IS NONE;")
+                .select::<Vec<crate::contracts::HypothesisNode>>("hypothesis_node")
                 .await
             {
-                if let Ok(root_nodes) = resp.take::<Vec<crate::contracts::HypothesisNode>>(0) {
-                    for mut root in root_nodes {
-                        if let Ok(mut children_resp) = surreal_backend
+                let root_nodes: Vec<_> = all_nodes
+                    .iter()
+                    .filter(|n| n.parent_id.is_none() || n.parent_id.as_deref() == Some(""))
+                    .cloned()
+                    .collect();
+                for mut root in root_nodes {
+                    let children: Vec<_> = all_nodes
+                        .iter()
+                        .filter(|n| {
+                            n.parent_id.as_deref() == Some(&root.node_id)
+                                || n.parent_id.as_deref().map_or(false, |p| p.ends_with(&format!(":{}", root.node_id)))
+                        })
+                        .cloned()
+                        .collect();
+                    use crate::cognitive::arbor::TreePropagate;
+                    let _ = root.propagate_upward(&children).await;
+                    if let Some(ref _ins) = root.insight {
+                        root.id = None;
+                        let _: Option<crate::contracts::HypothesisNode> = surreal_backend
                             .db
-                            .query("SELECT * FROM hypothesis_node WHERE parent_id = $pid;")
-                            .bind(("pid", root.node_id.clone()))
+                            .update(("hypothesis_node", root.node_id.as_str()))
+                            .content(root.clone())
                             .await
-                        {
-                            if let Ok(children) =
-                                children_resp.take::<Vec<crate::contracts::HypothesisNode>>(0)
-                            {
-                                use crate::cognitive::arbor::TreePropagate;
-                                let _ = root.propagate_upward(&children).await;
-                                if let Some(ref ins) = root.insight {
-                                    let update_sql = "UPDATE type::record('hypothesis_node', $id) MERGE { insight: $ins };";
-                                    let _ = surreal_backend
-                                        .db
-                                        .query(update_sql)
-                                        .bind(("id", root.node_id.clone()))
-                                        .bind(("ins", ins.clone()))
-                                        .await;
-                                    let md = crate::cognitive::arbor::format_node_markdown(&root);
-                                    let rel_path = format!("arbor/nodes/{}.md", root.node_id);
-                                    let _ = store.write_file(&rel_path, &md);
-                                }
-                            }
-                        }
+                            .unwrap_or(None);
+                        let md = crate::cognitive::arbor::format_node_markdown(&root);
+                        let default_path = format!("arbor/nodes/{}.md", root.node_id);
+                        let rel_path = root.vault_path.as_deref().unwrap_or(&default_path);
+                        let _ = store.write_file(rel_path, &md);
                     }
                 }
             }
+        } else {
+            eprintln!("COMPACTOR DOWNCAST FAILED!");
         }
 
         // Wire graduation pipeline to run opportunistically during compaction
