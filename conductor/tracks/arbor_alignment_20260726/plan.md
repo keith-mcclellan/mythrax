@@ -130,11 +130,11 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 6: Dead Code Removal (AFTER Phase 4 & 5)
 
-- [ ] **6.1** Delete `backpropagate_insights` (`arbor.rs` L458-514).
-- [ ] **6.2** Delete `decide_admission` (`arbor.rs` L516-585).
-- [ ] **6.3** Delete `collect_policy_context` (`manage_handlers.rs` L2196-2300).
-- [ ] **6.4** Refactor `LlmCriticEvaluator` (`arbor.rs` L96-145): native async.
-- [ ] **6.5** Verify: `cargo build --release --features mlx`. All tests pass.
+- [x] **6.1** Delete `backpropagate_insights` (`arbor.rs` L458-514).
+- [x] **6.2** Delete `decide_admission` (`arbor.rs` L516-585).
+- [x] **6.3** Delete `collect_policy_context` (`manage_handlers.rs` L2196-2300).
+- [x] **6.4** Refactor `LlmCriticEvaluator` (`arbor.rs` L96-145): native async.
+- [x] **6.5** Verify: `cargo build --release --features mlx`. All tests pass.
 
 ---
 
