@@ -299,8 +299,8 @@ fn parse_generic_markdown(path: &Path, scope: &str) -> Result<String> {
     } else {
         let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("note");
         Ok(format!(
-            "---\ntitle: \"{}\"\nscope: \"{}\"\n---\n\n{}",
-            file_stem, scope, content
+            "---\ntitle: \"{}\"\nscope: \"{}\"\n---\n\n{}\n\n## Synthesized Into\n- [[wiki/{}/MOC|Scope Map of Content]]\n\n## Temporal Navigation\n- **Sequence**: Episode captured in timeline\n",
+            file_stem, scope, content, scope
         ))
     }
 }

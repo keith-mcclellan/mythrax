@@ -1331,6 +1331,9 @@ impl Compactor {
                                         .bind(("id", root.node_id.clone()))
                                         .bind(("ins", ins.clone()))
                                         .await;
+                                    let md = crate::cognitive::arbor::format_node_markdown(&root);
+                                    let rel_path = format!("arbor/nodes/{}.md", root.node_id);
+                                    let _ = store.write_file(&rel_path, &md);
                                 }
                             }
                         }

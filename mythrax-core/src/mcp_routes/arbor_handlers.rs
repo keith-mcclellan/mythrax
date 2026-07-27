@@ -154,21 +154,71 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
             let output = match format {
                 "constraints" => {
                     let mut rules = Vec::new();
-                    let wisdom_res = state
-                        .backend
-                        .get_wisdom("*", None, 50, 0, 0.0)
+                    let target_scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+                    // 1. Permanent Wisdom
+                    if let Ok(mut resp) = surreal_backend
+                        .db
+                        .query("SELECT * FROM wisdom WHERE tier = 'permanent';")
                         .await
-                        .unwrap_or_default();
-                    for r in wisdom_res.results {
-                        rules.push(format!(
-                            "- Avoid: `{}` | Reason: `{}`",
-                            r.action_to_avoid, r.causal_explanation
-                        ));
+                    {
+                        if let Ok(w_rules) = resp.take::<Vec<crate::contracts::WisdomRule>>(0) {
+                            for r in w_rules {
+                                rules.push(format!(
+                                    "> [!CAUTION]\n> **Rule on {}**:\n> - **Avoid**: {}\n> - **Remedy**: {}",
+                                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
+                                ));
+                            }
+                        }
                     }
+                    // 2. Pruned Hypotheses
+                    let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
+                    if let Ok(mut resp) = surreal_backend
+                        .db
+                        .query(sql_pruned)
+                        .bind(("scope", target_scope))
+                        .await
+                    {
+                        if let Ok(p_rules) = resp.take::<Vec<serde_json::Value>>(0) {
+                            for val in p_rules {
+                                if let (Some(pat), Some(avoid), Some(remedy)) = (
+                                    val.get("target_pattern").and_then(|v| v.as_str()),
+                                    val.get("action_to_avoid").and_then(|v| v.as_str()),
+                                    val.get("prescribed_remedy").and_then(|v| v.as_str()),
+                                ) {
+                                    rules.push(format!(
+                                        "> [!CAUTION]\n> **Pruned Path: {}**\n> - **Avoid**: {}\n> - **Remedy**: {}",
+                                        pat, avoid, remedy
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    // 3. Conflict Nodes
+                    if let Ok(mut resp) = surreal_backend
+                        .db
+                        .query("SELECT * FROM episode WHERE node_type = 'conflict' AND (scope = $scope OR scope = 'general');")
+                        .bind(("scope", target_scope))
+                        .await
+                    {
+                        if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
+                            for val in episodes {
+                                if let (Some(title), Some(content)) = (
+                                    val.get("title").and_then(|v| v.as_str()),
+                                    val.get("content").and_then(|v| v.as_str()),
+                                ) {
+                                    rules.push(format!(
+                                        "> [!CAUTION]\n> **Knowledge Conflict: {}**\n> {}",
+                                        title, content
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
                     if rules.is_empty() {
                         "### Negative Constraints & Guardrails\n(No active negative constraints found)".to_string()
                     } else {
-                        format!("### Negative Constraints & Guardrails\n{}", rules.join("\n"))
+                        format!("### Negative Constraints & Guardrails\n{}\n\n", rules.join("\n"))
                     }
                 }
                 "hierarchy" => {
