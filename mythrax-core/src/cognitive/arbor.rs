@@ -249,6 +249,51 @@ impl ArborFsmState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ArborBudget {
+    pub max_depth: usize,
+    pub max_iterations: usize,
+    pub max_tokens: usize,
+    pub max_duration_secs: u64,
+    pub current_depth: usize,
+    pub current_iterations: usize,
+    pub current_tokens: usize,
+    pub start_time: std::time::Instant,
+}
+
+impl Default for ArborBudget {
+    fn default() -> Self {
+        Self {
+            max_depth: 2,
+            max_iterations: 10,
+            max_tokens: 100_000,
+            max_duration_secs: 300,
+            current_depth: 0,
+            current_iterations: 0,
+            current_tokens: 0,
+            start_time: std::time::Instant::now(),
+        }
+    }
+}
+
+impl ArborBudget {
+    pub fn is_exhausted(&self) -> bool {
+        if self.current_depth >= self.max_depth {
+            return true;
+        }
+        if self.current_iterations >= self.max_iterations {
+            return true;
+        }
+        if self.current_tokens >= self.max_tokens {
+            return true;
+        }
+        if self.start_time.elapsed().as_secs() >= self.max_duration_secs {
+            return true;
+        }
+        false
+    }
+}
+
 pub struct ArborCoordinator<L: ArborLlmClient> {
     db: Surreal<Db>,
     backend: crate::db::SurrealBackend,
@@ -890,5 +935,18 @@ mod tests {
         assert_eq!(state, ArborFsmState::PruneMerge);
         let state = state.next();
         assert_eq!(state, ArborFsmState::Ideate);
+    }
+
+    #[test]
+    fn test_arbor_budget_exhaustion() {
+        let mut budget = ArborBudget::default();
+        assert!(!budget.is_exhausted());
+
+        budget.current_depth = 2;
+        assert!(budget.is_exhausted());
+
+        let mut budget2 = ArborBudget::default();
+        budget2.current_tokens = 150_000;
+        assert!(budget2.is_exhausted());
     }
 }
