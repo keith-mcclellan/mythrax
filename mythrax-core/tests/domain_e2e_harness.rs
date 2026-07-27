@@ -696,7 +696,6 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         "Step D assertion failed: ROOT.md was not updated with the child insight"
     );
 
-    // ----- Step E: Deciding & Detached Merge Gate -----
     node_2.status = "merged".to_string();
     let _: Option<HypothesisNode> = db
         .update(("hypothesis_node", "2"))
