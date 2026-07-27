@@ -1500,11 +1500,31 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 } else {
                     Vec::new()
                 };
+
+            let mut turn_embedding = None;
+            if let Some(ref embedder) = surreal_backend.embedder {
+                if let Ok(emb) = embedder.embed(turn_content).await {
+                    turn_embedding = Some(emb);
+                }
+            }
+
             for rule in active_rules {
-                if turn_content
+                let mut triggered = turn_content
                     .to_lowercase()
-                    .contains(&rule.target_pattern.to_lowercase())
-                {
+                    .contains(&rule.target_pattern.to_lowercase());
+
+                if !triggered {
+                    if let (Some(ref t_emb), Some(ref embedder)) = (&turn_embedding, &surreal_backend.embedder) {
+                        if let Ok(r_emb) = embedder.embed(&rule.target_pattern).await {
+                            let sim = crate::math::cosine_similarity(t_emb, &r_emb);
+                            if sim > 0.82 { // threshold for semantic similarity
+                                triggered = true;
+                            }
+                        }
+                    }
+                }
+
+                if triggered {
                     let severity = rule
                         .severity
                         .clone()
