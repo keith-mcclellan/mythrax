@@ -56,7 +56,26 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 - [ ] **-1.8** Implement post-invocation hook:
   - No `handle_post_invocation_hook` exists. Session reflection relies on 15-turn heuristic.
   - Implement proper post-invocation lifecycle that runs reflection sweep after every session.
-- [ ] **-1.9** Verify: Create test wisdom rule → new session → rule appears → importance stable → graduated wisdom rule has correct `action_to_avoid` (not equal to `target_pattern`).
+- [ ] **-1.9** Fix `p1_advisory.clear()` — the nuclear memory wipe (`manage_handlers.rs` L1838-1841):
+  - Pre-invocation response budget defaults to 3000 tokens (L1811). Playbook + preamble + policies consume 1000+. When exceeded, ALL retrieved memories are silently wiped via `.clear()`.
+  - Replace with proper truncation: summarize long memories, keep most relevant, never drop ALL.
+  - Increase default budget to at least 8000 (or make it configurable via env var `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET`).
+- [ ] **-1.10** Fix embedding content — stop embedding noise (`daemon.rs` L190, L237, `crud_operations.rs` L295):
+  - Episodes: currently embeds `"{title}: {content}"` where content is raw terminal logs. Embed the distilled summary instead.
+  - Wisdom: currently embeds `"{target_pattern}: {prescribed_remedy}"` — OMITS `action_to_avoid` and `causal_explanation`. Include all 4 fields.
+  - Wiki nodes: currently embeds `"{name}: {content}"` — embed `causal_insight` when available.
+- [ ] **-1.11** Fix search result formatting — stop returning raw JSON (`read_handlers.rs` L270):
+  - `serde_json::to_string_pretty()` escapes newlines in markdown, making it unreadable to LLMs.
+  - Format search results as clean markdown with sections for each result.
+- [ ] **-1.12** Fix `let _ =` silent error swallowing across all critical paths:
+  - `manage_handlers.rs`: `let _ = state.backend.save_episode(&ep).await;`
+  - `compactor.rs`: `let _ = db.save_wiki_node...`, `let _ = store.write_file...`
+  - `synthesis.rs`: `let _ = store.write_file...`, `let _ = db.delete_pipeline_run...`
+  - At minimum: log errors. Preferably: propagate to caller.
+- [ ] **-1.13** Fix TOCTOU race in arbor backpropagation (`arbor.rs` `backpropagate_insights`):
+  - Concurrent leaf nodes backpropagate to same parent via `buffer_unordered(2)`.
+  - `select` → `update` race overwrites insights. Use atomic update or parent-level lock.
+- [ ] **-1.14** Verify: Pre-invocation response contains actual memories (not empty). Embedding vectors change when distilled content changes. Search results are human-readable markdown.
 
 ---
 
