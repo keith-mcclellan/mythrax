@@ -1950,6 +1950,17 @@ pub async fn sync_workspace_docs_to_vault(
         let canonical_ws = ws_root.canonicalize().unwrap_or_else(|_| ws_root.clone());
         let canonical_vault = vault_root.canonicalize().unwrap_or_else(|_| vault_root.clone());
 
+        // Safety Guard: Never scan user HOME directory or system root
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(&home);
+            if let Ok(canon_home) = home_path.canonicalize() {
+                if canonical_ws == canon_home || canonical_ws == Path::new("/") {
+                    tracing::warn!("sync_workspace_docs_to_vault: Refusing to scan entire HOME directory or system root ({:?})", canonical_ws);
+                    return Ok(Vec::new());
+                }
+            }
+        }
+
         fn collect_docs(
             dir: &Path,
             ws_root: &Path,
@@ -1974,6 +1985,16 @@ pub async fn sync_workspace_docs_to_vault(
                             || file_name == ".cargo"
                             || file_name == ".trash"
                             || file_name == "node_modules"
+                            || file_name == "Library"
+                            || file_name == "Music"
+                            || file_name == "Pictures"
+                            || file_name == "Desktop"
+                            || file_name == "Downloads"
+                            || file_name == "Movies"
+                            || file_name == "Applications"
+                            || file_name == ".gemini"
+                            || file_name == ".rustup"
+                            || file_name == ".npm"
                         {
                             continue;
                         }

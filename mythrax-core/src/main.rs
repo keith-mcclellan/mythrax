@@ -72,19 +72,20 @@ async fn execute_cli_tool_call(tool_name: &str, arguments: serde_json::Value) ->
 
 async fn ensure_daemon_active_for_cli(auth_token: &str, daemon_url: &str) -> Result<()> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(5))
         .build()?;
 
-    let ping_url = format!("{}/v1/config/llm", daemon_url);
+    let ping_url = format!("{}/health", daemon_url);
 
-    if client
+    if let Ok(resp) = client
         .get(&ping_url)
-        .header("X-Mythrax-Token", auth_token)
+        .header("X-Mythrax-Token", auth_token.trim())
         .send()
         .await
-        .is_ok()
     {
-        return Ok(());
+        if resp.status().is_success() {
+            return Ok(());
+        }
     }
 
     println!("Daemon inactive. Spawning background daemon...");

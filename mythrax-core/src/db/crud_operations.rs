@@ -48,10 +48,13 @@ impl SurrealBackend {
                 }
             }
             if idf_count == 0 {
-                tracing::info!("IDF index is empty. Backfilling...");
-                if let Err(e) = self.backfill_idf_index_db().await {
-                    tracing::error!("Failed to backfill IDF index: {:?}", e);
-                }
+                tracing::info!("IDF index is empty. Spawning non-blocking background backfill...");
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = self_clone.backfill_idf_index_db().await {
+                        tracing::error!("Failed to backfill IDF index: {:?}", e);
+                    }
+                });
             }
         }
 
@@ -67,10 +70,13 @@ impl SurrealBackend {
                 }
             }
             if missing_count > 0 {
-                tracing::info!("Found {} episodes missing content_hash. Backfilling...", missing_count);
-                if let Err(e) = self.backfill_content_hashes_db().await {
-                    tracing::error!("Failed to backfill content hashes: {:?}", e);
-                }
+                tracing::info!("Found {} episodes missing content_hash. Spawning background backfill...", missing_count);
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = self_clone.backfill_content_hashes_db().await {
+                        tracing::error!("Failed to backfill content hashes: {:?}", e);
+                    }
+                });
             }
         }
 
@@ -447,7 +453,7 @@ impl SurrealBackend {
             }
         }
 
-        if !missing_texts.is_empty() && self.embedder.is_some() {
+        if !missing_texts.is_empty() && self.embedder.is_some() && std::env::var("MYTHRAX_ASYNC_EMBEDDINGS").is_err() {
             if let Ok(generated) = self.embed_batch(&missing_texts).await {
                 for (midx, generated_emb) in missing_indices.into_iter().zip(generated.into_iter())
                 {

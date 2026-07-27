@@ -51,15 +51,18 @@ pub static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicUsize =
 pub fn is_hibernating() -> bool {
     IS_HIBERNATING.load(std::sync::atomic::Ordering::SeqCst)
 }
-static METAL_INFERENCE_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
-static METAL_EMBEDDING_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+static METAL_GPU_SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+
+pub fn metal_gpu_semaphore() -> &'static Semaphore {
+    METAL_GPU_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+}
 
 pub fn metal_inference_semaphore() -> &'static Semaphore {
-    METAL_INFERENCE_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+    metal_gpu_semaphore()
 }
 
 pub fn metal_embedding_semaphore() -> &'static Semaphore {
-    METAL_EMBEDDING_SEMAPHORE.get_or_init(|| Semaphore::new(1))
+    metal_gpu_semaphore()
 }
 
 #[async_trait]

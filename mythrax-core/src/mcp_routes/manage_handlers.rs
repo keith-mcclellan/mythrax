@@ -1514,7 +1514,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     .contains(&rule.target_pattern.to_lowercase());
 
                 if !triggered {
-                    if let (Some(ref t_emb), Some(ref embedder)) = (&turn_embedding, &surreal_backend.embedder) {
+                    if let (Some(t_emb), Some(embedder)) = (&turn_embedding, &surreal_backend.embedder) {
                         if let Ok(r_emb) = embedder.embed(&rule.target_pattern).await {
                             let sim = crate::math::cosine_similarity(t_emb, &r_emb);
                             if sim > 0.82 { // threshold for semantic similarity
