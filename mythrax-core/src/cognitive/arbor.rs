@@ -201,14 +201,14 @@ pub struct ConvergenceDetector {
 impl ConvergenceDetector {
     pub fn new(window_size: usize) -> Self {
         Self {
-            window_size,
+            window_size: window_size.max(2),
             history: Vec::new(),
         }
     }
 
     pub fn record_score(&mut self, score: f32) -> ConvergenceSignal {
         self.history.push(score);
-        if self.history.len() > self.window_size {
+        while self.history.len() > self.window_size {
             self.history.remove(0);
         }
 
@@ -216,11 +216,18 @@ impl ConvergenceDetector {
             return ConvergenceSignal::Converging;
         }
 
-        let delta_score = self.history.last().unwrap() - self.history.first().unwrap();
+        let first = self.history.first().copied().unwrap_or(0.0);
+        let last = self.history.last().copied().unwrap_or(0.0);
+        let delta_score = last - first;
         let delta_visits = (self.history.len() - 1) as f32;
+
+        if delta_visits <= 0.0 {
+            return ConvergenceSignal::Converging;
+        }
+
         let score_velocity = delta_score / delta_visits;
 
-        if score_velocity < 0.01 && *self.history.last().unwrap() < 70.0 {
+        if score_velocity < 0.01 && last < 70.0 {
             ConvergenceSignal::ParadigmShift
         } else if score_velocity < 0.05 {
             ConvergenceSignal::Stagnant
