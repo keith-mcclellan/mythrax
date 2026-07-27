@@ -1457,7 +1457,62 @@ pub async fn bulk_ingest_vault(
         other => anyhow::bail!("Unsupported harness type: {}", other),
     }
 
+    if success_count > 0 {
+        let _ = post_ingestion_compaction_and_cleanup(db, &store, scope).await;
+    }
+
     Ok((success_count, errors, has_more))
+}
+
+async fn post_ingestion_compaction_and_cleanup(
+    db: &dyn StorageBackend,
+    store: &MarkdownStore,
+    scope: &str,
+) -> Result<()> {
+    if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let compactor = crate::cognitive::compactor::Compactor::new();
+        let db_arc = std::sync::Arc::new(crate::db::SurrealBackend::new_with_db(surreal.db.clone()));
+        if let Err(e) = compactor.compact_scope(db_arc, store, scope, None).await {
+            tracing::warn!("Auto scope compaction post-ingestion returned: {:?}", e);
+        }
+
+        if let Ok(mut response) = surreal
+            .db
+            .query("SELECT * FROM episode WHERE scope = $scope AND archived = true;")
+            .bind(("scope", scope))
+            .await
+        {
+            if let Ok(archived_episodes) = response.take::<Vec<crate::contracts::Episode>>(0) {
+                for ep in archived_episodes {
+                    if let Some(ref path) = ep.vault_path {
+                        let file_name = std::path::Path::new(path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        let archive_rel_path = format!("archive/{}/{}", scope, file_name);
+                        let src_path = store.vault_root.join(path);
+                        let dst_path = store.vault_root.join(&archive_rel_path);
+                        if let Some(parent) = dst_path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::rename(src_path, dst_path);
+                    }
+                }
+            }
+        }
+    }
+
+    let wiki_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
+    let mut moc_content = format!("# Map of Content: {}\n\n## Wiki Nodes\n", scope);
+    for node in wiki_nodes {
+        if node.scope == scope {
+            moc_content.push_str(&format!("- [[wiki/{}/{}|{}]]\n", scope, node.name, node.name));
+        }
+    }
+    let moc_path = format!("wiki/{}/MOC.md", scope);
+    let _ = store.write_file(&moc_path, &moc_content);
+
+    Ok(())
 }
 
 fn split_by_page_breaks(text: &str) -> Vec<String> {
@@ -1478,12 +1533,10 @@ fn split_by_sections(text: &str) -> Vec<String> {
             }
             current_section = line.to_string();
         } else {
-            if current_section.is_empty() {
-                current_section = line.to_string();
-            } else {
+            if !current_section.is_empty() {
                 current_section.push('\n');
-                current_section.push_str(line);
             }
+            current_section.push_str(line);
         }
     }
 
@@ -2167,8 +2220,38 @@ async fn index_reference_doc(
             metacognitive_confidence: Some(100),
             node_type: Some("reference".to_string()),
             content_hash: Some(content_hash.to_string()),
+            ..Default::default()
         };
         backend.save_wiki_node(&node).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod phase8_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_post_ingestion_compaction_and_cleanup() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(temp_dir.path()).unwrap();
+        let db = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        let _ = db.db.query(crate::db::schema::INIT_SCHEMA).await;
+
+        let node = crate::contracts::WikiNode {
+            name: "test_node".to_string(),
+            scope: "test_scope".to_string(),
+            ..Default::default()
+        };
+        db.save_wiki_node(&node).await.unwrap();
+
+        post_ingestion_compaction_and_cleanup(&db, &store, "test_scope")
+            .await
+            .unwrap();
+
+        let moc_path = temp_dir.path().join("wiki/test_scope/MOC.md");
+        assert!(moc_path.exists());
+        let content = std::fs::read_to_string(moc_path).unwrap();
+        assert!(content.contains("[[wiki/test_scope/test_node|test_node]]"));
+    }
 }
