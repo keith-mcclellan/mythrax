@@ -688,12 +688,13 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
     let root_md_updated_content = fs::read_to_string(&root_md_path)?;
     let _ = root_md_updated_content;
 
-    // ----- Step E: Deciding & Detached Merge Gate -----
     node_2.status = "merged".to_string();
     let _: Option<HypothesisNode> = db
         .update(("hypothesis_node", "2"))
         .content(node_2.clone())
         .await?;
+    let node_2_md_str = mythrax_core::cognitive::arbor::format_node_markdown(&node_2);
+    fs::write(&node_2_md, &node_2_md_str)?;
 
     // Assertion 1: Node 2's status in SurrealDB is 'merged'
     let node_2_final: HypothesisNode = db
