@@ -3464,16 +3464,45 @@ pub async fn graduate_wisdom(
         let slug = slugify_title(&target_pattern);
         let rule_path = format!("wisdom/{}/{}.md", rule_class, slug);
 
-        let causal_explanation = format!(
-            "Synthesized from converging insights across {} scopes: {}",
-            cluster.len(),
-            cluster
-                .iter()
-                .map(|n| n.content.as_str())
-                .collect::<Vec<_>>()
-                .join(" | ")
+        let cluster_contents = cluster
+            .iter()
+            .map(|n| format!("- Scope '{}': {}", n.scope, n.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let sys_prompt = "You are a Principal Systems Architect synthesizing global wisdom rules from cross-project converging insights.";
+        let llm_prompt = format!(
+            "Analyze the following cross-project converging direction nodes for pattern '{}':\n{}\n\nSynthesize two structured outputs:\n1. ACTION_TO_AVOID: A specific antipattern or action to avoid.\n2. CAUSAL_EXPLANATION: A detailed explanation of why this action causes failure.",
+            target_pattern, cluster_contents
         );
-        let action_to_avoid = format!("Avoid pattern: {}", target_pattern);
+
+        let (action_to_avoid, causal_explanation) = match crate::llm::LLMClient::default().completion(db, Some(sys_prompt), &llm_prompt).await {
+            Ok(resp) => {
+                let mut avoid = format!("Avoid pattern: {}", target_pattern);
+                let mut why = format!("Synthesized from converging insights across {} scopes: {}", cluster.len(), cluster.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join(" | "));
+                for line in resp.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("ACTION_TO_AVOID:") || trimmed.starts_with("1. ACTION_TO_AVOID:") {
+                        avoid = trimmed.split(':').skip(1).collect::<Vec<_>>().join(":").trim().to_string();
+                    } else if trimmed.starts_with("CAUSAL_EXPLANATION:") || trimmed.starts_with("2. CAUSAL_EXPLANATION:") {
+                        why = trimmed.split(':').skip(1).collect::<Vec<_>>().join(":").trim().to_string();
+                    }
+                }
+                (avoid, why)
+            }
+            Err(_) => (
+                format!("Avoid pattern: {}", target_pattern),
+                format!(
+                    "Synthesized from converging insights across {} scopes: {}",
+                    cluster.len(),
+                    cluster
+                        .iter()
+                        .map(|n| n.content.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ),
+            ),
+        };
 
         let rule = crate::contracts::WisdomRule {
             target_pattern: target_pattern.clone(),

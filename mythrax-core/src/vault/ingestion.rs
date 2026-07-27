@@ -1458,7 +1458,9 @@ pub async fn bulk_ingest_vault(
     }
 
     if success_count > 0 {
-        let _ = post_ingestion_compaction_and_cleanup(db, &store, scope).await;
+        if let Err(e) = post_ingestion_compaction_and_cleanup(db, &store, scope).await {
+            tracing::warn!("Post-ingestion compaction and cleanup returned error: {:?}", e);
+        }
     }
 
     Ok((success_count, errors, has_more))
@@ -1482,7 +1484,8 @@ async fn post_ingestion_compaction_and_cleanup(
             .bind(("scope", scope))
             .await
         {
-            if let Ok(archived_episodes) = response.take::<Vec<crate::contracts::Episode>>(0) {
+            if let Ok(raws) = response.take::<Vec<crate::db::EpisodeRaw>>(0) {
+                let archived_episodes: Vec<crate::contracts::Episode> = raws.into_iter().map(|r| r.into()).collect();
                 for ep in archived_episodes {
                     if let Some(ref path) = ep.vault_path {
                         let file_name = std::path::Path::new(path)
@@ -1493,9 +1496,21 @@ async fn post_ingestion_compaction_and_cleanup(
                         let src_path = store.vault_root.join(path);
                         let dst_path = store.vault_root.join(&archive_rel_path);
                         if let Some(parent) = dst_path.parent() {
-                            let _ = std::fs::create_dir_all(parent);
+                            if let Err(e) = std::fs::create_dir_all(parent) {
+                                tracing::warn!("Failed to create archive directory {:?}: {:?}", parent, e);
+                            }
                         }
-                        let _ = std::fs::rename(src_path, dst_path);
+                        if src_path.exists() {
+                            if let Err(e) = std::fs::rename(&src_path, &dst_path) {
+                                tracing::warn!("Failed to move archived episode from {:?} to {:?}: {:?}", src_path, dst_path, e);
+                            } else if let Some(ref ep_id) = ep.id {
+                                let id_part = ep_id.split(':').nth(1).unwrap_or(ep_id);
+                                let update_sql = "UPDATE type::record('episode', $id) SET vault_path = $vp;";
+                                if let Err(e) = surreal.db.query(update_sql).bind(("id", id_part)).bind(("vp", archive_rel_path.clone())).await {
+                                    tracing::warn!("Failed to update database vault_path for archived episode '{}': {:?}", ep_id, e);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1510,7 +1525,7 @@ async fn post_ingestion_compaction_and_cleanup(
         }
     }
     let moc_path = format!("wiki/{}/MOC.md", scope);
-    let _ = store.write_file(&moc_path, &moc_content);
+    store.write_file(&moc_path, &moc_content)?;
 
     Ok(())
 }
@@ -2238,6 +2253,7 @@ mod phase8_tests {
         let db = crate::db::SurrealBackend::new_in_memory().await.unwrap();
         let _ = db.db.query(crate::db::schema::INIT_SCHEMA).await;
 
+        // 1. WikiNode for MOC generation
         let node = crate::contracts::WikiNode {
             name: "test_node".to_string(),
             scope: "test_scope".to_string(),
@@ -2245,13 +2261,52 @@ mod phase8_tests {
         };
         db.save_wiki_node(&node).await.unwrap();
 
+        // 2. Archived Episode for file move and DB vault_path update
+        let ep_rel_path = "episodes/test_scope/archived_ep.md";
+        store.write_file(ep_rel_path, "# Archived Episode Content").unwrap();
+
+        let ep = crate::contracts::Episode {
+            id: None,
+            title: "Archived Episode".to_string(),
+            scope: Some("test_scope".to_string()),
+            archived: Some(true),
+            vault_path: Some(ep_rel_path.to_string()),
+            ..Default::default()
+        };
+        let _: Option<crate::db::EpisodeRaw> = db
+            .db
+            .create(("episode", "archived_ep"))
+            .content(ep)
+            .await
+            .unwrap();
+
+        // Execute post-ingestion compaction and cleanup
         post_ingestion_compaction_and_cleanup(&db, &store, "test_scope")
             .await
             .unwrap();
 
+        // Verify MOC.md generation
         let moc_path = temp_dir.path().join("wiki/test_scope/MOC.md");
         assert!(moc_path.exists());
         let content = std::fs::read_to_string(moc_path).unwrap();
         assert!(content.contains("[[wiki/test_scope/test_node|test_node]]"));
+
+        // Verify archived file move on disk
+        let archived_disk_path = temp_dir.path().join("archive/test_scope/archived_ep.md");
+        assert!(archived_disk_path.exists(), "Archived file should be moved to archive/test_scope/");
+
+        // Verify SurrealDB vault_path update
+        let mut resp = db
+            .db
+            .query("SELECT * FROM episode WHERE id = episode:archived_ep;")
+            .await
+            .unwrap();
+        let raws: Vec<crate::db::EpisodeRaw> = resp.take(0).unwrap();
+        let updated_eps: Vec<crate::contracts::Episode> = raws.into_iter().map(|r| r.into()).collect();
+        assert_eq!(
+            updated_eps[0].vault_path,
+            Some("archive/test_scope/archived_ep.md".to_string()),
+            "Database vault_path should be updated to match moved file location"
+        );
     }
 }

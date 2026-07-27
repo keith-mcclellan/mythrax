@@ -274,11 +274,23 @@ impl Compactor {
                             };"
                         };
 
-                        let mut query = surreal_backend.db.query(archive_sql).bind(("id", id_raw));
+                        let mut query = surreal_backend.db.query(archive_sql).bind(("id", id_raw.clone()));
                         if let Some(ref nvp) = new_vp {
                             query = query.bind(("new_vp", nvp.clone()));
                         }
                         let _ = query.await;
+
+                        tracing::warn!("Archived episode {} due to token budget limits", id_raw);
+                        let _ = surreal_backend.db.query(
+                            "CREATE type::record('wisdom', $id) SET scope = $scope, target_pattern = $pat, action_to_avoid = $avoid, causal_explanation = $why, prescribed_remedy = $remedy, tier = 'wisdom', importance = 10.0;"
+                        )
+                        .bind(("id", format!("eviction_notice_{}", id_raw)))
+                        .bind(("scope", scope))
+                        .bind(("pat", format!("Evicted Episode {}", id_raw)))
+                        .bind(("avoid", "Do not rely on evicted raw turns; rely on compacted wisdom/MOC nodes."))
+                        .bind(("why", format!("Episode '{}' ({}) was archived due to token budget and capacity limits.", active_procs[i].title, id_raw)))
+                        .bind(("remedy", format!("Refer to scope '{}' MOC or wiki nodes for compacted context.", scope)))
+                        .await;
 
                         if let Some(ref vp) = active_procs[i].vault_path {
                             let src_file = store.vault_root.join(vp);

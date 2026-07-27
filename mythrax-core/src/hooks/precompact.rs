@@ -297,7 +297,7 @@ pub async fn mine_transcript(
                                 "user_input".to_string()
                             } else {
                                 let lower = extracted.to_lowercase();
-                                is_correction = lower.contains("wrong")
+                                let is_keyword = lower.contains("wrong")
                                     || lower.contains("forgot")
                                     || lower.contains("incorrect")
                                     || lower.contains("mistake")
@@ -305,7 +305,23 @@ pub async fn mine_transcript(
                                     || lower.contains("actually")
                                     || lower.contains("not right")
                                     || lower.contains("that was a mistake")
-                                    || lower.contains("that's wrong");
+                                    || lower.contains("that's wrong")
+                                    || lower.contains("we need to fix")
+                                    || lower.contains("revert")
+                                    || lower.contains("fail")
+                                    || lower.contains("error occurred");
+
+                                // Semantic similarity check for correction intent
+                                let is_semantic = if let Ok(embedder) = crate::embeddings::LocalEmbedder::get_global() {
+                                    if let (Ok(emb), Ok(ref_emb)) = (
+                                        embedder.embed(&extracted).await,
+                                        embedder.embed("that is incorrect, please fix the mistake and revert").await,
+                                    ) {
+                                        crate::math::cosine_similarity(&emb, &ref_emb) > 0.70
+                                    } else { false }
+                                } else { false };
+
+                                is_correction = is_keyword || is_semantic;
                                 "user_feedback".to_string()
                             }
                         }
