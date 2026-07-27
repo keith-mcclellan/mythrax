@@ -99,13 +99,13 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 4. Frontmatter uses wikilink paths, not SurrealDB record IDs.
 
 ### Tasks
-- [ ] **3.1** Add `sanitize_wikilink()` helper to `store.rs`.
-- [ ] **3.2** Update `synthesis.rs`: vault-relative wikilinks, typed relationship sections.
-- [ ] **3.3** Update `compactor.rs`: fix absolute path wikilinks, add `## Children`.
-- [ ] **3.4** Update `ingestion.rs`: human-readable filenames (slugified title). `## Synthesized Into` placeholder. `## Temporal Navigation` wikilinks.
-- [ ] **3.5** Update `crud_operations.rs`: after `processed_in_dream = true`, patch episode markdown with backlinks.
-- [ ] **3.6** Update MOC.md template to include wiki/ scope links.
-- [ ] **3.7** Verify: `grep '\[\[|'` = 0. `grep '\[\[/Users'` = 0. `grep 'episode:[0-9a-f]'` in wiki frontmatter = 0.
+- [x] **3.1** Add `sanitize_wikilink()` helper to `store.rs`.
+- [x] **3.2** Update `synthesis.rs`: vault-relative wikilinks, typed relationship sections.
+- [x] **3.3** Update `compactor.rs`: fix absolute path wikilinks, add `## Children`.
+- [x] **3.4** Update `ingestion.rs`: human-readable filenames (slugified title). `## Synthesized Into` placeholder. `## Temporal Navigation` wikilinks.
+- [x] **3.5** Update `crud_operations.rs`: after `processed_in_dream = true`, patch episode markdown with backlinks.
+- [x] **3.6** Update MOC.md template to include wiki/ scope links.
+- [x] **3.7** Verify: `grep '\[\[|'` = 0. `grep '\[\[/Users'` = 0. `grep 'episode:[0-9a-f]'` in wiki frontmatter = 0.
 
 ---
 
