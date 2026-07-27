@@ -1,11 +1,41 @@
 # Specification: Arbor Framework Alignment & Single-Pass Chunked Ingestion
 
 ## 1. Overview
-Align Mythrax core memory architecture with the Arbor framework research paper (`arXiv:2606.11926v1.pdf`) and resolve performance bottlenecks during high-throughput transcript ingestion. This spec incorporates findings from three adversarial CTO reviews.
+Align Mythrax core memory architecture with the Arbor framework research paper (`arXiv:2606.11926v1.pdf`), fix fatal memory integration bugs that prevent agents from learning, and resolve performance bottlenecks during high-throughput transcript ingestion. This spec incorporates findings from 3 adversarial CTO reviews, 1 forensic root-cause investigation, 1 vault/graph UX audit, and 1 deep architectural investigation.
 
 ---
 
-## 2. Functional Requirements
+## 2. Critical Memory Integration Fixes (EMERGENCY — Before All Other Work)
+
+### A. Guardrail Trigger Bug (`manage_handlers.rs` L1496-1498)
+- **Current**: `turn_content.to_lowercase().contains(&rule.target_pattern.to_lowercase())` — exact substring match. Agents never produce the pattern before making the mistake, so rules are never injected.
+- **Required**: Replace with semantic similarity (cosine ≥ 0.70) between current turn embedding and rule embeddings. Rules must fire BEFORE the mistake, not after.
+
+### B. Auto-Retrieval Fallback Bug (`manage_handlers.rs` L1727)
+- **Current**: `let search_query = query.unwrap_or("general context");` — retrieves pure noise.
+- **Required**: Extract user's last message or active task description. Only fall back to generic as last resort.
+
+### C. Utilization Scoring Bug (`manage_handlers.rs` L1411-1447)
+- **Current**: `.contains()` check on `wiki.name` / `ep.title`. Always fails → EMA decays importance → memory evicted.
+- **Required**: If a memory was injected into context, mark as utilized. Injection IS utilization.
+
+### D. Obsidian-Compatible Graph Edge Representation
+- All vault markdown files must represent SurrealDB graph edges as Obsidian `[[wikilinks]]`.
+- **Vault-relative paths only** — no `/Users/keith/mythrax-vault/...` absolute paths.
+- **No empty-path wikilinks** — `[[|title]]` renders as dead link.
+- **Typed relationship sections**: `## Source Episodes`, `## Related Insights`, `## Supersedes`, `## Parent`, `## Children`.
+- **Backlinks**: episodes get `## Synthesized Into`; wiki nodes get `## Source Episodes`.
+- **Frontmatter uses wikilink paths**, not SurrealDB record IDs.
+- **Human-readable filenames**: slugified titles, not UUID strings.
+
+### E. Post-Ingestion Compaction & Vault Cleanup
+- Auto-trigger scope compaction after `bulk_ingest_vault` completes.
+- Physically move archived episodes from `episodes/` → `archive/`.
+- Regenerate MOC.md to expose wiki knowledge base by scope.
+
+---
+
+## 3. Functional Requirements
 
 ### A. Arbor 4-Field Memory Node Schema ($n = \langle h_n, r_n, \iota_n, \mu_n \rangle$)
 - **Hypothesis ($h_n$)**: Target research direction or user intent claim.

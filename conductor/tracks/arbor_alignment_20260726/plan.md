@@ -1,17 +1,45 @@
 # Implementation Plan: Arbor Framework Alignment & Single-Pass Chunked Ingestion
 
-Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause investigation + 1 vault/graph UX audit.
+Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause investigation + 1 vault/graph UX audit + 1 deep architectural investigation.
 
 ---
 
 > [!CAUTION]
-> **Why This Has Failed 3 Times**: Previous versions stored 4-field Arbor output in flat `content: String` columns. Schema normalization, not prompt changes, is the fix.
+> ## 🚨 THE ACTUAL ROOT CAUSE — THREE FATAL STRING-MATCHING BUGS
+> 
+> The deep investigation found the entire memory system is non-functional due to three bugs in `manage_handlers.rs`:
+>
+> **Bug 1: Guardrail rules never fire (L1496-1498)**: `.contains()` exact substring match means rules are only injected if the agent already said the pattern. Catch-22 — agent can't be warned about what it doesn't know.
+>
+> **Bug 2: Auto-retrieval searches "general context" (L1727)**: Fallback query returns noise instead of task-relevant memories.
+>
+> **Bug 3: Utilization scoring evicts good memories (L1411-1447)**: Same `.contains()` check for utilization. When it fails, EMA decays importance → memory evicted. System punishes correct memories for a UX bug.
 
 > [!WARNING]
-> **Phase Ordering is Load-Bearing**: Build replacements FIRST (Phase 5), then delete dead code (Phase 6).
+> **Phase Ordering is Load-Bearing**: Fix the integration bugs FIRST (Phase -1). Build replacements BEFORE deleting dead code (Phase 5 before Phase 6).
 
 > [!IMPORTANT]
-> **Obsidian Graph UX**: All SurrealDB edges must be represented as vault-relative `[[wikilinks]]` in markdown. No absolute paths, no empty paths, no SurrealDB IDs in frontmatter.
+> **Obsidian Graph UX**: All SurrealDB edges must be represented as vault-relative `[[wikilinks]]` in markdown.
+
+---
+
+## Phase -1: EMERGENCY — Fix the Three Fatal Memory Integration Bugs
+
+These must be fixed BEFORE any other work. Without them, nothing else matters.
+
+- [ ] **-1.1** Replace guardrail `.contains()` with semantic similarity (`manage_handlers.rs` L1496-1518):
+  - Remove exact substring match on `turn_content.contains(&rule.target_pattern)`.
+  - Replace with vector similarity (cosine ≥ 0.70) between current turn embedding and rule embeddings.
+  - Rules fire BEFORE the agent makes the mistake, not after.
+  - Fallback: If embeddings unavailable, inject ALL active rules with severity ≥ WARNING.
+- [ ] **-1.2** Replace `"general context"` fallback with actual task context (`manage_handlers.rs` L1727):
+  - Extract user's last message or active task description from conversation turns.
+  - Use STM context from `session_id` if no turns exist.
+  - Only fall back to generic query as last resort.
+- [ ] **-1.3** Fix utilization scoring — stop evicting good memories (`manage_handlers.rs` L1411-1466):
+  - Remove `.contains()` check for utilization.
+  - If a memory was injected into the context window, mark `is_util = true`. Injection IS utilization.
+- [ ] **-1.4** Verify: Create test wisdom rule "never use sudo in scripts". Start new session. Rule appears in pre-invocation output WITHOUT agent mentioning "sudo". Importance does NOT decay.
 
 ---
 
@@ -34,7 +62,7 @@ Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause inv
 
 ---
 
-## Phase 2: 4-Field Schema Normalization (ROOT CAUSE FIX)
+## Phase 2: 4-Field Schema Normalization (STRUCTURAL ROOT CAUSE FIX)
 
 - [ ] **2.1** Add `hypothesis`, `raw_evidence`, `causal_insight`, `artifact_refs` to `Episode` (`contracts.rs` L98).
 - [ ] **2.2** Add same 4 fields to `WikiNode` (`contracts.rs` L551).
@@ -50,19 +78,19 @@ Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause inv
 ## Phase 3: Obsidian-Compatible Graph Edge Representation
 
 ### Wikilink Contract
-1. **Vault-relative paths only.** No `/Users/keith/mythrax-vault/...`. No `[[|title]]` empty paths.
-2. **Every SurrealDB edge → wikilink.** `relates_to`, `followed_by`, `superseded_by`, `mentions` edges all rendered as `[[wikilinks]]` in typed `## Relationships` sections.
-3. **Backlinks.** Episodes get `## Synthesized Into` → wiki nodes. Wiki nodes get `## Source Episodes` → episodes.
-4. **Frontmatter uses wikilink paths**, not SurrealDB record IDs (`episode:uuid`).
+1. Vault-relative paths only. No absolute paths. No `[[|title]]` empty paths.
+2. Every SurrealDB edge → wikilink. Typed `## Relationships` sections.
+3. Backlinks: episodes → wiki nodes. Wiki nodes → source episodes.
+4. Frontmatter uses wikilink paths, not SurrealDB record IDs.
 
 ### Tasks
-- [ ] **3.1** Add `sanitize_wikilink()` helper to `store.rs`. Strip vault root prefix, validate non-empty path.
-- [ ] **3.2** Update `synthesis.rs` (L1475-1487): vault-relative wikilinks, `## Relationships` with typed subsections.
-- [ ] **3.3** Update `compactor.rs` (L1042-1066): fix absolute path wikilinks, add `## Children` section.
-- [ ] **3.4** Update `ingestion.rs`: human-readable episode filenames (slugified title, not UUID). Add `## Synthesized Into` placeholder. Add `## Temporal Navigation` with `followed_by` wikilinks.
-- [ ] **3.5** Update `crud_operations.rs`: after `processed_in_dream = true`, patch episode markdown with `## Synthesized Into` backlinks.
-- [ ] **3.6** Update MOC.md template (`store.rs` L75-85) to include `[[wiki/|Wiki Knowledge Base]]` with per-scope links.
-- [ ] **3.7** Verify: `grep -rn '\[\[|' ~/mythrax-vault/` = 0. `grep -rn '\[\[/Users' ~/mythrax-vault/` = 0. `grep -rn 'episode:[0-9a-f]' ~/mythrax-vault/wiki/` = 0 in frontmatter.
+- [ ] **3.1** Add `sanitize_wikilink()` helper to `store.rs`.
+- [ ] **3.2** Update `synthesis.rs`: vault-relative wikilinks, typed relationship sections.
+- [ ] **3.3** Update `compactor.rs`: fix absolute path wikilinks, add `## Children`.
+- [ ] **3.4** Update `ingestion.rs`: human-readable filenames (slugified title). `## Synthesized Into` placeholder. `## Temporal Navigation` wikilinks.
+- [ ] **3.5** Update `crud_operations.rs`: after `processed_in_dream = true`, patch episode markdown with backlinks.
+- [ ] **3.6** Update MOC.md template to include wiki/ scope links.
+- [ ] **3.7** Verify: `grep '\[\[|'` = 0. `grep '\[\[/Users'` = 0. `grep 'episode:[0-9a-f]'` in wiki frontmatter = 0.
 
 ---
 
@@ -107,16 +135,17 @@ Incorporates findings from 3 adversarial CTO reviews + 1 forensic root-cause inv
 
 ## Phase 8: Post-Ingestion Compaction & Vault Cleanup
 
-- [ ] **8.1** After `bulk_ingest_vault` completes, auto-trigger scope compaction for all affected scopes.
+- [ ] **8.1** After `bulk_ingest_vault` completes, auto-trigger scope compaction.
 - [ ] **8.2** After compaction, physically move archived episodes to `archive/`.
 - [ ] **8.3** Regenerate MOC.md with wiki/ scope links.
-- [ ] **8.4** Verify: Episodes archived, MOC.md links to wiki, Obsidian graph shows clean wiki clusters.
+- [ ] **8.4** Verify: Episodes archived, MOC.md links to wiki, Obsidian graph clean.
 
 ---
 
 ## Phase 9: Integration & Ship
 
 - [ ] **9.1** Full integration: 1,000+ episodes → dreaming → Arbor HTR → all systems.
-- [ ] **9.2** Obsidian verification: Open vault, verify graph view shows wiki clusters not episode noise.
-- [ ] **9.3** Full test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core`.
-- [ ] **9.4** Git commit and push.
+- [ ] **9.2** CRITICAL TEST: Create wisdom rule → new session → rule appears WITHOUT agent mentioning it → importance does NOT decay.
+- [ ] **9.3** Obsidian verification: Open vault, graph view shows wiki clusters not episode noise.
+- [ ] **9.4** Full test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core`.
+- [ ] **9.5** Git commit and push.
