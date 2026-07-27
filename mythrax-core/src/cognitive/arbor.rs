@@ -390,6 +390,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             )),
             constraints: vec![],
             visits: 0,
+            ..Default::default()
         };
 
         let _: Option<HypothesisNode> = self
@@ -468,6 +469,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                 )),
                 constraints: parent.constraints.clone(),
                 visits: 0,
+                ..Default::default()
             };
 
             let _: Option<HypothesisNode> = self
