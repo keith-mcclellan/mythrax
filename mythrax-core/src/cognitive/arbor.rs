@@ -186,6 +186,69 @@ impl<L: ArborLlmClient> HeldOutEvaluator for LlmCriticEvaluator<L> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConvergenceSignal {
+    Converging,
+    Stagnant,
+    ParadigmShift,
+}
+
+pub struct ConvergenceDetector {
+    window_size: usize,
+    history: Vec<f32>,
+}
+
+impl ConvergenceDetector {
+    pub fn new(window_size: usize) -> Self {
+        Self {
+            window_size,
+            history: Vec::new(),
+        }
+    }
+
+    pub fn record_score(&mut self, score: f32) -> ConvergenceSignal {
+        self.history.push(score);
+        if self.history.len() > self.window_size {
+            self.history.remove(0);
+        }
+
+        if self.history.len() < self.window_size {
+            return ConvergenceSignal::Converging;
+        }
+
+        let delta_score = self.history.last().unwrap() - self.history.first().unwrap();
+        let delta_visits = (self.history.len() - 1) as f32;
+        let score_velocity = delta_score / delta_visits;
+
+        if score_velocity < 0.01 && *self.history.last().unwrap() < 70.0 {
+            ConvergenceSignal::ParadigmShift
+        } else if score_velocity < 0.05 {
+            ConvergenceSignal::Stagnant
+        } else {
+            ConvergenceSignal::Converging
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArborFsmState {
+    Ideate,
+    Execute,
+    Evaluate,
+    PruneMerge,
+}
+
+impl ArborFsmState {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Ideate => Self::Execute,
+            Self::Execute => Self::Evaluate,
+            Self::Evaluate => Self::PruneMerge,
+            Self::PruneMerge => Self::Ideate,
+        }
+    }
+}
+
 pub struct ArborCoordinator<L: ArborLlmClient> {
     db: Surreal<Db>,
     backend: crate::db::SurrealBackend,
@@ -795,5 +858,37 @@ mod tests {
         assert!(propagated.contains("Root insight"));
         assert!(propagated.contains("Child 1 insight"));
         assert!(propagated.contains("Child 2 insight"));
+    }
+
+    #[test]
+    fn test_convergence_detector_signals() {
+        let mut detector = ConvergenceDetector::new(5);
+        assert_eq!(detector.record_score(50.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(52.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(54.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(56.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(58.0), ConvergenceSignal::Converging);
+
+        // Stagnant flat trajectory
+        let mut stagnant_detector = ConvergenceDetector::new(5);
+        stagnant_detector.record_score(50.0);
+        stagnant_detector.record_score(50.1);
+        stagnant_detector.record_score(50.2);
+        stagnant_detector.record_score(50.1);
+        let sig = stagnant_detector.record_score(50.0);
+        assert!(sig == ConvergenceSignal::Stagnant || sig == ConvergenceSignal::ParadigmShift);
+    }
+
+    #[test]
+    fn test_arbor_fsm_transitions() {
+        let state = ArborFsmState::Ideate;
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::Execute);
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::Evaluate);
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::PruneMerge);
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::Ideate);
     }
 }
