@@ -566,7 +566,8 @@ impl SurrealBackend {
             }
         }
 
-        // 5. Execute batch transaction in database
+        // 5. Execute batch transaction in database using 50-item sub-batches
+        const SUB_BATCH_SIZE: usize = 50;
         let query = r#"
             BEGIN TRANSACTION;
             FOR $ep IN $episodes {
@@ -599,16 +600,27 @@ impl SurrealBackend {
             COMMIT TRANSACTION;
         "#;
 
-        let res = self
-            .db
-            .query(query)
-            .bind(("episodes", mapped_json_array))
-            .await?;
-        res.check()
-            .context("SurrealDB save_episodes_batch transaction failed")?;
+        let mut successful_inserted_ids = Vec::new();
+        for (chunk_idx, json_chunk) in mapped_json_array.chunks(SUB_BATCH_SIZE).enumerate() {
+            let chunk_start_idx = chunk_idx * SUB_BATCH_SIZE;
+            let chunk_end_idx = (chunk_start_idx + json_chunk.len()).min(inserted_ids.len());
 
-        for id_str in inserted_ids {
-            let _ = self.update_idf_index_db(&id_str, false).await;
+            match self.db.query(query).bind(("episodes", json_chunk.to_vec())).await {
+                Ok(res) => {
+                    if let Err(e) = res.check() {
+                        tracing::error!("SurrealDB save_episodes_batch sub-batch {} failed: {:?}", chunk_idx, e);
+                    } else {
+                        successful_inserted_ids.extend_from_slice(&inserted_ids[chunk_start_idx..chunk_end_idx]);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("SurrealDB save_episodes_batch query sub-batch {} failed: {:?}", chunk_idx, e);
+                }
+            }
+        }
+
+        for id_str in &successful_inserted_ids {
+            let _ = self.update_idf_index_db(id_str, false).await;
         }
 
         // 6. Relate temporal followed_by connections
