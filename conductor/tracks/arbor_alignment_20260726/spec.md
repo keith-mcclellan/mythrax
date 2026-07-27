@@ -33,6 +33,27 @@ Align Mythrax core memory architecture with the Arbor framework research paper (
 - Physically move archived episodes from `episodes/` → `archive/`.
 - Regenerate MOC.md to expose wiki knowledge base by scope.
 
+### F. Corrupted Wisdom Graduation (`synthesis.rs` L3468-3469)
+- **Current**: `action_to_avoid` is set to the same value as `target_pattern`. If a positive pattern like "Use connection pooling" is graduated, agents are told: **"Avoid: Use connection pooling"**.
+- **Current**: `causal_explanation` is hardcoded to `"Synthesized via cross-scope graduation."` — no actual causal reasoning preserved.
+- **Required**: Use an LLM call to properly synthesize `action_to_avoid` and `causal_explanation` from the cluster content.
+
+### G. Distillation Prompt Doesn't Extract Mistakes (`distillation.rs` L289-295)
+- **Current**: LLM is asked to extract: Decisions, Constraints, User Preferences, Summary, Takeaways. It is NEVER asked to extract mistakes, failures, errors, or causal lessons.
+- **Required**: Add explicit extraction categories: "Mistakes & Failures", "Root Causes", "What Worked vs What Didn't".
+
+### H. Naive Correction Detection (`precompact.rs` L300-308)
+- **Current**: Corrections only detected if user literally says "wrong", "forgot", "mistake", "should have", "actually", "not right". If an agent self-corrects or the user provides implicit correction, it's invisible.
+- **Required**: Use semantic similarity or LLM classification to detect corrections, not keyword matching.
+
+### I. Token Budget Silent Eviction (`manage_handlers.rs` L1262-1327)
+- **Current**: 8000-token budget permanently archives unpinned episodes when exceeded. No notification to the agent.
+- **Required**: At minimum, notify the agent which memories were evicted. Consider increasing the budget or using summarization instead of deletion.
+
+### J. No Automatic Post-Invocation Hook
+- **Current**: No `handle_post_invocation_hook` exists. Session reflection relies on a 15-turn boundary heuristic or manual `reflect` trigger.
+- **Required**: Implement a proper post-invocation lifecycle that runs a reflection sweep after every session, extracting mistakes and causal insights automatically.
+
 ---
 
 ## 3. Functional Requirements

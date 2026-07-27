@@ -39,7 +39,24 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 - [ ] **-1.3** Fix utilization scoring — stop evicting good memories (`manage_handlers.rs` L1411-1466):
   - Remove `.contains()` check for utilization.
   - If a memory was injected into the context window, mark `is_util = true`. Injection IS utilization.
-- [ ] **-1.4** Verify: Create test wisdom rule "never use sudo in scripts". Start new session. Rule appears in pre-invocation output WITHOUT agent mentioning "sudo". Importance does NOT decay.
+- [ ] **-1.4** Fix corrupted wisdom graduation (`synthesis.rs` L3468-3469):
+  - `action_to_avoid` is set to `target_pattern` — tells agents to avoid good practices.
+  - `causal_explanation` is hardcoded generic string — no actual reasoning.
+  - Use LLM call to properly synthesize both fields from cluster content.
+- [ ] **-1.5** Fix distillation prompt — extract mistakes (`distillation.rs` L289-295):
+  - Current prompt asks for: Decisions, Constraints, User Preferences, Summary, Takeaways.
+  - NEVER asks for: Mistakes, Failures, Root Causes, What Worked vs What Didn't.
+  - Add explicit extraction categories for failures and causal insights.
+- [ ] **-1.6** Fix correction detection — replace keyword matching (`precompact.rs` L300-308):
+  - Current: only detects corrections if user says "wrong", "forgot", "mistake" etc.
+  - Replace with semantic similarity or LLM classification.
+- [ ] **-1.7** Fix token budget silent eviction (`manage_handlers.rs` L1262-1327):
+  - 8000-token budget permanently archives unpinned episodes with no notification.
+  - Add notification to agent of evicted memories. Consider summarization instead of deletion.
+- [ ] **-1.8** Implement post-invocation hook:
+  - No `handle_post_invocation_hook` exists. Session reflection relies on 15-turn heuristic.
+  - Implement proper post-invocation lifecycle that runs reflection sweep after every session.
+- [ ] **-1.9** Verify: Create test wisdom rule → new session → rule appears → importance stable → graduated wisdom rule has correct `action_to_avoid` (not equal to `target_pattern`).
 
 ---
 
