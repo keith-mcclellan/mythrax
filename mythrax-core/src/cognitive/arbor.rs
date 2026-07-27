@@ -30,6 +30,48 @@ pub trait ArborLlmClient: Send + Sync + Clone + 'static {
     ) -> impl std::future::Future<Output = Result<String>> + Send;
 }
 
+pub trait TreePropagate {
+    fn propagate_upward<'a>(
+        &'a mut self,
+        children: &'a [Self],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>
+    where
+        Self: Sized;
+}
+
+impl TreePropagate for HypothesisNode {
+    fn propagate_upward<'a>(
+        &'a mut self,
+        children: &'a [Self],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>> {
+        Box::pin(async move {
+            if children.is_empty() {
+                return Ok(self.insight.clone());
+            }
+
+            let mut child_insights = Vec::new();
+            for child in children {
+                if let Some(ref ins) = child.insight {
+                    child_insights.push(ins.clone());
+                }
+            }
+
+            if child_insights.is_empty() {
+                return Ok(self.insight.clone());
+            }
+
+            let aggregated = child_insights.join(" | ");
+            let new_insight = match &self.insight {
+                Some(existing) => format!("{} | {}", existing, aggregated),
+                None => aggregated,
+            };
+
+            self.insight = Some(new_insight.clone());
+            Ok(Some(new_insight))
+        })
+    }
+}
+
 pub trait HeldOutEvaluator: Send + Sync {
     fn evaluate(&self, branch_name: &str, temp_worktree_path: &Path) -> Result<f32>;
 }
@@ -850,4 +892,42 @@ pub fn format_node_markdown(node: &HypothesisNode) -> String {
         node.hypothesis,
         navigation_section
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_tree_propagate_upward() {
+        let mut root = HypothesisNode {
+            node_id: "root".to_string(),
+            hypothesis: "Root hypothesis".to_string(),
+            insight: Some("Root insight".to_string()),
+            ..Default::default()
+        };
+
+        let child1 = HypothesisNode {
+            node_id: "child1".to_string(),
+            parent_id: Some("root".to_string()),
+            insight: Some("Child 1 insight".to_string()),
+            ..Default::default()
+        };
+
+        let child2 = HypothesisNode {
+            node_id: "child2".to_string(),
+            parent_id: Some("root".to_string()),
+            insight: Some("Child 2 insight".to_string()),
+            ..Default::default()
+        };
+
+        let children = vec![child1, child2];
+        let result = root.propagate_upward(&children).await.unwrap();
+
+        assert!(result.is_some());
+        let propagated = result.unwrap();
+        assert!(propagated.contains("Root insight"));
+        assert!(propagated.contains("Child 1 insight"));
+        assert!(propagated.contains("Child 2 insight"));
+    }
 }

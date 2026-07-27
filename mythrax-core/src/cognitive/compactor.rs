@@ -1300,6 +1300,45 @@ impl Compactor {
             );
         }
 
+        // Propagate tree insights upward for arbor hypothesis nodes
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
+            if let Ok(mut resp) = surreal_backend
+                .db
+                .query("SELECT * FROM hypothesis_node WHERE parent_id IS NONE;")
+                .await
+            {
+                if let Ok(root_nodes) = resp.take::<Vec<crate::contracts::HypothesisNode>>(0) {
+                    for mut root in root_nodes {
+                        if let Ok(mut children_resp) = surreal_backend
+                            .db
+                            .query("SELECT * FROM hypothesis_node WHERE parent_id = $pid;")
+                            .bind(("pid", root.node_id.clone()))
+                            .await
+                        {
+                            if let Ok(children) =
+                                children_resp.take::<Vec<crate::contracts::HypothesisNode>>(0)
+                            {
+                                use crate::cognitive::arbor::TreePropagate;
+                                let _ = root.propagate_upward(&children).await;
+                                if let Some(ref ins) = root.insight {
+                                    let update_sql = "UPDATE type::record('hypothesis_node', $id) MERGE { insight: $ins };";
+                                    let _ = surreal_backend
+                                        .db
+                                        .query(update_sql)
+                                        .bind(("id", root.node_id.clone()))
+                                        .bind(("ins", ins.clone()))
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Wire graduation pipeline to run opportunistically during compaction
         let _ = crate::db::graduation_pipeline::run_graduation_pipeline(&*db, scope).await;
 
