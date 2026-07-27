@@ -291,8 +291,11 @@ pub async fn distill_transcript_file(
             1. Decisions: key design, architecture, or scope decisions.
             2. Constraints: any constraints or requirements discovered.
             3. User Preferences: any user stated preferences.
-            4. Summary: a one paragraph summary.
-            5. Takeaways: key takeaways.
+            4. Mistakes & Failures: Any errors, failed attempts, bugs, or wrong paths encountered.
+            5. Root Causes: Why those failures occurred.
+            6. Actions to Avoid: Specific actions, patterns, or commands to avoid in the future.
+            7. Summary: a one paragraph summary.
+            8. Takeaways: key takeaways.
 
             Transcript Content:
             {}
@@ -304,6 +307,9 @@ pub async fn distill_transcript_file(
               \"decisions\": [\"dec1\"],
               \"constraints_discovered\": [\"con1\"],
               \"user_preferences\": [\"pref1\"],
+              \"mistakes_failures\": [\"mistake1\"],
+              \"root_causes\": [\"cause1\"],
+              \"actions_to_avoid\": [\"avoid1\"],
               \"summary\": \"concise summary\",
               \"key_takeaways\": [\"takeaway1\"]
             }}",
@@ -339,8 +345,10 @@ pub async fn distill_transcript_file(
                 if surreal_backend.create_cognitive_task(&task).await.is_ok() {
                     let start = std::time::Instant::now();
                     let timeout = std::time::Duration::from_secs(60);
+                    let mut delay_ms = 10;
                     while start.elapsed() < timeout {
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms = (delay_ms * 2).min(250);
                         if let Ok(Some(updated)) =
                             surreal_backend.get_cognitive_task(&task_id).await
                         {

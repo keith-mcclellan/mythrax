@@ -3464,10 +3464,21 @@ pub async fn graduate_wisdom(
         let slug = slugify_title(&target_pattern);
         let rule_path = format!("wisdom/{}/{}.md", rule_class, slug);
 
+        let causal_explanation = format!(
+            "Synthesized from converging insights across {} scopes: {}",
+            cluster.len(),
+            cluster
+                .iter()
+                .map(|n| n.content.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+        let action_to_avoid = format!("Avoid pattern: {}", target_pattern);
+
         let rule = crate::contracts::WisdomRule {
             target_pattern: target_pattern.clone(),
-            action_to_avoid: target_pattern.clone(),
-            causal_explanation: "Synthesized via cross-scope graduation.".into(),
+            action_to_avoid,
+            causal_explanation,
             prescribed_remedy: cluster[0].content.clone(),
             tier: crate::contracts::Tier::Wisdom,
             scope: "general".into(),
