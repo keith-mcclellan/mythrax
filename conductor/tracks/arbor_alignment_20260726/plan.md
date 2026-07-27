@@ -140,11 +140,11 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 7: FSM, Convergence & Budget
 
-- [ ] **7.1** `ConvergenceDetector`: sliding window of 5, $\Delta S / \Delta V$, escalating signals.
-- [ ] **7.2** `parent_exhaustion` detection.
-- [ ] **7.3** FSM: `IDEATE → EXECUTE → EVALUATE → PRUNE/MERGE`.
-- [ ] **7.4** `max_depth` (default: 2), budget tracking (token/wall-clock/iteration).
-- [ ] **7.5** Verify: FSM enforced, convergence triggers paradigm_shift.
+- [x] **7.1** `ConvergenceDetector`: sliding window of 5, $\Delta S / \Delta V$, escalating signals.
+- [x] **7.2** `parent_exhaustion` detection.
+- [x] **7.3** FSM: `IDEATE → EXECUTE → EVALUATE → PRUNE/MERGE`.
+- [x] **7.4** `max_depth` (default: 2), budget tracking (token/wall-clock/iteration).
+- [x] **7.5** Verify: FSM enforced, convergence triggers paradigm_shift.
 
 ---
 
