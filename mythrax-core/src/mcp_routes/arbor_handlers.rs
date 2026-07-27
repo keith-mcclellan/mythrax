@@ -224,6 +224,14 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                 .get("node_id")
                 .and_then(|v| v.as_str())
                 .context("Missing node_id")?;
+            let test_cmd = args
+                .get("test_command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("cargo check");
+            let target_branch = args
+                .get("branch")
+                .and_then(|v| v.as_str())
+                .unwrap_or("main");
 
             let surreal_backend = state
                 .backend
@@ -231,21 +239,63 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                 .downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required")?;
 
-            let node: Option<HypothesisNode> = surreal_backend
+            let mut node: HypothesisNode = surreal_backend
                 .db
                 .select(("hypothesis_node", node_id))
+                .await?
+                .ok_or_else(|| anyhow!("Node '{}' not found for merge gate", node_id))?;
+
+            // Held-out test evaluation gate (Etest)
+            let evaluator = crate::cognitive::arbor::TestCommandEvaluator {
+                test_command: test_cmd.to_string(),
+            };
+
+            let repo_path =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let test_score = crate::cognitive::arbor::HeldOutEvaluator::evaluate(
+                &evaluator,
+                target_branch,
+                &repo_path,
+            )
+            .unwrap_or(0.0);
+            node.score = Some(test_score);
+
+            let merge_passed = test_score >= 70.0;
+            if merge_passed {
+                let branch_name = format!("htr_branch_{}", node_id);
+                let merge_status = std::process::Command::new("git")
+                    .args(["merge", &branch_name])
+                    .current_dir(&repo_path)
+                    .status();
+                if let Ok(st) = merge_status {
+                    if st.success() {
+                        node.status = "merged".to_string();
+                    } else {
+                        node.status = "failed_merge".to_string();
+                    }
+                } else {
+                    node.status = "failed_merge".to_string();
+                }
+            } else {
+                node.status = "rejected".to_string();
+            }
+
+            let _: Option<HypothesisNode> = surreal_backend
+                .db
+                .update(("hypothesis_node", node_id))
+                .content(node.clone())
                 .await?;
 
-            if let Some(n) = node {
-                Ok(json!({
-                    "content": [{
-                        "type": "text",
-                        "text": format!("Git merge branch evaluated for node '{}' (Score: {:?}, Status: {}).", node_id, n.score, n.status)
-                    }]
-                }))
-            } else {
-                Err(anyhow!("Node '{}' not found for merge gate", node_id))
-            }
+            let md = crate::cognitive::arbor::format_node_markdown(&node);
+            let rel_path = format!("arbor/nodes/{}.md", node_id);
+            state.store.write_file(&rel_path, &md)?;
+
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Git merge branch evaluated for node '{}' (Etest Score: {}, Status: '{}').", node_id, test_score, node.status)
+                }]
+            }))
         }
         _ => Err(anyhow!("Unknown arbor action: {}", action)),
     }
@@ -337,5 +387,18 @@ mod tests {
         .await
         .unwrap();
         assert!(res_p["content"][0]["text"].as_str().unwrap().contains("pruned"));
+
+        // 6. GitMergeBranch (Etest)
+        let res_m = handle_manage_arbor(
+            &state,
+            json!({
+                "action": "git_merge_branch",
+                "node_id": "test_root",
+                "test_command": "echo 'ok'"
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(res_m["content"][0]["text"].as_str().unwrap().contains("Git merge branch evaluated"));
     }
 }
