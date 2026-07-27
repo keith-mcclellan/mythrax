@@ -69,11 +69,11 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 1: Chunked Ingestion Engine
 
-- [ ] **1.1** Chunk `save_episodes_batch_db` into 50-item sub-batches.
-- [ ] **1.2** Skip-and-continue failure strategy per chunk.
-- [ ] **1.3** Batch IDF index updates into set-based SQL.
-- [ ] **1.4** Single-pass scan with JSONL timestamp sorting.
-- [ ] **1.5** Verify: Ingest 1,000+ episodes. No transaction timeouts.
+- [x] **1.1** Chunk `save_episodes_batch_db` into 50-item sub-batches.
+- [x] **1.2** Skip-and-continue failure strategy per chunk.
+- [x] **1.3** Batch IDF index updates into set-based SQL.
+- [x] **1.4** Single-pass scan with JSONL timestamp sorting.
+- [x] **1.5** Verify: Ingest 1,000+ episodes. No transaction timeouts.
 
 ---
 
