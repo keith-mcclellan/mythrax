@@ -120,11 +120,11 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 5: TreePropagate & Negative Constraints (BUILD FIRST)
 
-- [ ] **5.1** Define `TreePropagate` trait in `arbor.rs`.
-- [ ] **5.2** Implement for `HypothesisNode`.
-- [ ] **5.3** Update `compact_scope` in `compactor.rs`: keep DBSCAN, add negative constraint extraction.
-- [ ] **5.4** Update parent vault markdown with `## Propagated Insights` wikilinks.
-- [ ] **5.5** Verify: Parent nodes have abstracted child insights. Negative constraints in pre-invocation hook.
+- [x] **5.1** Define `TreePropagate` trait in `arbor.rs`.
+- [x] **5.2** Implement for `HypothesisNode`.
+- [x] **5.3** Update `compact_scope` in `compactor.rs`: keep DBSCAN, add negative constraint extraction.
+- [x] **5.4** Update parent vault markdown with `## Propagated Insights` wikilinks.
+- [x] **5.5** Verify: Parent nodes have abstracted child insights. Negative constraints in pre-invocation hook.
 
 ---
 
