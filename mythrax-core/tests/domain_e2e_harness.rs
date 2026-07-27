@@ -694,6 +694,7 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         .update(("hypothesis_node", "2"))
         .content(node_2.clone())
         .await?;
+    fs::write(&node_2_md, mythrax_core::cognitive::arbor::format_node_markdown(&node_2))?;
 
     // Assertion 1: Node 2's status in SurrealDB is 'merged'
     let node_2_final: HypothesisNode = db
