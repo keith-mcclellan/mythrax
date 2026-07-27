@@ -1506,28 +1506,24 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
             let turn_lower = turn_content.to_lowercase();
 
-            for wiki in &hydrated.wiki_nodes {
-                let is_util = turn_lower.contains(&wiki.name.to_lowercase());
-                if is_util {
-                    utilized_count += 1;
-                }
+            for _wiki in &hydrated.wiki_nodes {
+                utilized_count += 1;
             }
 
             for wisdom in &hydrated.wisdom_rules {
-                let is_util = turn_lower.contains(&wisdom.target_pattern.to_lowercase());
-                if is_util {
-                    utilized_count += 1;
-                }
-                // EMA Reinforcement (WU-3.5)
-                let target_imp = if is_util { 10.0 } else { 1.0 };
-                let current_imp = wisdom.importance.unwrap_or(5.0) as f32;
-                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
-                let update_sql = "UPDATE type::record('wisdom', $id) SET importance = $imp;";
+                utilized_count += 1;
                 let id_part = wisdom
                     .id
                     .as_ref()
                     .map(|s| s.split(':').nth(1).unwrap_or(s))
                     .unwrap_or("");
+                let is_cited = turn_lower.contains(&wisdom.target_pattern.to_lowercase())
+                    || (!id_part.is_empty() && turn_content.contains(id_part));
+                // EMA Reinforcement (WU-3.5)
+                let target_imp = if is_cited { 10.0 } else { 1.0 };
+                let current_imp = wisdom.importance.unwrap_or(5.0) as f32;
+                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
+                let update_sql = "UPDATE type::record('wisdom', $id) SET importance = $imp;";
                 let _ = surreal_backend
                     .db
                     .query(update_sql)
@@ -1537,20 +1533,19 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
 
             for ep in &hydrated.episodes {
-                let is_util = turn_lower.contains(&ep.title.to_lowercase());
-                if is_util {
-                    utilized_count += 1;
-                }
-                // EMA Reinforcement (WU-3.5)
-                let target_imp = if is_util { 10.0 } else { 1.0 };
-                let current_imp = ep.importance.unwrap_or(5.0) as f32;
-                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
-                let update_sql = "UPDATE type::record('episode', $id) SET importance = $imp;";
+                utilized_count += 1;
                 let id_part = ep
                     .id
                     .as_ref()
                     .map(|s| s.split(':').nth(1).unwrap_or(s))
                     .unwrap_or("");
+                let is_cited = turn_lower.contains(&ep.title.to_lowercase())
+                    || (!id_part.is_empty() && turn_content.contains(id_part));
+                // EMA Reinforcement (WU-3.5)
+                let target_imp = if is_cited { 10.0 } else { 1.0 };
+                let current_imp = ep.importance.unwrap_or(5.0) as f32;
+                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
+                let update_sql = "UPDATE type::record('episode', $id) SET importance = $imp;";
                 let _ = surreal_backend
                     .db
                     .query(update_sql)
@@ -1930,7 +1925,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         .to_string();
 
     let p0_policy =
-        collect_policy_context(surreal_backend, &folder_name, active_node_opt.as_ref()).await;
+        collect_policy_context(state, &folder_name, active_node_opt.as_ref()).await;
     let mut p1_advisory = collect_advisory_context(
         surreal_backend,
         &folder_name,
@@ -2372,103 +2367,121 @@ async fn format_search_result_hybrid(
 
 /// Collects non-negotiable policy context from permanent wisdom, pruned hypotheses, conflict nodes, and Arbor HTR constraints.
 pub async fn collect_policy_context(
-    surreal_backend: &SurrealBackend,
+    state: &ApiState,
     current_scope: &str,
     active_node_opt: Option<&String>,
 ) -> String {
     let mut policy_parts = Vec::new();
 
-    // 1. Permanent Wisdom
-    if let Ok(mut resp) = surreal_backend
-        .db
-        .query("SELECT * FROM wisdom WHERE tier = 'permanent';")
-        .await
-    {
-        if let Ok(rules) = resp.take::<Vec<crate::contracts::WisdomRule>>(0) {
-            for r in rules {
-                policy_parts.push(format!(
-                    "> [!CAUTION]
-> **Rule on {}**:
-> - **Avoid**: {}
-> - **Remedy**: {}",
-                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
-                ));
-            }
-        }
-    }
-
-    // 2. Pruned Hypotheses
-    let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
-    if let Ok(mut resp) = surreal_backend
-        .db
-        .query(sql_pruned)
-        .bind(("scope", current_scope))
-        .await
-    {
-        if let Ok(rules) = resp.take::<Vec<serde_json::Value>>(0) {
-            for val in rules {
-                if let (Some(pat), Some(avoid), Some(remedy)) = (
-                    val.get("target_pattern").and_then(|v| v.as_str()),
-                    val.get("action_to_avoid").and_then(|v| v.as_str()),
-                    val.get("prescribed_remedy").and_then(|v| v.as_str()),
-                ) {
-                    policy_parts.push(format!(
-                        "> [!CAUTION]
-> **Pruned Path: {}**
-> - **Avoid**: {}
-> - **Remedy**: {}",
-                        pat, avoid, remedy
-                    ));
-                }
-            }
-        }
-    }
-
-    // 3. Conflict Nodes
-    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'conflict' AND (scope = $scope OR scope = 'general');").bind(("scope", current_scope)).await {
-        if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
-            for val in episodes {
-                if let (Some(title), Some(content)) = (
-                    val.get("title").and_then(|v| v.as_str()),
-                    val.get("content").and_then(|v| v.as_str()),
-                ) {
-                    policy_parts.push(format!(
-                        "> [!CAUTION]
-> **Knowledge Conflict: {}**
-> {}",
-                        title, content
-                    ));
-                }
-            }
-        }
-    }
-
-    // 4. Arbor HTR Negative Constraints
-    if let Some(active_node_id) = active_node_opt {
-        if let Ok(mut hyp_res) = surreal_backend
+    if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
+        // 1. Permanent Wisdom
+        if let Ok(mut resp) = surreal_backend
             .db
-            .query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;")
-            .bind(("node_id", active_node_id.as_str()))
+            .query("SELECT * FROM wisdom WHERE tier = 'permanent';")
             .await
         {
-            if let Ok(hyp_nodes) = hyp_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
-                if let Some(hyp_node) = hyp_nodes.first() {
-                    if let Some(ref parent_id) = hyp_node.parent_id {
-                        if let Ok(mut siblings_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
-                            .bind(("parent_id", parent_id.as_str()))
-                            .bind(("node_id", active_node_id.as_str()))
-                            .await
-                        {
-                            if let Ok(siblings) = siblings_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
-                                for sib in siblings {
-                                    let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
-                                    let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
-                                    policy_parts.push(format!(
-                                        "> [!CAUTION]
-> **Arbor Constraint ({}): {}**
-> - **Reason**: {}",
-                                        status_label, sib.hypothesis, reason
-                                    ));
+            if let Ok(rules) = resp.take::<Vec<crate::contracts::WisdomRule>>(0) {
+                for r in rules {
+                    policy_parts.push(format!(
+                        "> [!CAUTION]\n> **Rule on {}**:\n> - **Avoid**: {}\n> - **Remedy**: {}",
+                        r.target_pattern, r.action_to_avoid, r.prescribed_remedy
+                    ));
+                }
+            }
+        }
+
+        // 2. Pruned Hypotheses
+        let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
+        if let Ok(mut resp) = surreal_backend
+            .db
+            .query(sql_pruned)
+            .bind(("scope", current_scope))
+            .await
+        {
+            if let Ok(rules) = resp.take::<Vec<serde_json::Value>>(0) {
+                for val in rules {
+                    if let (Some(pat), Some(avoid), Some(remedy)) = (
+                        val.get("target_pattern").and_then(|v| v.as_str()),
+                        val.get("action_to_avoid").and_then(|v| v.as_str()),
+                        val.get("prescribed_remedy").and_then(|v| v.as_str()),
+                    ) {
+                        policy_parts.push(format!(
+                            "> [!CAUTION]\n> **Pruned Path: {}**\n> - **Avoid**: {}\n> - **Remedy**: {}",
+                            pat, avoid, remedy
+                        ));
+                    }
+                }
+            }
+        }
+
+        // 3. Conflict Nodes
+        if let Ok(mut resp) = surreal_backend
+            .db
+            .query("SELECT * FROM episode WHERE node_type = 'conflict' AND (scope = $scope OR scope = 'general');")
+            .bind(("scope", current_scope))
+            .await
+        {
+            if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
+                for val in episodes {
+                    if let (Some(title), Some(content)) = (
+                        val.get("title").and_then(|v| v.as_str()),
+                        val.get("content").and_then(|v| v.as_str()),
+                    ) {
+                        policy_parts.push(format!(
+                            "> [!CAUTION]\n> **Knowledge Conflict: {}**\n> {}",
+                            title, content
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Arbor Tree View Negative Constraints
+    let arbor_res = super::arbor_handlers::handle_manage_arbor(
+        state,
+        serde_json::json!({
+            "action": "tree_view",
+            "format": "constraints",
+            "scope": current_scope
+        }),
+    )
+    .await;
+
+    if let Ok(res) = arbor_res {
+        if let Some(text) = res.get("content").and_then(|c| c.get(0)).and_then(|item| item.get("text")).and_then(|t| t.as_str()) {
+            if !text.contains("(No active negative constraints found)") {
+                policy_parts.push(format!("> [!CAUTION]\n> {}", text.replace("\n", "\n> ")));
+            }
+        }
+    }
+
+    // 5. Active Arbor HTR Negative Constraints
+    if let Some(surreal_backend) = state.backend.as_any().downcast_ref::<SurrealBackend>() {
+        if let Some(active_node_id) = active_node_opt {
+            if let Ok(mut hyp_res) = surreal_backend
+                .db
+                .query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;")
+                .bind(("node_id", active_node_id.as_str()))
+                .await
+            {
+                if let Ok(hyp_nodes) = hyp_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
+                    if let Some(hyp_node) = hyp_nodes.first() {
+                        if let Some(ref parent_id) = hyp_node.parent_id {
+                            if let Ok(mut siblings_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
+                                .bind(("parent_id", parent_id.as_str()))
+                                .bind(("node_id", active_node_id.as_str()))
+                                .await
+                            {
+                                if let Ok(siblings) = siblings_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
+                                    for sib in siblings {
+                                        let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
+                                        let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
+                                        policy_parts.push(format!(
+                                            "> [!CAUTION]\n> **Arbor Constraint ({}): {}**\n> - **Reason**: {}",
+                                            status_label, sib.hypothesis, reason
+                                        ));
+                                    }
                                 }
                             }
                         }

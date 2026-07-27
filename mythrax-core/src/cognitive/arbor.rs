@@ -826,6 +826,20 @@ pub fn format_node_markdown(node: &HypothesisNode) -> String {
         format!("\n{}", child_bullets.join("\n"))
     };
 
+    let propagated_insights_section = match &node.insight {
+        Some(ins) if !node.children_ids.is_empty() => {
+            let child_links = node
+                .children_ids
+                .iter()
+                .map(|c| format!("- [[wiki/{}/hypothesis_tree/{}|{}]]", scope, c, c))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("\n\n## Propagated Insights\n{}\n\n- **Aggregated Insight**: {}", child_links, ins)
+        }
+        Some(ins) => format!("\n\n## Propagated Insights\n- **Insight**: {}", ins),
+        None => String::new(),
+    };
+
     let navigation_section = format!(
         "\n\n## Navigation\n- **Parent**: {}\n- **Children**: {}",
         nav_parent, nav_children
@@ -848,7 +862,7 @@ pub fn format_node_markdown(node: &HypothesisNode) -> String {
          visits: {}\n\
          ---\n\n\
          # Hypothesis Tree Node: {}\n\n\
-         {}{}\n",
+         {}{}{}\n",
         node.node_id,
         parent_link,
         children_links,
@@ -864,6 +878,7 @@ pub fn format_node_markdown(node: &HypothesisNode) -> String {
         node.visits,
         node.node_id,
         node.hypothesis,
+        propagated_insights_section,
         navigation_section
     )
 }

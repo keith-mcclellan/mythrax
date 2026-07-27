@@ -1129,6 +1129,10 @@ pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
         body.push('\n');
     }
 
+    let scope_str = episode.scope.as_deref().unwrap_or("general");
+    body.push_str(&format!("\n\n## Synthesized Into\n- [[wiki/{}/MOC|Scope Map of Content]]\n", scope_str));
+    body.push_str("\n## Temporal Navigation\n- **Sequence**: Episode captured in timeline\n");
+
     body
 }
 
