@@ -223,19 +223,31 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                 }
                 "hierarchy" => {
                     let mut out = String::from("### Arbor Tree Hierarchy\n");
+                    let mut children_map: std::collections::HashMap<Option<String>, Vec<&HypothesisNode>> = std::collections::HashMap::new();
                     for node in &nodes {
-                        let indent = if node.parent_id.is_some() { "  " } else { "" };
-                        out.push_str(&format!(
-                            "{}- [{}] `{}`: {}\n",
-                            indent,
-                            node.status,
-                            node.node_id,
-                            node.hypothesis
-                        ));
-                        if let Some(ref i) = node.insight {
-                            out.push_str(&format!("{}  - Insight: {}\n", indent, i));
+                        children_map.entry(node.parent_id.clone()).or_default().push(node);
+                    }
+                    fn render_level(
+                        parent_id: Option<String>,
+                        map: &std::collections::HashMap<Option<String>, Vec<&HypothesisNode>>,
+                        depth: usize,
+                        out: &mut String,
+                    ) {
+                        if let Some(children) = map.get(&parent_id) {
+                            for child in children {
+                                let indent = "  ".repeat(depth);
+                                out.push_str(&format!(
+                                    "{}- [{}] `{}`: {}\n",
+                                    indent, child.status, child.node_id, child.hypothesis
+                                ));
+                                if let Some(ref i) = child.insight {
+                                    out.push_str(&format!("{}  - Insight: {}\n", indent, i));
+                                }
+                                render_level(Some(child.node_id.clone()), map, depth + 1, out);
+                            }
                         }
                     }
+                    render_level(None, &children_map, 0, &mut out);
                     out
                 }
                 "insights" => {
@@ -295,16 +307,18 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                 .await?
                 .ok_or_else(|| anyhow!("Node '{}' not found for merge gate", node_id))?;
 
-            // Held-out test evaluation gate (Etest)
+            let branch_name = format!("htr_branch_{}", node_id);
             let evaluator = crate::cognitive::arbor::TestCommandEvaluator {
                 test_command: test_cmd.to_string(),
             };
 
             let repo_path =
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+            // Evaluate test command on the hypothesis branch directly!
             let test_score = crate::cognitive::arbor::HeldOutEvaluator::evaluate(
                 &evaluator,
-                target_branch,
+                &branch_name,
                 &repo_path,
             )
             .unwrap_or(0.0);
@@ -312,7 +326,11 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
 
             let merge_passed = test_score >= 70.0;
             if merge_passed {
-                let branch_name = format!("htr_branch_{}", node_id);
+                let _ = std::process::Command::new("git")
+                    .args(["checkout", target_branch])
+                    .current_dir(&repo_path)
+                    .status();
+
                 let merge_status = std::process::Command::new("git")
                     .args(["merge", &branch_name])
                     .current_dir(&repo_path)
