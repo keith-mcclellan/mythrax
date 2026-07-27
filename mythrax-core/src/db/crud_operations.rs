@@ -292,7 +292,13 @@ impl SurrealBackend {
             .unwrap_or_else(|| "agent_thought".to_string());
 
         let embedding_val = if self.embedder.is_some() {
-            let text_to_embed = format!("{}: {}", episode.title, episode.content);
+            let text_to_embed = if let Some(ref insight) = episode.causal_insight.as_ref().or(episode.causal_explanation.as_ref()) {
+                format!("{}: {}", episode.title, insight)
+            } else if let Some(ref summary) = episode.summary {
+                format!("{}: {}", episode.title, summary)
+            } else {
+                format!("{}: {}", episode.title, episode.content)
+            };
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
                 Err(e) => {

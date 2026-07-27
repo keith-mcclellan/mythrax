@@ -135,9 +135,15 @@ pub struct Episode {
     #[serde(default)]
     pub word_count: Option<u32>,
     #[serde(default)]
-    pub archived_at: Option<String>,
-    #[serde(default)]
     pub node_type: Option<String>,
+    #[serde(default)]
+    pub hypothesis: Option<String>,
+    #[serde(default)]
+    pub raw_evidence: Option<Vec<String>>,
+    #[serde(default)]
+    pub causal_insight: Option<String>,
+    #[serde(default)]
+    pub artifact_refs: Option<Vec<String>>,
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -566,6 +572,53 @@ pub struct WikiNode {
     pub node_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hypothesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_evidence: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_insight: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_refs: Option<Vec<String>>,
+}
+
+pub trait ArborNode {
+    fn h_n(&self) -> Option<&str>;
+    fn r_n(&self) -> &[String];
+    fn iota_n(&self) -> Option<&str>;
+    fn mu_n(&self) -> &[String];
+}
+
+static EMPTY_STR_VEC: Vec<String> = Vec::new();
+
+impl ArborNode for Episode {
+    fn h_n(&self) -> Option<&str> {
+        self.hypothesis.as_deref()
+    }
+    fn r_n(&self) -> &[String] {
+        self.raw_evidence.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
+    fn iota_n(&self) -> Option<&str> {
+        self.causal_insight.as_deref().or(self.summary.as_deref())
+    }
+    fn mu_n(&self) -> &[String] {
+        self.artifact_refs.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
+}
+
+impl ArborNode for WikiNode {
+    fn h_n(&self) -> Option<&str> {
+        self.hypothesis.as_deref()
+    }
+    fn r_n(&self) -> &[String] {
+        self.raw_evidence.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
+    fn iota_n(&self) -> Option<&str> {
+        self.causal_insight.as_deref()
+    }
+    fn mu_n(&self) -> &[String] {
+        self.artifact_refs.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

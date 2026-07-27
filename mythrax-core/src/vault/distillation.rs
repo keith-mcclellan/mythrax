@@ -109,7 +109,7 @@ pub fn chunk_transcript(steps: &[TranscriptStep]) -> Vec<Vec<TranscriptStep>> {
 }
 
 pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
-    if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
+    let mut result = if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
         let sub = &input[start_idx..];
         let mut end_idx = sub.len();
         for (i, line) in sub.lines().enumerate() {
@@ -148,7 +148,30 @@ pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
         }
     } else {
         output.to_string()
+    };
+
+    // Task 2.6: Preserve raw evidence file paths and artifact references
+    let file_path_regex = regex::Regex::new(r"(/[\w\.\-]+)+").ok();
+    if let Some(re) = file_path_regex {
+        let mut missing_paths = Vec::new();
+        for cap in re.find_iter(input) {
+            let path_str = cap.as_str();
+            if (path_str.contains('/') || path_str.contains('.')) && !result.contains(path_str) {
+                missing_paths.push(path_str);
+            }
+        }
+        if !missing_paths.is_empty() {
+            missing_paths.dedup();
+            if !result.contains("### Referenced Artifacts & Files") {
+                result.push_str("\n\n### Referenced Artifacts & Files\n");
+                for p in missing_paths.iter().take(10) {
+                    result.push_str(&format!("- `{}`\n", p));
+                }
+            }
+        }
     }
+
+    result
 }
 
 pub async fn run_summarization_task(
@@ -385,6 +408,13 @@ pub async fn distill_transcript_file(
             decisions: Option<Vec<String>>,
             constraints_discovered: Option<Vec<String>>,
             user_preferences: Option<Vec<String>>,
+            mistakes_failures: Option<Vec<String>>,
+            root_causes: Option<Vec<String>>,
+            actions_to_avoid: Option<Vec<String>>,
+            hypothesis: Option<String>,
+            raw_evidence: Option<Vec<String>>,
+            causal_insight: Option<String>,
+            artifact_refs: Option<Vec<String>>,
             summary: Option<String>,
             key_takeaways: Option<Vec<String>>,
         }

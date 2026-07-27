@@ -187,7 +187,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                             break;
                                         }
                                         if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
-                                            let text_to_embed = if let Some(ref insight) = ep.causal_explanation {
+                                            let text_to_embed = if let Some(ref insight) = ep.causal_insight.as_ref().or(ep.causal_explanation.as_ref()) {
                                                 format!("{}: {}", ep.title, insight)
                                             } else if let Some(ref summary) = ep.summary {
                                                 format!("{}: {}", ep.title, summary)
