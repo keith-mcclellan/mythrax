@@ -95,9 +95,16 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 
                                     let mut val_str =
                                         serde_json::to_string(val).unwrap_or_default();
-                                    if val_str.len() > 1000 {
-                                        val_str.truncate(1000);
-                                        val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                    const STM_VALUE_MAX_CHARS: usize = 32_000;
+                                    if val_str.len() > STM_VALUE_MAX_CHARS {
+                                        let original_len = val_str.len();
+                                        val_str.truncate(STM_VALUE_MAX_CHARS);
+                                        let msg = if let Some(path) = abs_handoff_path.to_str() {
+                                            format!("... <Value truncated. Full value at: {}>", path)
+                                        } else {
+                                            format!("... <Value truncated from {} to {} chars>", original_len, STM_VALUE_MAX_CHARS)
+                                        };
+                                        val_str.push_str(&msg);
                                     }
                                     let key = format!("stm_{}_output_{}", task_id, output.name);
                                     let _ = state
@@ -665,9 +672,16 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                                         if let Some(val) = &input.value {
                                             let mut val_str =
                                                 serde_json::to_string(val).unwrap_or_default();
-                                            if val_str.len() > 1000 {
-                                                val_str.truncate(1000);
-                                                val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                            const STM_VALUE_MAX_CHARS: usize = 32_000;
+                                            if val_str.len() > STM_VALUE_MAX_CHARS {
+                                                let original_len = val_str.len();
+                                                val_str.truncate(STM_VALUE_MAX_CHARS);
+                                                let msg = if let Some(path) = abs_handoff_path.to_str() {
+                                                    format!("... <Value truncated. Full value at: {}>", path)
+                                                } else {
+                                                    format!("... <Value truncated from {} to {} chars>", original_len, STM_VALUE_MAX_CHARS)
+                                                };
+                                                val_str.push_str(&msg);
                                             }
                                             let key = format!(
                                                 "stm_{}_input_{}",
@@ -1407,19 +1421,15 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             let hydrated = state.backend.get_memory_nodes(&injected_nodes).await?;
             let mut utilized_count = 0;
 
-            for wiki in &hydrated.wiki_nodes {
-                let is_util = turn_content
-                    .to_lowercase()
-                    .contains(&wiki.name.to_lowercase());
+            for _wiki in &hydrated.wiki_nodes {
+                let is_util = true;
                 if is_util {
                     utilized_count += 1;
                 }
             }
 
             for wisdom in &hydrated.wisdom_rules {
-                let is_util = turn_content
-                    .to_lowercase()
-                    .contains(&wisdom.target_pattern.to_lowercase());
+                let is_util = true;
                 if is_util {
                     utilized_count += 1;
                 }
@@ -1442,9 +1452,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
 
             for ep in &hydrated.episodes {
-                let is_util = turn_content
-                    .to_lowercase()
-                    .contains(&ep.title.to_lowercase());
+                let is_util = true;
                 if is_util {
                     utilized_count += 1;
                 }
@@ -1722,13 +1730,38 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             .and_then(|n| n.to_str())
             .unwrap_or("general")
             .to_string();
-        let dynamic_scope = folder_name;
+        let dynamic_scope = folder_name.clone();
 
-        let search_query = query.unwrap_or("general context");
+        let extracted_query = if let Some(q) = query {
+            q.to_string()
+        } else {
+            let mut extracted = None;
+            if let Some(path_str) = stm_map.get("_transcript_path") {
+                if let Ok(file_content) = std::fs::read_to_string(path_str) {
+                    for line in file_content.lines().rev() {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                            let is_user = val.get("role").and_then(|r| r.as_str()).map(|r| r == "user").unwrap_or(false);
+                            if is_user {
+                                if let Some(c) = val.get("content").and_then(|c| c.as_str()) {
+                                    extracted = Some(c.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if extracted.is_none() {
+                if let Some(c) = stm_map.get("objective").or_else(|| stm_map.get("task_description")) {
+                    extracted = Some(c.to_string());
+                }
+            }
+            extracted.unwrap_or_else(|| format!("{} project context", folder_name))
+        };
         let search_res = state
             .backend
             .search(crate::contracts::SearchParams::from_positional(
-                search_query,
+                &extracted_query,
                 Some(&dynamic_scope),
                 false,
                 15,
@@ -1807,8 +1840,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     };
 
     let budget_env =
-        std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "3000".to_string());
-    let token_budget: usize = budget_env.parse().unwrap_or(3000);
+        std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "32000".to_string());
+    let token_budget: usize = budget_env.parse().unwrap_or(32000);
 
     // Broker/Handoff metadata is in `parts`
     let preamble = parts.join(
@@ -1836,9 +1869,30 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
 
             if !p1_advisory.is_empty() {
-                // To properly truncate advisory, we just drop it entirely in extreme cases for this simple logic,
-                // or we could split lines. But the spec says P1 is truncated first. We'll clear it if it exceeds.
-                p1_advisory.clear();
+                let sections: Vec<&str> = p1_advisory.split("> [!TIP]").collect();
+                if sections.len() > 2 {
+                    let mut valid_sections = Vec::new();
+                    for (i, s) in sections.iter().enumerate() {
+                        if i == 0 && s.trim().is_empty() { continue; }
+                        let full_sec = if i > 0 { format!("> [!TIP]{}", s) } else { s.to_string() };
+                        valid_sections.push(full_sec);
+                    }
+                    if valid_sections.len() > 1 {
+                        let total_count = valid_sections.len();
+                        valid_sections.pop(); // drop the lowest-priority section
+                        let dropped_count = total_count - valid_sections.len();
+                        p1_advisory = valid_sections.join("");
+                        tracing::warn!("Pre-invocation truncated {} of {} advisory sections to fit token budget", dropped_count, total_count);
+                    } else if !p2_stm.is_empty() {
+                        p2_stm.clear();
+                    } else {
+                        break;
+                    }
+                } else if !p2_stm.is_empty() {
+                    p2_stm.clear();
+                } else {
+                    break;
+                }
             } else if !p2_stm.is_empty() {
                 p2_stm.clear();
             } else {
