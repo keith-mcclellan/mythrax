@@ -89,7 +89,21 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
   - Test guardrail triggering via semantic similarity (not `.contains()`).
   - Test utilization scoring after session with injected memories.
   - These are the ONLY tests that matter — backend functions are already tested.
-- [ ] **-1.18** Verify all Round 1-4 findings: Create wisdom rule → start session → rule appears → importance stable → graduation correct → distillation extracts mistakes → STM passes large payloads → search returns readable markdown.
+- [ ] **-1.18** Fix wisdom extraction trap — agents can't proactively save rules (`write_handlers.rs` L213-228):
+  - No `save_wisdom` MCP action exists. Agents cannot explicitly save a wisdom rule.
+  - Rules only created if episode content contains one of 9 hardcoded strings ("you forgot", "that was a mistake", etc.).
+  - Professional post-mortems without those exact phrases are silently ignored.
+  - Add `save_wisdom` action to `write` MCP tool accepting `target_pattern`, `action_to_avoid`, `causal_explanation`, `prescribed_remedy`.
+- [ ] **-1.19** FINAL VERIFICATION — end-to-end test of entire memory lifecycle:
+  1. Set `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET=128000`
+  2. Create wisdom rule via new `save_wisdom` action
+  3. Start new session → rule appears in pre-invocation (via semantic similarity, not `.contains()`)
+  4. Verify importance does NOT decay (injected = utilized)
+  5. Verify graduated rules have correct `action_to_avoid` ≠ `target_pattern`
+  6. Verify distilled episodes contain "Mistakes & Failures" section
+  7. Verify search results return readable markdown (not escaped JSON)
+  8. Verify STM passes large payloads between agents
+  9. Verify RAPTOR summaries have embeddings
 
 ---
 

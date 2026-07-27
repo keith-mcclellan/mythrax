@@ -76,6 +76,17 @@ Align Mythrax core memory architecture with the Arbor framework research paper (
 - MCP route handlers (`handle_pre_invocation_hook`, guardrail engine, utilization scoring) are ENTIRELY untested.
 - Integration tests must be added for the MCP layer, not just the backend.
 
+### P. Wisdom Rule Creation Trap (`write_handlers.rs` L213-228)
+- **Current**: No `save_wisdom` MCP action exists. Wisdom rules only created if agent's episode text contains one of 9 hardcoded phrases ("you forgot", "that was a mistake", etc.). Professional post-mortems without those exact colloquialisms are silently ignored.
+- **Required**: Add `save_wisdom` action to `write` MCP tool. Allow agents to explicitly save wisdom rules with `target_pattern`, `action_to_avoid`, `causal_explanation`, `prescribed_remedy`.
+
+### Q. Prioritized Fix Order (Maximum Impact, Minimum Code)
+1. **Zero code**: Set `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET=128000`
+2. **Small**: Format search results as markdown instead of escaped JSON (`read_handlers.rs`)
+3. **Small**: Raise STM truncation from 1000 to 128000 chars (`manage_handlers.rs` L98)
+4. **Medium**: Add `save_wisdom` MCP action (`write_handlers.rs`)
+5. **Small**: Fix `text_to_embed` to embed summaries, not raw transcripts (`daemon.rs`, `crud_operations.rs`)
+
 ---
 
 ## 3. Functional Requirements
