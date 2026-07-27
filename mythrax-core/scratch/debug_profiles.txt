@@ -22331,3 +22331,279 @@ user: That's really helpful, thank you!  I went to a 3-day photography workshop 
 user: I'm interested in learning more about camera sensors and how they affect astrophotography images. Can you explain how camera sensors work and what factors affect their performance in low-light conditions? Additionally, I've been thinking of upgrading my camera, do you have any recommendations for cameras that are suitable for astrophotography?
 ====================================
 
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = 8f38ba82-4e8c-4338-b281-de02f1d15781 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_10 ===
+big_key: A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A 
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = session123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_123 ===
+I started my study.
+I prefer coffee over tea.
+My occupation is a software engineer.
+I live in Boston.
+degree: physics
+favorite_color: blue
+====================================
+
+=== PROFILE FOR session_id = test_session_456 ===
+Weather is nice today so
+I went for a walk to
+deg: math
+fav: red
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_bar ===
+context_guard: Avoid concurrent RocksDB process lock by starting in client mode
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:5e2f0025-8d6a-4f79-ba9d-dca6c426f3a4", "episode:3295ee92-ff3e-4202-b975-f97a262bf19d"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_obs_test ===
+distilled_context_nodes: ["wisdom:delete"]
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_ttl ===
+
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_10 ===
+big_key: A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A 
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = session123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_123 ===
+I started my study.
+I prefer coffee over tea.
+My occupation is a software engineer.
+I live in Boston.
+degree: physics
+favorite_color: blue
+====================================
+
+=== PROFILE FOR session_id = test_session_456 ===
+Weather is nice today so
+I went for a walk to
+deg: math
+fav: red
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_bar ===
+context_guard: Avoid concurrent RocksDB process lock by starting in client mode
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = session_foo ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_obs_test ===
+distilled_context_nodes: ["wisdom:delete"]
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:3ace89b4-1544-4cca-8c6c-7583147a1903", "episode:789bb3a2-64b4-4b15-bb20-0ff6d0210ae0"]
+====================================
+
+=== PROFILE FOR session_id = sess_freq_test ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_ttl ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:a389d3dc-33dd-4f28-a212-628f4c3b60e1", "episode:1ce8fe59-4987-4e57-b285-4a79475ec4c4"]
+====================================
+
+=== PROFILE FOR session_id = sess_reinforce_test ===
+distilled_context_nodes: ["episode:92bac813-b56f-47bc-b6ea-d349023bf376", "episode:1598b803-3371-4a83-b51a-762abb532237"]
+====================================
+
