@@ -1156,12 +1156,64 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
     }
 }
 
-pub async fn handle_post_invocation_hook(_state: &ApiState, _args: Value) -> Result<Value> {
+pub async fn handle_post_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .context("Missing session_id for post_invocation")?;
+
+    let exit_code = args.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
+    let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("success");
+    let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+    let error_msg = args.get("error_message").and_then(|v| v.as_str());
+
+    let status_info = serde_json::json!({
+        "exit_code": exit_code,
+        "status": status,
+        "summary": summary,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+
+    if let Err(e) = state
+        .backend
+        .save_stm(
+            session_id,
+            "_last_post_invocation_status",
+            &serde_json::to_string(&status_info).unwrap_or_default(),
+        )
+        .await
+    {
+        tracing::error!("Failed to save post-invocation status to STM: {:?}", e);
+    }
+
+    if exit_code != 0 || status == "error" || status == "failed" {
+        tracing::warn!("Post-invocation reported failure for session {}: exit_code={}, status={}", session_id, exit_code, status);
+        let ep_content = format!(
+            "Post-invocation failure reported.\nStatus: {}\nExit Code: {}\nSummary: {}\nError: {}",
+            status,
+            exit_code,
+            summary,
+            error_msg.unwrap_or("N/A")
+        );
+        let failure_ep = EpisodeSave::builder(
+            format!("PostInvocation Failure: {}", session_id),
+            ep_content,
+        )
+        .scope(Some("general".to_string()))
+        .session_id(Some(session_id.to_string()))
+        .node_type(Some("post_invocation_failure".to_string()))
+        .build();
+
+        if let Err(e) = state.backend.save_episode(&failure_ep).await {
+            tracing::error!("Failed to save post-invocation failure episode: {:?}", e);
+        }
+    }
+
     Ok(serde_json::json!({
         "content": [
             {
                 "type": "text",
-                "text": "Post invocation executed."
+                "text": format!("Post invocation hook processed successfully for session: {}", session_id)
             }
         ]
     }))
