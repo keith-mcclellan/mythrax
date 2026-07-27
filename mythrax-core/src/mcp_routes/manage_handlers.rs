@@ -197,6 +197,9 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }
             super::vault_handlers::handle_manage_vault(state, modified_args).await
         }
+        "tree_add_node" | "tree_update_node" | "tree_prune" | "tree_view" | "git_merge_branch" => {
+            super::arbor_handlers::handle_manage_arbor(state, args).await
+        }
         "init" | "ideate" | "execute" | "backprop" | "merge" | "run" => {
             let _scope = args
                 .get("scope")

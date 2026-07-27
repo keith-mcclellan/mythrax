@@ -551,7 +551,7 @@ pub struct LlmConfigRequest {
     pub model_tier_mappings: Option<std::collections::HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct HypothesisNode {
     pub node_id: String,
     pub parent_id: Option<String>,
@@ -683,7 +683,7 @@ pub struct SearchResponse {
     pub omitted_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WisdomSearchResponse {
     pub results: Vec<WisdomRule>,
     pub total_matches: usize,

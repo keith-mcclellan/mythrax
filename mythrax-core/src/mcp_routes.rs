@@ -4,12 +4,14 @@ use crate::db::{StorageBackend, SurrealBackend, backend::format_record_id, parse
 use anyhow::Result;
 use serde_json::{Value, json};
 
+pub mod arbor_handlers;
 pub mod htr_handlers;
 pub mod manage_handlers;
 pub mod read_handlers;
 pub mod vault_handlers;
 pub mod write_handlers;
 
+pub use arbor_handlers::handle_manage_arbor;
 pub use htr_handlers::handle_manage_htr;
 pub use manage_handlers::{
     handle_agent, handle_complete_code_task, handle_manage, handle_manage_config,

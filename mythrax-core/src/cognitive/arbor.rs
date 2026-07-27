@@ -751,7 +751,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
     }
 }
 
-fn format_node_markdown(node: &HypothesisNode) -> String {
+pub fn format_node_markdown(node: &HypothesisNode) -> String {
     let scope = node.scope.as_deref().unwrap_or("default");
 
     let parent_link = match &node.parent_id {
