@@ -24,6 +24,7 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
         "ingest_forge" => "ingest_forge",
         "set" | "set_config" => "set",
         "cognitive_callback" => "cognitive_callback",
+        "save_wisdom" => "save_wisdom",
         other => other,
     };
     if let Some(obj) = args.as_object_mut() {
@@ -143,6 +144,51 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
             super::vault_handlers::handle_manage_vault(state, args).await
         }
         "cognitive_callback" => handle_cognitive_callback(state, args).await,
+        "save_wisdom" => {
+            let target_pattern = args.get("target_pattern").and_then(|v| v.as_str()).context("Missing target_pattern")?.to_string();
+            let action_to_avoid = args.get("action_to_avoid").and_then(|v| v.as_str()).context("Missing action_to_avoid")?.to_string();
+            let causal_explanation = args.get("causal_explanation").and_then(|v| v.as_str()).context("Missing causal_explanation")?.to_string();
+            let prescribed_remedy = args.get("prescribed_remedy").and_then(|v| v.as_str()).context("Missing prescribed_remedy")?.to_string();
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            
+            let tier_str = args.get("tier").and_then(|v| v.as_str()).unwrap_or("wisdom");
+            let tier = tier_str.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom);
+            
+            let rule_path = crate::cognitive::synthesis::resolve_rule_path(&scope, &action_to_avoid);
+            
+            let rule = crate::contracts::WisdomRule {
+                id: None,
+                target_pattern,
+                action_to_avoid,
+                causal_explanation,
+                prescribed_remedy,
+                tier,
+                scope,
+                vault_path: Some(rule_path.clone()),
+                generator_name: "Manual".to_string(),
+                ..Default::default()
+            };
+            
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<SurrealBackend>()
+                .context("SurrealBackend required to save wisdom_rule")?;
+            
+            let markdown = crate::vault::watcher::format_wisdom_markdown(&rule);
+            state.store.write_file(&rule_path, &markdown)?;
+            
+            let id = surreal_backend.save_wisdom_rule(&rule).await?;
+            
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Wisdom rule saved successfully: {}", id)
+                    }
+                ]
+            }))
+        }
         _ => anyhow::bail!("Invalid action for write tool: {}", action),
     }
 }
@@ -221,6 +267,11 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
                 "not right",
                 "should have",
                 "didn't run",
+                "actually that didn't work",
+                "we need to fix",
+                "revert",
+                "fail",
+                "error occurred",
             ];
             let has_correction = correction_indicators
                 .iter()
