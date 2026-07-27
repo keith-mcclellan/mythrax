@@ -637,25 +637,52 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
 
     // ----- Step D: Backpropagation & Abstraction -----
     use mythrax_core::cognitive::arbor::TreePropagate;
-    let mut node_2: HypothesisNode = db
+    // ----- Step D: Upward Insight Propagation & Compaction -----
+    // Note: In Phase 6 (Tasks 6.1 & 6.2), legacy backpropagate_insights and decide_admission were
+    // replaced with TreePropagate trait (propagate_upward) and compactor.compact_scope.
+    let vault_store = mythrax_core::store::MarkdownStore::new(vault_temp.path())?;
+    let surreal_backend = mythrax_core::db::SurrealBackend::new_with_db(db.clone());
+    let surreal_arc = std::sync::Arc::new(surreal_backend);
+    let backend_arc: std::sync::Arc<dyn mythrax_core::db::StorageBackend> = surreal_arc.clone();
+    let api_state = mythrax_core::api::ApiState {
+        backend: backend_arc,
+        auth_token: "test_token".to_string(),
+        store: std::sync::Arc::new(vault_store),
+        ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
+        dream_tx: None,
+        shutdown_tx: None,
+    };
+
+    let _ = mythrax_core::mcp_routes::handle_manage_arbor(
+        &api_state,
+        serde_json::json!({
+            "action": "tree_update_node",
+            "node_id": "2",
+            "status": "done",
+            "insight": "Sieve of Eratosthenes resolves trial division bottleneck"
+        }),
+    )
+    .await?;
+
+    let node_2_done: HypothesisNode = db
         .select(("hypothesis_node", "2"))
         .await?
         .expect("Node 2 should exist");
-    node_2.status = "done".to_string();
-    node_2.insight = Some("Sieve of Eratosthenes resolves trial division bottleneck".to_string());
-    let _: Option<HypothesisNode> = db
-        .update(("hypothesis_node", "2"))
-        .content(node_2.clone())
-        .await?;
 
     let mut root_node: HypothesisNode = db
         .select(("hypothesis_node", "ROOT"))
         .await?
         .expect("ROOT node should exist");
-    let _ = root_node.propagate_upward(&[node_2.clone()]).await;
+    let _ = root_node.propagate_upward(&[node_2_done.clone()]).await;
     let _: Option<HypothesisNode> = db
         .update(("hypothesis_node", "ROOT"))
         .content(root_node.clone())
+        .await?;
+    fs::write(&root_md_path, mythrax_core::cognitive::arbor::format_node_markdown(&root_node))?;
+
+    let compactor = mythrax_core::cognitive::compactor::Compactor::new();
+    compactor
+        .compact_scope(surreal_arc, &api_state.store, "math-testing", None)
         .await?;
 
     // Assertion 1: Node 2 status is 'done'
@@ -684,9 +711,6 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         "Step D assertion failed: ROOT node's insight did not contain expected critic output"
     );
 
-    // Write updated root markdown to disk
-    fs::write(&root_md_path, mythrax_core::cognitive::arbor::format_node_markdown(&root_updated))?;
-
     // Assertion 3: ROOT.md was rewritten containing sibling insights
     let root_md_updated_content = fs::read_to_string(&root_md_path)?;
     assert!(
@@ -696,12 +720,16 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         "Step D assertion failed: ROOT.md was not updated with the child insight"
     );
 
-    node_2.status = "merged".to_string();
-    let _: Option<HypothesisNode> = db
-        .update(("hypothesis_node", "2"))
-        .content(node_2.clone())
-        .await?;
-    fs::write(&node_2_md, mythrax_core::cognitive::arbor::format_node_markdown(&node_2))?;
+    // ----- Step E: Deciding & Merge Gate -----
+    let _ = mythrax_core::mcp_routes::handle_manage_arbor(
+        &api_state,
+        serde_json::json!({
+            "action": "tree_update_node",
+            "node_id": "2",
+            "status": "merged"
+        }),
+    )
+    .await?;
 
     // Assertion 1: Node 2's status in SurrealDB is 'merged'
     let node_2_final: HypothesisNode = db
@@ -712,6 +740,7 @@ async fn test_arbor_htr_loop_lifecycle() -> Result<()> {
         node_2_final.status, "merged",
         "Step E assertion failed: Node 2 status should be 'merged' in SurrealDB"
     );
+    fs::write(&node_2_md, mythrax_core::cognitive::arbor::format_node_markdown(&node_2_final))?;
 
     // Assertion 2: Node 2's status in the vault is 'merged'
     let node_2_md_content = fs::read_to_string(&node_2_md)?;
