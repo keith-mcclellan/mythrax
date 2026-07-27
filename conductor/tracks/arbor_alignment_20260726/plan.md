@@ -79,14 +79,14 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 2: 4-Field Schema Normalization (STRUCTURAL ROOT CAUSE FIX)
 
-- [ ] **2.1** Add `hypothesis`, `raw_evidence`, `causal_insight`, `artifact_refs` to `Episode` (`contracts.rs` L98).
-- [ ] **2.2** Add same 4 fields to `WikiNode` (`contracts.rs` L551).
-- [ ] **2.3** Update SurrealQL schema definitions (`schema.rs`).
-- [ ] **2.4** Define `ArborNode` trait with `h_n()`, `r_n()`, `iota_n()`, `mu_n()` accessors.
-- [ ] **2.5** Replace distillation system prompt with 4-field contract (`distillation.rs` L159). Parse into discrete fields.
-- [ ] **2.6** Extend `enforce_symbol_integrity` for `raw_evidence` and `artifact_refs`.
-- [ ] **2.7** Use `causal_insight` as embedding source, not `content`.
-- [ ] **2.8** Verify: Summaries have 4 separate fields, embeddings from `causal_insight`.
+- [x] **2.1** Add `hypothesis`, `raw_evidence`, `causal_insight`, `artifact_refs` to `Episode` (`contracts.rs` L98).
+- [x] **2.2** Add same 4 fields to `WikiNode` (`contracts.rs` L551).
+- [x] **2.3** Update SurrealQL schema definitions (`schema.rs`).
+- [x] **2.4** Define `ArborNode` trait with `h_n()`, `r_n()`, `iota_n()`, `mu_n()` accessors.
+- [x] **2.5** Replace distillation system prompt with 4-field contract (`distillation.rs` L159). Parse into discrete fields.
+- [x] **2.6** Extend `enforce_symbol_integrity` for `raw_evidence` and `artifact_refs`.
+- [x] **2.7** Use `causal_insight` as embedding source, not `content`.
+- [x] **2.8** Verify: Summaries have 4 separate fields, embeddings from `causal_insight`.
 
 ---
 
