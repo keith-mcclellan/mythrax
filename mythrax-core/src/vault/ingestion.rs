@@ -2167,6 +2167,7 @@ async fn index_reference_doc(
             metacognitive_confidence: Some(100),
             node_type: Some("reference".to_string()),
             content_hash: Some(content_hash.to_string()),
+            ..Default::default()
         };
         backend.save_wiki_node(&node).await?;
     }
