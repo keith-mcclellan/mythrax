@@ -1527,16 +1527,25 @@ impl Compactor {
                                 );
                                 let _ = store.write_file(&wiki_rel, &wiki_content);
 
-                                let node_contract = WikiNode {
+                                let mut node_contract = WikiNode {
                                     id: None,
                                     name: format!("Raptor Summary: {}", ep.title),
-                                    content: summary,
+                                    content: summary.clone(),
                                     scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
                                     vault_path: Some(wiki_rel),
                                     embedding: None,
                                     ..Default::default()
                                 };
-                                let _ = db.save_wiki_node(&node_contract).await;
+                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                                    if let Some(ref embedder) = surreal_backend.embedder {
+                                        if let Ok(emb) = embedder.embed(&summary).await {
+                                            node_contract.embedding = Some(emb);
+                                        }
+                                    }
+                                }
+                                if let Err(e) = db.save_wiki_node(&node_contract).await {
+                                    tracing::error!("Failed to save RAPTOR summary wiki node: {:?}", e);
+                                }
                             }
                             Err(e) => {
                                 eprintln!("COMPACTOR SUMMARY ERROR: {:?}", e);

@@ -233,6 +233,9 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 .context("Missing session_id parameter for pre_invocation")?;
             handle_pre_invocation_hook(state, args).await
         }
+        "post_invocation" => {
+            handle_post_invocation_hook(state, args).await
+        }
         "precompact" => {
             let session_id = args
                 .get("session_id")
@@ -728,7 +731,9 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             .session_id(Some(parent_conversation_id.clone()))
             .node_type(Some("handoff_event".to_string()))
             .build();
-            let _ = state.backend.save_episode(&event_ep).await;
+            if let Err(e) = state.backend.save_episode(&event_ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
 
             if let Ok(stm_map) = state
                 .backend
@@ -1019,7 +1024,9 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             .files_modified(Some(vec![path.to_string()]))
             .node_type(Some("artifact_state".to_string()))
             .build();
-            let _ = state.backend.save_episode(&artifact_ep).await;
+            if let Err(e) = state.backend.save_episode(&artifact_ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
 
             Ok(json!({
                 "content": [
@@ -1132,7 +1139,9 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             .files_modified(Some(vec![path.to_string()]))
             .node_type(Some("artifact_state".to_string()))
             .build();
-            let _ = state.backend.save_episode(&artifact_ep).await;
+            if let Err(e) = state.backend.save_episode(&artifact_ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
 
             Ok(json!({
                 "content": [
@@ -1145,6 +1154,17 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
         }
         _ => anyhow::bail!("Invalid action for manage_file: {}", action),
     }
+}
+
+pub async fn handle_post_invocation_hook(_state: &ApiState, _args: Value) -> Result<Value> {
+    Ok(serde_json::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": "Post invocation executed."
+            }
+        ]
+    }))
 }
 
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
@@ -1169,7 +1189,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             .await;
         let state_clone = state.clone();
         tokio::spawn(async move {
-            let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await;
+            if let Err(e) = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
         });
 
         let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
@@ -1269,7 +1291,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     // WU-4.5: TTL Sweep & LargeLocal Fallback
     let state_clone = state.clone();
     tokio::spawn(async move {
-        let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await;
+        if let Err(e) = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await {
+            tracing::error!("Operation failed: {:?}", e);
+        }
     });
 
     // WU-6.9: PagingManager context window paging
@@ -1332,11 +1356,15 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     if let Some(ref id) = ep.id {
                         let id_raw = id.split(':').nth(1).unwrap_or(id).to_string();
                         let archive_sql = "UPDATE type::record('episode', $id) MERGE { archived: true, archived_at: time::now() };";
-                        let _ = surreal_backend
+                        tracing::warn!("Archiving episode {} due to token budget limits", id_raw);
+                        if let Err(e) = surreal_backend
                             .db
                             .query(archive_sql)
                             .bind(("id", id_raw))
-                            .await;
+                            .await
+                        {
+                            tracing::error!("Failed to archive episode: {:?}", e);
+                        }
                     }
                 }
             }
@@ -1569,7 +1597,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 .session_id(Some(session_id.to_string()))
                 .node_type(Some("task_checklist".to_string()))
                 .build();
-            let _ = state.backend.save_episode(&ep).await;
+            if let Err(e) = state.backend.save_episode(&ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
         }
     }
 

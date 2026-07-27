@@ -586,17 +586,9 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
     }
 
     pub async fn dispatch_batch(&self, node_ids: &[String]) -> Result<()> {
-        use futures_util::stream::{StreamExt, TryStreamExt};
-
-        futures_util::stream::iter(node_ids)
-            .map(|id| {
-                let id_clone = id.clone();
-                async move { self.execute_node(&id_clone).await }
-            })
-            .buffer_unordered(2)
-            .try_collect::<Vec<()>>()
-            .await?;
-
+        for id in node_ids {
+            self.execute_node(id).await?;
+        }
         Ok(())
     }
 
