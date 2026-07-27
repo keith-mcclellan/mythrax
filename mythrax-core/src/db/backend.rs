@@ -783,12 +783,12 @@ impl SurrealBackend {
     }
 
     /// Helper to load the auth token from the standard location or fallback
-    fn get_auth_token() -> String {
+    fn get_auth_token() -> Result<String> {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let token_path = std::path::PathBuf::from(home).join(".mythrax/token");
 
         crate::auth::get_or_create_token(&token_path)
-            .unwrap_or_else(|_| "fallback-err-token".to_string())
+            .context("Failed to get or create auth token")
     }
 
     pub async fn resolve_query_anchors(
@@ -894,7 +894,7 @@ impl SurrealBackend {
             .ok_or_else(|| anyhow::anyhow!("Not in client mode, cannot route to daemon"))?;
 
         let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
-        let token = Self::get_auth_token();
+        let token = Self::get_auth_token()?;
 
         let client = Self::get_rpc_http_client();
         let res = client
@@ -932,7 +932,7 @@ impl SurrealBackend {
             .ok_or_else(|| anyhow::anyhow!("Not in client mode, cannot route to daemon"))?;
 
         let url = format!("http://127.0.0.1:{}/{}", port, path.trim_start_matches('/'));
-        let token = Self::get_auth_token();
+        let token = Self::get_auth_token()?;
 
         let client = Self::get_rpc_http_client();
         let res = client
