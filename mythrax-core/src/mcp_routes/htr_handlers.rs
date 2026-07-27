@@ -136,19 +136,11 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 .context("Missing node")?
                 .to_string();
 
-            let llm = crate::llm::LLMClient::default();
-            let current_dir = std::env::current_dir()?;
-            let coordinator = ArborCoordinator::new(
-                surreal_backend.db.clone(),
-                state.store.vault_root.clone(),
-                current_dir,
-                llm,
-                scope,
-                "".to_string(),
-                vec![],
+            super::arbor_handlers::handle_manage_arbor(
+                state,
+                json!({ "action": "tree_update_node", "node_id": node, "status": "done" }),
             )
-            .await;
-            coordinator.backpropagate_insights(&node).await?;
+            .await?;
 
             Ok(json!({
                 "content": [
@@ -167,19 +159,11 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 .context("Missing node")?
                 .to_string();
 
-            let llm = crate::llm::LLMClient::default();
-            let current_dir = std::env::current_dir()?;
-            let coordinator = ArborCoordinator::new(
-                surreal_backend.db.clone(),
-                state.store.vault_root.clone(),
-                current_dir,
-                llm,
-                scope,
-                "".to_string(),
-                vec![],
+            super::arbor_handlers::handle_manage_arbor(
+                state,
+                json!({ "action": "git_merge_branch", "node_id": node }),
             )
-            .await;
-            coordinator.decide_admission(&node).await?;
+            .await?;
 
             Ok(json!({
                 "content": [
@@ -256,7 +240,11 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
 
                 let selected_node = &next_batch[0];
                 coordinator.execute_node(selected_node).await?;
-                coordinator.backpropagate_insights(selected_node).await?;
+                super::arbor_handlers::handle_manage_arbor(
+                    state,
+                    json!({ "action": "tree_update_node", "node_id": selected_node, "status": "done" }),
+                )
+                .await?;
 
                 let node_val: Option<HypothesisNode> = surreal_backend
                     .db
@@ -265,7 +253,11 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 if let Some(node_node) = node_val {
                     if let Some(score) = node_node.score {
                         if score >= 95.0 {
-                            coordinator.decide_admission(selected_node).await?;
+                            super::arbor_handlers::handle_manage_arbor(
+                                state,
+                                json!({ "action": "git_merge_branch", "node_id": selected_node }),
+                            )
+                            .await?;
                             status_msg = format!(
                                 "HTR run loop completed successfully. Node {} merged with Score: {}.",
                                 selected_node, score
