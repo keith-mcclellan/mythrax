@@ -1515,7 +1515,9 @@ impl Compactor {
                                 let archive_dir = store
                                     .vault_root
                                     .join(format!("wiki/{}/archive", resolved_scope));
-                                let _ = std::fs::create_dir_all(&archive_dir);
+                                if let Err(e) = std::fs::create_dir_all(&archive_dir) {
+                                    tracing::error!("Failed to create archive directory {:?}: {:?}", archive_dir, e);
+                                }
                                 let wiki_rel = format!(
                                     "wiki/{}/archive/raptor_summary_{}.md",
                                     resolved_scope,
@@ -1525,7 +1527,9 @@ impl Compactor {
                                     "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
                                     ep.title, ep.title, summary
                                 );
-                                let _ = store.write_file(&wiki_rel, &wiki_content);
+                                if let Err(e) = store.write_file(&wiki_rel, &wiki_content) {
+                                    tracing::error!("Failed to write RAPTOR wiki file {:?}: {:?}", wiki_rel, e);
+                                }
 
                                 let mut node_contract = WikiNode {
                                     id: None,
@@ -1538,8 +1542,13 @@ impl Compactor {
                                 };
                                 if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
                                     if let Some(ref embedder) = surreal_backend.embedder {
-                                        if let Ok(emb) = embedder.embed(&summary).await {
-                                            node_contract.embedding = Some(emb);
+                                        match embedder.embed(&summary).await {
+                                            Ok(emb) => {
+                                                node_contract.embedding = Some(emb);
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("Failed to generate RAPTOR embedding for '{}': {:?}", ep.title, e);
+                                            }
                                         }
                                     }
                                 }

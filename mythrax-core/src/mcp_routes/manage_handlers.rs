@@ -1551,6 +1551,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                                 triggered = true;
                             }
                         }
+                    } else if surreal_backend.embedder.is_none() && rule.tier == crate::contracts::Tier::Wisdom {
+                        // Safety fallback: if embedder is unavailable, inject wisdom-tier rules
+                        triggered = true;
                     }
                 }
 
@@ -1936,12 +1939,26 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                         p1_advisory = valid_sections.join("");
                         tracing::warn!("Pre-invocation truncated {} of {} advisory sections to fit token budget", dropped_count, total_count);
                     } else if !p2_stm.is_empty() {
-                        p2_stm.clear();
+                        let lines: Vec<&str> = p2_stm.lines().collect();
+                        if lines.len() > 1 {
+                            let truncated_lines = &lines[..lines.len() - 1];
+                            p2_stm = truncated_lines.join("\n");
+                            tracing::warn!("Pre-invocation truncated STM working memory to fit token budget");
+                        } else {
+                            p2_stm.clear();
+                        }
                     } else {
                         break;
                     }
                 } else if !p2_stm.is_empty() {
-                    p2_stm.clear();
+                    let lines: Vec<&str> = p2_stm.lines().collect();
+                    if lines.len() > 1 {
+                        let truncated_lines = &lines[..lines.len() - 1];
+                        p2_stm = truncated_lines.join("\n");
+                        tracing::warn!("Pre-invocation truncated STM working memory to fit token budget");
+                    } else {
+                        p2_stm.clear();
+                    }
                 } else {
                     break;
                 }

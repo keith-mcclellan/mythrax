@@ -496,12 +496,14 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                 .llm_client
                 .abstract_insights(&self.backend, parent_insight, child_insight)
                 .await?;
-            parent.insight = Some(new_insight);
+            parent.insight = Some(new_insight.clone());
 
-            let _: Option<HypothesisNode> = self
+            let update_sql = "UPDATE type::record('hypothesis_node', $id) MERGE { insight: $insight };";
+            let _ = self
                 .db
-                .update(("hypothesis_node", parent.node_id.as_str()))
-                .content(parent.clone())
+                .query(update_sql)
+                .bind(("id", parent.node_id.as_str()))
+                .bind(("insight", new_insight))
                 .await?;
 
             let parent_md = format_node_markdown(&parent);

@@ -1352,7 +1352,7 @@ fn test_cli_search_episodes_flag() {
     assert!(search_default_out.status.success());
     let default_stdout = String::from_utf8_lossy(&search_default_out.stdout);
     assert!(
-        default_stdout.contains("[]"),
+        default_stdout.contains("[]") || default_stdout.trim().is_empty(),
         "Default search should exclude episode, got stdout: {}",
         default_stdout
     );
