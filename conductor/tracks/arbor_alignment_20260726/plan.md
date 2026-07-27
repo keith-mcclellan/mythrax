@@ -111,10 +111,10 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 
 ## Phase 4: Coordinator MCP Tool Boundaries
 
-- [ ] **4.1** Create `arbor_handlers.rs` with `TreeAddNode`, `TreeUpdateNode`, `TreePrune`, `TreeView(5 formats)`, `GitMergeBranch`.
-- [ ] **4.2** All tree mutations update SurrealDB AND vault markdown with proper `[[wikilinks]]`.
-- [ ] **4.3** Rewire `handle_pre_invocation_hook` (L1790) to `TreeView(format="constraints")`.
-- [ ] **4.4** Verify: All 6 MCP tools callable. Constraints flow to pre-invocation hook.
+- [x] **4.1** Create `arbor_handlers.rs` with `TreeAddNode`, `TreeUpdateNode`, `TreePrune`, `TreeView(5 formats)`, `GitMergeBranch`.
+- [x] **4.2** All tree mutations update SurrealDB AND vault markdown with proper `[[wikilinks]]`.
+- [x] **4.3** Rewire `handle_pre_invocation_hook` (L1790) to `TreeView(format="constraints")`.
+- [x] **4.4** Verify: All 6 MCP tools callable. Constraints flow to pre-invocation hook.
 
 ---
 
