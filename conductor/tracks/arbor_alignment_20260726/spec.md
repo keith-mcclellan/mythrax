@@ -54,6 +54,28 @@ Align Mythrax core memory architecture with the Arbor framework research paper (
 - **Current**: No `handle_post_invocation_hook` exists. Session reflection relies on a 15-turn boundary heuristic or manual `reflect` trigger.
 - **Required**: Implement a proper post-invocation lifecycle that runs a reflection sweep after every session, extracting mistakes and causal insights automatically.
 
+### K. STM Handoff Truncation (`manage_handlers.rs` L98)
+- **Current**: Agent-to-agent payloads truncated at 1000 characters (≈250 tokens). Appends `<Value too large for STM. Consult contract file directly.>` but never provides the contract file path.
+- **Required**: Raise limit to 32,000 characters minimum, or inject the contract file path into subagent context.
+
+### L. RAPTOR Summary Embedding Gap (`compactor.rs` L1536)
+- **Current**: RAPTOR summaries saved with `embedding: None`, relying entirely on filesystem watcher to async-embed. If watcher misses the event, summary is permanently invisible to semantic search.
+- **Required**: Embed synchronously after saving, or implement a background reconciliation sweep for nodes with `embedding: None`.
+
+### M. Immediate Mitigation (No Code Change Required)
+- Set `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET=128000` to prevent `p1_advisory.clear()` from wiping all memories. The env var already exists in the code (L1810) but defaults to 3000.
+
+### N. Architecture to PRESERVE (Do Not Break)
+- `search_pipeline.rs`: Hybrid BM25 + vector + temporal sigmoid decay — mathematically sound.
+- `arbor.rs` UCT selection: Textbook MCTS exploration/exploitation formula — correct.
+- `synthesis.rs` DBSCAN clustering: Cosine distances + dynamic eps elbow — correct.
+- These algorithms are NOT the problem. The bugs are all in the plumbing/UX layer.
+
+### O. Test Suite Blind Spots
+- Backend functions (`backend.search()`) are well-tested.
+- MCP route handlers (`handle_pre_invocation_hook`, guardrail engine, utilization scoring) are ENTIRELY untested.
+- Integration tests must be added for the MCP layer, not just the backend.
+
 ---
 
 ## 3. Functional Requirements

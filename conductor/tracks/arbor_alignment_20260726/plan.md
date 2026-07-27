@@ -75,7 +75,21 @@ These must be fixed BEFORE any other work. Without them, nothing else matters.
 - [ ] **-1.13** Fix TOCTOU race in arbor backpropagation (`arbor.rs` `backpropagate_insights`):
   - Concurrent leaf nodes backpropagate to same parent via `buffer_unordered(2)`.
   - `select` → `update` race overwrites insights. Use atomic update or parent-level lock.
-- [ ] **-1.14** Verify: Pre-invocation response contains actual memories (not empty). Embedding vectors change when distilled content changes. Search results are human-readable markdown.
+- [ ] **-1.14** Fix STM handoff truncation (`manage_handlers.rs` L98):
+  - 1000-character hardcoded limit truncates agent-to-agent payloads.
+  - Appends "Consult contract file directly" but never provides the file path.
+  - Raise to 32,000 chars or inject contract file path into subagent context.
+- [ ] **-1.15** Fix RAPTOR embedding gap (`compactor.rs` L1536):
+  - RAPTOR summaries saved with `embedding: None`, relying on watcher to async-embed.
+  - If watcher misses event, summary is permanently invisible to search.
+  - Embed synchronously after saving.
+- [ ] **-1.16** IMMEDIATE FIX (no code change): Set `MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET=128000` in daemon environment. This prevents `p1_advisory.clear()` from firing.
+- [ ] **-1.17** Add MCP route handler integration tests:
+  - Test `handle_pre_invocation_hook` end-to-end with a wisdom rule and verify it appears in response.
+  - Test guardrail triggering via semantic similarity (not `.contains()`).
+  - Test utilization scoring after session with injected memories.
+  - These are the ONLY tests that matter — backend functions are already tested.
+- [ ] **-1.18** Verify all Round 1-4 findings: Create wisdom rule → start session → rule appears → importance stable → graduation correct → distillation extracts mistakes → STM passes large payloads → search returns readable markdown.
 
 ---
 
