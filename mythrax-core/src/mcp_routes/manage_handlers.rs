@@ -1421,15 +1421,17 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             let hydrated = state.backend.get_memory_nodes(&injected_nodes).await?;
             let mut utilized_count = 0;
 
-            for _wiki in &hydrated.wiki_nodes {
-                let is_util = true;
+            let turn_lower = turn_content.to_lowercase();
+
+            for wiki in &hydrated.wiki_nodes {
+                let is_util = turn_lower.contains(&wiki.name.to_lowercase());
                 if is_util {
                     utilized_count += 1;
                 }
             }
 
             for wisdom in &hydrated.wisdom_rules {
-                let is_util = true;
+                let is_util = turn_lower.contains(&wisdom.target_pattern.to_lowercase());
                 if is_util {
                     utilized_count += 1;
                 }
@@ -1452,7 +1454,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
 
             for ep in &hydrated.episodes {
-                let is_util = true;
+                let is_util = turn_lower.contains(&ep.title.to_lowercase());
                 if is_util {
                     utilized_count += 1;
                 }
