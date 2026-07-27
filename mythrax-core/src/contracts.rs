@@ -137,6 +137,8 @@ pub struct Episode {
     #[serde(default)]
     pub node_type: Option<String>,
     #[serde(default)]
+    pub archived_at: Option<String>,
+    #[serde(default)]
     pub hypothesis: Option<String>,
     #[serde(default)]
     pub raw_evidence: Option<Vec<String>>,
@@ -211,6 +213,16 @@ pub struct EpisodeSave {
     pub parent_task_id: Option<String>,
     #[serde(default)]
     pub content_hash: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub hypothesis: Option<String>,
+    #[serde(default)]
+    pub raw_evidence: Option<Vec<String>>,
+    #[serde(default)]
+    pub causal_insight: Option<String>,
+    #[serde(default)]
+    pub artifact_refs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +250,11 @@ pub struct EpisodeSaveBuilder {
     pub causal_explanation: Option<String>,
     pub parent_task_id: Option<String>,
     pub content_hash: Option<String>,
+    pub summary: Option<String>,
+    pub hypothesis: Option<String>,
+    pub raw_evidence: Option<Vec<String>>,
+    pub causal_insight: Option<String>,
+    pub artifact_refs: Option<Vec<String>>,
 }
 
 impl EpisodeSaveBuilder {
@@ -266,6 +283,11 @@ impl EpisodeSaveBuilder {
             causal_explanation: None,
             parent_task_id: None,
             content_hash: None,
+            summary: None,
+            hypothesis: None,
+            raw_evidence: None,
+            causal_insight: None,
+            artifact_refs: None,
         }
     }
 
@@ -369,6 +391,31 @@ impl EpisodeSaveBuilder {
         self
     }
 
+    pub fn summary(mut self, summary: Option<String>) -> Self {
+        self.summary = summary;
+        self
+    }
+
+    pub fn hypothesis(mut self, hypothesis: Option<String>) -> Self {
+        self.hypothesis = hypothesis;
+        self
+    }
+
+    pub fn raw_evidence(mut self, raw_evidence: Option<Vec<String>>) -> Self {
+        self.raw_evidence = raw_evidence;
+        self
+    }
+
+    pub fn causal_insight(mut self, causal_insight: Option<String>) -> Self {
+        self.causal_insight = causal_insight;
+        self
+    }
+
+    pub fn artifact_refs(mut self, artifact_refs: Option<Vec<String>>) -> Self {
+        self.artifact_refs = artifact_refs;
+        self
+    }
+
     pub fn build(self) -> EpisodeSave {
         EpisodeSave {
             title: self.title,
@@ -394,6 +441,11 @@ impl EpisodeSaveBuilder {
             causal_explanation: self.causal_explanation,
             parent_task_id: self.parent_task_id,
             content_hash: self.content_hash,
+            summary: self.summary,
+            hypothesis: self.hypothesis,
+            raw_evidence: self.raw_evidence,
+            causal_insight: self.causal_insight,
+            artifact_refs: self.artifact_refs,
         }
     }
 }

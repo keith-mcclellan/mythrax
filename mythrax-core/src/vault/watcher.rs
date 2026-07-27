@@ -727,7 +727,29 @@ pub async fn sync_file_to_db_with_cache(
             .vault_path(Some(rel_path))
             .build();
 
-        backend.save_episode(&episode).await?;
+        let db_id = backend.save_episode(&episode).await?;
+
+        if let Some(surreal_backend) =
+            backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+        {
+            if let Ok(from_id) = crate::db::parse_record_id(&db_id) {
+                let body_links = crate::parser::extract_wiki_links(&body);
+                for link in body_links {
+                    if let Some(target_id) =
+                        resolve_target_to_id(&link, surreal_backend, cache).await
+                    {
+                        let relate_query =
+                            "RELATE $from -> relates_to -> $to CONTENT { relation: 'related', created_at: time::now() };";
+                        let _ = surreal_backend
+                            .db
+                            .query(relate_query)
+                            .bind(("from", from_id.clone()))
+                            .bind(("to", target_id))
+                            .await;
+                    }
+                }
+            }
+        }
     } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
         if let Some(yaml_val) = yaml_opt {
             let frontmatter: WisdomFrontmatter =
@@ -1052,7 +1074,30 @@ pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-    format!("---\n{}---\n{}", yaml_str.trim(), episode.content)
+    let mut body = format!("---\n{}---\n{}", yaml_str.trim(), episode.content);
+
+    // Task 3.2: Append ## Related Nodes with [[wikilinks]]
+    let mut related_links = Vec::new();
+    if let Some(ref refs) = episode.artifact_refs {
+        for r in refs {
+            related_links.push(format!("- [[{}]]", r));
+        }
+    }
+    if let Some(ref ev) = episode.raw_evidence {
+        for e in ev {
+            if e.contains('/') || e.contains('.') {
+                related_links.push(format!("- [[{}]]", e));
+            }
+        }
+    }
+    if !related_links.is_empty() {
+        related_links.dedup();
+        body.push_str("\n\n## Related Nodes\n");
+        body.push_str(&related_links.join("\n"));
+        body.push('\n');
+    }
+
+    body
 }
 
 pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
@@ -1103,7 +1148,17 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-    format!("---\n{}---\n", yaml_str.trim())
+    let mut body = format!("---\n{}---\n", yaml_str.trim());
+
+    // Task 3.3: Append ## Source Episodes section with [[episode_id]] wikilinks
+    if !rule.source_episodes.is_empty() {
+        body.push_str("\n## Source Episodes\n");
+        for ep_id in &rule.source_episodes {
+            body.push_str(&format!("- [[{}]]\n", ep_id));
+        }
+    }
+
+    body
 }
 
 #[cfg(test)]
@@ -1274,5 +1329,27 @@ mod tests {
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].tier, crate::contracts::Tier::Wisdom);
         assert_eq!(results.results[0].target_pattern, "test-pattern");
+    }
+
+    #[tokio::test]
+    async fn test_obsidian_wikilink_formatting_and_graph_edges() {
+        let save = EpisodeSave::builder("Test Title".to_string(), "Test content".to_string())
+            .artifact_refs(Some(vec!["src/main.rs".to_string()]))
+            .build();
+        let markdown = format_episode_markdown(&save);
+        assert!(markdown.contains("## Related Nodes"));
+        assert!(markdown.contains("- [[src/main.rs]]"));
+
+        let rule = WisdomRule {
+            target_pattern: "pat".to_string(),
+            action_to_avoid: "avoid".to_string(),
+            causal_explanation: "exp".to_string(),
+            prescribed_remedy: "rem".to_string(),
+            source_episodes: vec!["ep-123".to_string()],
+            ..Default::default()
+        };
+        let wisdom_md = format_wisdom_markdown(&rule);
+        assert!(wisdom_md.contains("## Source Episodes"));
+        assert!(wisdom_md.contains("- [[ep-123]]"));
     }
 }
