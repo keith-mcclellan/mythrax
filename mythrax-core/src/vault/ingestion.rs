@@ -887,7 +887,7 @@ pub async fn bulk_ingest_vault(
                     let total_chunks = chunks.len();
                     let mut generated_parts = Vec::new();
 
-                    let slug_title = slugify_title(&title);
+                    let slug_title = crate::cognitive::synthesis::slugify_title(&title);
                     let parent_relative_path =
                         format!("episodes/{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix);
                     let parent_title = title.clone();
