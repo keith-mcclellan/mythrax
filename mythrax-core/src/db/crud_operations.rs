@@ -1403,6 +1403,27 @@ impl SurrealBackend {
     pub async fn save_wiki_node_db(&self, node: &WikiNode) -> Result<String> {
         if let Some(ref vp) = node.vault_path {
             self.record_indexing_write(vp).await;
+
+            // Mirror WikiNode to physical Markdown vault file
+            let mut yaml_val = serde_json::Map::new();
+            yaml_val.insert("title".to_string(), serde_json::json!(node.name));
+            yaml_val.insert("scope".to_string(), serde_json::json!(node.scope));
+            if let Some(ref nt) = node.node_type {
+                yaml_val.insert("node_type".to_string(), serde_json::json!(nt));
+            }
+            if let Some(mc) = node.metacognitive_confidence {
+                yaml_val.insert("metacognitive_confidence".to_string(), serde_json::json!(mc));
+            }
+            let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
+            let markdown = format!("---\n{}---\n\n# {}\n\n{}\n", yaml_str.trim(), node.name, node.content);
+
+            if let Some(root) = crate::store::get_workspace_root() {
+                let full_path = root.join(vp);
+                if let Some(parent) = full_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&full_path, &markdown);
+            }
         }
         let mut node_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
