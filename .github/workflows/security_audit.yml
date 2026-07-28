@@ -1,0 +1,44 @@
+name: Security Audit
+on:
+  push:
+    branches:
+      - '**'
+  schedule:
+    - cron: '0 0 * * *' # Nightly
+
+permissions:
+  pull-requests: write
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Required to scan git history
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-audit
+        run: cargo binstall -y cargo-audit
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run Security Audit Script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/security_audit.py

@@ -77,3 +77,5 @@ embedding_cache.bin.archive
 
 .handoffs/
 mythrax-core/scratch/
+issues/
+security_advisory_report.md
