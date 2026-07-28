@@ -95,9 +95,16 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 
                                     let mut val_str =
                                         serde_json::to_string(val).unwrap_or_default();
-                                    if val_str.len() > 1000 {
-                                        val_str.truncate(1000);
-                                        val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                    const STM_VALUE_MAX_CHARS: usize = 32_000;
+                                    if val_str.len() > STM_VALUE_MAX_CHARS {
+                                        let original_len = val_str.len();
+                                        val_str.truncate(STM_VALUE_MAX_CHARS);
+                                        let msg = if let Some(path) = abs_handoff_path.to_str() {
+                                            format!("... <Value truncated. Full value at: {}>", path)
+                                        } else {
+                                            format!("... <Value truncated from {} to {} chars>", original_len, STM_VALUE_MAX_CHARS)
+                                        };
+                                        val_str.push_str(&msg);
                                     }
                                     let key = format!("stm_{}_output_{}", task_id, output.name);
                                     let _ = state
@@ -190,6 +197,9 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }
             super::vault_handlers::handle_manage_vault(state, modified_args).await
         }
+        "tree_add_node" | "tree_update_node" | "tree_prune" | "tree_view" | "git_merge_branch" => {
+            super::arbor_handlers::handle_manage_arbor(state, args).await
+        }
         "init" | "ideate" | "execute" | "backprop" | "merge" | "run" => {
             let _scope = args
                 .get("scope")
@@ -225,6 +235,9 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 .and_then(|v| v.as_str())
                 .context("Missing session_id parameter for pre_invocation")?;
             handle_pre_invocation_hook(state, args).await
+        }
+        "post_invocation" => {
+            handle_post_invocation_hook(state, args).await
         }
         "precompact" => {
             let session_id = args
@@ -665,9 +678,16 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                                         if let Some(val) = &input.value {
                                             let mut val_str =
                                                 serde_json::to_string(val).unwrap_or_default();
-                                            if val_str.len() > 1000 {
-                                                val_str.truncate(1000);
-                                                val_str.push_str("... <Value too large for STM. Consult contract file directly.>");
+                                            const STM_VALUE_MAX_CHARS: usize = 32_000;
+                                            if val_str.len() > STM_VALUE_MAX_CHARS {
+                                                let original_len = val_str.len();
+                                                val_str.truncate(STM_VALUE_MAX_CHARS);
+                                                let msg = if let Some(path) = abs_handoff_path.to_str() {
+                                                    format!("... <Value truncated. Full value at: {}>", path)
+                                                } else {
+                                                    format!("... <Value truncated from {} to {} chars>", original_len, STM_VALUE_MAX_CHARS)
+                                                };
+                                                val_str.push_str(&msg);
                                             }
                                             let key = format!(
                                                 "stm_{}_input_{}",
@@ -714,7 +734,9 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
             .session_id(Some(parent_conversation_id.clone()))
             .node_type(Some("handoff_event".to_string()))
             .build();
-            let _ = state.backend.save_episode(&event_ep).await;
+            if let Err(e) = state.backend.save_episode(&event_ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
 
             if let Ok(stm_map) = state
                 .backend
@@ -1005,7 +1027,9 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             .files_modified(Some(vec![path.to_string()]))
             .node_type(Some("artifact_state".to_string()))
             .build();
-            let _ = state.backend.save_episode(&artifact_ep).await;
+            if let Err(e) = state.backend.save_episode(&artifact_ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
 
             Ok(json!({
                 "content": [
@@ -1118,7 +1142,9 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
             .files_modified(Some(vec![path.to_string()]))
             .node_type(Some("artifact_state".to_string()))
             .build();
-            let _ = state.backend.save_episode(&artifact_ep).await;
+            if let Err(e) = state.backend.save_episode(&artifact_ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
 
             Ok(json!({
                 "content": [
@@ -1131,6 +1157,69 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
         }
         _ => anyhow::bail!("Invalid action for manage_file: {}", action),
     }
+}
+
+pub async fn handle_post_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .context("Missing session_id for post_invocation")?;
+
+    let exit_code = args.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
+    let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("success");
+    let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+    let error_msg = args.get("error_message").and_then(|v| v.as_str());
+
+    let status_info = serde_json::json!({
+        "exit_code": exit_code,
+        "status": status,
+        "summary": summary,
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+
+    if let Err(e) = state
+        .backend
+        .save_stm(
+            session_id,
+            "_last_post_invocation_status",
+            &serde_json::to_string(&status_info).unwrap_or_default(),
+        )
+        .await
+    {
+        tracing::error!("Failed to save post-invocation status to STM: {:?}", e);
+    }
+
+    if exit_code != 0 || status == "error" || status == "failed" {
+        tracing::warn!("Post-invocation reported failure for session {}: exit_code={}, status={}", session_id, exit_code, status);
+        let ep_content = format!(
+            "Post-invocation failure reported.\nStatus: {}\nExit Code: {}\nSummary: {}\nError: {}",
+            status,
+            exit_code,
+            summary,
+            error_msg.unwrap_or("N/A")
+        );
+        let failure_ep = EpisodeSave::builder(
+            format!("PostInvocation Failure: {}", session_id),
+            ep_content,
+        )
+        .scope(Some("general".to_string()))
+        .session_id(Some(session_id.to_string()))
+        .node_type(Some("post_invocation_failure".to_string()))
+        .build();
+
+        if let Err(e) = state.backend.save_episode(&failure_ep).await {
+            tracing::error!("Failed to save post-invocation failure episode: {:?}", e);
+        }
+    }
+
+    Ok(serde_json::json!({
+        "content": [
+            {
+                "type": "text",
+                "text": format!("Post invocation hook processed successfully for session: {}", session_id)
+            }
+        ]
+    }))
 }
 
 pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result<Value> {
@@ -1155,7 +1244,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             .await;
         let state_clone = state.clone();
         tokio::spawn(async move {
-            let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await;
+            if let Err(e) = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
         });
 
         let pending_tasks = surreal_backend.get_pending_cognitive_tasks().await?;
@@ -1255,7 +1346,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     // WU-4.5: TTL Sweep & LargeLocal Fallback
     let state_clone = state.clone();
     tokio::spawn(async move {
-        let _ = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await;
+        if let Err(e) = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await {
+            tracing::error!("Operation failed: {:?}", e);
+        }
     });
 
     // WU-6.9: PagingManager context window paging
@@ -1318,11 +1411,15 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     if let Some(ref id) = ep.id {
                         let id_raw = id.split(':').nth(1).unwrap_or(id).to_string();
                         let archive_sql = "UPDATE type::record('episode', $id) MERGE { archived: true, archived_at: time::now() };";
-                        let _ = surreal_backend
+                        tracing::warn!("Archiving episode {} due to token budget limits", id_raw);
+                        if let Err(e) = surreal_backend
                             .db
                             .query(archive_sql)
                             .bind(("id", id_raw))
-                            .await;
+                            .await
+                        {
+                            tracing::error!("Failed to archive episode: {:?}", e);
+                        }
                     }
                 }
             }
@@ -1407,32 +1504,26 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             let hydrated = state.backend.get_memory_nodes(&injected_nodes).await?;
             let mut utilized_count = 0;
 
-            for wiki in &hydrated.wiki_nodes {
-                let is_util = turn_content
-                    .to_lowercase()
-                    .contains(&wiki.name.to_lowercase());
-                if is_util {
-                    utilized_count += 1;
-                }
+            let turn_lower = turn_content.to_lowercase();
+
+            for _wiki in &hydrated.wiki_nodes {
+                utilized_count += 1;
             }
 
             for wisdom in &hydrated.wisdom_rules {
-                let is_util = turn_content
-                    .to_lowercase()
-                    .contains(&wisdom.target_pattern.to_lowercase());
-                if is_util {
-                    utilized_count += 1;
-                }
-                // EMA Reinforcement (WU-3.5)
-                let target_imp = if is_util { 10.0 } else { 1.0 };
-                let current_imp = wisdom.importance.unwrap_or(5.0) as f32;
-                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
-                let update_sql = "UPDATE type::record('wisdom', $id) SET importance = $imp;";
+                utilized_count += 1;
                 let id_part = wisdom
                     .id
                     .as_ref()
                     .map(|s| s.split(':').nth(1).unwrap_or(s))
                     .unwrap_or("");
+                let is_cited = turn_lower.contains(&wisdom.target_pattern.to_lowercase())
+                    || (!id_part.is_empty() && turn_content.contains(id_part));
+                // EMA Reinforcement (WU-3.5): Cited memories reinforce upward (10.0), uncited decay (1.0).
+                let target_imp = if is_cited { 10.0 } else { 1.0 };
+                let current_imp = wisdom.importance.unwrap_or(5.0) as f32;
+                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
+                let update_sql = "UPDATE type::record('wisdom', $id) SET importance = $imp;";
                 let _ = surreal_backend
                     .db
                     .query(update_sql)
@@ -1442,22 +1533,19 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
 
             for ep in &hydrated.episodes {
-                let is_util = turn_content
-                    .to_lowercase()
-                    .contains(&ep.title.to_lowercase());
-                if is_util {
-                    utilized_count += 1;
-                }
-                // EMA Reinforcement (WU-3.5)
-                let target_imp = if is_util { 10.0 } else { 1.0 };
-                let current_imp = ep.importance.unwrap_or(5.0) as f32;
-                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
-                let update_sql = "UPDATE type::record('episode', $id) SET importance = $imp;";
+                utilized_count += 1;
                 let id_part = ep
                     .id
                     .as_ref()
                     .map(|s| s.split(':').nth(1).unwrap_or(s))
                     .unwrap_or("");
+                let is_cited = turn_lower.contains(&ep.title.to_lowercase())
+                    || (!id_part.is_empty() && turn_content.contains(id_part));
+                // EMA Reinforcement (WU-3.5): Cited memories reinforce upward (10.0), uncited decay (1.0).
+                let target_imp = if is_cited { 10.0 } else { 1.0 };
+                let current_imp = ep.importance.unwrap_or(5.0) as f32;
+                let new_imp = 0.9 * current_imp + 0.1 * target_imp;
+                let update_sql = "UPDATE type::record('episode', $id) SET importance = $imp;";
                 let _ = surreal_backend
                     .db
                     .query(update_sql)
@@ -1492,11 +1580,34 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 } else {
                     Vec::new()
                 };
+
+            let mut turn_embedding = None;
+            if let Some(ref embedder) = surreal_backend.embedder {
+                if let Ok(emb) = embedder.embed(turn_content).await {
+                    turn_embedding = Some(emb);
+                }
+            }
+
             for rule in active_rules {
-                if turn_content
+                let mut triggered = turn_content
                     .to_lowercase()
-                    .contains(&rule.target_pattern.to_lowercase())
-                {
+                    .contains(&rule.target_pattern.to_lowercase());
+
+                if !triggered {
+                    if let (Some(t_emb), Some(embedder)) = (&turn_embedding, &surreal_backend.embedder) {
+                        if let Ok(r_emb) = embedder.embed(&rule.target_pattern).await {
+                            let sim = crate::math::cosine_similarity(t_emb, &r_emb);
+                            if sim > 0.82 { // threshold for semantic similarity
+                                triggered = true;
+                            }
+                        }
+                    } else if surreal_backend.embedder.is_none() && rule.tier == crate::contracts::Tier::Wisdom {
+                        // Safety fallback: if embedder is unavailable, inject wisdom-tier rules
+                        triggered = true;
+                    }
+                }
+
+                if triggered {
                     let severity = rule
                         .severity
                         .clone()
@@ -1539,7 +1650,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 .session_id(Some(session_id.to_string()))
                 .node_type(Some("task_checklist".to_string()))
                 .build();
-            let _ = state.backend.save_episode(&ep).await;
+            if let Err(e) = state.backend.save_episode(&ep).await {
+                tracing::error!("Operation failed: {:?}", e);
+            }
         }
     }
 
@@ -1722,13 +1835,38 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             .and_then(|n| n.to_str())
             .unwrap_or("general")
             .to_string();
-        let dynamic_scope = folder_name;
+        let dynamic_scope = folder_name.clone();
 
-        let search_query = query.unwrap_or("general context");
+        let extracted_query = if let Some(q) = query {
+            q.to_string()
+        } else {
+            let mut extracted = None;
+            if let Some(path_str) = stm_map.get("_transcript_path") {
+                if let Ok(file_content) = std::fs::read_to_string(path_str) {
+                    for line in file_content.lines().rev() {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+                            let is_user = val.get("role").and_then(|r| r.as_str()).map(|r| r == "user").unwrap_or(false);
+                            if is_user {
+                                if let Some(c) = val.get("content").and_then(|c| c.as_str()) {
+                                    extracted = Some(c.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if extracted.is_none() {
+                if let Some(c) = stm_map.get("objective").or_else(|| stm_map.get("task_description")) {
+                    extracted = Some(c.to_string());
+                }
+            }
+            extracted.unwrap_or_else(|| format!("{} project context", folder_name))
+        };
         let search_res = state
             .backend
             .search(crate::contracts::SearchParams::from_positional(
-                search_query,
+                &extracted_query,
                 Some(&dynamic_scope),
                 false,
                 15,
@@ -1770,7 +1908,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     }
 
-    let active_node_opt = stm_map
+    let _active_node_opt = stm_map
         .get("active_hypothesis_node")
         .or_else(|| stm_map.get("active_node"))
         .cloned();
@@ -1786,8 +1924,29 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         .unwrap_or("general")
         .to_string();
 
-    let p0_policy =
-        collect_policy_context(surreal_backend, &folder_name, active_node_opt.as_ref()).await;
+    let arbor_res = super::arbor_handlers::handle_manage_arbor(
+        state,
+        serde_json::json!({
+            "action": "tree_view",
+            "format": "constraints",
+            "scope": folder_name
+        }),
+    )
+    .await;
+    let p0_policy = if let Ok(res) = arbor_res {
+        if let Some(text) = res.get("content").and_then(|c| c.get(0)).and_then(|item| item.get("text")).and_then(|t| t.as_str()) {
+            if !text.contains("(No active negative constraints found)") {
+                let rules_body = text.strip_prefix("### Negative Constraints & Guardrails\n").unwrap_or(text);
+                format!("### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n", rules_body.trim())
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
     let mut p1_advisory = collect_advisory_context(
         surreal_backend,
         &folder_name,
@@ -1807,8 +1966,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     };
 
     let budget_env =
-        std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "3000".to_string());
-    let token_budget: usize = budget_env.parse().unwrap_or(3000);
+        std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "32000".to_string());
+    let token_budget: usize = budget_env.parse().unwrap_or(32000);
 
     // Broker/Handoff metadata is in `parts`
     let preamble = parts.join(
@@ -1836,9 +1995,44 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             }
 
             if !p1_advisory.is_empty() {
-                // To properly truncate advisory, we just drop it entirely in extreme cases for this simple logic,
-                // or we could split lines. But the spec says P1 is truncated first. We'll clear it if it exceeds.
-                p1_advisory.clear();
+                let sections: Vec<&str> = p1_advisory.split("> [!TIP]").collect();
+                if sections.len() > 2 {
+                    let mut valid_sections = Vec::new();
+                    for (i, s) in sections.iter().enumerate() {
+                        if i == 0 && s.trim().is_empty() { continue; }
+                        let full_sec = if i > 0 { format!("> [!TIP]{}", s) } else { s.to_string() };
+                        valid_sections.push(full_sec);
+                    }
+                    if valid_sections.len() > 1 {
+                        let total_count = valid_sections.len();
+                        valid_sections.pop(); // drop the lowest-priority section
+                        let dropped_count = total_count - valid_sections.len();
+                        p1_advisory = valid_sections.join("");
+                        tracing::warn!("Pre-invocation truncated {} of {} advisory sections to fit token budget", dropped_count, total_count);
+                    } else if !p2_stm.is_empty() {
+                        let lines: Vec<&str> = p2_stm.lines().collect();
+                        if lines.len() > 1 {
+                            let truncated_lines = &lines[..lines.len() - 1];
+                            p2_stm = truncated_lines.join("\n");
+                            tracing::warn!("Pre-invocation truncated STM working memory to fit token budget");
+                        } else {
+                            p2_stm.clear();
+                        }
+                    } else {
+                        break;
+                    }
+                } else if !p2_stm.is_empty() {
+                    let lines: Vec<&str> = p2_stm.lines().collect();
+                    if lines.len() > 1 {
+                        let truncated_lines = &lines[..lines.len() - 1];
+                        p2_stm = truncated_lines.join("\n");
+                        tracing::warn!("Pre-invocation truncated STM working memory to fit token budget");
+                    } else {
+                        p2_stm.clear();
+                    }
+                } else {
+                    break;
+                }
             } else if !p2_stm.is_empty() {
                 p2_stm.clear();
             } else {
@@ -2192,123 +2386,7 @@ async fn format_search_result_hybrid(
     }
 }
 
-/// Collects non-negotiable policy context from permanent wisdom, pruned hypotheses, conflict nodes, and Arbor HTR constraints.
-pub async fn collect_policy_context(
-    surreal_backend: &SurrealBackend,
-    current_scope: &str,
-    active_node_opt: Option<&String>,
-) -> String {
-    let mut policy_parts = Vec::new();
 
-    // 1. Permanent Wisdom
-    if let Ok(mut resp) = surreal_backend
-        .db
-        .query("SELECT * FROM wisdom WHERE tier = 'permanent';")
-        .await
-    {
-        if let Ok(rules) = resp.take::<Vec<crate::contracts::WisdomRule>>(0) {
-            for r in rules {
-                policy_parts.push(format!(
-                    "> [!CAUTION]
-> **Rule on {}**:
-> - **Avoid**: {}
-> - **Remedy**: {}",
-                    r.target_pattern, r.action_to_avoid, r.prescribed_remedy
-                ));
-            }
-        }
-    }
-
-    // 2. Pruned Hypotheses
-    let sql_pruned = "SELECT * FROM wisdom WHERE rule_type = 'pruned_hypothesis' AND status = 'active' AND (scope = $scope OR scope = 'general') LIMIT 5;";
-    if let Ok(mut resp) = surreal_backend
-        .db
-        .query(sql_pruned)
-        .bind(("scope", current_scope))
-        .await
-    {
-        if let Ok(rules) = resp.take::<Vec<serde_json::Value>>(0) {
-            for val in rules {
-                if let (Some(pat), Some(avoid), Some(remedy)) = (
-                    val.get("target_pattern").and_then(|v| v.as_str()),
-                    val.get("action_to_avoid").and_then(|v| v.as_str()),
-                    val.get("prescribed_remedy").and_then(|v| v.as_str()),
-                ) {
-                    policy_parts.push(format!(
-                        "> [!CAUTION]
-> **Pruned Path: {}**
-> - **Avoid**: {}
-> - **Remedy**: {}",
-                        pat, avoid, remedy
-                    ));
-                }
-            }
-        }
-    }
-
-    // 3. Conflict Nodes
-    if let Ok(mut resp) = surreal_backend.db.query("SELECT * FROM episode WHERE node_type = 'conflict' AND (scope = $scope OR scope = 'general');").bind(("scope", current_scope)).await {
-        if let Ok(episodes) = resp.take::<Vec<serde_json::Value>>(0) {
-            for val in episodes {
-                if let (Some(title), Some(content)) = (
-                    val.get("title").and_then(|v| v.as_str()),
-                    val.get("content").and_then(|v| v.as_str()),
-                ) {
-                    policy_parts.push(format!(
-                        "> [!CAUTION]
-> **Knowledge Conflict: {}**
-> {}",
-                        title, content
-                    ));
-                }
-            }
-        }
-    }
-
-    // 4. Arbor HTR Negative Constraints
-    if let Some(active_node_id) = active_node_opt {
-        if let Ok(mut hyp_res) = surreal_backend
-            .db
-            .query("SELECT * FROM hypothesis_node WHERE node_id = $node_id;")
-            .bind(("node_id", active_node_id.as_str()))
-            .await
-        {
-            if let Ok(hyp_nodes) = hyp_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
-                if let Some(hyp_node) = hyp_nodes.first() {
-                    if let Some(ref parent_id) = hyp_node.parent_id {
-                        if let Ok(mut siblings_res) = surreal_backend.db.query("SELECT * FROM hypothesis_node WHERE parent_id = $parent_id AND node_id != $node_id AND (status = 'failed' OR status = 'pruned');")
-                            .bind(("parent_id", parent_id.as_str()))
-                            .bind(("node_id", active_node_id.as_str()))
-                            .await
-                        {
-                            if let Ok(siblings) = siblings_res.take::<Vec<crate::contracts::HypothesisNode>>(0) {
-                                for sib in siblings {
-                                    let status_label = if sib.status == "failed" { "FAILED" } else { "PRUNED" };
-                                    let reason = sib.result.or(sib.insight).unwrap_or_else(|| "No failure details recorded".to_string());
-                                    policy_parts.push(format!(
-                                        "> [!CAUTION]
-> **Arbor Constraint ({}): {}**
-> - **Reason**: {}",
-                                        status_label, sib.hypothesis, reason
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if policy_parts.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n",
-            policy_parts.join("\n")
-        )
-    }
-}
 
 /// Collects advisory context from semantic insights, experience episodes, and belief state.
 pub async fn collect_advisory_context(

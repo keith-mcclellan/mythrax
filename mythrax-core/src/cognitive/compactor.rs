@@ -274,11 +274,23 @@ impl Compactor {
                             };"
                         };
 
-                        let mut query = surreal_backend.db.query(archive_sql).bind(("id", id_raw));
+                        let mut query = surreal_backend.db.query(archive_sql).bind(("id", id_raw.clone()));
                         if let Some(ref nvp) = new_vp {
                             query = query.bind(("new_vp", nvp.clone()));
                         }
                         let _ = query.await;
+
+                        tracing::warn!("Archived episode {} due to token budget limits", id_raw);
+                        let _ = surreal_backend.db.query(
+                            "CREATE type::record('wisdom', $id) SET scope = $scope, target_pattern = $pat, action_to_avoid = $avoid, causal_explanation = $why, prescribed_remedy = $remedy, tier = 'wisdom', importance = 10.0;"
+                        )
+                        .bind(("id", format!("eviction_notice_{}", id_raw)))
+                        .bind(("scope", scope))
+                        .bind(("pat", format!("Evicted Episode {}", id_raw)))
+                        .bind(("avoid", "Do not rely on evicted raw turns; rely on compacted wisdom/MOC nodes."))
+                        .bind(("why", format!("Episode '{}' ({}) was archived due to token budget and capacity limits.", active_procs[i].title, id_raw)))
+                        .bind(("remedy", format!("Refer to scope '{}' MOC or wiki nodes for compacted context.", scope)))
+                        .await;
 
                         if let Some(ref vp) = active_procs[i].vault_path {
                             let src_file = store.vault_root.join(vp);
@@ -899,10 +911,7 @@ impl Compactor {
             .filter(|ins| ins.scope == scope)
             .collect();
 
-        if scope_insights.is_empty() {
-            return Ok(());
-        }
-
+        if !scope_insights.is_empty() {
         // 1. Load embeddings for all insights in the scope by resolving their DB record IDs
         let mut node_ids = Vec::new();
         let mut ins_by_id = std::collections::HashMap::new();
@@ -1299,6 +1308,52 @@ impl Compactor {
                 scope
             );
         }
+        }
+
+        // Propagate tree insights upward for arbor hypothesis nodes
+        if let Some(surreal_backend) = db
+            .as_any()
+            .downcast_ref::<crate::db::backend::SurrealBackend>()
+        {
+            if let Ok(all_nodes) = surreal_backend
+                .db
+                .select::<Vec<crate::contracts::HypothesisNode>>("hypothesis_node")
+                .await
+            {
+                let root_nodes: Vec<_> = all_nodes
+                    .iter()
+                    .filter(|n| n.parent_id.is_none() || n.parent_id.as_deref() == Some(""))
+                    .cloned()
+                    .collect();
+                for mut root in root_nodes {
+                    let children: Vec<_> = all_nodes
+                        .iter()
+                        .filter(|n| {
+                            n.parent_id.as_deref() == Some(&root.node_id)
+                                || n.parent_id.as_deref().map_or(false, |p| p.ends_with(&format!(":{}", root.node_id)))
+                        })
+                        .cloned()
+                        .collect();
+                    use crate::cognitive::arbor::TreePropagate;
+                    let _ = root.propagate_upward(&children).await;
+                    if let Some(ref _ins) = root.insight {
+                        root.id = None;
+                        let _: Option<crate::contracts::HypothesisNode> = surreal_backend
+                            .db
+                            .update(("hypothesis_node", root.node_id.as_str()))
+                            .content(root.clone())
+                            .await
+                            .unwrap_or(None);
+                        let md = crate::cognitive::arbor::format_node_markdown(&root);
+                        let default_path = format!("arbor/nodes/{}.md", root.node_id);
+                        let rel_path = root.vault_path.as_deref().unwrap_or(&default_path);
+                        let _ = store.write_file(rel_path, &md);
+                    }
+                }
+            }
+        } else {
+            eprintln!("COMPACTOR DOWNCAST FAILED!");
+        }
 
         // Wire graduation pipeline to run opportunistically during compaction
         let _ = crate::db::graduation_pipeline::run_graduation_pipeline(&*db, scope).await;
@@ -1515,7 +1570,9 @@ impl Compactor {
                                 let archive_dir = store
                                     .vault_root
                                     .join(format!("wiki/{}/archive", resolved_scope));
-                                let _ = std::fs::create_dir_all(&archive_dir);
+                                if let Err(e) = std::fs::create_dir_all(&archive_dir) {
+                                    tracing::error!("Failed to create archive directory {:?}: {:?}", archive_dir, e);
+                                }
                                 let wiki_rel = format!(
                                     "wiki/{}/archive/raptor_summary_{}.md",
                                     resolved_scope,
@@ -1525,18 +1582,34 @@ impl Compactor {
                                     "---\ntype: \"raptor_summary\"\noriginal_title: \"{}\"\n---\n\n# Raptor Summary: {}\n\n{}",
                                     ep.title, ep.title, summary
                                 );
-                                let _ = store.write_file(&wiki_rel, &wiki_content);
+                                if let Err(e) = store.write_file(&wiki_rel, &wiki_content) {
+                                    tracing::error!("Failed to write RAPTOR wiki file {:?}: {:?}", wiki_rel, e);
+                                }
 
-                                let node_contract = WikiNode {
+                                let mut node_contract = WikiNode {
                                     id: None,
                                     name: format!("Raptor Summary: {}", ep.title),
-                                    content: summary,
+                                    content: summary.clone(),
                                     scope: ep.scope.clone().unwrap_or_else(|| "general".to_string()),
                                     vault_path: Some(wiki_rel),
                                     embedding: None,
                                     ..Default::default()
                                 };
-                                let _ = db.save_wiki_node(&node_contract).await;
+                                if let Some(surreal_backend) = db.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+                                    if let Some(ref embedder) = surreal_backend.embedder {
+                                        match embedder.embed(&summary).await {
+                                            Ok(emb) => {
+                                                node_contract.embedding = Some(emb);
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("Failed to generate RAPTOR embedding for '{}': {:?}", ep.title, e);
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Err(e) = db.save_wiki_node(&node_contract).await {
+                                    tracing::error!("Failed to save RAPTOR summary wiki node: {:?}", e);
+                                }
                             }
                             Err(e) => {
                                 eprintln!("COMPACTOR SUMMARY ERROR: {:?}", e);

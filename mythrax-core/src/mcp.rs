@@ -108,22 +108,35 @@ impl McpServer {
         Ok(())
     }
 
+    fn get_current_token(&self) -> String {
+        if let Ok(home) = std::env::var("HOME") {
+            let token_path = std::path::PathBuf::from(home).join(".mythrax").join("token");
+            if let Ok(token) = std::fs::read_to_string(&token_path) {
+                let trimmed = token.trim().to_string();
+                if !trimmed.is_empty() {
+                    return trimmed;
+                }
+            }
+        }
+        self.auth_token.clone()
+    }
+
     async fn ensure_daemon_active(&self) -> Result<()> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(1))
+            .timeout(std::time::Duration::from_secs(5))
             .build()?;
 
-        let ping_url = format!("{}/v1/config/llm", self.daemon_url);
+        let ping_url = format!("{}/health", self.daemon_url);
 
         // Try to ping the daemon
         let ping = client
             .get(&ping_url)
-            .header("X-Mythrax-Token", &self.auth_token)
+            .header("X-Mythrax-Token", self.get_current_token())
             .send()
             .await;
 
         if let Ok(resp) = ping {
-            if resp.status() == reqwest::StatusCode::OK {
+            if resp.status().is_success() {
                 return Ok(());
             }
         }
@@ -260,7 +273,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
             let resp = self
                 .http_client
                 .post(&url)
-                .header("X-Mythrax-Token", &self.auth_token)
+                .header("X-Mythrax-Token", self.get_current_token())
                 .json(&payload)
                 .send()
                 .await
@@ -395,7 +408,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     let resp = self
                         .http_client
                         .get(&url)
-                        .header("X-Mythrax-Token", &self.auth_token)
+                        .header("X-Mythrax-Token", self.get_current_token())
                         .send()
                         .await
                         .context("Failed to contact daemon tools endpoint")?;
@@ -430,7 +443,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     let resp = self
                         .http_client
                         .post(&url)
-                        .header("X-Mythrax-Token", &self.auth_token)
+                        .header("X-Mythrax-Token", self.get_current_token())
                         .json(&payload)
                         .send()
                         .await
@@ -489,7 +502,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     let resp = self
                         .http_client
                         .get(&url)
-                        .header("X-Mythrax-Token", &self.auth_token)
+                        .header("X-Mythrax-Token", self.get_current_token())
                         .send()
                         .await
                         .context("Failed to contact daemon resources endpoint")?;
@@ -515,7 +528,7 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                     let resp = self
                         .http_client
                         .post(&url)
-                        .header("X-Mythrax-Token", &self.auth_token)
+                        .header("X-Mythrax-Token", self.get_current_token())
                         .json(&payload)
                         .send()
                         .await

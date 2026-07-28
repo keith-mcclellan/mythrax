@@ -335,6 +335,69 @@ async fn test_soft_thresholding_and_hook_injection() {
     );
 }
 
+#[tokio::test]
+async fn test_post_invocation_hook_success_and_failure() {
+    use mythrax_core::mcp_routes::handle_post_invocation_hook;
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let db_path = temp_dir.path().join("db");
+
+    let backend = SurrealBackend::new(
+        &format!("surrealkv://{}", db_path.to_string_lossy()),
+        mythrax_core::db::BackendConfig {
+            check_daemon: false,
+            embedder: Some(std::sync::Arc::new(mythrax_core::embeddings::MockEmbedder)),
+            llm: Some(mythrax_core::llm::LLMClient::new_mock()),
+        },
+    )
+    .await
+    .unwrap();
+    backend.init().await.unwrap();
+
+    let state = ApiState {
+        backend: Arc::new(backend),
+        auth_token: "secret-token".to_string(),
+        store: Arc::new(
+            mythrax_core::store::MarkdownStore::new(temp_dir.path().to_path_buf()).unwrap(),
+        ),
+        ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
+        dream_tx: None,
+        shutdown_tx: None,
+    };
+
+    // 1. Success case
+    let payload_success = serde_json::json!({
+        "session_id": "test_post_session",
+        "exit_code": 0,
+        "status": "success",
+        "summary": "Completed successfully"
+    });
+    let res_success = handle_post_invocation_hook(&state, payload_success).await.unwrap();
+    assert!(res_success["content"][0]["text"].as_str().unwrap().contains("test_post_session"));
+
+    // Check STM status saved
+    let stm_map = state.backend.get_stm("test_post_session", Some("_last_post_invocation_status")).await.unwrap();
+    let stm_val = stm_map.get("_last_post_invocation_status");
+    assert!(stm_val.is_some());
+    assert!(stm_val.unwrap().contains("success"));
+
+    // 2. Failure case
+    let payload_fail = serde_json::json!({
+        "session_id": "test_post_fail_session",
+        "exit_code": 1,
+        "status": "error",
+        "summary": "Build failed",
+        "error_message": "cargo compilation error"
+    });
+    let res_fail = handle_post_invocation_hook(&state, payload_fail).await.unwrap();
+    assert!(res_fail["content"][0]["text"].as_str().unwrap().contains("test_post_fail_session"));
+
+    // Check failure episode created
+    let eps = state.backend.get_all_episodes().await.unwrap();
+    let fail_ep = eps.iter().find(|e| e.session_id.as_deref() == Some("test_post_fail_session"));
+    assert!(fail_ep.is_some(), "Failure episode must be saved on error post-invocation");
+}
+
 }
 
 mod stop_hook {

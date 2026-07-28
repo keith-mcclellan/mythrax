@@ -48,6 +48,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS summary ON episode TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS distilled_at ON episode TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS content_hash ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS hypothesis ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS raw_evidence ON episode TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS causal_insight ON episode TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS artifact_refs ON episode TYPE option<array<string>>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
     DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
@@ -80,6 +84,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS metacognitive_confidence ON wiki_node TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS node_type ON wiki_node TYPE option<string> DEFAULT 'insight';
     DEFINE FIELD IF NOT EXISTS content_hash ON wiki_node TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS hypothesis ON wiki_node TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS raw_evidence ON wiki_node TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS causal_insight ON wiki_node TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS artifact_refs ON wiki_node TYPE option<array<string>>;
     DEFINE INDEX OVERWRITE wiki_node_name ON TABLE wiki_node FIELDS name, scope UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
     DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;

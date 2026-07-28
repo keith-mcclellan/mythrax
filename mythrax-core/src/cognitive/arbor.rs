@@ -30,6 +30,48 @@ pub trait ArborLlmClient: Send + Sync + Clone + 'static {
     ) -> impl std::future::Future<Output = Result<String>> + Send;
 }
 
+pub trait TreePropagate {
+    fn propagate_upward<'a>(
+        &'a mut self,
+        children: &'a [Self],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>
+    where
+        Self: Sized;
+}
+
+impl TreePropagate for HypothesisNode {
+    fn propagate_upward<'a>(
+        &'a mut self,
+        children: &'a [Self],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>> {
+        Box::pin(async move {
+            if children.is_empty() {
+                return Ok(self.insight.clone());
+            }
+
+            let mut child_insights = Vec::new();
+            for child in children {
+                if let Some(ref ins) = child.insight {
+                    child_insights.push(ins.clone());
+                }
+            }
+
+            if child_insights.is_empty() {
+                return Ok(self.insight.clone());
+            }
+
+            let aggregated = child_insights.join(" | ");
+            let new_insight = match &self.insight {
+                Some(existing) => format!("{} | {}", existing, aggregated),
+                None => aggregated,
+            };
+
+            self.insight = Some(new_insight.clone());
+            Ok(Some(new_insight))
+        })
+    }
+}
+
 pub trait HeldOutEvaluator: Send + Sync {
     fn evaluate(&self, branch_name: &str, temp_worktree_path: &Path) -> Result<f32>;
 }
@@ -144,6 +186,121 @@ impl<L: ArborLlmClient> HeldOutEvaluator for LlmCriticEvaluator<L> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConvergenceSignal {
+    Converging,
+    Stagnant,
+    ParadigmShift,
+}
+
+pub struct ConvergenceDetector {
+    window_size: usize,
+    history: Vec<f32>,
+}
+
+impl ConvergenceDetector {
+    pub fn new(window_size: usize) -> Self {
+        Self {
+            window_size: window_size.max(2),
+            history: Vec::new(),
+        }
+    }
+
+    pub fn record_score(&mut self, score: f32) -> ConvergenceSignal {
+        self.history.push(score);
+        while self.history.len() > self.window_size {
+            self.history.remove(0);
+        }
+
+        if self.history.len() < self.window_size {
+            return ConvergenceSignal::Converging;
+        }
+
+        let first = self.history.first().copied().unwrap_or(0.0);
+        let last = self.history.last().copied().unwrap_or(0.0);
+        let delta_score = last - first;
+        let delta_visits = (self.history.len() - 1) as f32;
+
+        if delta_visits <= 0.0 {
+            return ConvergenceSignal::Converging;
+        }
+
+        let score_velocity = delta_score / delta_visits;
+
+        if score_velocity < 0.01 && last < 70.0 {
+            ConvergenceSignal::ParadigmShift
+        } else if score_velocity < 0.05 {
+            ConvergenceSignal::Stagnant
+        } else {
+            ConvergenceSignal::Converging
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArborFsmState {
+    Ideate,
+    Execute,
+    Evaluate,
+    PruneMerge,
+}
+
+impl ArborFsmState {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Ideate => Self::Execute,
+            Self::Execute => Self::Evaluate,
+            Self::Evaluate => Self::PruneMerge,
+            Self::PruneMerge => Self::Ideate,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ArborBudget {
+    pub max_depth: usize,
+    pub max_iterations: usize,
+    pub max_tokens: usize,
+    pub max_duration_secs: u64,
+    pub current_depth: usize,
+    pub current_iterations: usize,
+    pub current_tokens: usize,
+    pub start_time: std::time::Instant,
+}
+
+impl Default for ArborBudget {
+    fn default() -> Self {
+        Self {
+            max_depth: 2,
+            max_iterations: 10,
+            max_tokens: 100_000,
+            max_duration_secs: 300,
+            current_depth: 0,
+            current_iterations: 0,
+            current_tokens: 0,
+            start_time: std::time::Instant::now(),
+        }
+    }
+}
+
+impl ArborBudget {
+    pub fn is_exhausted(&self) -> bool {
+        if self.current_depth >= self.max_depth {
+            return true;
+        }
+        if self.current_iterations >= self.max_iterations {
+            return true;
+        }
+        if self.current_tokens >= self.max_tokens {
+            return true;
+        }
+        if self.start_time.elapsed().as_secs() >= self.max_duration_secs {
+            return true;
+        }
+        false
+    }
+}
+
 pub struct ArborCoordinator<L: ArborLlmClient> {
     db: Surreal<Db>,
     backend: crate::db::SurrealBackend,
@@ -233,6 +390,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             )),
             constraints: vec![],
             visits: 0,
+            ..Default::default()
         };
 
         let _: Option<HypothesisNode> = self
@@ -311,6 +469,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
                 )),
                 constraints: parent.constraints.clone(),
                 visits: 0,
+                ..Default::default()
             };
 
             let _: Option<HypothesisNode> = self
@@ -455,148 +614,10 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         Ok(())
     }
 
-    pub async fn backpropagate_insights(&self, leaf_id: &str) -> Result<()> {
-        let mut leaf: HypothesisNode = self
-            .db
-            .select(("hypothesis_node", leaf_id))
-            .await?
-            .ok_or_else(|| anyhow!("Leaf node not found"))?;
-
-        let run_logs = leaf.result.as_deref().unwrap_or("");
-        let critic = crate::cognitive::critic::ArborCritic::new();
-        let critic_output = critic
-            .evaluate(&self.backend, &self.llm_client, run_logs)
-            .await?;
-
-        leaf.score = Some(critic_output.score);
-        leaf.insight = Some(critic_output.insight.clone());
-        leaf.status = "done".to_string();
-
-        let _: Option<HypothesisNode> = self
-            .db
-            .update(("hypothesis_node", leaf.node_id.as_str()))
-            .content(leaf.clone())
-            .await?;
-
-        let leaf_md = format_node_markdown(&leaf);
-        fs::write(self.get_vault_path(&leaf.node_id), leaf_md)?;
-
-        let mut current_parent_id = leaf.parent_id.clone();
-        while let Some(parent_id) = current_parent_id {
-            let mut parent: HypothesisNode = self
-                .db
-                .select(("hypothesis_node", parent_id.as_str()))
-                .await?
-                .ok_or_else(|| anyhow!("Parent node not found"))?;
-
-            let parent_insight = parent.insight.as_deref();
-            let child_insight = critic_output.insight.as_str();
-
-            let new_insight = self
-                .llm_client
-                .abstract_insights(&self.backend, parent_insight, child_insight)
-                .await?;
-            parent.insight = Some(new_insight);
-
-            let _: Option<HypothesisNode> = self
-                .db
-                .update(("hypothesis_node", parent.node_id.as_str()))
-                .content(parent.clone())
-                .await?;
-
-            let parent_md = format_node_markdown(&parent);
-            fs::write(self.get_vault_path(&parent.node_id), parent_md)?;
-
-            current_parent_id = parent.parent_id.clone();
-        }
-
-        Ok(())
-    }
-
-    pub async fn decide_admission(&self, node_id: &str) -> Result<()> {
-        let mut node: HypothesisNode = self
-            .db
-            .select(("hypothesis_node", node_id))
-            .await?
-            .ok_or_else(|| anyhow!("Node not found"))?;
-
-        let branch_name = format!("htr_branch_{}", node_id);
-        let temp_dir = format!("/tmp/admission-gate-{}", node_id);
-        let temp_path = Path::new(&temp_dir);
-
-        if temp_path.exists() {
-            let _ = std::fs::remove_dir_all(temp_path);
-        }
-        let status = Command::new("git")
-            .args(["worktree", "add", &temp_dir, &branch_name])
-            .current_dir(&self.repo_path)
-            .status()?;
-        if !status.success() {
-            return Err(anyhow!("Failed to add worktree for admission check"));
-        }
-
-        let test_eval = TestCommandEvaluator {
-            test_command: self.test_command.clone(),
-        };
-        let critic_eval = LlmCriticEvaluator {
-            llm_client: self.llm_client.clone(),
-            backend: self.backend.clone(),
-        };
-
-        let test_score = test_eval.evaluate(&branch_name, temp_path).unwrap_or(0.0);
-        let critic_score = critic_eval
-            .evaluate(&branch_name, temp_path)
-            .unwrap_or(50.0);
-        let blended_score = (test_score + critic_score) / 2.0;
-
-        let _ = Command::new("git")
-            .args(["worktree", "remove", "--force", &temp_dir])
-            .current_dir(&self.repo_path)
-            .status();
-        if temp_path.exists() {
-            let _ = std::fs::remove_dir_all(temp_path);
-        }
-
-        node.score = Some(blended_score);
-
-        if blended_score >= 70.0 {
-            let merge_status = Command::new("git")
-                .args(["merge", &branch_name])
-                .current_dir(&self.repo_path)
-                .status()?;
-            if merge_status.success() {
-                node.status = "merged".to_string();
-            } else {
-                node.status = "failed_merge".to_string();
-            }
-        } else {
-            node.status = "rejected".to_string();
-        }
-
-        let _: Option<HypothesisNode> = self
-            .db
-            .update(("hypothesis_node", node.node_id.as_str()))
-            .content(node.clone())
-            .await?;
-
-        let md = format_node_markdown(&node);
-        fs::write(self.get_vault_path(&node.node_id), md)?;
-
-        Ok(())
-    }
-
     pub async fn dispatch_batch(&self, node_ids: &[String]) -> Result<()> {
-        use futures_util::stream::{StreamExt, TryStreamExt};
-
-        futures_util::stream::iter(node_ids)
-            .map(|id| {
-                let id_clone = id.clone();
-                async move { self.execute_node(&id_clone).await }
-            })
-            .buffer_unordered(2)
-            .try_collect::<Vec<()>>()
-            .await?;
-
+        for id in node_ids {
+            self.execute_node(id).await?;
+        }
         Ok(())
     }
 
@@ -683,8 +704,6 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
         if let Some(node_id) = pending_ids.first() {
             self.increment_visits_upward(node_id).await?;
             self.execute_node(node_id).await?;
-            self.backpropagate_insights(node_id).await?;
-            self.decide_admission(node_id).await?;
         }
 
         Ok(())
@@ -757,7 +776,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
     }
 }
 
-fn format_node_markdown(node: &HypothesisNode) -> String {
+pub fn format_node_markdown(node: &HypothesisNode) -> String {
     let scope = node.scope.as_deref().unwrap_or("default");
 
     let parent_link = match &node.parent_id {
@@ -816,6 +835,20 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
         format!("\n{}", child_bullets.join("\n"))
     };
 
+    let propagated_insights_section = match &node.insight {
+        Some(ins) if !node.children_ids.is_empty() => {
+            let child_links = node
+                .children_ids
+                .iter()
+                .map(|c| format!("- [[wiki/{}/hypothesis_tree/{}|{}]]", scope, c, c))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("\n\n## Propagated Insights\n{}\n\n- **Aggregated Insight**: {}", child_links, ins)
+        }
+        Some(ins) => format!("\n\n## Propagated Insights\n- **Insight**: {}", ins),
+        None => String::new(),
+    };
+
     let navigation_section = format!(
         "\n\n## Navigation\n- **Parent**: {}\n- **Children**: {}",
         nav_parent, nav_children
@@ -838,7 +871,7 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
          visits: {}\n\
          ---\n\n\
          # Hypothesis Tree Node: {}\n\n\
-         {}{}\n",
+         {}{}{}\n",
         node.node_id,
         parent_link,
         children_links,
@@ -854,6 +887,90 @@ fn format_node_markdown(node: &HypothesisNode) -> String {
         node.visits,
         node.node_id,
         node.hypothesis,
+        propagated_insights_section,
         navigation_section
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_tree_propagate_upward() {
+        let mut root = HypothesisNode {
+            node_id: "root".to_string(),
+            hypothesis: "Root hypothesis".to_string(),
+            insight: Some("Root insight".to_string()),
+            ..Default::default()
+        };
+
+        let child1 = HypothesisNode {
+            node_id: "child1".to_string(),
+            parent_id: Some("root".to_string()),
+            insight: Some("Child 1 insight".to_string()),
+            ..Default::default()
+        };
+
+        let child2 = HypothesisNode {
+            node_id: "child2".to_string(),
+            parent_id: Some("root".to_string()),
+            insight: Some("Child 2 insight".to_string()),
+            ..Default::default()
+        };
+
+        let children = vec![child1, child2];
+        let result = root.propagate_upward(&children).await.unwrap();
+
+        assert!(result.is_some());
+        let propagated = result.unwrap();
+        assert!(propagated.contains("Root insight"));
+        assert!(propagated.contains("Child 1 insight"));
+        assert!(propagated.contains("Child 2 insight"));
+    }
+
+    #[test]
+    fn test_convergence_detector_signals() {
+        let mut detector = ConvergenceDetector::new(5);
+        assert_eq!(detector.record_score(50.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(52.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(54.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(56.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(58.0), ConvergenceSignal::Converging);
+
+        // Stagnant flat trajectory
+        let mut stagnant_detector = ConvergenceDetector::new(5);
+        stagnant_detector.record_score(50.0);
+        stagnant_detector.record_score(50.1);
+        stagnant_detector.record_score(50.2);
+        stagnant_detector.record_score(50.1);
+        let sig = stagnant_detector.record_score(50.0);
+        assert!(sig == ConvergenceSignal::Stagnant || sig == ConvergenceSignal::ParadigmShift);
+    }
+
+    #[test]
+    fn test_arbor_fsm_transitions() {
+        let state = ArborFsmState::Ideate;
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::Execute);
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::Evaluate);
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::PruneMerge);
+        let state = state.next();
+        assert_eq!(state, ArborFsmState::Ideate);
+    }
+
+    #[test]
+    fn test_arbor_budget_exhaustion() {
+        let mut budget = ArborBudget::default();
+        assert!(!budget.is_exhausted());
+
+        budget.current_depth = 2;
+        assert!(budget.is_exhausted());
+
+        let mut budget2 = ArborBudget::default();
+        budget2.current_tokens = 150_000;
+        assert!(budget2.is_exhausted());
+    }
 }

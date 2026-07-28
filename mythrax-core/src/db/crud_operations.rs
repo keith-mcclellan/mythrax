@@ -48,10 +48,13 @@ impl SurrealBackend {
                 }
             }
             if idf_count == 0 {
-                tracing::info!("IDF index is empty. Backfilling...");
-                if let Err(e) = self.backfill_idf_index_db().await {
-                    tracing::error!("Failed to backfill IDF index: {:?}", e);
-                }
+                tracing::info!("IDF index is empty. Spawning non-blocking background backfill...");
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = self_clone.backfill_idf_index_db().await {
+                        tracing::error!("Failed to backfill IDF index: {:?}", e);
+                    }
+                });
             }
         }
 
@@ -67,10 +70,13 @@ impl SurrealBackend {
                 }
             }
             if missing_count > 0 {
-                tracing::info!("Found {} episodes missing content_hash. Backfilling...", missing_count);
-                if let Err(e) = self.backfill_content_hashes_db().await {
-                    tracing::error!("Failed to backfill content hashes: {:?}", e);
-                }
+                tracing::info!("Found {} episodes missing content_hash. Spawning background backfill...", missing_count);
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = self_clone.backfill_content_hashes_db().await {
+                        tracing::error!("Failed to backfill content hashes: {:?}", e);
+                    }
+                });
             }
         }
 
@@ -286,7 +292,13 @@ impl SurrealBackend {
             .unwrap_or_else(|| "agent_thought".to_string());
 
         let embedding_val = if self.embedder.is_some() {
-            let text_to_embed = format!("{}: {}", episode.title, episode.content);
+            let text_to_embed = if let Some(ref insight) = episode.causal_insight.as_ref().or(episode.causal_explanation.as_ref()) {
+                format!("{}: {}", episode.title, insight)
+            } else if let Some(ref summary) = episode.summary {
+                format!("{}: {}", episode.title, summary)
+            } else {
+                format!("{}: {}", episode.title, episode.content)
+            };
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
                 Err(e) => {
@@ -447,7 +459,7 @@ impl SurrealBackend {
             }
         }
 
-        if !missing_texts.is_empty() && self.embedder.is_some() {
+        if !missing_texts.is_empty() && self.embedder.is_some() && std::env::var("MYTHRAX_ASYNC_EMBEDDINGS").is_err() {
             if let Ok(generated) = self.embed_batch(&missing_texts).await {
                 for (midx, generated_emb) in missing_indices.into_iter().zip(generated.into_iter())
                 {
@@ -560,7 +572,8 @@ impl SurrealBackend {
             }
         }
 
-        // 5. Execute batch transaction in database
+        // 5. Execute batch transaction in database using 50-item sub-batches
+        const SUB_BATCH_SIZE: usize = 50;
         let query = r#"
             BEGIN TRANSACTION;
             FOR $ep IN $episodes {
@@ -593,16 +606,27 @@ impl SurrealBackend {
             COMMIT TRANSACTION;
         "#;
 
-        let res = self
-            .db
-            .query(query)
-            .bind(("episodes", mapped_json_array))
-            .await?;
-        res.check()
-            .context("SurrealDB save_episodes_batch transaction failed")?;
+        let mut successful_inserted_ids = Vec::new();
+        for (chunk_idx, json_chunk) in mapped_json_array.chunks(SUB_BATCH_SIZE).enumerate() {
+            let chunk_start_idx = chunk_idx * SUB_BATCH_SIZE;
+            let chunk_end_idx = (chunk_start_idx + json_chunk.len()).min(inserted_ids.len());
 
-        for id_str in inserted_ids {
-            let _ = self.update_idf_index_db(&id_str, false).await;
+            match self.db.query(query).bind(("episodes", json_chunk.to_vec())).await {
+                Ok(res) => {
+                    if let Err(e) = res.check() {
+                        tracing::error!("SurrealDB save_episodes_batch sub-batch {} failed: {:?}", chunk_idx, e);
+                    } else {
+                        successful_inserted_ids.extend_from_slice(&inserted_ids[chunk_start_idx..chunk_end_idx]);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("SurrealDB save_episodes_batch query sub-batch {} failed: {:?}", chunk_idx, e);
+                }
+            }
+        }
+
+        for id_str in &successful_inserted_ids {
+            let _ = self.update_idf_index_db(id_str, false).await;
         }
 
         // 6. Relate temporal followed_by connections

@@ -204,6 +204,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
             let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
+            let full_content = args.get("full_content").and_then(|v| v.as_bool()).unwrap_or(false);
 
             let search_res = state
                 .backend
@@ -256,18 +257,32 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                 }
             }
 
-            let stripped_results: Vec<Value> = search_res
-                .results
-                .into_iter()
-                .map(|mut r| {
-                    r.embedding = None;
-                    let mut v = serde_json::to_value(&r).unwrap();
-                    strip_nulls(&mut v);
-                    v
-                })
-                .collect();
+            let mut text = String::new();
+            for r in &search_res.results {
+                let score = r.similarity;
+                let node_type = r.tier.to_string();
+                let title = &r.title;
+                let id = &r.id;
+                let scope = "N/A";
+                let vault_path = r.vault_path.as_deref().unwrap_or("none");
+                
+                let mut content_slice = r.content.clone();
+                if !full_content && content_slice.len() > 500 {
+                    let mut truncate_idx = 500;
+                    if let Some(idx) = content_slice[..500].rfind("\n\n") {
+                        truncate_idx = idx;
+                    } else if let Some(idx) = content_slice[..500].rfind(". ") {
+                        truncate_idx = idx + 1;
+                    }
+                    content_slice = format!("{}... [truncated]", &content_slice[..truncate_idx]);
+                }
 
-            let mut text = serde_json::to_string_pretty(&stripped_results)?;
+                text.push_str(&format!(
+                    "### [{:.4}] {}: {} (`{}`)\n**Scope:** {} | **Tier:** {} | **Path:** `{}`\n{}\n\n",
+                    score, node_type, title, id, scope, node_type, vault_path, content_slice
+                ));
+            }
+
             if search_res.has_more {
                 let remainder = search_res.total_matches.saturating_sub(offset + limit);
                 text.push_str(&format!(

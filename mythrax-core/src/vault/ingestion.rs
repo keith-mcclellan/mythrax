@@ -299,8 +299,8 @@ fn parse_generic_markdown(path: &Path, scope: &str) -> Result<String> {
     } else {
         let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("note");
         Ok(format!(
-            "---\ntitle: \"{}\"\nscope: \"{}\"\n---\n\n{}",
-            file_stem, scope, content
+            "---\ntitle: \"{}\"\nscope: \"{}\"\n---\n\n{}\n\n## Synthesized Into\n- [[wiki/{}/MOC|Scope Map of Content]]\n\n## Temporal Navigation\n- **Sequence**: Episode captured in timeline\n",
+            file_stem, scope, content, scope
         ))
     }
 }
@@ -610,7 +610,6 @@ pub async fn bulk_ingest_vault(
 ) -> Result<(usize, Vec<String>, bool)> {
     let _ingestion_guard = IngestionGuard::new();
     crate::daemon::update_last_activity();
-    let _ = skip_llm;
     let mut success_count = 0;
     let mut errors = Vec::new();
     let mut has_more = false;
@@ -1458,7 +1457,77 @@ pub async fn bulk_ingest_vault(
         other => anyhow::bail!("Unsupported harness type: {}", other),
     }
 
+    if success_count > 0 {
+        if let Err(e) = post_ingestion_compaction_and_cleanup(db, &store, scope).await {
+            tracing::warn!("Post-ingestion compaction and cleanup returned error: {:?}", e);
+        }
+    }
+
     Ok((success_count, errors, has_more))
+}
+
+async fn post_ingestion_compaction_and_cleanup(
+    db: &dyn StorageBackend,
+    store: &MarkdownStore,
+    scope: &str,
+) -> Result<()> {
+    if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let compactor = crate::cognitive::compactor::Compactor::new();
+        let db_arc = std::sync::Arc::new(crate::db::SurrealBackend::new_with_db(surreal.db.clone()));
+        if let Err(e) = compactor.compact_scope(db_arc, store, scope, None).await {
+            tracing::warn!("Auto scope compaction post-ingestion returned: {:?}", e);
+        }
+
+        if let Ok(mut response) = surreal
+            .db
+            .query("SELECT * FROM episode WHERE scope = $scope AND archived = true;")
+            .bind(("scope", scope))
+            .await
+        {
+            if let Ok(raws) = response.take::<Vec<crate::db::EpisodeRaw>>(0) {
+                let archived_episodes: Vec<crate::contracts::Episode> = raws.into_iter().map(|r| r.into()).collect();
+                for ep in archived_episodes {
+                    if let Some(ref path) = ep.vault_path {
+                        let file_name = std::path::Path::new(path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        let archive_rel_path = format!("archive/{}/{}", scope, file_name);
+                        let src_path = store.vault_root.join(path);
+                        let dst_path = store.vault_root.join(&archive_rel_path);
+                        if let Some(parent) = dst_path.parent() {
+                            if let Err(e) = std::fs::create_dir_all(parent) {
+                                tracing::warn!("Failed to create archive directory {:?}: {:?}", parent, e);
+                            }
+                        }
+                        if src_path.exists() {
+                            if let Err(e) = std::fs::rename(&src_path, &dst_path) {
+                                tracing::warn!("Failed to move archived episode from {:?} to {:?}: {:?}", src_path, dst_path, e);
+                            } else if let Some(ref ep_id) = ep.id {
+                                let id_part = ep_id.split(':').nth(1).unwrap_or(ep_id);
+                                let update_sql = "UPDATE type::record('episode', $id) SET vault_path = $vp;";
+                                if let Err(e) = surreal.db.query(update_sql).bind(("id", id_part)).bind(("vp", archive_rel_path.clone())).await {
+                                    tracing::warn!("Failed to update database vault_path for archived episode '{}': {:?}", ep_id, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let wiki_nodes = db.get_all_wiki_nodes().await.unwrap_or_default();
+    let mut moc_content = format!("# Map of Content: {}\n\n## Wiki Nodes\n", scope);
+    for node in wiki_nodes {
+        if node.scope == scope {
+            moc_content.push_str(&format!("- [[wiki/{}/{}|{}]]\n", scope, node.name, node.name));
+        }
+    }
+    let moc_path = format!("wiki/{}/MOC.md", scope);
+    store.write_file(&moc_path, &moc_content)?;
+
+    Ok(())
 }
 
 fn split_by_page_breaks(text: &str) -> Vec<String> {
@@ -1479,12 +1548,10 @@ fn split_by_sections(text: &str) -> Vec<String> {
             }
             current_section = line.to_string();
         } else {
-            if current_section.is_empty() {
-                current_section = line.to_string();
-            } else {
+            if !current_section.is_empty() {
                 current_section.push('\n');
-                current_section.push_str(line);
             }
+            current_section.push_str(line);
         }
     }
 
@@ -1950,6 +2017,17 @@ pub async fn sync_workspace_docs_to_vault(
         let canonical_ws = ws_root.canonicalize().unwrap_or_else(|_| ws_root.clone());
         let canonical_vault = vault_root.canonicalize().unwrap_or_else(|_| vault_root.clone());
 
+        // Safety Guard: Never scan user HOME directory or system root
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(&home);
+            if let Ok(canon_home) = home_path.canonicalize() {
+                if canonical_ws == canon_home || canonical_ws == Path::new("/") {
+                    tracing::warn!("sync_workspace_docs_to_vault: Refusing to scan entire HOME directory or system root ({:?})", canonical_ws);
+                    return Ok(Vec::new());
+                }
+            }
+        }
+
         fn collect_docs(
             dir: &Path,
             ws_root: &Path,
@@ -1974,6 +2052,16 @@ pub async fn sync_workspace_docs_to_vault(
                             || file_name == ".cargo"
                             || file_name == ".trash"
                             || file_name == "node_modules"
+                            || file_name == "Library"
+                            || file_name == "Music"
+                            || file_name == "Pictures"
+                            || file_name == "Desktop"
+                            || file_name == "Downloads"
+                            || file_name == "Movies"
+                            || file_name == "Applications"
+                            || file_name == ".gemini"
+                            || file_name == ".rustup"
+                            || file_name == ".npm"
                         {
                             continue;
                         }
@@ -2147,8 +2235,78 @@ async fn index_reference_doc(
             metacognitive_confidence: Some(100),
             node_type: Some("reference".to_string()),
             content_hash: Some(content_hash.to_string()),
+            ..Default::default()
         };
         backend.save_wiki_node(&node).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod phase8_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_post_ingestion_compaction_and_cleanup() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = MarkdownStore::new(temp_dir.path()).unwrap();
+        let db = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        let _ = db.db.query(crate::db::schema::INIT_SCHEMA).await;
+
+        // 1. WikiNode for MOC generation
+        let node = crate::contracts::WikiNode {
+            name: "test_node".to_string(),
+            scope: "test_scope".to_string(),
+            ..Default::default()
+        };
+        db.save_wiki_node(&node).await.unwrap();
+
+        // 2. Archived Episode for file move and DB vault_path update
+        let ep_rel_path = "episodes/test_scope/archived_ep.md";
+        store.write_file(ep_rel_path, "# Archived Episode Content").unwrap();
+
+        let ep = crate::contracts::Episode {
+            id: None,
+            title: "Archived Episode".to_string(),
+            scope: Some("test_scope".to_string()),
+            archived: Some(true),
+            vault_path: Some(ep_rel_path.to_string()),
+            ..Default::default()
+        };
+        let _: Option<crate::db::EpisodeRaw> = db
+            .db
+            .create(("episode", "archived_ep"))
+            .content(ep)
+            .await
+            .unwrap();
+
+        // Execute post-ingestion compaction and cleanup
+        post_ingestion_compaction_and_cleanup(&db, &store, "test_scope")
+            .await
+            .unwrap();
+
+        // Verify MOC.md generation
+        let moc_path = temp_dir.path().join("wiki/test_scope/MOC.md");
+        assert!(moc_path.exists());
+        let content = std::fs::read_to_string(moc_path).unwrap();
+        assert!(content.contains("[[wiki/test_scope/test_node|test_node]]"));
+
+        // Verify archived file move on disk
+        let archived_disk_path = temp_dir.path().join("archive/test_scope/archived_ep.md");
+        assert!(archived_disk_path.exists(), "Archived file should be moved to archive/test_scope/");
+
+        // Verify SurrealDB vault_path update
+        let mut resp = db
+            .db
+            .query("SELECT * FROM episode WHERE id = episode:archived_ep;")
+            .await
+            .unwrap();
+        let raws: Vec<crate::db::EpisodeRaw> = resp.take(0).unwrap();
+        let updated_eps: Vec<crate::contracts::Episode> = raws.into_iter().map(|r| r.into()).collect();
+        assert_eq!(
+            updated_eps[0].vault_path,
+            Some("archive/test_scope/archived_ep.md".to_string()),
+            "Database vault_path should be updated to match moved file location"
+        );
+    }
 }

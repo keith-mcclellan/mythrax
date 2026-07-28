@@ -4,16 +4,18 @@ use crate::db::{StorageBackend, SurrealBackend, backend::format_record_id, parse
 use anyhow::Result;
 use serde_json::{Value, json};
 
+pub mod arbor_handlers;
 pub mod htr_handlers;
 pub mod manage_handlers;
 pub mod read_handlers;
 pub mod vault_handlers;
 pub mod write_handlers;
 
+pub use arbor_handlers::handle_manage_arbor;
 pub use htr_handlers::handle_manage_htr;
 pub use manage_handlers::{
     handle_agent, handle_complete_code_task, handle_manage, handle_manage_config,
-    handle_manage_file, handle_manage_stm, handle_pre_invocation_hook,
+    handle_manage_file, handle_manage_stm, handle_post_invocation_hook, handle_pre_invocation_hook,
 };
 pub use read_handlers::{handle_query_memory, handle_read};
 pub use vault_handlers::{handle_ingest_knowledge, handle_manage_vault};
@@ -235,7 +237,7 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge", "save_forged_assets", "init", "ideate", "execute", "backprop", "merge", "run", "pre_invocation", "precompact", "audit_compliance", "clean", "bootstrap", "prune"] },
+                        "action": { "type": "string", "enum": ["verify", "organize", "reprocess", "summarize", "audit", "ingest_bulk", "ingest_forge", "save_forged_assets", "init", "ideate", "execute", "backprop", "merge", "run", "pre_invocation", "precompact", "audit_compliance", "clean", "bootstrap", "prune", "tree_add_node", "tree_update_node", "tree_prune", "tree_view", "git_merge_branch"] },
                         "fix": { "type": "boolean", "default": false },
                         "scope": { "type": "string" },
                         "workspace_path": { "type": "string", "default": "." },

@@ -23,6 +23,10 @@ pub struct DistilledConversation {
     pub user_preferences: Vec<String>,
     pub summary: String,
     pub key_takeaways: Vec<String>,
+    pub hypothesis: Option<String>,
+    pub raw_evidence: Vec<String>,
+    pub causal_insight: Option<String>,
+    pub artifact_refs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -109,7 +113,7 @@ pub fn chunk_transcript(steps: &[TranscriptStep]) -> Vec<Vec<TranscriptStep>> {
 }
 
 pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
-    if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
+    let mut result = if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
         let sub = &input[start_idx..];
         let mut end_idx = sub.len();
         for (i, line) in sub.lines().enumerate() {
@@ -148,7 +152,30 @@ pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
         }
     } else {
         output.to_string()
+    };
+
+    // Task 2.6: Preserve raw evidence file paths and artifact references
+    let file_path_regex = regex::Regex::new(r"(/[\w\.\-]+)+").ok();
+    if let Some(re) = file_path_regex {
+        let mut missing_paths = Vec::new();
+        for cap in re.find_iter(input) {
+            let path_str = cap.as_str();
+            if (path_str.contains('/') || path_str.contains('.')) && !result.contains(path_str) {
+                missing_paths.push(path_str);
+            }
+        }
+        if !missing_paths.is_empty() {
+            missing_paths.dedup();
+            if !result.contains("### Referenced Artifacts & Files") {
+                result.push_str("\n\n### Referenced Artifacts & Files\n");
+                for p in missing_paths.iter().take(10) {
+                    result.push_str(&format!("- `{}`\n", p));
+                }
+            }
+        }
     }
+
+    result
 }
 
 pub async fn run_summarization_task(
@@ -285,14 +312,21 @@ pub async fn distill_transcript_file(
             }
         }
 
-        // Formulate LLM distillation prompt to parse semantic elements
+        // Formulate LLM distillation prompt to parse semantic elements and 4 Arbor fields
         let prompt = format!(
             "Analyze the following segment of a coding transcript. Extract:
             1. Decisions: key design, architecture, or scope decisions.
             2. Constraints: any constraints or requirements discovered.
             3. User Preferences: any user stated preferences.
-            4. Summary: a one paragraph summary.
-            5. Takeaways: key takeaways.
+            4. Mistakes & Failures: Any errors, failed attempts, bugs, or wrong paths encountered.
+            5. Root Causes: Why those failures occurred.
+            6. Actions to Avoid: Specific actions, patterns, or commands to avoid in the future.
+            7. Summary: a one paragraph summary.
+            8. Takeaways: key takeaways.
+            9. Hypothesis (h_n): core problem statement or goal.
+            10. Raw Evidence (r_n): list of concrete log lines, errors, or evidence snippets.
+            11. Causal Insight (iota_n): root cause mechanism and preventative rule.
+            12. Artifact Refs (mu_n): list of files modified or referenced.
 
             Transcript Content:
             {}
@@ -301,9 +335,16 @@ pub async fn distill_transcript_file(
             {{
               \"title\": \"Segment Title\",
               \"scope\": \"general\",
+              \"hypothesis\": \"Core task goal or hypothesis\",
+              \"raw_evidence\": [\"evidence snippet 1\"],
+              \"causal_insight\": \"Causal explanation and rule\",
+              \"artifact_refs\": [\"src/file.rs\"],
               \"decisions\": [\"dec1\"],
               \"constraints_discovered\": [\"con1\"],
               \"user_preferences\": [\"pref1\"],
+              \"mistakes_failures\": [\"mistake1\"],
+              \"root_causes\": [\"cause1\"],
+              \"actions_to_avoid\": [\"avoid1\"],
               \"summary\": \"concise summary\",
               \"key_takeaways\": [\"takeaway1\"]
             }}",
@@ -339,8 +380,10 @@ pub async fn distill_transcript_file(
                 if surreal_backend.create_cognitive_task(&task).await.is_ok() {
                     let start = std::time::Instant::now();
                     let timeout = std::time::Duration::from_secs(60);
+                    let mut delay_ms = 10;
                     while start.elapsed() < timeout {
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        delay_ms = (delay_ms * 2).min(250);
                         if let Ok(Some(updated)) =
                             surreal_backend.get_cognitive_task(&task_id).await
                         {
@@ -377,6 +420,13 @@ pub async fn distill_transcript_file(
             decisions: Option<Vec<String>>,
             constraints_discovered: Option<Vec<String>>,
             user_preferences: Option<Vec<String>>,
+            mistakes_failures: Option<Vec<String>>,
+            root_causes: Option<Vec<String>>,
+            actions_to_avoid: Option<Vec<String>>,
+            hypothesis: Option<String>,
+            raw_evidence: Option<Vec<String>>,
+            causal_insight: Option<String>,
+            artifact_refs: Option<Vec<String>>,
             summary: Option<String>,
             key_takeaways: Option<Vec<String>>,
         }
@@ -401,6 +451,32 @@ pub async fn distill_transcript_file(
             user_preferences: parsed.user_preferences.unwrap_or_default(),
             summary: parsed.summary.unwrap_or_default(),
             key_takeaways: parsed.key_takeaways.unwrap_or_default(),
+            hypothesis: parsed.hypothesis,
+            raw_evidence: parsed.raw_evidence.unwrap_or_default(),
+            causal_insight: parsed.causal_insight.or_else(|| {
+                let mut parts = Vec::new();
+                if let Some(ref m) = parsed.mistakes_failures {
+                    if !m.is_empty() {
+                        parts.push(format!("Mistakes: {}", m.join("; ")));
+                    }
+                }
+                if let Some(ref r) = parsed.root_causes {
+                    if !r.is_empty() {
+                        parts.push(format!("Root Causes: {}", r.join("; ")));
+                    }
+                }
+                if let Some(ref a) = parsed.actions_to_avoid {
+                    if !a.is_empty() {
+                        parts.push(format!("Actions to Avoid: {}", a.join("; ")));
+                    }
+                }
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join(" | "))
+                }
+            }),
+            artifact_refs: parsed.artifact_refs.unwrap_or_default(),
         };
 
         distilled_chunks.push(distilled);

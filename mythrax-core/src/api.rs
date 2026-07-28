@@ -57,7 +57,12 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/v1/hooks/precompact", post(precompact_handler))
         .route("/v1/hooks/stop", post(stop_handler))
         .route("/v1/daemon/stop", post(stop_daemon_endpoint_handler))
+        .route("/health", get(health_handler))
         .with_state(state)
+}
+
+async fn health_handler() -> axum::response::Response {
+    axum::response::IntoResponse::into_response((axum::http::StatusCode::OK, "OK"))
 }
 
 fn check_auth(headers: &HeaderMap, state: &ApiState) -> bool {

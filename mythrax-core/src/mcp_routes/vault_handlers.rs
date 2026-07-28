@@ -713,7 +713,11 @@ pub async fn run_bootstrap_internal(
                                         errors_resolved: $errors_resolved,
                                         user_preferences: $user_preferences,
                                         summary: $summary,
-                                        key_takeaways: $key_takeaways
+                                        key_takeaways: $key_takeaways,
+                                        hypothesis: $hypothesis,
+                                        raw_evidence: $raw_evidence,
+                                        causal_insight: $causal_insight,
+                                        artifact_refs: $artifact_refs
                                     };
                                 ";
                                 let rec_id =
@@ -737,6 +741,10 @@ pub async fn run_bootstrap_internal(
                                     .bind(("user_preferences", distilled.user_preferences.clone()))
                                     .bind(("summary", distilled.summary.clone()))
                                     .bind(("key_takeaways", distilled.key_takeaways.clone()))
+                                    .bind(("hypothesis", distilled.hypothesis.clone()))
+                                    .bind(("raw_evidence", distilled.raw_evidence.clone()))
+                                    .bind(("causal_insight", distilled.causal_insight.clone()))
+                                    .bind(("artifact_refs", distilled.artifact_refs.clone()))
                                     .await;
                                 distilled_count += 1;
                             }

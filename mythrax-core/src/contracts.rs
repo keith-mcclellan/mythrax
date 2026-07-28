@@ -135,9 +135,17 @@ pub struct Episode {
     #[serde(default)]
     pub word_count: Option<u32>,
     #[serde(default)]
+    pub node_type: Option<String>,
+    #[serde(default)]
     pub archived_at: Option<String>,
     #[serde(default)]
-    pub node_type: Option<String>,
+    pub hypothesis: Option<String>,
+    #[serde(default)]
+    pub raw_evidence: Option<Vec<String>>,
+    #[serde(default)]
+    pub causal_insight: Option<String>,
+    #[serde(default)]
+    pub artifact_refs: Option<Vec<String>>,
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,6 +213,16 @@ pub struct EpisodeSave {
     pub parent_task_id: Option<String>,
     #[serde(default)]
     pub content_hash: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub hypothesis: Option<String>,
+    #[serde(default)]
+    pub raw_evidence: Option<Vec<String>>,
+    #[serde(default)]
+    pub causal_insight: Option<String>,
+    #[serde(default)]
+    pub artifact_refs: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -232,6 +250,11 @@ pub struct EpisodeSaveBuilder {
     pub causal_explanation: Option<String>,
     pub parent_task_id: Option<String>,
     pub content_hash: Option<String>,
+    pub summary: Option<String>,
+    pub hypothesis: Option<String>,
+    pub raw_evidence: Option<Vec<String>>,
+    pub causal_insight: Option<String>,
+    pub artifact_refs: Option<Vec<String>>,
 }
 
 impl EpisodeSaveBuilder {
@@ -260,6 +283,11 @@ impl EpisodeSaveBuilder {
             causal_explanation: None,
             parent_task_id: None,
             content_hash: None,
+            summary: None,
+            hypothesis: None,
+            raw_evidence: None,
+            causal_insight: None,
+            artifact_refs: None,
         }
     }
 
@@ -363,6 +391,31 @@ impl EpisodeSaveBuilder {
         self
     }
 
+    pub fn summary(mut self, summary: Option<String>) -> Self {
+        self.summary = summary;
+        self
+    }
+
+    pub fn hypothesis(mut self, hypothesis: Option<String>) -> Self {
+        self.hypothesis = hypothesis;
+        self
+    }
+
+    pub fn raw_evidence(mut self, raw_evidence: Option<Vec<String>>) -> Self {
+        self.raw_evidence = raw_evidence;
+        self
+    }
+
+    pub fn causal_insight(mut self, causal_insight: Option<String>) -> Self {
+        self.causal_insight = causal_insight;
+        self
+    }
+
+    pub fn artifact_refs(mut self, artifact_refs: Option<Vec<String>>) -> Self {
+        self.artifact_refs = artifact_refs;
+        self
+    }
+
     pub fn build(self) -> EpisodeSave {
         EpisodeSave {
             title: self.title,
@@ -388,6 +441,11 @@ impl EpisodeSaveBuilder {
             causal_explanation: self.causal_explanation,
             parent_task_id: self.parent_task_id,
             content_hash: self.content_hash,
+            summary: self.summary,
+            hypothesis: self.hypothesis,
+            raw_evidence: self.raw_evidence,
+            causal_insight: self.causal_insight,
+            artifact_refs: self.artifact_refs,
         }
     }
 }
@@ -493,8 +551,10 @@ pub struct LlmConfigRequest {
     pub model_tier_mappings: Option<std::collections::HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
 pub struct HypothesisNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<surrealdb::types::RecordId>,
     pub node_id: String,
     pub parent_id: Option<String>,
     pub children_ids: Vec<String>,
@@ -566,6 +626,53 @@ pub struct WikiNode {
     pub node_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hypothesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_evidence: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_insight: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_refs: Option<Vec<String>>,
+}
+
+pub trait ArborNode {
+    fn h_n(&self) -> Option<&str>;
+    fn r_n(&self) -> &[String];
+    fn iota_n(&self) -> Option<&str>;
+    fn mu_n(&self) -> &[String];
+}
+
+static EMPTY_STR_VEC: Vec<String> = Vec::new();
+
+impl ArborNode for Episode {
+    fn h_n(&self) -> Option<&str> {
+        self.hypothesis.as_deref()
+    }
+    fn r_n(&self) -> &[String] {
+        self.raw_evidence.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
+    fn iota_n(&self) -> Option<&str> {
+        self.causal_insight.as_deref().or(self.summary.as_deref())
+    }
+    fn mu_n(&self) -> &[String] {
+        self.artifact_refs.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
+}
+
+impl ArborNode for WikiNode {
+    fn h_n(&self) -> Option<&str> {
+        self.hypothesis.as_deref()
+    }
+    fn r_n(&self) -> &[String] {
+        self.raw_evidence.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
+    fn iota_n(&self) -> Option<&str> {
+        self.causal_insight.as_deref()
+    }
+    fn mu_n(&self) -> &[String] {
+        self.artifact_refs.as_deref().unwrap_or(&EMPTY_STR_VEC)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -578,7 +685,7 @@ pub struct SearchResponse {
     pub omitted_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WisdomSearchResponse {
     pub results: Vec<WisdomRule>,
     pub total_matches: usize,
