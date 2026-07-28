@@ -887,9 +887,10 @@ pub async fn bulk_ingest_vault(
                     let total_chunks = chunks.len();
                     let mut generated_parts = Vec::new();
 
+                    let slug_title = slugify_title(&title);
                     let parent_relative_path =
-                        format!("episodes/antigravity_{}_{}.md", dir_name, uuid_suffix);
-                    let parent_title = format!("antigravity_{}", dir_name);
+                        format!("episodes/{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix);
+                    let parent_title = title.clone();
                     let mut parent_saved_id = String::new();
 
                     // If multi-part, write the parent index document first and save it
@@ -898,9 +899,10 @@ pub async fn bulk_ingest_vault(
                         parent_parts_list.push_str("\n\n## Parts\n");
                         for chunk_idx in 0..total_chunks {
                             let part_path = format!(
-                                "episodes/antigravity_{}_part{}_{}",
-                                dir_name,
+                                "episodes/{}_part{}_{}_{}",
+                                slug_title,
                                 chunk_idx + 1,
+                                &dir_name[..dir_name.len().min(8)],
                                 uuid_suffix
                             );
                             parent_parts_list.push_str(&format!("- [[{}]]\n", part_path));
@@ -942,20 +944,21 @@ pub async fn bulk_ingest_vault(
 
                     for (chunk_idx, chunk_text) in chunks.iter().enumerate() {
                         let part_title = if total_chunks > 1 {
-                            format!("antigravity_{}_part{}", dir_name, chunk_idx + 1)
+                            format!("{} Part {}", title, chunk_idx + 1)
                         } else {
-                            format!("antigravity_{}", dir_name)
+                            title.clone()
                         };
 
                         let relative_path = if total_chunks > 1 {
                             format!(
-                                "episodes/antigravity_{}_part{}_{}.md",
-                                dir_name,
+                                "episodes/{}_part{}_{}_{}.md",
+                                slug_title,
                                 chunk_idx + 1,
+                                &dir_name[..dir_name.len().min(8)],
                                 uuid_suffix
                             )
                         } else {
-                            format!("episodes/antigravity_{}_{}.md", dir_name, uuid_suffix)
+                            format!("episodes/{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix)
                         };
 
                         let mut linked_artifacts_section = String::new();
@@ -977,8 +980,8 @@ pub async fn bulk_ingest_vault(
 
                             let prev_str = if chunk_idx > 0 {
                                 let prev_path = format!(
-                                    "episodes/antigravity_{}_part{}_{}",
-                                    dir_name, chunk_idx, uuid_suffix
+                                    "episodes/{}_part{}_{}_{}",
+                                    slug_title, chunk_idx, &dir_name[..dir_name.len().min(8)], uuid_suffix
                                 );
                                 format!("[[{}]]", prev_path)
                             } else {
@@ -987,9 +990,10 @@ pub async fn bulk_ingest_vault(
 
                             let next_str = if chunk_idx + 1 < total_chunks {
                                 let next_path = format!(
-                                    "episodes/antigravity_{}_part{}_{}",
-                                    dir_name,
+                                    "episodes/{}_part{}_{}_{}",
+                                    slug_title,
                                     chunk_idx + 2,
+                                    &dir_name[..dir_name.len().min(8)],
                                     uuid_suffix
                                 );
                                 format!("[[{}]]", next_path)
