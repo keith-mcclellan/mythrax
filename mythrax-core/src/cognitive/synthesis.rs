@@ -1475,8 +1475,17 @@ impl DreamCoordinator {
 
                             let clean_title = slugify_title(&analysis.title);
                             let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
+                            let wikilinks_list = cluster_ep_ids
+                                .iter()
+                                .map(|id| {
+                                    let clean_id = id.trim_start_matches("episode:");
+                                    format!("- [[episodes/{}]]", clean_id)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+
                             let insight_content = format!(
-                                "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}",
+                                "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n# {}\n\n## 🧠 Causal Lessons & Architectural Principles\n{}\n\n## Source Episodes\n{}\n",
                                 analysis.title,
                                 scope,
                                 cluster_ep_ids
@@ -1486,7 +1495,9 @@ impl DreamCoordinator {
                                     .join("\n"),
                                 analysis.metacognitive_confidence.unwrap_or(3),
                                 analysis.node_type.as_deref().unwrap_or("insight"),
-                                analysis.summary
+                                analysis.title,
+                                analysis.summary,
+                                wikilinks_list
                             );
                             store.write_file(&relative_path, &insight_content)?;
 
