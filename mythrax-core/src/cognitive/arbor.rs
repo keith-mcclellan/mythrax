@@ -82,53 +82,41 @@ pub struct TestCommandEvaluator {
 
 impl HeldOutEvaluator for TestCommandEvaluator {
     fn evaluate(&self, _branch_name: &str, temp_worktree_path: &Path) -> Result<f32> {
-        let has_shell_operators = self.test_command.contains('&')
-            || self.test_command.contains('|')
-            || self.test_command.contains('>')
-            || self.test_command.contains('<')
-            || self.test_command.contains(';');
-        let mut cmd = if has_shell_operators {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(&self.test_command);
-            c
-        } else {
-            let mut args = Vec::new();
-            let mut current_arg = String::new();
-            let mut in_quotes = false;
-            let mut quote_char = '\0';
-            for c in self.test_command.chars() {
-                match c {
-                    '"' | '\'' if !in_quotes => {
-                        in_quotes = true;
-                        quote_char = c;
-                    }
-                    '"' | '\'' if in_quotes && c == quote_char => {
-                        in_quotes = false;
-                        quote_char = '\0';
-                    }
-                    ' ' | '\t' if !in_quotes => {
-                        if !current_arg.is_empty() {
-                            args.push(current_arg.clone());
-                            current_arg.clear();
-                        }
-                    }
-                    _ => {
-                        current_arg.push(c);
+        let mut args = Vec::new();
+        let mut current_arg = String::new();
+        let mut in_quotes = false;
+        let mut quote_char = '\0';
+        for c in self.test_command.chars() {
+            match c {
+                '"' | '\'' if !in_quotes => {
+                    in_quotes = true;
+                    quote_char = c;
+                }
+                '"' | '\'' if in_quotes && c == quote_char => {
+                    in_quotes = false;
+                    quote_char = '\0';
+                }
+                ' ' | '\t' if !in_quotes => {
+                    if !current_arg.is_empty() {
+                        args.push(current_arg.clone());
+                        current_arg.clear();
                     }
                 }
+                _ => {
+                    current_arg.push(c);
+                }
             }
-            if !current_arg.is_empty() {
-                args.push(current_arg);
-            }
-            if args.is_empty() {
-                return Err(anyhow!("Empty test command"));
-            }
-            let mut c = Command::new(&args[0]);
-            if args.len() > 1 {
-                c.args(&args[1..]);
-            }
-            c
-        };
+        }
+        if !current_arg.is_empty() {
+            args.push(current_arg);
+        }
+        if args.is_empty() {
+            return Err(anyhow!("Empty test command"));
+        }
+        let mut cmd = Command::new(&args[0]);
+        if args.len() > 1 {
+            cmd.args(&args[1..]);
+        }
         cmd.current_dir(temp_worktree_path);
         let status = cmd.status()?;
         if status.success() { Ok(100.0) } else { Ok(0.0) }
