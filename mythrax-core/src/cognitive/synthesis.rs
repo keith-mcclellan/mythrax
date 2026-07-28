@@ -1396,7 +1396,10 @@ impl DreamCoordinator {
                                 ));
                             }
 
-                            let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                            let base_sys = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Analyze the cluster of events and output a JSON object containing: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
+                    CRITICAL ARBOR INSIGHT RULES (ιn):\n\
+                    1. TITLE: Must be a concise, abstract, noun-phrase topic or reusable design pattern (e.g., 'Adversarial CTO Subagent Validation Protocol', '50-Chunk Single-Pass Transcript Ingestion'). NEVER use event-record passive voice or completion status (e.g. DO NOT write 'X Was Validated', 'Y Was Completed', 'CTO Reviews Arbor Alignment Validated').\n\
+                    2. SUMMARY: Must focus on CAUSAL LESSONS, STRUCTURAL PATTERNS, and WHY/HOW decisions were made (what worked, what failed, root causes, and architectural principles). DO NOT summarize turn-by-turn narrative history or transient step logs.\n\n\
                     For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
                     - 1: Anecdotal / Single Episode\n\
                     - 3: Corroborated / Tested\n\
@@ -1406,7 +1409,7 @@ impl DreamCoordinator {
                                 crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
 
                             let prompt_text = format!(
-                                "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
+                                "Please synthesize distilled causal insights (ιn) from these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"<Abstract Noun-Phrase Pattern>\", \"summary\": \"<Causal Lessons & Architectural Principles>\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
                                 events_text
                             );
 

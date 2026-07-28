@@ -371,7 +371,7 @@ impl Forge {
     }
 
     async fn extract_rules(&self, chunk_text: &str) -> Result<Vec<ForgedRule>> {
-        let system_instruction = "You are a wisdom extraction assistant. Extract system-level Wisdom Rules as a JSON array of objects, with no markdown fences, explanation, or other text.";
+        let system_instruction = "You are a wisdom extraction assistant for the Arbor memory system. Extract system-level, non-obvious Wisdom Rules focus on causal failure modes, structural design constraints, and non-negotiable architectural remedies as a JSON array of objects, with no markdown fences, explanation, or other text.";
         let prompt = format!(
             "Identify and extract Wisdom Rules from the text below. For each rule, provide:\n\
              - target_pattern: the name or pattern to avoid/address\n\
