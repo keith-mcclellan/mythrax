@@ -476,15 +476,21 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
+            let source_path_buf = if source == "antigravity" || !std::path::Path::new(source).exists() {
+                let home = std::env::var("HOME").unwrap_or_default();
+                std::path::PathBuf::from(home).join(".gemini/antigravity/brain")
+            } else {
+                std::path::PathBuf::from(source)
+            };
+
             if async_mode {
                 let state_clone = state.clone();
-                let source_clone = source.to_string();
                 let harness_clone = harness.to_string();
                 let scope_clone = scope.to_string();
                 tokio::spawn(async move {
                     if let Err(e) = bulk_ingest_vault(
                         &state_clone.store.vault_root,
-                        std::path::Path::new(&source_clone),
+                        &source_path_buf,
                         &harness_clone,
                         &scope_clone,
                         &*state_clone.backend,
@@ -509,7 +515,7 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
             } else {
                 let (count, errors, has_more) = bulk_ingest_vault(
                     &state.store.vault_root,
-                    std::path::Path::new(source),
+                    &source_path_buf,
                     harness,
                     scope,
                     &*state.backend,

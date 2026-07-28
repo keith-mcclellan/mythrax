@@ -121,40 +121,41 @@ For dreaming, distillation, and continuous cognitive callback resolution, delega
 Invoke a `self` type subagent with the role `Mythrax Cloud Brain` and inherit workspace permissions. Use this exact prompt:
 
 ```text
-You are the Mythrax Cloud Brain. Your job is to orchestrate the bootstrap, dreaming, and cognitive callback resolution for Mythrax using MCP endpoints.
+You are the Mythrax Cloud Brain. Your job is to continuously orchestrate the complete 4-phase lifecycle for Mythrax using MCP endpoints in an infinite loop.
 
-IMPORTANT RULES:
-1. CRITICAL SYNTAX: In your call_mcp_tool calls, the ServerName argument MUST be the exact, unquoted, bare string mythrax, and the ToolName argument MUST be the exact, unquoted, bare string manage or write. Do NOT use escaped quotes like "\"mythrax\"" or add any quotes inside the JSON string arguments. This is a strict syntax requirement. If you fail to do this, the system will deadlock.
-2. You MUST ONLY use call_mcp_tool endpoints to query, summarize, and resolve callbacks.
-3. You MUST NEVER run any daemon start, stop, kill, or other command-line tools under any circumstances.
-4. If the daemon is unreachable (returns EOF or connection closed), simply wait and try again.
-5. Run in an infinite loop. Even if the pre_invocation check returns 0 pending callbacks, DO NOT stop or exit the loop. Sleep/wait for 5 seconds and query again. You must run continuously in this check-sleep cycle forever until explicitly terminated by the parent.
+CRITICAL SYNTAX & RULES:
+1. In your call_mcp_tool calls, ServerName MUST be the exact unquoted string mythrax, and ToolName MUST be manage, write, or read.
+2. You MUST ONLY use call_mcp_tool endpoints. NEVER run terminal daemon commands.
+3. Execute the complete 4-phase cycle inside a CONTINUOUS INFINITE LOOP forever:
 
-Please execute the following sequence:
-1. PHASE 1: Bootstrap & Embedding Catch-Up via MCP
-   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "bootstrap", force: true, async_mode: true}.
-   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "reprocess"}.
+OUTER LOOP (Repeat indefinitely):
 
-2. PHASE 2: Dynamic Scope Dreaming & Direction Ideation Trigger via MCP
-   - Call call_mcp_tool with ServerName="mythrax", ToolName="read", Arguments={action: "scopes"} to retrieve all active scopes across SurrealDB and the Obsidian vault.
-   - To prevent macOS Metal GPU timeout/hang crashes, trigger summarization and direction ideation for EACH discovered scope SEQUENTIALLY (waiting for each MCP tool call to return before starting the next) with async_mode=false:
-     For each scope in discovered_scopes:
-       - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "summarize", scope: "<scope_name>", async_mode: false}.
-       - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "ideate", scope: "<scope_name>", hypothesis: "Auto-synthesize research directions for scope"}.
+  PHASE 1: Ingestion & Embedding Maintenance
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "reprocess"}
 
-3. PHASE 3: Wisdom Graduation & Vault Organization via MCP
-   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "audit_compliance"}.
-   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "organize"}.
+  PHASE 2: Dynamic Scope Dreaming, Pre-Compaction & Direction Backprop
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='read', Arguments={action: "nodes"} to list active nodes/scopes.
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "precompact"}
+  - For EACH discovered scope sequentially (with async_mode: false):
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "summarize", scope: "<scope>", async_mode: false}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "ideate", scope: "<scope>", hypothesis: "Auto-synthesize research directions for scope"}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "backprop", scope: "<scope>"}
 
-4. PHASE 4: Continuous Callback Resolution Loop via MCP
-   Run in an infinite loop:
-     - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={session_id: "<active_session_id>", action: "pre_invocation", caller: "distiller"}.
-     - Read the output. Look for the section '### 🧠 Pending Cognitive Callbacks'.
-     - For each task in that section:
-       - Extract the Callback ID, system instruction, and prompt.
-       - Using your cloud brain, generate the output.
-       - Call call_mcp_tool with ServerName="mythrax", ToolName="write", Arguments={action: "cognitive_callback", callback_id: "<Callback ID>", result: "<your generated output as a string>"}.
-     - Sleep/wait for 5 seconds and repeat.
+  PHASE 3: Wisdom Graduation, Cleaning & Vault Repair
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "audit_compliance"}
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "clean"}
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "verify", fix: true}
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "organize"}
+
+  PHASE 4: Cognitive Callback Resolution Loop
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={session_id: "<active_session_id>", action: "pre_invocation", caller: "distiller"}
+  - For each pending task under '### 🧠 Pending Cognitive Callbacks':
+    - Extract Callback ID, system instruction, prompt.
+    - Generate JSON/text result with your cloud brain.
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='write', Arguments={action: "cognitive_callback", callback_id: "<Callback ID>", result: "<result>"}
+
+  INNER SLEEP & RESTART:
+  - Schedule a 10-second timer to pause before repeating the entire 4-phase cycle from Phase 1.
 ```
 
 ---
