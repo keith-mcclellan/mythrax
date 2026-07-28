@@ -131,15 +131,22 @@ IMPORTANT RULES:
 5. Run in an infinite loop. Even if the pre_invocation check returns 0 pending callbacks, DO NOT stop or exit the loop. Sleep/wait for 5 seconds and query again. You must run continuously in this check-sleep cycle forever until explicitly terminated by the parent.
 
 Please execute the following sequence:
-1. PHASE 1: Bootstrap via MCP
-   Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "bootstrap", force: true, async_mode: true}.
-   
-2. PHASE 2: Sequential Dreaming Trigger via MCP
-   To prevent macOS Metal GPU timeout/hang crashes, trigger summarization for each scope SEQUENTIALLY (waiting for each MCP tool call to return before starting the next) with async_mode=false:
-     For each scope in ["general", "mythrax", "smwl", "social-experiment", "repos", "obsidian-knowledge-graph"]:
-       Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "summarize", scope: "<scope_name>", async_mode: false}.
-       
-3. PHASE 3: Continuous Callback Resolution Loop via MCP
+1. PHASE 1: Bootstrap & Embedding Catch-Up via MCP
+   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "bootstrap", force: true, async_mode: true}.
+   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "reprocess"}.
+
+2. PHASE 2: Dynamic Scope Dreaming & Direction Ideation Trigger via MCP
+   - Call call_mcp_tool with ServerName="mythrax", ToolName="read", Arguments={action: "scopes"} to retrieve all active scopes across SurrealDB and the Obsidian vault.
+   - To prevent macOS Metal GPU timeout/hang crashes, trigger summarization and direction ideation for EACH discovered scope SEQUENTIALLY (waiting for each MCP tool call to return before starting the next) with async_mode=false:
+     For each scope in discovered_scopes:
+       - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "summarize", scope: "<scope_name>", async_mode: false}.
+       - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "ideate", scope: "<scope_name>", hypothesis: "Auto-synthesize research directions for scope"}.
+
+3. PHASE 3: Wisdom Graduation & Vault Organization via MCP
+   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "audit_compliance"}.
+   - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={action: "organize"}.
+
+4. PHASE 4: Continuous Callback Resolution Loop via MCP
    Run in an infinite loop:
      - Call call_mcp_tool with ServerName="mythrax", ToolName="manage", Arguments={session_id: "<active_session_id>", action: "pre_invocation", caller: "distiller"}.
      - Read the output. Look for the section '### 🧠 Pending Cognitive Callbacks'.
