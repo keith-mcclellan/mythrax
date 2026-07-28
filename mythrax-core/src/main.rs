@@ -1335,7 +1335,8 @@ fn merge_antigravity_hooks(path: &std::path::Path, _exe_path: &str) -> Result<()
                 "server": "mythrax",
                 "tool": "manage",
                 "arguments": {
-                    "action": "pre_invocation"
+                    "action": "pre_invocation",
+                    "session_id": "{{conversation_id}}"
                 }
             }
         ]),
