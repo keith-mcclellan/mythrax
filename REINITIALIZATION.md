@@ -49,14 +49,14 @@ Cleans up stale sessions, expired short-term memory files, `.trash/` files, and 
   }
   ```
 
-### Option B: Full Destructive Reset (Fresh Slate - CLI Fallback)
+### Option B: Full Destructive Reset (Fresh Slate - macOS Launchctl)
 Wipes the entire SurrealDB local database and clears local Obsidian vault directories:
 ```bash
-# 1. Stop the daemon if running
-mythrax daemon stop
+# 1. Stop and unload the daemon via launchctl
+launchctl unload ~/Library/LaunchAgents/com.mythrax.daemon.plist 2>/dev/null || launchctl stop com.mythrax.daemon
 
 # 2. Delete SurrealDB local database directory and configs
-rm -rf ~/.mythrax/db/ ~/.mythrax/data/ ~/.mythrax/config.json
+rm -rf ~/.mythrax/db.nosync ~/.mythrax/db/ ~/.mythrax/data/ ~/.mythrax/config.json
 
 # 3. Clean local Obsidian vault directories
 rm -rf ~/mythrax-vault/.trash/
@@ -72,11 +72,12 @@ rm -rf ~/mythrax-vault/reference/
 
 ## 🛠️ Step-by-Step Reinitialization via MCP & Service Lifecycles
 
-### 1. Process Launch (Metal Environment & Daemon Start)
-On macOS, export the Xcode developer directory before starting the background daemon process:
+### 1. Process Launch (macOS Launchctl & Daemon Start)
+On macOS, manage the Mythrax daemon using `launchctl` (or `mythrax daemon start` / `mythrax daemon stop` wrappers which utilize launchctl):
 ```bash
+# Load and start daemon via launchctl
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-mythrax daemon start
+launchctl load ~/Library/LaunchAgents/com.mythrax.daemon.plist || mythrax daemon start
 ```
 
 ### 2. Vault Subdirectory & System Bootstrap via MCP Endpoint
