@@ -100,7 +100,7 @@ impl Compactor {
             }
         }
 
-        let sys_prompt = "You are a master systems architect. Analyze the sequence of checkpoints and summarize the transitions between them, detailing how the codebase evolved, what errors were resolved, and the progression of active changes.";
+        let sys_prompt = "You are a master systems architect implementing the Arbor memory framework. Analyze the sequence of checkpoints and summarize the architectural evolution. Focus on: 1) Structural state shifts and design transitions, 2) Root causes of resolved errors and failure modes, and 3) Preserved architectural invariants across iterations. Omit transient step logs.";
         let summary = self
             .llm
             .routed_completion(
@@ -1013,7 +1013,7 @@ impl Compactor {
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+            let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Synthesize cluster insights per the Arbor specification into distilled insights (ιn).\n\nCRITICAL ARBOR RULES:\n- Title: Must be an abstract, noun-phrase topic or reusable design pattern. NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed').\n- Summary: Focus on causal lessons, structural design patterns, and systemic constraints (what worked, what failed, root causes).\n- Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self
                 .llm
@@ -1172,7 +1172,7 @@ impl Compactor {
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let sys_prompt = "You are an architectural compactor. Summarize the key architectural decisions, design patterns, and systemic constraints described in these insights.\n\nWrite clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+            let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Synthesize cluster insights per the Arbor specification into distilled insights (ιn).\n\nCRITICAL ARBOR RULES:\n- Title: Must be an abstract, noun-phrase topic or reusable design pattern. NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed').\n- Summary: Focus on causal lessons, structural design patterns, and systemic constraints (what worked, what failed, root causes).\n- Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self
                 .llm
