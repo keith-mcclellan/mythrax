@@ -712,7 +712,7 @@ pub async fn bulk_ingest_vault(
                         prompt.push_str(&format!("{}(:|-|:){}\n", i + 1, dir_name));
                     }
 
-                    let sys_prompt = "You are a title generator. For each provided directory name, generate a concise, human-readable title. Format your response strictly as index(:|-|:)title, one per line.";
+                    let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). For each provided transcript directory/content, generate an abstract, noun-phrase topic or design pattern title (e.g., 'Adversarial CTO Subagent Validation Protocol', '50-Chunk Single-Pass Ingestion'). NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed', 'CTO Review Approved'). Format strictly as index(:|-|:)title, one per line.";
                     let llm_resp = llm
                         .routed_completion(
                             db,
@@ -742,8 +742,8 @@ pub async fn bulk_ingest_vault(
                     } else {
                         tracing::warn!("Title for {} missing from batch, falling back", dir_name);
                         let fb_prompt =
-                            format!("Generate a concise title for directory name: {}", dir_name);
-                        let sys_prompt = "You are a title generator. For each provided directory name, generate a concise, human-readable title. Format your response strictly as index(:|-|:)title, one per line.";
+                            format!("Generate an abstract noun-phrase Arbor title for transcript: {}", dir_name);
+                        let sys_prompt = "You are a title generator implementing Arbor (arXiv:2606.11926v1). Generate an abstract, noun-phrase topic title. NEVER write event status like 'X Was Validated'. Format strictly as index(:|-|:)title, one per line.";
                         llm.routed_completion(
                             db,
                             &crate::contracts::TaskProfile::new(
