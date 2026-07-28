@@ -566,11 +566,11 @@ impl DreamCoordinator {
 
         let mut candidates = Vec::new();
         if let Some(ref new_emb) = node.embedding {
+            let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
             for existing in same_scope_nodes {
                 if let Some(ref ext_emb) = existing.embedding {
                     let sim = {
                         let dot: f32 = new_emb.iter().zip(ext_emb.iter()).map(|(a, b)| a * b).sum();
-                        let norm_u: f32 = new_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         let norm_v: f32 = ext_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         if norm_u == 0.0 || norm_v == 0.0 {
                             0.0
@@ -2065,6 +2065,7 @@ impl DreamCoordinator {
                 name: String,
                 content: String,
                 embedding: Vec<f32>,
+                embedding_norm: f32,
                 is_procedural: bool,
                 temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
                 temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
@@ -2080,12 +2081,14 @@ impl DreamCoordinator {
                         let w_count = wiki_nodes.len() as u32;
                         for node in wiki_nodes {
                             if let Some(ref emb) = node.embedding {
+                                let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                                 candidates.push(GradCandidate {
                                     id: node.id.unwrap_or_default().replace("`", ""),
                                     scope: node.scope,
                                     name: node.name,
                                     content: node.content,
                                     embedding: emb.clone(),
+                                    embedding_norm: norm,
                                     is_procedural: false,
                                     temporal_range_start: node.temporal_range_start,
                                     temporal_range_end: node.temporal_range_end,
@@ -2109,12 +2112,14 @@ impl DreamCoordinator {
                                     .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                     .map(|dt| dt.with_timezone(&chrono::Utc))
                             });
+                            let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                             candidates.push(GradCandidate {
                                 id: ep.id.unwrap_or_default().replace("`", ""),
                                 scope: ep.scope.unwrap_or_else(|| "general".to_string()),
                                 name: ep.title,
                                 content: ep.content,
                                 embedding: emb.clone(),
+                                embedding_norm: norm,
                                 is_procedural: true,
                                 temporal_range_start: ep_start,
                                 temporal_range_end: ep.temporal_range_end.or(ep_start),
@@ -2217,10 +2222,8 @@ impl DreamCoordinator {
                                     .zip(other.embedding.iter())
                                     .map(|(a, b)| a * b)
                                     .sum();
-                                let norm_u: f32 =
-                                    cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 =
-                                    other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_u: f32 = cand.embedding_norm;
+                                let norm_v: f32 = other.embedding_norm;
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
                                 } else {
@@ -2234,12 +2237,15 @@ impl DreamCoordinator {
                     }
                 } else {
                     for node in matches_wiki {
+                        let emb = node.embedding.unwrap_or_default();
+                        let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         cluster.push(GradCandidate {
                             id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
-                            embedding: node.embedding.unwrap_or_default(),
+                            embedding: emb,
+                            embedding_norm: norm,
                             is_procedural: false,
                             temporal_range_start: node.temporal_range_start,
                             temporal_range_end: node.temporal_range_end,
@@ -2257,10 +2263,8 @@ impl DreamCoordinator {
                                     .zip(other.embedding.iter())
                                     .map(|(a, b)| a * b)
                                     .sum();
-                                let norm_u: f32 =
-                                    cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 =
-                                    other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_u: f32 = cand.embedding_norm;
+                                let norm_v: f32 = other.embedding_norm;
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
                                 } else {
@@ -2283,12 +2287,15 @@ impl DreamCoordinator {
                                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                 .map(|dt| dt.with_timezone(&chrono::Utc))
                         });
+                        let emb = ep.embedding.unwrap_or_default();
+                        let norm = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
                         cluster.push(GradCandidate {
                             id: ep.id.unwrap_or_default().replace("`", ""),
                             scope: ep_scope,
                             name: ep.title,
                             content: ep.content,
-                            embedding: ep.embedding.unwrap_or_default(),
+                            embedding: emb,
+                            embedding_norm: norm,
                             is_procedural: true,
                             temporal_range_start: ep_start,
                             temporal_range_end: ep.temporal_range_end.or(ep_start),
