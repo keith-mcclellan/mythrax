@@ -5,6 +5,7 @@ use crate::db::SurrealBackend;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use surrealdb::types::SurrealValue;
 
 pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
     let action = args
@@ -579,6 +580,63 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
             Some(result.to_string()),
         )
         .await?;
+
+    // Dynamic Episode Title Resolution & Renaming Pass
+    if task.task_type == "Extraction" || task.system_instruction.contains("title generator") || task.prompt.contains("Generate a concise title") {
+        let clean_title = result
+            .lines()
+            .next()
+            .unwrap_or(result)
+            .split(":")
+            .last()
+            .unwrap_or(result)
+            .trim()
+            .trim_matches('"');
+
+        if !clean_title.is_empty() {
+            let slug_title = crate::cognitive::synthesis::slugify_title(clean_title);
+            if let Some(ref session_id) = task.session_id {
+                let query = "SELECT id, vault_path, name FROM episode WHERE session_id = $session_id OR id = $session_id;";
+                if let Ok(mut resp) = surreal_backend.db.query(query).bind(("session_id", session_id.clone())).await {
+                    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+                    struct EpRow {
+                        id: surrealdb::types::RecordId,
+                        vault_path: Option<String>,
+                        name: String,
+                    }
+                    if let Ok(rows) = resp.take::<Vec<EpRow>>(0) {
+                        for row in rows {
+                            if let Some(ref old_path) = row.vault_path {
+                                let new_rel_path = format!("episodes/{}_{}.md", slug_title, &session_id[..session_id.len().min(8)]);
+                                if let Ok(old_content) = std::fs::read_to_string(state.store.vault_root.join(old_path)) {
+                                    let mut updated_content = old_content;
+                                    if let Some(pos) = updated_content.find("title: \"") {
+                                        if let Some(end_pos) = updated_content[pos + 8..].find('"') {
+                                            let full_end = pos + 8 + end_pos;
+                                            updated_content.replace_range(pos + 8..full_end, clean_title);
+                                        }
+                                    }
+                                    let _ = state.store.write_file(&new_rel_path, &updated_content);
+                                    if old_path != &new_rel_path {
+                                        let full_old_path = state.store.vault_root.join(old_path);
+                                        let _ = std::fs::remove_file(full_old_path);
+                                    }
+                                    let update_sql = "UPDATE $ep_id SET name = $new_name, vault_path = $new_path;";
+                                    let _ = surreal_backend
+                                        .db
+                                        .query(update_sql)
+                                        .bind(("ep_id", row.id))
+                                        .bind(("new_name", clean_title.to_string()))
+                                        .bind(("new_path", new_rel_path))
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let state_opt = surreal_backend.get_pipeline_state(callback_id).await?;
     if let Some(serialized_state) = state_opt {
