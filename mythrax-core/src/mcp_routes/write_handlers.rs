@@ -416,15 +416,15 @@ pub async fn run_llm_critic(
         Err(_) => true,
     };
 
-    let system_instruction = "You are a systems critic. Analyze the dialog context/episode content showing a mistake, and extract a structured Wisdom Rule to prevent this mistake in the future. Respond ONLY with a JSON object.";
+    let system_instruction = "You are a systems critic. Analyze the dialog context/episode content showing a mistake, and extract a structured Wisdom Rule to prevent this mistake in the future. Focus on Causal failure modes and non-negotiable remedies. Respond ONLY with a JSON object.";
     let prompt = format!(
         "Analyze the following dialog context and extract a single Wisdom Rule to prevent the mistake:\n\n\
         {}\n\n\
         Respond ONLY with a JSON object containing exactly these fields:\n\
         - target_pattern (context or trigger pattern, e.g., 'git merge conflict')\n\
-        - action_to_avoid (the specific incorrect action taken, e.g., 'manually editing conflict markers without tools')\n\
-        - causal_explanation (why it is bad / what happens, e.g., 'leads to malformed syntax and compiler failures')\n\
-        - prescribed_remedy (what to do instead, e.g., 'use git merge-tool or structured 3-way merge library')\n\n\
+        - action_to_avoid (the specific incorrect action taken, causal failure mode, e.g., 'manually editing conflict markers without tools')\n\
+        - causal_explanation (why it is bad / what happens, causal failure mode, e.g., 'leads to malformed syntax and compiler failures')\n\
+        - prescribed_remedy (what to do instead, non-negotiable remedy, e.g., 'use git merge-tool or structured 3-way merge library')\n\n\
         Ensure it is a valid JSON object.",
         content
     );

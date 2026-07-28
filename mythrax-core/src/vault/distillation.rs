@@ -183,7 +183,11 @@ pub async fn run_summarization_task(
     client: &LLMClient,
     content: &str,
 ) -> Result<String> {
-    let sys_prompt = "You are a code summarizer. You MUST enforce the Symbol Integrity prompt contract: if there is a '### Key Code Symbols & Paths' section in the context, you must maintain it verbatim in your response.";
+    let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Structure your summary according to the Arbor 4-Field Memory Contract:\n\
+                      ### 🎯 Intent & Hypothesis (hn)\n\
+                      ### 📊 Factual Result & Raw Evidence (rn) (Preserve compiler error tracebacks, diffs, and tool outputs verbatim without LLM truncation)\n\
+                      ### 🧠 Distilled Insight & Causal Lessons (ιn) (Detail what worked, what failed, root causes, and architectural principles)\n\
+                      ### 🔑 Artifact References & Key Symbols (µn) (Enforce Symbol Integrity: preserve '### Key Code Symbols & Paths' verbatim)";
     let user_prompt = format!("Summarize the following content:\n\n{}", content);
 
     // Try cognitive callback first if not bootstrapping in CLI mode
@@ -314,19 +318,11 @@ pub async fn distill_transcript_file(
 
         // Formulate LLM distillation prompt to parse semantic elements and 4 Arbor fields
         let prompt = format!(
-            "Analyze the following segment of a coding transcript. Extract:
-            1. Decisions: key design, architecture, or scope decisions.
-            2. Constraints: any constraints or requirements discovered.
-            3. User Preferences: any user stated preferences.
-            4. Mistakes & Failures: Any errors, failed attempts, bugs, or wrong paths encountered.
-            5. Root Causes: Why those failures occurred.
-            6. Actions to Avoid: Specific actions, patterns, or commands to avoid in the future.
-            7. Summary: a one paragraph summary.
-            8. Takeaways: key takeaways.
-            9. Hypothesis (h_n): core problem statement or goal.
-            10. Raw Evidence (r_n): list of concrete log lines, errors, or evidence snippets.
-            11. Causal Insight (iota_n): root cause mechanism and preventative rule.
-            12. Artifact Refs (mu_n): list of files modified or referenced.
+            "Analyze the following segment of a coding transcript. Extract ONLY the 4-field memory contract (hn, rn, ιn, µn) per the Arbor framework specification:
+            1. Hypothesis (h_n): core problem statement or goal.
+            2. Raw Evidence (r_n): list of concrete log lines, errors, or evidence snippets.
+            3. Causal Insight (iota_n): root cause mechanism and preventative rule.
+            4. Artifact Refs (mu_n): list of files modified or referenced.
 
             Transcript Content:
             {}
@@ -338,15 +334,7 @@ pub async fn distill_transcript_file(
               \"hypothesis\": \"Core task goal or hypothesis\",
               \"raw_evidence\": [\"evidence snippet 1\"],
               \"causal_insight\": \"Causal explanation and rule\",
-              \"artifact_refs\": [\"src/file.rs\"],
-              \"decisions\": [\"dec1\"],
-              \"constraints_discovered\": [\"con1\"],
-              \"user_preferences\": [\"pref1\"],
-              \"mistakes_failures\": [\"mistake1\"],
-              \"root_causes\": [\"cause1\"],
-              \"actions_to_avoid\": [\"avoid1\"],
-              \"summary\": \"concise summary\",
-              \"key_takeaways\": [\"takeaway1\"]
+              \"artifact_refs\": [\"src/file.rs\"]
             }}",
             chunk_text
         );
@@ -724,13 +712,13 @@ pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) 
         let parsed_rules_json = if std::env::var("MYTHRAX_MOCK_LLM").unwrap_or_default() == "true" {
             r#"[{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}]"#.to_string()
         } else {
-            let sys_prompt = "You are a wisdom seeding assistant that parses developer rules and skill definitions. Your task is to extract actionable guidelines as WisdomRule JSON objects.";
+            let sys_prompt = "You are a wisdom seeding assistant that parses developer rules and skill definitions. Your task is to extract actionable guidelines as WisdomRule JSON objects. Focus specifically on Causal failure modes and non-negotiable remedies.";
             let user_prompt = format!(
                 "Parse the following rule/skill document and extract all actionable guidelines. For each guideline, create a JSON object with:
                 - target_pattern: the context or trigger (e.g. 'Parallel Test Execution', 'Metal compiler JIT', 'LTM Search')
-                - action_to_avoid: what NOT to do
-                - causal_explanation: the reason/why
-                - prescribed_remedy: what TO do
+                - action_to_avoid: what NOT to do (Causal failure mode)
+                - causal_explanation: the reason/why (Causal failure mode)
+                - prescribed_remedy: what TO do (non-negotiable remedies)
                 - rule_type: 'procedural' or 'aesthetic'
 
                 Document Content:
