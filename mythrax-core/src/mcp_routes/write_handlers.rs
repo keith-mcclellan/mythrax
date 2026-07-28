@@ -544,10 +544,12 @@ pub async fn run_llm_critic(
 pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<Value> {
     let callback_id = args
         .get("callback_id")
+        .or_else(|| args.get("id"))
         .and_then(|v| v.as_str())
         .context("Missing callback_id")?;
     let result = args
         .get("result")
+        .or_else(|| args.get("output"))
         .and_then(|v| v.as_str())
         .context("Missing result")?;
 
