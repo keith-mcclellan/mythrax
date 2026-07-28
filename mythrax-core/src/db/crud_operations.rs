@@ -681,6 +681,16 @@ impl SurrealBackend {
     pub async fn save_wisdom_rule_db(&self, rule: &WisdomRule) -> Result<String> {
         if let Some(ref vp) = rule.vault_path {
             self.record_indexing_write(vp).await;
+
+            // Mirror WisdomRule to physical Markdown vault file
+            let markdown = crate::vault::watcher::format_wisdom_markdown(rule);
+            if let Some(root) = crate::store::get_workspace_root() {
+                let full_path = root.join(vp);
+                if let Some(parent) = full_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&full_path, &markdown);
+            }
         }
         let mut rule_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
