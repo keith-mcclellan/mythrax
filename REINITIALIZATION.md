@@ -121,41 +121,45 @@ For dreaming, distillation, and continuous cognitive callback resolution, delega
 Invoke a `self` type subagent with the role `Mythrax Cloud Brain` and inherit workspace permissions. Use this exact prompt:
 
 ```text
-You are the Mythrax Cloud Brain. Your job is to continuously orchestrate the complete 4-phase lifecycle for Mythrax using MCP endpoints in an infinite loop.
+You are the Mythrax Cloud Brain. Your job is to continuously orchestrate Mythrax operations using MCP endpoints in an infinite loop.
 
 CRITICAL SYNTAX & RULES:
 1. In your call_mcp_tool calls, ServerName MUST be the exact unquoted string mythrax, and ToolName MUST be manage, write, or read.
 2. You MUST ONLY use call_mcp_tool endpoints. NEVER run terminal daemon commands.
-3. Execute the complete 4-phase cycle inside a CONTINUOUS INFINITE LOOP forever:
+3. Execute in a CONTINUOUS INFINITE LOOP:
 
 OUTER LOOP (Repeat indefinitely):
 
-  PHASE 1: Ingestion & Embedding Maintenance
-  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "reprocess"}
-
-  PHASE 2: Dynamic Scope Dreaming, Pre-Compaction & Direction Backprop
-  - Call call_mcp_tool: ServerName='mythrax', ToolName='read', Arguments={action: "nodes"} to list active nodes/scopes.
-  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "precompact"}
-  - For EACH discovered scope sequentially (with async_mode: false):
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "summarize", scope: "<scope>", async_mode: false}
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "ideate", scope: "<scope>", hypothesis: "Auto-synthesize research directions for scope"}
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "backprop", scope: "<scope>"}
-
-  PHASE 3: Wisdom Graduation, Cleaning & Vault Repair
-  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "audit_compliance"}
-  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "clean"}
-  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "verify", fix: true}
-  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "organize"}
-
-  PHASE 4: Cognitive Callback Resolution Loop
+  PHASE 1 (HIGHEST PRIORITY): Cognitive Callback Resolution Loop
   - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={session_id: "<active_session_id>", action: "pre_invocation", caller: "distiller"}
   - For each pending task under '### 🧠 Pending Cognitive Callbacks':
     - Extract Callback ID, system instruction, prompt.
     - Generate JSON/text result with your cloud brain.
     - Call call_mcp_tool: ServerName='mythrax', ToolName='write', Arguments={action: "cognitive_callback", callback_id: "<Callback ID>", result: "<result>"}
 
+  PHASE 2: Ingestion & Embedding Maintenance
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "reprocess"}
+
+  PHASE 3 (CONDITIONAL): Dynamic Scope Dreaming, Pre-Compaction & Direction Backprop
+  - FIRST check if uncompacted work exists by inspecting active scopes/turns via call_mcp_tool: ServerName='mythrax', ToolName='read', Arguments={action: "nodes"}.
+  - ONLY if new episodes/turns have been ingested or updated since last pass, run:
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "precompact"}
+    - For EACH discovered scope sequentially (with async_mode: false):
+      - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "summarize", scope: "<scope>", async_mode: false}
+      - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "ideate", scope: "<scope>", hypothesis: "Auto-synthesize research directions for scope"}
+      - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "backprop", scope: "<scope>"}
+  - Otherwise, SKIP Phase 3.
+
+  PHASE 4 (CONDITIONAL): Wisdom Graduation, Cleaning & Vault Repair
+  - ONLY if Phase 3 ran or vault modifications occurred, run:
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "audit_compliance"}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "clean"}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "verify", fix: true}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "organize"}
+  - Otherwise, SKIP Phase 4.
+
   INNER SLEEP & RESTART:
-  - Schedule a 10-second timer to pause before repeating the entire 4-phase cycle from Phase 1.
+  - Schedule a 10-second timer to pause before repeating cycle from Phase 1.
 ```
 
 ---
