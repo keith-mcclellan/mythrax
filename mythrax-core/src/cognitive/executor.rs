@@ -163,9 +163,7 @@ impl ArborExecutor {
             || test_command.contains(';');
 
         let mut cmd = if has_shell_operators {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(test_command);
-            c
+            return Err(anyhow!("Test commands with shell operators (&, |, <, >, ;) are not supported for security reasons"));
         } else {
             let mut args = Vec::new();
             let mut current_arg = String::new();
