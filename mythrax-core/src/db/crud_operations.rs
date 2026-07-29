@@ -625,9 +625,7 @@ impl SurrealBackend {
             }
         }
 
-        for id_str in &successful_inserted_ids {
-            let _ = self.update_idf_index_db(id_str, false).await;
-        }
+        let _ = self.update_idf_index_batch_db(&successful_inserted_ids).await;
 
         // 6. Relate temporal followed_by connections
         for rel in relations {
@@ -1650,13 +1648,23 @@ impl SurrealBackend {
 
     pub async fn get_related_node_ids_db(&self, from_id: &str) -> Result<Vec<String>> {
         let from_thing = parse_record_id(from_id)?;
-        let sql = "SELECT VALUE out FROM relates_to WHERE in = $from LIMIT 50;";
-        let mut response = self.db.query(sql).bind(("from", from_thing)).await?;
-        let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-        Ok(ids
-            .into_iter()
-            .map(|thing| format_record_id(&thing))
-            .collect())
+        let sql1 = "SELECT VALUE out FROM relates_to WHERE in = $from LIMIT 50;";
+        let mut res1 = self.db.query(sql1).bind(("from", from_thing.clone())).await?;
+        let mut outs: Vec<surrealdb::types::RecordId> = res1.take(0).unwrap_or_default();
+
+        let sql2 = "SELECT VALUE in FROM relates_to WHERE out = $from LIMIT 50;";
+        let mut res2 = self.db.query(sql2).bind(("from", from_thing)).await?;
+        let ins: Vec<surrealdb::types::RecordId> = res2.take(0).unwrap_or_default();
+
+        outs.extend(ins);
+        let mut ids = Vec::new();
+        for thing in outs {
+            let formatted = format_record_id(&thing);
+            if !ids.contains(&formatted) {
+                ids.push(formatted);
+            }
+        }
+        Ok(ids)
     }
 
     pub async fn get_wiki_node_id_by_vault_path_db(
@@ -1754,6 +1762,28 @@ impl SurrealBackend {
             }
         };
         self.update_idf_index_for_episode(&ep, is_delete).await
+    }
+
+    pub async fn update_idf_index_batch_db(&self, episode_ids: &[String]) -> Result<()> {
+        if episode_ids.is_empty() {
+            return Ok(());
+        }
+        let mut term_counts: std::collections::HashMap<(String, String), i64> = std::collections::HashMap::new();
+        for id_str in episode_ids {
+            if let Ok(Some(ep)) = self.get_episode_db(id_str).await {
+                let tokens = crate::retrieval::bm25::tokenize(&ep.content);
+                let unique_terms: std::collections::HashSet<_> = tokens.into_iter().collect();
+                let scope = ep.scope.as_deref().unwrap_or("general").to_string();
+                for term in unique_terms {
+                    *term_counts.entry((term, scope.clone())).or_insert(0) += 1;
+                }
+            }
+        }
+        for ((term, scope), delta) in term_counts {
+            let sql = "UPDATE idf_index SET document_frequency = document_frequency + $delta WHERE term = $term AND scope = $scope; IF count() == 0 THEN INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $delta }; END;";
+            let _ = self.db.query(sql).bind(("term", term)).bind(("scope", scope)).bind(("delta", delta)).await;
+        }
+        Ok(())
     }
 
     /// Backfills document term frequencies into the `idf_index` SurrealDB table using paginated episode iteration.

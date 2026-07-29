@@ -619,13 +619,25 @@ impl RealLlmProvider {
                 || prompt.contains("emerged independently")
             {
                 return Ok(r#"{"target_pattern": "test_graduated_pattern", "action_to_avoid": "avoid_test", "causal_explanation": "why_test", "prescribed_remedy": "do_test", "confidence": 0.95}"#.to_string());
+            } else if prompt.contains("Synthesize atomic causal insights") {
+                if prompt.contains("No ORM") || prompt.contains("never use ORMs") {
+                    return Ok(r#"{"items": [{"title": "Direct SQL Mandate to Avoid ORM Impedance Mismatch", "item_type": "rule", "content": "We should never use ORMs for database queries because they cause impedance mismatch and slow down performance.", "metacognitive_confidence": 95}]}"#.to_string());
+                } else if prompt.contains("ORM") || prompt.contains("Always use ORMs") {
+                    return Ok(r#"{"items": [{"title": "ORM Usage Pattern for High Performance Data Access", "item_type": "pattern", "content": "Always use ORMs for all database queries to ensure safety and prevent SQL injection vulnerabilities.", "metacognitive_confidence": 90}]}"#.to_string());
+                } else if prompt.contains("Episode 1") || prompt.contains("Episode 2") {
+                    return Ok(r#"{"items": [{"title": "Split Analysis One Pattern", "item_type": "pattern", "content": "Comprehensive architectural pattern describing how split analysis maintains deterministic state across distributed nodes during compactor runs.", "metacognitive_confidence": 95}]}"#.to_string());
+                } else if prompt.contains("Episode 3") || prompt.contains("Episode 4") {
+                    return Ok(r#"{"items": [{"title": "Split Analysis Two Failure Mode", "item_type": "failure_mode", "content": "Detailed failure mode analysis demonstrating memory leak vulnerabilities when background handles are dropped prematurely without RAII guards.", "metacognitive_confidence": 90}]}"#.to_string());
+                } else {
+                    return Ok(r#"{"items": [{"title": "Split Analysis General Lesson", "item_type": "lesson", "content": "Fundamental architectural lesson on configuring cluster boundaries to prevent semantic drift across multi-project memory graphs.", "metacognitive_confidence": 85}]}"#.to_string());
+                }
             } else if prompt.contains("Please analyze these events:") {
                 if prompt.contains("Episode 1") || prompt.contains("Episode 2") {
-                    return Ok(r#"{"title": "Split Analysis One", "summary": "Summary of cluster 1", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    return Ok(r#"{"title": "Split Analysis One", "summary": "Summary of cluster 1 containing key decisions and outcomes for this episode.", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
                 } else if prompt.contains("Episode 3") || prompt.contains("Episode 4") {
-                    return Ok(r#"{"title": "Split Analysis Two", "summary": "Summary of cluster 2", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    return Ok(r#"{"title": "Split Analysis Two", "summary": "Summary of cluster 2 containing key decisions and outcomes for this episode.", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
                 } else {
-                    return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
+                    return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster containing key decisions and outcomes for this episode.", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
                 }
             } else {
                 return Ok(

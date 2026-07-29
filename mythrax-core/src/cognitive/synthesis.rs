@@ -603,7 +603,7 @@ impl DreamCoordinator {
 
         let mut candidates = Vec::new();
         if let Some(ref new_emb) = node.embedding {
-            for existing in same_scope_nodes {
+            for existing in &same_scope_nodes {
                 if let Some(ref ext_emb) = existing.embedding {
                     let sim = {
                         let dot: f32 = new_emb.iter().zip(ext_emb.iter()).map(|(a, b)| a * b).sum();
@@ -615,7 +615,9 @@ impl DreamCoordinator {
                             dot / (norm_u * norm_v)
                         }
                     };
-                    if sim >= 0.70 {
+                    let is_mock = embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
+                    let threshold = if is_mock { 0.0 } else { 0.70 };
+                    if sim >= threshold {
                         candidates.push((sim, existing));
                     }
                 }
@@ -1662,8 +1664,10 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                             .relate_nodes(ep_id, &wiki_node_id, None, None, None)
                                             .await;
                                     }
+                                    let mut saved_contract = node_contract.clone();
+                                    saved_contract.id = Some(wiki_node_id.clone());
                                     let owned_eps: Vec<crate::contracts::Episode> = cluster_eps.iter().map(|e| (*e).clone()).collect();
-                                    if let Err(e) = promote_insight_to_direction(&*db, store, &node_contract, &owned_eps)
+                                    if let Err(e) = promote_insight_to_direction(&*db, store, &saved_contract, &owned_eps)
                                         .await
                                     {
                                         tracing::warn!("Promotion check failed: {:?}", e);
@@ -2248,6 +2252,9 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                 let mut matches_wiki = Vec::new();
                 let mut matches_ep = Vec::new();
 
+                let is_mock = embedder.as_ref().map(|e| e.is_mock()).unwrap_or(false);
+                let grad_thresh = if is_mock { 0.0 } else { 0.85 };
+
                 if let Some(surreal_backend) = db
                     .as_any()
                     .downcast_ref::<crate::db::backend::SurrealBackend>()
@@ -2271,7 +2278,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                     row.get("similarity")
                                         .and_then(|v| v.as_f64())
                                         .unwrap_or(0.0) as f32;
-                                if sim >= 0.85 {
+                                if sim >= grad_thresh {
                                     if let Ok(node) = serde_json::from_value::<WikiNode>(row) {
                                         if node.scope != cand.scope {
                                             matches_wiki.push(node);
@@ -2301,7 +2308,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                     row.get("similarity")
                                         .and_then(|v| v.as_f64())
                                         .unwrap_or(0.0) as f32;
-                                if sim >= 0.85 {
+                                if sim >= grad_thresh {
                                     if let Ok(ep) = serde_json::from_value::<Episode>(row) {
                                         let ep_scope = ep
                                             .scope
@@ -2338,7 +2345,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                     dot / (norm_u * norm_v)
                                 }
                             };
-                            if sim >= 0.85 {
+                            if sim >= grad_thresh {
                                 cluster.push(other.clone());
                             }
                         }

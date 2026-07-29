@@ -154,7 +154,7 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // 2. Run run_dream(mode="deep") synchronously
     // In deep dreaming mode, all scopes are processed.
     coordinator
-        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("deep"), None)
+        .run_dream(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, Some("deep"), backend.embedder.clone())
         .await?;
 
     // 3. Assertions
