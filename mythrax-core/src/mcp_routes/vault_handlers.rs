@@ -81,6 +81,25 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             }))
         }
         "reprocess" => {
+            let reset_processed = args
+                .get("reset_processed")
+                .or_else(|| args.get("reset"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            if reset_processed {
+                if let Some(surreal_backend) = state
+                    .backend
+                    .as_any()
+                    .downcast_ref::<SurrealBackend>()
+                {
+                    let _ = surreal_backend
+                        .db
+                        .query("UPDATE episode SET processed_in_dream = false;")
+                        .await;
+                }
+            }
+
             let mut count = 0;
             let mut offset = 0;
             let limit = 500;
@@ -107,7 +126,11 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("Reprocessed {} episodes with missing vector embeddings.", count)
+                        "text": if reset_processed {
+                            format!("Reset processed_in_dream flag to false and reprocessed {} episodes with missing vector embeddings.", count)
+                        } else {
+                            format!("Reprocessed {} episodes with missing vector embeddings.", count)
+                        }
                     }
                 ]
             }))
@@ -150,17 +173,32 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                         tracing::error!("Background dream run failed: {:?}", e);
                     }
 
-                    let scope_name = scope.as_deref().unwrap_or("general");
-                    if let Err(e) = compactor
-                        .compact_scope(
-                            state_clone.backend.clone(),
-                            &state_clone.store,
-                            scope_name,
-                            embedder,
-                        )
-                        .await
-                    {
-                        tracing::error!("Background compact_scope failed: {:?}", e);
+                    let scopes_to_compact = if let Some(ref s) = scope {
+                        if s == "all" || s.is_empty() {
+                            state_clone.backend.get_active_scopes().await.unwrap_or_else(|_| vec!["general".to_string(), "mythrax".to_string()])
+                        } else {
+                            vec![s.clone()]
+                        }
+                    } else {
+                        state_clone.backend.get_active_scopes().await.unwrap_or_else(|_| vec!["general".to_string(), "mythrax".to_string()])
+                    };
+
+                    for scope_name in scopes_to_compact {
+                        if let Err(e) = compactor
+                            .compact_scope(
+                                state_clone.backend.clone(),
+                                &state_clone.store,
+                                &scope_name,
+                                embedder.clone(),
+                            )
+                            .await
+                        {
+                            tracing::error!("Background compact_scope failed for scope '{}': {:?}", scope_name, e);
+                        }
+                    }
+                    crate::embeddings::evict_global_embedder();
+                    if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+                        broker.evict_unused_models().await;
                     }
                 });
 

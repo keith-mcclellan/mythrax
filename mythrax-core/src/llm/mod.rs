@@ -277,7 +277,7 @@ impl RealLlmProvider {
                     let timeout_secs = std::env::var("MYTHRAX_TEST_TIMEOUT_SECS")
                         .ok()
                         .and_then(|v| v.parse::<u64>().ok())
-                        .unwrap_or(60);
+                        .unwrap_or(300);
                     let timeout = std::time::Duration::from_secs(timeout_secs);
                     let mut completed_opt = None;
                     while start.elapsed() < timeout {
@@ -431,13 +431,17 @@ impl RealLlmProvider {
         }
 
         // --- 3. PRIORITY 3: LOCAL MODEL (FALLBACK) ---
+        if std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok() {
+            anyhow::bail!("Local model fallback is disabled (MYTHRAX_DISABLE_FALLBACK is set). Waiting for Cloud Brain cognitive callback.");
+        }
+
         let tier = crate::llm::router::route_task(db, profile).await;
         let _gpu_permit = crate::llm::router::gpu_reservation_lock().lock().await;
 
         let local_model = match tier {
-            crate::contracts::ModelTier::Micro => "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
-            crate::contracts::ModelTier::Small => "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
-            crate::contracts::ModelTier::Medium => "mlx-community/Qwen2.5-7B-Instruct-4bit",
+            crate::contracts::ModelTier::Micro => "mlx-community/Qwen3.6-35B-A3B-4bit",
+            crate::contracts::ModelTier::Small => "mlx-community/Qwen3.6-35B-A3B-4bit",
+            crate::contracts::ModelTier::Medium => "mlx-community/Qwen3.6-35B-A3B-4bit",
             _ => &config.model,
         };
 

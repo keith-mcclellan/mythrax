@@ -744,7 +744,7 @@ pub async fn bulk_ingest_vault(
                         let fb_prompt =
                             format!("Generate an abstract noun-phrase Arbor title for transcript: {}", dir_name);
                         let sys_prompt = "You are a title generator implementing Arbor (arXiv:2606.11926v1). Generate an abstract, noun-phrase topic title. NEVER write event status like 'X Was Validated'. Format strictly as index(:|-|:)title, one per line.";
-                        llm.routed_completion(
+                        let resolved_title = llm.routed_completion(
                             db,
                             &crate::contracts::TaskProfile::new(
                                 crate::contracts::TaskArchetype::Extraction,
@@ -752,8 +752,33 @@ pub async fn bulk_ingest_vault(
                             Some(sys_prompt),
                             &fb_prompt,
                         )
-                        .await
-                        .unwrap_or_else(|_| format!("antigravity_{}", dir_name))
+                        .await;
+
+                        match resolved_title {
+                            Ok(t) if !t.is_empty() => t,
+                            _ => {
+                                if let Some(surreal) =
+                                    db.as_any().downcast_ref::<crate::db::SurrealBackend>()
+                                {
+                                    let task = crate::db::cognitive_tasks::CognitiveTask {
+                                        id: format!("cognitive_task:{}", uuid::Uuid::new_v4()),
+                                        task_type: "Extraction".to_string(),
+                                        prompt: fb_prompt,
+                                        system_instruction: sys_prompt.to_string(),
+                                        expected_format: "Any".to_string(),
+                                        priority: "Normal".to_string(),
+                                        created_at: chrono::Utc::now(),
+                                        status: "Pending".to_string(),
+                                        result: None,
+                                        ttl_minutes: 60,
+                                        injected_at: None,
+                                        session_id: Some(dir_name.clone()),
+                                    };
+                                    let _ = surreal.create_cognitive_task(&task).await;
+                                }
+                                format!("antigravity_{}", dir_name)
+                            }
+                        }
                     };
 
                     let part1_title = format!("{}_part1", title);
@@ -1141,6 +1166,8 @@ pub async fn bulk_ingest_vault(
                             scope: resolved_scope.clone(),
                             vault_path: Some(wiki_rel),
                             embedding: None,
+                            item_type: Some("episode_summary".to_string()),
+                            node_type: Some("episode_summary".to_string()),
                             ..Default::default()
                         };
 

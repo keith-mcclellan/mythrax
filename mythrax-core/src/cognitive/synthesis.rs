@@ -60,16 +60,85 @@ pub fn slugify_title(text: &str) -> String {
     while slug.contains("__") {
         slug = slug.replace("__", "_");
     }
-    let trimmed = slug.trim_matches(|c| c == '_' || c == '-').to_string();
-    if trimmed.len() > 100 {
-        if let Some(pos) = trimmed[..100].rfind('_') {
-            trimmed[..pos].to_string()
-        } else {
-            trimmed[..100].to_string()
+    slug.trim_matches('_').to_lowercase()
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+pub struct AtomicInsightItem {
+    pub title: String,
+    pub item_type: String, // "pattern" | "constraint" | "failure_mode" | "lesson"
+    pub content: String,
+    #[serde(default)]
+    pub metacognitive_confidence: Option<i32>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct ClusterAnalysis {
+    #[serde(default)]
+    pub items: Vec<AtomicInsightItem>,
+    // Backward-compat fallback fields:
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub metacognitive_confidence: Option<i32>,
+    #[serde(default)]
+    pub node_type: Option<String>,
+}
+
+impl ClusterAnalysis {
+    pub fn resolved_items(self, llm_res_fallback: &str) -> Vec<AtomicInsightItem> {
+        if !self.items.is_empty() {
+            return self.items;
         }
-    } else {
-        trimmed
+        if let (Some(t), Some(s)) = (self.title, self.summary) {
+            if !t.trim().is_empty() || !s.trim().is_empty() {
+                return vec![AtomicInsightItem {
+                    title: if t.trim().is_empty() {
+                        format!("Insight {}", &uuid::Uuid::new_v4().to_string()[..8])
+                    } else {
+                        t
+                    },
+                    item_type: "lesson".to_string(),
+                    content: s,
+                    metacognitive_confidence: self.metacognitive_confidence,
+                }];
+            }
+        }
+        if !llm_res_fallback.trim().is_empty() {
+            tracing::warn!("ClusterAnalysis produced empty items and no fallback fields; using raw output fallback");
+            return vec![AtomicInsightItem {
+                title: format!("Cluster Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
+                item_type: "lesson".to_string(),
+                content: llm_res_fallback.to_string(),
+                metacognitive_confidence: None,
+            }];
+        }
+        tracing::warn!("ClusterAnalysis produced empty items and no fallback fields");
+        Vec::new()
     }
+}
+
+pub fn validate_insight_item(item: &AtomicInsightItem) -> Result<(), String> {
+    if item.content.trim().len() < 100 {
+        return Err(format!(
+            "Item '{}' content length ({}) is under 100 characters minimum threshold",
+            item.title,
+            item.content.trim().len()
+        ));
+    }
+    let lower_content = item.content.trim().to_lowercase();
+    let passive_prefixes = ["was ", "were ", "is ", "are ", "been "];
+    for prefix in passive_prefixes {
+        if lower_content.starts_with(prefix) {
+            return Err(format!(
+                "Item '{}' starts with passive voice verb prefix '{}'",
+                item.title, prefix
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_rule_path(scope: &str, action_to_avoid: &str) -> String {
@@ -305,38 +374,6 @@ fn parse_insight_note(content: &str, path: &Path, scope: &str) -> Result<Insight
         source_episodes,
         vault_path: path.to_string_lossy().to_string(),
     })
-}
-
-fn calculate_centroid(source_episodes: &[String], all_episodes: &[Episode]) -> Option<Vec<f32>> {
-    let mut sum = Vec::new();
-    let mut count = 0;
-    for ep_id in source_episodes {
-        if let Some(ep) = all_episodes.iter().find(|e| e.id.as_ref() == Some(ep_id))
-            && let Some(ref emb) = ep.embedding
-        {
-            if sum.is_empty() {
-                sum = vec![0.0; emb.len()];
-            }
-            for (i, val) in emb.iter().enumerate() {
-                sum[i] += val;
-            }
-            count += 1;
-        }
-    }
-    if count > 0 {
-        for val in &mut sum {
-            *val /= count as f32;
-        }
-        let norm: f32 = sum.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for val in &mut sum {
-                *val /= norm;
-            }
-        }
-        Some(sum)
-    } else {
-        None
-    }
 }
 
 pub struct DreamCoordinator {
@@ -1037,12 +1074,13 @@ impl DreamCoordinator {
                             .filter(|ins| ins.scope == scope)
                             .collect();
 
+                        let scope_nodes = db.get_wiki_nodes_paginated(100, 0).await.unwrap_or_default();
                         let mut centroids = Vec::new();
                         for ins in &scope_insights {
-                            if let Some(cent) =
-                                calculate_centroid(&ins.source_episodes, &chunk_unprocessed)
-                            {
-                                centroids.push((ins.clone(), cent));
+                            if let Some(node) = scope_nodes.iter().find(|n| n.name == ins.title) {
+                                if let Some(ref emb) = node.embedding {
+                                    centroids.push((ins.clone(), emb.clone()));
+                                }
                             }
                         }
 
@@ -1208,15 +1246,24 @@ impl DreamCoordinator {
                                     }
                                 }
 
+                                let content_embedding = if let Some(ref emb) = embedder {
+                                    let text_to_embed = format!("{}: {}", ins.title, updated_summary);
+                                    emb.embed(&text_to_embed).await.ok()
+                                } else {
+                                    None
+                                };
+
                                 let node_contract = WikiNode {
                                     id: None,
                                     name: ins.title.clone(),
                                     content: updated_summary.clone(),
                                     scope: scope.clone(),
                                     vault_path: Some(relative_path.clone()),
-                                    embedding: None,
+                                    embedding: content_embedding,
                                     temporal_range_start: temporal_start,
                                     temporal_range_end: temporal_end,
+                                    item_type: Some("lesson".to_string()),
+                                    node_type: Some("insight".to_string()),
                                     ..Default::default()
                                 };
                                 let source_eps = vec![ep.id.clone().unwrap_or_default()];
@@ -1396,20 +1443,53 @@ impl DreamCoordinator {
                                 ));
                             }
 
-                            let base_sys = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Analyze the cluster of events and output a JSON object containing: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
-                    CRITICAL ARBOR INSIGHT RULES (ιn):\n\
-                    1. TITLE: Must be a concise, abstract, noun-phrase topic or reusable design pattern (e.g., 'Adversarial CTO Subagent Validation Protocol', '50-Chunk Single-Pass Transcript Ingestion'). NEVER use event-record passive voice or completion status (e.g. DO NOT write 'X Was Validated', 'Y Was Completed', 'CTO Reviews Arbor Alignment Validated').\n\
-                    2. SUMMARY: Must focus on CAUSAL LESSONS, STRUCTURAL PATTERNS, and WHY/HOW decisions were made (what worked, what failed, root causes, and architectural principles). DO NOT summarize turn-by-turn narrative history or transient step logs.\n\n\
-                    For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
-                    - 1: Anecdotal / Single Episode\n\
-                    - 3: Corroborated / Tested\n\
-                    - 5: Proven / Universal\n\n\
-                    For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
+                            let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+Analyze the events and extract distilled causal insights (ι_n). Output a JSON object matching this schema:
+{
+  "items": [
+    {
+      "title": "<Abstract Noun-Phrase Title>",
+      "item_type": "<pattern | constraint | failure_mode | lesson>",
+      "content": "<2-3 sentence causal explanation of what was tried, what happened, and why>",
+      "metacognitive_confidence": 90
+    }
+  ]
+}
+
+CRITICAL ARBOR INSIGHT RULES:
+1. ι_n must answer "what was tried, what happened, and why" — NOT summarize turn-by-turn activities.
+2. Return at most 5 items per cluster.
+3. Each item's content MUST be at least 2-3 sentences explaining the underlying causal mechanism.
+4. NEVER start titles or content with event-record passive voice (e.g. DO NOT write "Was configured", "Were validated", "Task was completed").
+
+FEW-SHOT EXAMPLES BY ITEM_TYPE:
+
+- "pattern":
+  title: "Post-Task Metal Cache Eviction Protocol"
+  item_type: "pattern"
+  content: "Call mlx_rs::transforms::compile::clear_cache() immediately upon completion of compaction threads to release C++ GPU memory pools. Without explicit eviction, Metal retains ~2.3GB of JIT-compiled kernels beyond the model's logical lifetime, triggering swap pressure."
+
+- "constraint":
+  title: "SurrealDB 50-Item Batch Transaction Ceiling"
+  item_type: "constraint"
+  content: "Transactions exceeding 50 episode inserts trigger SurrealDB lock contention timeouts (>30s). Root cause: SurrealDB's MVCC layer holds row-level locks for the duration of the transaction. Batch sizes must be bounded to ≤50 items."
+
+- "failure_mode":
+  title: "0.5B Model Token Repetition Corruption"
+  item_type: "failure_mode"
+  content: "Small instruct models (Qwen3-0.6B) generate repetitive token loops during multi-turn JSON synthesis when context exceeds 4096 tokens, corrupting cluster output parsing. Mitigation: route synthesis tasks to ≥8B models via TaskArchetype routing."
+
+- "lesson":
+  title: "Centroid Embedding Dilution Effect"
+  item_type: "lesson"
+  content: "Averaging episode embeddings produces a centroid that drifts toward the mean of the embedding space, reducing discriminative power for DBSCAN clustering. Content-derived embeddings from the synthesized insight text produce tighter, more semantically coherent clusters."
+
+For metacognitive_confidence, use an integer scale (1-100)."#;
                             let sys_prompt =
                                 crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
 
                             let prompt_text = format!(
-                                "Please synthesize distilled causal insights (ιn) from these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"<Abstract Noun-Phrase Pattern>\", \"summary\": \"<Causal Lessons & Architectural Principles>\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
+                                "Synthesize atomic causal insights from these events:\n\n{}\nRespond ONLY with valid JSON matching {{\"items\": [...]}}.",
                                 events_text
                             );
 
@@ -1431,28 +1511,20 @@ impl DreamCoordinator {
                                 original_tokens,
                             );
 
-                            #[derive(serde::Deserialize)]
-                            struct ClusterAnalysis {
-                                title: String,
-                                summary: String,
-                                #[serde(default)]
-                                metacognitive_confidence: Option<i32>,
-                                #[serde(default)]
-                                node_type: Option<String>,
-                            }
-
                             let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
                                 Ok(a) => a,
                                 Err(_) => ClusterAnalysis {
-                                    title: format!(
+                                    items: Vec::new(),
+                                    title: Some(format!(
                                         "Cluster Analysis {}",
                                         &uuid::Uuid::new_v4().to_string()[..8]
-                                    ),
-                                    summary: llm_res,
+                                    )),
+                                    summary: Some(llm_res),
                                     metacognitive_confidence: None,
                                     node_type: None,
                                 },
                             };
+                            let resolved_items = analysis.resolved_items("synthesis");
 
                             let cluster_ep_ids: Vec<String> = cluster_eps
                                 .iter()
@@ -1473,90 +1545,113 @@ impl DreamCoordinator {
                             let temporal_start = cluster_starts.iter().min().cloned();
                             let temporal_end = cluster_starts.iter().max().cloned();
 
-                            let clean_title = slugify_title(&analysis.title);
-                            let relative_path = format!("wiki/{}/insights/{}.md", scope, clean_title);
-                            let wikilinks_list = cluster_ep_ids
-                                .iter()
-                                .map(|id| {
-                                    let clean_id = id.trim_start_matches("episode:");
-                                    format!("- [[episodes/{}]]", clean_id)
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                            for item in resolved_items {
+                                if let Err(reason) = validate_insight_item(&item) {
+                                    tracing::warn!("Atomic insight quality gate REJECTED item: {}", reason);
+                                    continue;
+                                }
 
-                            let insight_content = format!(
-                                "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n# {}\n\n## 🧠 Causal Lessons & Architectural Principles\n{}\n\n## Source Episodes\n{}\n",
-                                analysis.title,
-                                scope,
-                                cluster_ep_ids
+                                let clean_title = slugify_title(&item.title);
+                                let relative_path = format!("wiki/{}/insights/{}/{}.md", scope, item.item_type, clean_title);
+
+                                let wikilinks_list = cluster_ep_ids
                                     .iter()
-                                    .map(|id| format!("  - \"{}\"", id))
+                                    .map(|id| {
+                                        let clean_id = id.trim_start_matches("episode:");
+                                        format!("- [[episodes/{}]]", clean_id)
+                                    })
                                     .collect::<Vec<_>>()
-                                    .join("\n"),
-                                analysis.metacognitive_confidence.unwrap_or(3),
-                                analysis.node_type.as_deref().unwrap_or("insight"),
-                                analysis.title,
-                                analysis.summary,
-                                wikilinks_list
-                            );
-                            store.write_file(&relative_path, &insight_content)?;
+                                    .join("\n");
 
-                            let centroid = calculate_centroid(&cluster_ep_ids, &chunk_unprocessed);
-                            let node_contract = WikiNode {
-                                id: None,
-                                name: analysis.title.clone(),
-                                content: analysis.summary.clone(),
-                                scope: scope.clone(),
-                                vault_path: Some(relative_path.clone()),
-                                embedding: centroid,
-                                metacognitive_confidence: analysis.metacognitive_confidence,
-                                node_type: analysis.node_type.clone().or(Some("insight".to_string())),
-                                temporal_range_start: temporal_start,
-                                temporal_range_end: temporal_end,
-                                ..Default::default()
-                            };
-                            if let Ok(wiki_node_id) = self
-                                .save_wiki_node_with_contradiction_resolution(
-                                    &*db,
-                                    store,
-                                    &node_contract,
-                                    embedder.clone(),
-                                    cluster_ep_ids.clone(),
-                                )
-                                .await
-                            {
-                                for ep in &cluster_eps {
-                                    if let Some(ref ep_id) = ep.id {
-                                        let ep_start = ep.temporal_range_start.or_else(|| {
-                                            ep.created_at
-                                                .as_ref()
-                                                .and_then(|s| {
-                                                    chrono::DateTime::parse_from_rfc3339(s).ok()
-                                                })
-                                                .map(|dt| dt.with_timezone(&chrono::Utc))
-                                        });
-                                        let _ = db
-                                            .relate_nodes(
-                                                ep_id,
-                                                &wiki_node_id,
-                                                ep_start,
-                                                ep_start,
-                                                Some(1.0),
-                                            )
-                                            .await;
+                                let insight_content = format!(
+                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nitem_type: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"insight\"\n---\n\n# {}\n\n{}\n\n## Source Episodes\n{}\n",
+                                    item.title,
+                                    scope,
+                                    item.item_type,
+                                    cluster_ep_ids
+                                        .iter()
+                                        .map(|id| format!("  - \"{}\"", id))
+                                        .collect::<Vec<_>>()
+                                        .join("\n"),
+                                    item.metacognitive_confidence.unwrap_or(80),
+                                    item.title,
+                                    item.content,
+                                    wikilinks_list
+                                );
+                                store.write_file(&relative_path, &insight_content)?;
+
+                                let content_embedding = if let Some(ref emb) = embedder {
+                                    let text_to_embed = format!("{}: {}", item.title, item.content);
+                                    emb.embed(&text_to_embed).await.ok()
+                                } else {
+                                    None
+                                };
+
+                                let mut is_duplicate = false;
+                                if let Some(ref new_emb) = content_embedding {
+                                    let existing_nodes = db.get_wiki_nodes_paginated(100, 0).await.unwrap_or_default();
+                                    for ext in existing_nodes {
+                                        if ext.scope == scope && ext.item_type.as_deref() == Some(&item.item_type) {
+                                            if let Some(ref ext_emb) = ext.embedding {
+                                                let sim: f32 = new_emb.iter().zip(ext_emb.iter()).map(|(a, b)| a * b).sum();
+                                                if sim > 0.92 {
+                                                    tracing::info!(
+                                                        "Deduplication merge triggered for item '{}' (similarity {:.4})",
+                                                        item.title,
+                                                        sim
+                                                    );
+                                                    is_duplicate = true;
+                                                    let updated_node = WikiNode {
+                                                        metacognitive_confidence: Some(
+                                                            ext.metacognitive_confidence.unwrap_or(80) + 5,
+                                                        ),
+                                                        ..ext
+                                                    };
+                                                    let _ = db.save_wiki_node(&updated_node).await;
+                                                    break;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 
-                                let mut node_with_id = node_contract.clone();
-                                node_with_id.id = Some(wiki_node_id);
-                                if let Ok(mem_resp) = db.get_memory_nodes(&cluster_ep_ids).await {
-                                    if let Err(e) = promote_insight_to_direction(
+                                if is_duplicate {
+                                    continue;
+                                }
+
+                                let node_contract = WikiNode {
+                                    id: None,
+                                    name: item.title.clone(),
+                                    content: item.content.clone(),
+                                    scope: scope.clone(),
+                                    vault_path: Some(relative_path.clone()),
+                                    embedding: content_embedding,
+                                    metacognitive_confidence: item.metacognitive_confidence,
+                                    item_type: Some(item.item_type.clone()),
+                                    node_type: Some("insight".to_string()),
+                                    temporal_range_start: temporal_start,
+                                    temporal_range_end: temporal_end,
+                                    ..Default::default()
+                                };
+
+                                if let Ok(wiki_node_id) = self
+                                    .save_wiki_node_with_contradiction_resolution(
                                         &*db,
                                         store,
-                                        &node_with_id,
-                                        &mem_resp.episodes,
+                                        &node_contract,
+                                        embedder.clone(),
+                                        cluster_ep_ids.clone(),
                                     )
                                     .await
+                                {
+                                    for ep_id in &cluster_ep_ids {
+                                        let _ = db
+                                            .relate_nodes(ep_id, &wiki_node_id, None, None, None)
+                                            .await;
+                                    }
+                                    let owned_eps: Vec<crate::contracts::Episode> = cluster_eps.iter().map(|e| (*e).clone()).collect();
+                                    if let Err(e) = promote_insight_to_direction(&*db, store, &node_contract, &owned_eps)
+                                        .await
                                     {
                                         tracing::warn!("Promotion check failed: {:?}", e);
                                     }
@@ -3362,6 +3457,158 @@ mod tests {
         let truncated = truncate_by_tokens(&long_text, 2048, None);
         assert_eq!(truncated.len(), 2048 * 4);
     }
+
+    #[test]
+    fn test_cluster_analysis_deserialization_with_items() {
+        let json_str = r#"{
+            "items": [
+                {
+                    "title": "Post-Task Eviction",
+                    "item_type": "pattern",
+                    "content": "Clear GPU cache immediately after compaction to release memory pools.",
+                    "metacognitive_confidence": 95
+                },
+                {
+                    "title": "Batch Ceiling Limit",
+                    "item_type": "constraint",
+                    "content": "SurrealDB transactions over 50 items trigger lock contention.",
+                    "metacognitive_confidence": 90
+                }
+            ]
+        }"#;
+        let analysis: ClusterAnalysis = serde_json::from_str(json_str).unwrap();
+        let items = analysis.resolved_items("");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "Post-Task Eviction");
+        assert_eq!(items[0].item_type, "pattern");
+        assert_eq!(items[0].metacognitive_confidence, Some(95));
+        assert_eq!(items[1].item_type, "constraint");
+    }
+
+    #[test]
+    fn test_cluster_analysis_legacy_fallback() {
+        let json_str = r#"{
+            "title": "Legacy Insight Title",
+            "summary": "Legacy insight summary content.",
+            "metacognitive_confidence": 80
+        }"#;
+        let analysis: ClusterAnalysis = serde_json::from_str(json_str).unwrap();
+        let items = analysis.resolved_items("");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Legacy Insight Title");
+        assert_eq!(items[0].item_type, "lesson");
+        assert_eq!(items[0].content, "Legacy insight summary content.");
+        assert_eq!(items[0].metacognitive_confidence, Some(80));
+    }
+
+    #[test]
+    fn test_cluster_analysis_empty_items_graceful_handling() {
+        let json_str = r#"{"items": []}"#;
+        let analysis: ClusterAnalysis = serde_json::from_str(json_str).unwrap();
+        let items = analysis.resolved_items("");
+        assert_eq!(items.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_wiki_node_item_type_roundtrip() {
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let node = WikiNode {
+            name: "Test Constraint Pattern".to_string(),
+            content: "SurrealDB batch limit transaction ceiling is 50.".to_string(),
+            scope: "test".to_string(),
+            item_type: Some("constraint".to_string()),
+            ..Default::default()
+        };
+        let saved_id = backend.save_wiki_node_db(&node).await.unwrap();
+        assert!(saved_id.starts_with("wiki_node:"));
+
+        let nodes = backend.get_wiki_nodes_paginated_db(10, 0).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].item_type.as_deref(), Some("constraint"));
+    }
+
+    #[tokio::test]
+    async fn test_wiki_node_item_type_contradiction_resolution() {
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = crate::store::MarkdownStore::new(temp_dir.path()).unwrap();
+        let coordinator = DreamCoordinator::new();
+
+        let node = WikiNode {
+            name: "Failure Mode Eviction".to_string(),
+            content: "GPU cache eviction missing causes memory leak.".to_string(),
+            scope: "test".to_string(),
+            item_type: Some("failure_mode".to_string()),
+            ..Default::default()
+        };
+
+        let saved_id = coordinator
+            .save_wiki_node_with_contradiction_resolution(&backend, &store, &node, None, vec![])
+            .await
+            .unwrap();
+        assert!(saved_id.starts_with("wiki_node:"));
+
+        let nodes = backend.get_wiki_nodes_paginated_db(10, 0).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].item_type.as_deref(), Some("failure_mode"));
+    }
+
+    #[tokio::test]
+    async fn test_deduplication_cross_item_type_guard() {
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        backend.init().await.unwrap();
+
+        let node1 = WikiNode {
+            name: "Metal Eviction Pattern".to_string(),
+            content: "Call clear_cache after compaction to free Metal GPU memory pools.".to_string(),
+            scope: "test".to_string(),
+            item_type: Some("pattern".to_string()),
+            embedding: Some(vec![1.0; 768]),
+            ..Default::default()
+        };
+        backend.save_wiki_node_db(&node1).await.unwrap();
+
+        let node2 = WikiNode {
+            name: "Metal Eviction Constraint".to_string(),
+            content: "Call clear_cache after compaction to free Metal GPU memory pools.".to_string(),
+            scope: "test".to_string(),
+            item_type: Some("constraint".to_string()),
+            embedding: Some(vec![1.0; 768]),
+            ..Default::default()
+        };
+        backend.save_wiki_node_db(&node2).await.unwrap();
+
+        let nodes = backend.get_wiki_nodes_paginated_db(10, 0).await.unwrap();
+        assert_eq!(nodes.len(), 2);
+        let item_types: Vec<_> = nodes.iter().filter_map(|n| n.item_type.clone()).collect();
+        assert!(item_types.contains(&"pattern".to_string()));
+        assert!(item_types.contains(&"constraint".to_string()));
+    }
+
+    #[test]
+    fn test_quality_gate_rejects_short_items() {
+        let short_item = AtomicInsightItem {
+            title: "Short Item".to_string(),
+            item_type: "lesson".to_string(),
+            content: "Too short.".to_string(),
+            metacognitive_confidence: Some(80),
+        };
+        assert!(validate_insight_item(&short_item).is_err());
+    }
+
+    #[test]
+    fn test_quality_gate_rejects_passive_voice_items() {
+        let passive_item = AtomicInsightItem {
+            title: "Passive Item".to_string(),
+            item_type: "lesson".to_string(),
+            content: "Was configured to run cleanup routines after every single task completed successfully in the background queue.".to_string(),
+            metacognitive_confidence: Some(80),
+        };
+        assert!(validate_insight_item(&passive_item).is_err());
+    }
 }
 
 pub async fn graduate_wisdom(
@@ -3473,7 +3720,8 @@ pub async fn graduate_wisdom(
             continue;
         }
 
-        let rule_class = "system_constraint";
+        let is_failure_mode = cluster.iter().any(|n| n.item_type.as_deref() == Some("failure_mode"));
+        let rule_class = if is_failure_mode { "failure_mode_prevention" } else { "system_constraint" };
         let target_pattern = cluster[0].name.clone();
         let slug = slugify_title(&target_pattern);
         let rule_path = format!("wisdom/{}/{}.md", rule_class, slug);
@@ -3484,38 +3732,46 @@ pub async fn graduate_wisdom(
             .collect::<Vec<_>>()
             .join("\n");
 
-        let sys_prompt = "You are a Principal Systems Architect synthesizing global wisdom rules from cross-project converging insights.";
-        let llm_prompt = format!(
-            "Analyze the following cross-project converging direction nodes for pattern '{}':\n{}\n\nSynthesize two structured outputs:\n1. ACTION_TO_AVOID: A specific antipattern or action to avoid.\n2. CAUSAL_EXPLANATION: A detailed explanation of why this action causes failure.",
-            target_pattern, cluster_contents
-        );
+        let (action_to_avoid, causal_explanation) = if is_failure_mode {
+            let failure_node = cluster.iter().find(|n| n.item_type.as_deref() == Some("failure_mode")).unwrap();
+            (
+                failure_node.content.clone(),
+                failure_node.causal_insight.clone().unwrap_or_else(|| failure_node.content.clone()),
+            )
+        } else {
+            let sys_prompt = "You are a Principal Systems Architect synthesizing global wisdom rules from cross-project converging insights.";
+            let llm_prompt = format!(
+                "Analyze the following cross-project converging direction nodes for pattern '{}':\n{}\n\nSynthesize two structured outputs:\n1. ACTION_TO_AVOID: A specific antipattern or action to avoid.\n2. CAUSAL_EXPLANATION: A detailed explanation of why this action causes failure.",
+                target_pattern, cluster_contents
+            );
 
-        let (action_to_avoid, causal_explanation) = match crate::llm::LLMClient::default().completion(db, Some(sys_prompt), &llm_prompt).await {
-            Ok(resp) => {
-                let mut avoid = format!("Avoid pattern: {}", target_pattern);
-                let mut why = format!("Synthesized from converging insights across {} scopes: {}", cluster.len(), cluster.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join(" | "));
-                for line in resp.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with("ACTION_TO_AVOID:") || trimmed.starts_with("1. ACTION_TO_AVOID:") {
-                        avoid = trimmed.split(':').skip(1).collect::<Vec<_>>().join(":").trim().to_string();
-                    } else if trimmed.starts_with("CAUSAL_EXPLANATION:") || trimmed.starts_with("2. CAUSAL_EXPLANATION:") {
-                        why = trimmed.split(':').skip(1).collect::<Vec<_>>().join(":").trim().to_string();
+            match crate::llm::LLMClient::default().completion(db, Some(sys_prompt), &llm_prompt).await {
+                Ok(resp) => {
+                    let mut avoid = format!("Avoid pattern: {}", target_pattern);
+                    let mut why = format!("Synthesized from converging insights across {} scopes: {}", cluster.len(), cluster.iter().map(|n| n.content.as_str()).collect::<Vec<_>>().join(" | "));
+                    for line in resp.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("ACTION_TO_AVOID:") || trimmed.starts_with("1. ACTION_TO_AVOID:") {
+                            avoid = trimmed.split(':').skip(1).collect::<Vec<_>>().join(":").trim().to_string();
+                        } else if trimmed.starts_with("CAUSAL_EXPLANATION:") || trimmed.starts_with("2. CAUSAL_EXPLANATION:") {
+                            why = trimmed.split(':').skip(1).collect::<Vec<_>>().join(":").trim().to_string();
+                        }
                     }
+                    (avoid, why)
                 }
-                (avoid, why)
-            }
-            Err(_) => (
-                format!("Avoid pattern: {}", target_pattern),
-                format!(
-                    "Synthesized from converging insights across {} scopes: {}",
-                    cluster.len(),
-                    cluster
-                        .iter()
-                        .map(|n| n.content.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" | ")
+                Err(_) => (
+                    format!("Avoid pattern: {}", target_pattern),
+                    format!(
+                        "Synthesized from converging insights across {} scopes: {}",
+                        cluster.len(),
+                        cluster
+                            .iter()
+                            .map(|n| n.content.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    ),
                 ),
-            ),
+            }
         };
 
         let rule = crate::contracts::WisdomRule {

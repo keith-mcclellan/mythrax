@@ -135,10 +135,9 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
             super::manage_handlers::handle_manage_stm(state, args).await
         }
         "set" => {
-            let _provider = args
-                .get("provider")
-                .and_then(|v| v.as_str())
-                .context("Missing provider")?;
+            if args.get("key").is_none() && args.get("provider").is_none() {
+                anyhow::bail!("Missing provider or key parameter for set action");
+            }
             super::manage_handlers::handle_manage_config(state, args).await
         }
         "save_forged_assets" | "ingest_bulk" | "ingest_forge" => {
@@ -598,7 +597,7 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
         if !clean_title.is_empty() {
             let slug_title = crate::cognitive::synthesis::slugify_title(clean_title);
             if let Some(ref session_id) = task.session_id {
-                let query = "SELECT id, vault_path, name FROM episode WHERE session_id = $session_id OR id = $session_id;";
+                let query = "SELECT id, vault_path, name FROM episode WHERE session_id = $session_id OR id = $session_id OR vault_path CONTAINS $session_id;";
                 if let Ok(mut resp) = surreal_backend.db.query(query).bind(("session_id", session_id.clone())).await {
                     #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
                     struct EpRow {

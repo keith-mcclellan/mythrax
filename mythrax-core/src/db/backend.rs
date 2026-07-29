@@ -1283,6 +1283,8 @@ pub struct WikiNodeRaw {
     pub(crate) causal_insight: Option<String>,
     #[serde(default)]
     pub(crate) artifact_refs: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) item_type: Option<String>,
 }
 
 impl From<WikiNodeRaw> for WikiNode {
@@ -1304,6 +1306,7 @@ impl From<WikiNodeRaw> for WikiNode {
             raw_evidence: raw.raw_evidence,
             causal_insight: raw.causal_insight,
             artifact_refs: raw.artifact_refs,
+            item_type: raw.item_type,
         }
     }
 }

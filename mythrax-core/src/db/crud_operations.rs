@@ -1421,6 +1421,9 @@ impl SurrealBackend {
             if let Some(ref nt) = node.node_type {
                 yaml_val.insert("node_type".to_string(), serde_json::json!(nt));
             }
+            if let Some(ref it) = node.item_type {
+                yaml_val.insert("item_type".to_string(), serde_json::json!(it));
+            }
             if let Some(mc) = node.metacognitive_confidence {
                 yaml_val.insert("metacognitive_confidence".to_string(), serde_json::json!(mc));
             }
@@ -1476,6 +1479,7 @@ impl SurrealBackend {
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
                     node_type: $node_type,
+                    item_type: $item_type,
                     content_hash: $content_hash,
                     updated_at: time::now()
                 };
@@ -1495,6 +1499,7 @@ impl SurrealBackend {
                     temporal_range_end: $temporal_range_end,
                     metacognitive_confidence: $metacognitive_confidence,
                     node_type: $node_type,
+                    item_type: $item_type,
                     content_hash: $content_hash,
                     created_at: time::now(),
                     updated_at: time::now()
@@ -1532,6 +1537,7 @@ impl SurrealBackend {
             .bind(("temporal_range_end", node.temporal_range_end))
             .bind(("metacognitive_confidence", node.metacognitive_confidence))
             .bind(("node_type", node.node_type.as_deref().unwrap_or("insight")))
+            .bind(("item_type", node.item_type.as_deref()))
             .bind(("content_hash", content_hash.as_str()))
             .await?;
 

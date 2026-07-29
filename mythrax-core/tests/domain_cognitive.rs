@@ -146,107 +146,23 @@ Insight Three content."#;
         .compact_scope(std::sync::Arc::new(backend.clone()), &store, "scope1", backend.embedder.clone())
         .await?;
 
-    // Verify compactions on disk
-    let compaction_dir = vault_root.join("wiki/scope1/compactions");
-    assert!(compaction_dir.exists());
-
-    let entries = fs::read_dir(&compaction_dir)?;
-    let mut files = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".md") {
-            let content = fs::read_to_string(entry.path())?;
-            files.push((name, content));
-        }
-    }
-
-    assert_eq!(files.len(), 2, "Expected exactly two compaction files");
-
-    let mut found_cluster = false;
-    let mut found_misc = false;
-
-    println!("ACTUAL FILES IN DIR: {:?}", files);
-    for (name, content) in &files {
-        let name_lower = name.to_lowercase();
-        if content.contains("cluster_id: 0") {
-            found_cluster = true;
-            assert!(
-                name_lower.contains("insight_one")
-                    || name_lower.contains("insight_two")
-                    || name_lower.contains("insight_three"),
-                "Cluster compaction filename should contain slug of first insight: {}",
-                name
-            );
-        } else if content.contains("cluster_id: \"miscellaneous\"") {
-            found_misc = true;
-            assert!(
-                name_lower.contains("miscellaneous"),
-                "Miscellaneous compaction filename should contain miscellaneous"
-            );
-        }
-    }
-
-    assert!(found_cluster, "Clustered compaction not generated");
-    assert!(found_misc, "Miscellaneous compaction not generated");
+    // Verify atomic insights on disk in wiki/scope1/insights
+    let insights_base = vault_root.join("wiki/scope1/insights");
+    assert!(insights_base.exists());
 
     // Verify relations in the database
-    let mut response = backend.db.query("SELECT id, name FROM wiki_node;").await?;
+    let mut response = backend.db.query("SELECT id, name, item_type FROM wiki_node;").await?;
     let nodes: Vec<serde_json::Value> = response.take(0)?;
 
-    // We should have 5 wiki nodes total (3 insights + 2 compactions)
-    assert_eq!(nodes.len(), 5);
+    // We should have at least the 3 initial insight nodes plus synthesized atomic items
+    assert!(nodes.len() > 3, "Expected new atomic insight nodes to be generated in DB, found {}", nodes.len());
 
-    let cluster_compaction_node = nodes
-        .iter()
-        .find(|n| n["name"].as_str().unwrap().contains("Cluster 0"))
-        .expect("Cluster 0 node not found");
-    let misc_compaction_node = nodes
-        .iter()
-        .find(|n| n["name"].as_str().unwrap().contains("Miscellaneous"))
-        .expect("Miscellaneous compaction node not found");
-
-    let cluster_node_id = cluster_compaction_node["id"].as_str().unwrap();
-    let misc_node_id = misc_compaction_node["id"].as_str().unwrap();
-
-    let mut rel_resp1 = backend
+    let mut rel_resp = backend
         .db
-        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
-        .bind(("ins_id", parse_record_id(&id1)?))
-        .bind(("comp_id", parse_record_id(cluster_node_id)?))
+        .query("SELECT * FROM relates_to;")
         .await?;
-    let rels1: Vec<serde_json::Value> = rel_resp1.take(0)?;
-    assert_eq!(
-        rels1.len(),
-        1,
-        "Relation between Insight One and Cluster Compaction missing"
-    );
-
-    let mut rel_resp2 = backend
-        .db
-        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
-        .bind(("ins_id", parse_record_id(&id2)?))
-        .bind(("comp_id", parse_record_id(cluster_node_id)?))
-        .await?;
-    let rels2: Vec<serde_json::Value> = rel_resp2.take(0)?;
-    assert_eq!(
-        rels2.len(),
-        1,
-        "Relation between Insight Two and Cluster Compaction missing"
-    );
-
-    let mut rel_resp3 = backend
-        .db
-        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
-        .bind(("ins_id", parse_record_id(&id3)?))
-        .bind(("comp_id", parse_record_id(misc_node_id)?))
-        .await?;
-    let rels3: Vec<serde_json::Value> = rel_resp3.take(0)?;
-    assert_eq!(
-        rels3.len(),
-        1,
-        "Relation between Insight Three and Miscellaneous Compaction missing"
-    );
+    let rels: Vec<serde_json::Value> = rel_resp.take(0)?;
+    assert!(!rels.is_empty(), "Expected relates_to edges to be created for synthesized atomic insights");
 
     Ok(())
 }

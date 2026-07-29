@@ -597,7 +597,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
     // Run the compactor dreaming sweep unmocked (will route LLM calls to 35B model on mlx-lm HTTP server)
     let coordinator = mythrax_core::cognitive::synthesis::DreamCoordinator::new();
     coordinator
-        .run_dream(backend.clone(), &store, Some("incremental"), None)
+        .run_dream(backend.clone() as std::sync::Arc<dyn mythrax_core::db::StorageBackend>, &store, Some("incremental"), None)
         .await?;
 
     // Verify the new turns are mined into the database
@@ -1130,10 +1130,10 @@ fn test_inspect_calibrated_score_pairs() {
         .reshape(&[batch_size as i32, 1, max_seq_len_i32, max_seq_len_i32])
         .unwrap();
 
-    let out = reranker.model.forward(&ids_array, Some(&mask)).unwrap();
+    let out = reranker.model.as_mut().unwrap().forward(&ids_array, Some(&mask)).unwrap();
     let last_hidden = out.try_index((.., max_seq_len_i32 - 1, ..)).unwrap();
 
-    let embed_w = reranker.model.embed_tokens.weight.value.clone();
+    let embed_w = reranker.model.as_ref().unwrap().embed_tokens.weight.value.clone();
     let w_no_tok = embed_w.try_index((2152, ..)).unwrap();
     let w_yes_tok = embed_w.try_index((9693, ..)).unwrap();
 

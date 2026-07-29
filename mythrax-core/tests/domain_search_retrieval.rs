@@ -2213,12 +2213,12 @@ fn test_cross_encoder_mlx_loading_and_scoring() {
     let null_ids: Vec<i32> = null_encoding.get_ids().iter().map(|&x| x as i32).collect();
     let null_seq_len = null_ids.len();
     let null_ids_array = mlx_rs::Array::from_slice(&null_ids, &[1, null_seq_len as i32]);
-    let null_out = reranker.model.forward(&null_ids_array, None).unwrap();
+    let null_out = reranker.model.as_mut().unwrap().forward(&null_ids_array, None).unwrap();
     let null_last_hidden = null_out
         .try_index((0, (null_seq_len - 1) as i32, ..))
         .unwrap();
 
-    let embed_w = reranker.model.embed_tokens.weight.value.clone();
+    let embed_w = reranker.model.as_ref().unwrap().embed_tokens.weight.value.clone();
     let w_0 = embed_w.try_index((15, ..)).unwrap();
     let w_1 = embed_w.try_index((16, ..)).unwrap();
 
@@ -2249,7 +2249,7 @@ fn test_cross_encoder_mlx_loading_and_scoring() {
         let seq_len = ids.len();
         let ids_array = mlx_rs::Array::from_slice(&ids, &[1, seq_len as i32]);
 
-        let out = reranker.model.forward(&ids_array, None).unwrap();
+        let out = reranker.model.as_mut().unwrap().forward(&ids_array, None).unwrap();
         let last_hidden = out.try_index((0, (seq_len - 1) as i32, ..)).unwrap();
 
         let logit_0 = last_hidden

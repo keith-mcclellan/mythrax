@@ -393,6 +393,10 @@ pub fn spawn_swap_monitor_thread() {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
+            if std::env::var("MYTHRAX_DISABLE_SWAP_MONITOR").is_ok() {
+                continue;
+            }
+
             // 1. Query disable_swap_monitor from database config:settings
             let config_sql = "SELECT VALUE disable_swap_monitor FROM config:settings LIMIT 1;";
             let disable_monitor = match backend.db.query(config_sql).await {

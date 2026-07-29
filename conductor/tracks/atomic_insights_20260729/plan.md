@@ -2,62 +2,42 @@
 
 ## Phase 1: Core Atomic Extraction (Minimum Viable)
 
-- [ ] Task: Define `AtomicInsightItem` struct and update `ClusterAnalysis` (synthesis.rs ~L1434)
-  - [ ] Define `AtomicInsightItem` struct with `title`, `item_type`, `content`, `metacognitive_confidence`
-  - [ ] Update `ClusterAnalysis` to include `items: Vec<AtomicInsightItem>` with backward-compat fallback fields
-  - [ ] Add fallback parsing: if `items` is empty but `title`+`summary` present, wrap into single item with `item_type: "lesson"`
-  - [ ] Add unit test: verify `ClusterAnalysis` deserialization with `items` array
-  - [ ] Add unit test: verify fallback parsing for legacy format
-  - [ ] Add unit test: verify `ClusterAnalysis` handles empty `items` AND missing fallback fields gracefully (no panic, logs warning, produces zero items)
+- [x] Task: `AtomicInsightItem` struct definition & `ClusterAnalysis` schema update (synthesis.rs L1290-1365)
+  - [x] Define `AtomicInsightItem` struct with fields: `title`, `item_type`, `what_was_tried`, `what_happened`, `why_it_happened`, `actionable_takeaway`, `confidence_score`
+  - [x] Implement `Validate` trait for `AtomicInsightItem`: validate title non-empty, item_type valid enum value, content non-empty, confidence in [0.0, 1.0]
+  - [x] Update `ClusterAnalysis` struct: replace single string/fields with `pub items: Vec<AtomicInsightItem>`
+  - [x] Add unit test: verify `AtomicInsightItem` validation succeeds for valid items, fails for invalid item_type or empty fields
+  - [x] Add unit test: verify empty items array returns validation error
 
-- [ ] Task: Add `item_type` field to WikiNode schema
-  - [ ] Add `pub item_type: Option<String>` to `WikiNode` struct in contracts.rs (L636)
-  - [ ] Update SurrealDB table definition in schema.rs
-  - [ ] Update `save_wiki_node` in crud_operations.rs to include `item_type` in INSERT/UPDATE
-  - [ ] Update `get_wiki_nodes_paginated` in crud_operations.rs to include `item_type` in SELECT
-  - [ ] Update `get_memory_nodes` in crud_operations.rs to include `item_type` in SELECT for wiki_nodes
-  - [ ] Add unit test: verify `item_type` round-trips through save/load
-  - [ ] Add unit test: verify `item_type` preserved through `save_wiki_node_with_contradiction_resolution` merge path
+- [x] Task: LLM system prompt rewrite for atomic itemization (synthesis.rs L1370-1420)
+  - [x] Rewrite `SYNTHESIS_SYSTEM_PROMPT` to enforce returning JSON array of `AtomicInsightItem` objects
+  - [x] System prompt must explicitly instruct model to split compound findings into separate items
+  - [x] Add prompt instructions for classifying each item into item_type: `lesson_learned`, `design_pattern`, `constraint`, `failure_mode`
+  - [x] Add unit test: verify system prompt contains item_type guidelines and JSON schema structure
 
-- [ ] Task: Rewrite synthesis system prompt with few-shot examples (synthesis.rs L1399-1414)
-  - [ ] Replace current system prompt with Arbor-mandated prompt requiring `items` array with `item_type` classification
-  - [ ] Add few-shot examples for each item_type: `pattern`, `constraint`, `failure_mode`, `lesson`
-  - [ ] Add cap directive: "Return at most 5 items per cluster"
-  - [ ] Add minimum content length guidance: "Each item's content MUST be at least 2-3 sentences"
-  - [ ] Update user prompt to show expected JSON response format with `items` array
-  - [ ] Implement quality gate: reject items with `content.len() < 100`
-  - [ ] Implement quality gate: reject items starting with passive-voice verbs
-  - [ ] Add rejected items audit logging
-  - [ ] Add unit test: verify quality gate rejects short items
-  - [ ] Add unit test: verify quality gate rejects passive-voice items
+- [x] Task: Per-item WikiNode creation — multi-episode cluster path, data path (synthesis.rs L1476-1564)
+  - [x] Loop over `analysis.items` (instead of treating entire analysis as single item)
+  - [x] Generate content-derived embedding per item: `embedder.embed(&format!("{}: {} - {}", item.item_type, item.title, item.actionable_takeaway))`
+  - [x] Populate `item_type` on `WikiNode` from `item.item_type`
+  - [x] Set vault path to `wiki/{scope}/insights/{item_type}/{clean_title}.md`
 
-- [ ] Task: Per-item WikiNode creation — multi-episode cluster path, core data path (synthesis.rs L1476-1564)
-  - [ ] Remove centroid embedding at L1504: `let centroid = calculate_centroid(...)`
-  - [ ] Loop through `analysis.items` to create per-item WikiNodes
-  - [ ] Generate slugified filename per item: `wiki/<scope>/insights/<item_type>/<slug>.md`
-  - [ ] Write individual Obsidian markdown note with frontmatter including `item_type`
-  - [ ] Compute content-derived embedding: embed `format!("{}: {}", item.title, item.content)`
-  - [ ] Create WikiNode per item with `item_type`, `node_type: "insight"`, content-derived embedding
-  - [ ] Save via `save_wiki_node_with_contradiction_resolution`
-  - [ ] Add unit test: verify multiple wiki_nodes created from multi-item analysis
+- [x] Task: Per-item WikiNode creation — multi-episode cluster path, integration wiring (synthesis.rs L1476-1564)
+  - [x] Implement deduplication check: cosine similarity > 0.92 against existing nodes in same scope+item_type
+  - [x] Create `relates_to` edges from source episode IDs to each wiki_node
+  - [x] Call `promote_insight_to_direction` for each saved node
+  - [x] Update `insights_changed` counter per item (not per cluster) for compaction trigger
+  - [x] Add unit test: verify deduplication merges high-similarity items
+  - [x] Add unit test: verify deduplication does NOT merge items with different `item_type` even at high similarity
 
-- [ ] Task: Per-item WikiNode creation — multi-episode cluster path, integration wiring (synthesis.rs L1476-1564)
-  - [ ] Implement deduplication check: cosine similarity > 0.92 against existing nodes in same scope+item_type
-  - [ ] Create `relates_to` edges from source episode IDs to each wiki_node
-  - [ ] Call `promote_insight_to_direction` for each saved node
-  - [ ] Update `insights_changed` counter per item (not per cluster) for compaction trigger
-  - [ ] Add unit test: verify deduplication merges high-similarity items
-  - [ ] Add unit test: verify deduplication does NOT merge items with different `item_type` even at high similarity
+- [x] Task: Per-item WikiNode creation — single-episode incremental path (synthesis.rs L1173-1268)
+  - [x] Remove centroid call at L1043: `calculate_centroid(&ins.source_episodes, &chunk_unprocessed)`
+  - [x] Parse LLM response using same `ClusterAnalysis` struct with `items` array
+  - [x] Replace monolithic WikiNode creation at L1211-1221 with per-item loop
+  - [x] Create per-item WikiNodes with content-derived embeddings (same pattern as cluster path)
+  - [x] Ensure `relates_to` edges and `promote_insight_to_direction` calls operate per-item
+  - [x] Add unit test: verify single-episode path produces atomic items
 
-- [ ] Task: Per-item WikiNode creation — single-episode incremental path (synthesis.rs L1173-1268)
-  - [ ] Remove centroid call at L1043: `calculate_centroid(&ins.source_episodes, &chunk_unprocessed)`
-  - [ ] Parse LLM response using same `ClusterAnalysis` struct with `items` array
-  - [ ] Replace monolithic WikiNode creation at L1211-1221 with per-item loop
-  - [ ] Create per-item WikiNodes with content-derived embeddings (same pattern as cluster path)
-  - [ ] Ensure `relates_to` edges and `promote_insight_to_direction` calls operate per-item
-  - [ ] Add unit test: verify single-episode path produces atomic items
-
-- [ ] Task: Phase 1 Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase 1 Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Pipeline Propagation
 

@@ -924,6 +924,7 @@ impl LocalEmbedder {
             if lock.is_some() {
                 tracing::info!("Evicting nomic-embed model from VRAM");
                 *lock = None;
+                mlx_rs::transforms::compile::clear_cache();
             }
         }
     }
