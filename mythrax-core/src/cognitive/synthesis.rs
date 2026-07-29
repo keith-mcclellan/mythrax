@@ -1111,7 +1111,19 @@ impl DreamCoordinator {
                                     new_source_episodes.push(ep_id_str);
                                 }
 
-                                let base_sys = "You are a systems synthesizer. Refine the existing architectural insight note by incorporating the details of the new event.";
+                                let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+Analyze the existing architectural insight and the new event, then extract distilled causal insights (ι_n). Output a JSON object matching this schema:
+{
+  "items": [
+    {
+      "title": "<Abstract Noun-Phrase Title>",
+      "item_type": "<pattern | constraint | failure_mode | lesson>",
+      "content": "<2-3 sentence causal explanation of what was tried, what happened, and why>",
+      "metacognitive_confidence": 90
+    }
+  ]
+}
+"#;
                                 let sys_prompt =
                                     crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
                                 let mut display_content = ep.content.clone();
@@ -1150,12 +1162,12 @@ impl DreamCoordinator {
                                     display_content
                                 };
                                 let prompt_text = format!(
-                                    "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}",
+                                    "Existing Insight Body:\n{}\n\nNew Event content:\nTitle: {}\n{}\nRespond ONLY with valid JSON matching {{\"items\": [...]}}.",
                                     ins.content, ep.title, display_content
                                 );
                                 let original_tokens =
                                     (ins.content.len() + display_content.len()) / 4;
-                                let updated_summary = self
+                                let llm_res = self
                                     .llm
                                     .routed_completion(
                                         &*db,
@@ -1168,176 +1180,83 @@ impl DreamCoordinator {
                                     .await?;
                                 crate::cognitive::synthesis::check_compression_ratio(
                                     &prompt_text,
-                                    &updated_summary,
+                                    &llm_res,
                                     original_tokens,
                                 );
 
-                                let mut source_ep_links = Vec::new();
-                                let mut eps_to_link = Vec::new();
-                                let mut starts = Vec::new();
-                                if let Ok(mem_nodes) =
-                                    db.get_memory_nodes(&new_source_episodes).await
-                                {
-                                    for ep in mem_nodes.episodes {
-                                        if let Some(ref path) = ep.vault_path {
-                                            let target = path.strip_suffix(".md").unwrap_or(&path);
-                                            source_ep_links
-                                                .push(format!("- [[{}|{}]]", target, ep.title));
-                                            eps_to_link.push((path.clone(), ep.title.clone()));
-                                        }
-                                        let t_start = ep.temporal_range_start.or_else(|| {
-                                            ep.created_at
-                                                .as_ref()
-                                                .and_then(|s| {
-                                                    chrono::DateTime::parse_from_rfc3339(s).ok()
-                                                })
-                                                .map(|dt| dt.with_timezone(&chrono::Utc))
-                                        });
-                                        if let Some(ts) = t_start {
-                                            starts.push(ts);
-                                        }
-                                    }
-                                }
-                                let temporal_start = starts.iter().min().cloned();
-                                let temporal_end = starts.iter().max().cloned();
-
-                                let source_ep_section = if !source_ep_links.is_empty() {
-                                    format!(
-                                        "\n\n## Source Episodes\n{}",
-                                        source_ep_links.join("\n")
-                                    )
-                                } else {
-                                    String::new()
+                                let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
+                                    Ok(a) => a,
+                                    Err(_) => ClusterAnalysis {
+                                        items: Vec::new(),
+                                        title: Some(ins.title.clone()),
+                                        summary: Some(llm_res),
+                                        metacognitive_confidence: None,
+                                        node_type: None,
+                                    },
                                 };
+                                let resolved_items = analysis.resolved_items("single_episode_synthesis");
 
-                                let relative_path = format!(
-                                    "wiki/{}/insights/{}.md",
-                                    scope,
-                                    slugify_title(&ins.title)
-                                );
-                                let new_content = format!(
-                                    "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\n---\n\n{}{}",
-                                    ins.title,
-                                    scope,
-                                    new_source_episodes
-                                        .iter()
-                                        .map(|id| format!("  - \"{}\"", id))
-                                        .collect::<Vec<_>>()
-                                        .join("\n"),
-                                    updated_summary,
-                                    source_ep_section
-                                );
-                                store.write_file(&relative_path, &new_content)?;
-
-                                for (ep_path, _ep_title) in eps_to_link {
-                                    let _ = store.append_link_to_file(
-                                        &ep_path,
-                                        "Insights & Summaries",
-                                        &relative_path,
-                                        &ins.title,
-                                    );
-                                }
-
-                                if let Err(e) = self.distill_episode_metadata(&*db, store, &ep).await
-                                {
-                                    tracing::error!("distill_episode_metadata error: {:?}", e);
-                                }
                                 if let Some(ref ep_id) = ep.id {
                                     if db.mark_episode_processed(ep_id).await.is_ok() {
                                         processed_any_episodes = true;
                                     }
                                 }
 
-                                let content_embedding = if let Some(ref emb) = embedder {
-                                    let text_to_embed = format!("lesson_learned: {} - {}", ins.title, updated_summary);
-                                    emb.embed(&text_to_embed).await.ok()
-                                } else {
-                                    None
-                                };
-
-                                let node_contract = WikiNode {
-                                    id: None,
-                                    name: ins.title.clone(),
-                                    content: updated_summary.clone(),
-                                    scope: scope.clone(),
-                                    vault_path: Some(relative_path.clone()),
-                                    embedding: content_embedding,
-                                    temporal_range_start: temporal_start,
-                                    temporal_range_end: temporal_end,
-                                    item_type: Some("lesson".to_string()),
-                                    node_type: Some("insight".to_string()),
-                                    ..Default::default()
-                                };
-                                let source_eps = vec![ep.id.clone().unwrap_or_default()];
-                                if let Ok(wiki_node_id) = self
-                                    .save_wiki_node_with_contradiction_resolution(
-                                        &*db,
-                                        store,
-                                        &node_contract,
-                                        embedder.clone(),
-                                        source_eps,
-                                    )
-                                    .await
-                                {
-                                    if let Some(ref ep_id) = ep.id {
-                                        let ep_start = ep.temporal_range_start.or_else(|| {
-                                            ep.created_at
-                                                .as_ref()
-                                                .and_then(|s| {
-                                                    chrono::DateTime::parse_from_rfc3339(s).ok()
-                                                })
-                                                .map(|dt| dt.with_timezone(&chrono::Utc))
-                                        });
-                                        let _ = db
-                                            .relate_nodes(
-                                                ep_id,
-                                                &wiki_node_id,
-                                                ep_start,
-                                                ep_start,
-                                                Some(1.0),
-                                            )
-                                            .await;
-                                    }
-
-                                    let mut node_with_id = node_contract.clone();
-                                    node_with_id.id = Some(wiki_node_id);
-                                    if let Ok(mem_resp) =
-                                        db.get_memory_nodes(&new_source_episodes).await
-                                    {
-                                        if let Err(e) = promote_insight_to_direction(
-                                            &*db,
-                                            store,
-                                            &node_with_id,
-                                            &mem_resp.episodes,
-                                        )
-                                        .await
-                                        {
-                                            tracing::warn!("Promotion check failed: {:?}", e);
-                                        }
-                                    }
-                                }
-
-                                insights_changed += 1;
-                                if insights_changed > 5 {
-                                    tracing::info!(
-                                        "Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.",
-                                        scope
+                                for item in resolved_items {
+                                    let relative_path = format!(
+                                        "wiki/{}/insights/{}/{}.md",
+                                        scope,
+                                        item.item_type,
+                                        slugify_title(&item.title)
                                     );
-                                    let compactor = crate::cognitive::compactor::Compactor::new();
-                                    let _ = compactor
-                                        .compact_scope(db.clone(), store, &scope, embedder.clone())
-                                        .await;
-                                    insights_changed = 0;
+                                    let new_content = format!(
+                                        "---\ntitle: \"{}\"\nscope: \"{}\"\nitem_type: \"{}\"\nsource_episodes:\n{}\n---\n\n{}",
+                                        item.title,
+                                        scope,
+                                        item.item_type,
+                                        new_source_episodes
+                                            .iter()
+                                            .map(|id| format!("  - \"{}\"", id))
+                                            .collect::<Vec<_>>()
+                                            .join("\n"),
+                                        item.content
+                                    );
+                                    let _ = store.write_file(&relative_path, &new_content);
+
+                                    let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
+                                    let content_embedding = if let Some(ref emb) = embedder {
+                                        emb.embed(&text_to_embed).await.ok()
+                                    } else {
+                                        None
+                                    };
+
+                                    let node_contract = WikiNode {
+                                        id: None,
+                                        name: item.title.clone(),
+                                        content: item.content.clone(),
+                                        scope: scope.clone(),
+                                        vault_path: Some(relative_path.clone()),
+                                        embedding: content_embedding,
+                                        metacognitive_confidence: item.metacognitive_confidence,
+                                        item_type: Some(item.item_type.clone()),
+                                        node_type: Some("insight".to_string()),
+                                        ..Default::default()
+                                    };
+                                    if let Ok(saved_id) = db.save_wiki_node(&node_contract).await {
+                                        let mut saved_contract = node_contract.clone();
+                                        saved_contract.id = Some(saved_id);
+                                        let _ = promote_insight_to_direction(&*db, store, &saved_contract, &[ep.clone()]).await;
+                                        insights_changed += 1;
+                                    }
                                 }
 
                                 tracing::info!(
-                                    "Dreaming scope {}/{} ('{}'): incremental episode {} of {} complete (merged into '{}')",
+                                    "Dreaming scope {}/{} ('{}'): incremental episode {} of {} complete",
                                     scope_idx + 1,
                                     total_scopes,
                                     scope,
                                     ep_idx + 1,
-                                    total_new_episodes,
-                                    ins.title
+                                    total_new_episodes
                                 );
                             } else {
                                 candidates.push(ep);
@@ -1672,10 +1591,10 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                     {
                                         tracing::warn!("Promotion check failed: {:?}", e);
                                     }
+                                    insights_changed += 1;
                                 }
                             }
 
-                            insights_changed += 1;
                             if insights_changed > 5 {
                                 tracing::info!(
                                     "Scope '{}' exceeded 5 insight changes. Triggering interleaved compaction.",

@@ -486,43 +486,7 @@ pub async fn distill_transcript_file(
     Ok(distilled_chunks)
 }
 
-pub fn extract_decisions(content: &str) -> String {
-    let mut decisions = Vec::new();
-    let mut in_decisions_section = false;
 
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.to_lowercase().starts_with("#") && trimmed.to_lowercase().contains("decision") {
-            in_decisions_section = true;
-            continue;
-        } else if trimmed.to_lowercase().starts_with("#") && in_decisions_section {
-            in_decisions_section = false;
-        }
-
-        if in_decisions_section {
-            if !trimmed.is_empty() {
-                decisions.push(line.to_string());
-            }
-        } else {
-            let lower = trimmed.to_lowercase();
-            if (trimmed.starts_with("-")
-                || trimmed.starts_with("*")
-                || (trimmed.chars().next().map_or(false, |c| c.is_ascii_digit())))
-                && (lower.contains("decision")
-                    || lower.contains("decided")
-                    || lower.contains("decide"))
-            {
-                decisions.push(line.to_string());
-            }
-        }
-    }
-
-    if decisions.is_empty() {
-        "No explicit decisions extracted.".to_string()
-    } else {
-        decisions.join("\n")
-    }
-}
 
 pub fn extract_completed_tasks(content: &str) -> String {
     let mut completed = Vec::new();

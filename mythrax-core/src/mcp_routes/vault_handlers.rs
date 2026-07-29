@@ -154,13 +154,16 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                         "lesson"
                     };
 
+                    let text_to_embed = format!("{}: {} - {}", item_type, node.name, node.content);
+                    let content_embedding = state.backend.embed(&text_to_embed).await.ok();
+
                     let new_node = WikiNode {
                         id: None,
                         name: format!("Itemized: {}", node.name),
                         content: node.content.clone(),
                         scope: node.scope.clone(),
                         vault_path: node.vault_path.clone(),
-                        embedding: None,
+                        embedding: content_embedding,
                         item_type: Some(item_type.to_string()),
                         node_type: Some(item_type.to_string()),
                         ..Default::default()
@@ -178,7 +181,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("Reprocessed {} monolithic markdown wiki nodes into atomic items.", count)
+                        "text": format!("Reprocessed {} monolithic markdown wiki nodes into atomic items with content-derived embeddings.", count)
                     }
                 ]
             }))
