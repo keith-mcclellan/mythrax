@@ -8,6 +8,7 @@
   - [ ] Add fallback parsing: if `items` is empty but `title`+`summary` present, wrap into single item with `item_type: "lesson"`
   - [ ] Add unit test: verify `ClusterAnalysis` deserialization with `items` array
   - [ ] Add unit test: verify fallback parsing for legacy format
+  - [ ] Add unit test: verify `ClusterAnalysis` handles empty `items` AND missing fallback fields gracefully (no panic, logs warning, produces zero items)
 
 - [ ] Task: Add `item_type` field to WikiNode schema
   - [ ] Add `pub item_type: Option<String>` to `WikiNode` struct in contracts.rs (L636)
@@ -16,6 +17,7 @@
   - [ ] Update `get_wiki_nodes_paginated` in crud_operations.rs to include `item_type` in SELECT
   - [ ] Update `get_memory_nodes` in crud_operations.rs to include `item_type` in SELECT for wiki_nodes
   - [ ] Add unit test: verify `item_type` round-trips through save/load
+  - [ ] Add unit test: verify `item_type` preserved through `save_wiki_node_with_contradiction_resolution` merge path
 
 - [ ] Task: Rewrite synthesis system prompt with few-shot examples (synthesis.rs L1399-1414)
   - [ ] Replace current system prompt with Arbor-mandated prompt requiring `items` array with `item_type` classification
@@ -29,20 +31,23 @@
   - [ ] Add unit test: verify quality gate rejects short items
   - [ ] Add unit test: verify quality gate rejects passive-voice items
 
-- [ ] Task: Per-item WikiNode creation — multi-episode cluster path (synthesis.rs L1476-1564)
+- [ ] Task: Per-item WikiNode creation — multi-episode cluster path, core data path (synthesis.rs L1476-1564)
   - [ ] Remove centroid embedding at L1504: `let centroid = calculate_centroid(...)`
   - [ ] Loop through `analysis.items` to create per-item WikiNodes
   - [ ] Generate slugified filename per item: `wiki/<scope>/insights/<item_type>/<slug>.md`
   - [ ] Write individual Obsidian markdown note with frontmatter including `item_type`
   - [ ] Compute content-derived embedding: embed `format!("{}: {}", item.title, item.content)`
-  - [ ] Implement deduplication check: cosine similarity > 0.92 against existing nodes in same scope+item_type
   - [ ] Create WikiNode per item with `item_type`, `node_type: "insight"`, content-derived embedding
   - [ ] Save via `save_wiki_node_with_contradiction_resolution`
+  - [ ] Add unit test: verify multiple wiki_nodes created from multi-item analysis
+
+- [ ] Task: Per-item WikiNode creation — multi-episode cluster path, integration wiring (synthesis.rs L1476-1564)
+  - [ ] Implement deduplication check: cosine similarity > 0.92 against existing nodes in same scope+item_type
   - [ ] Create `relates_to` edges from source episode IDs to each wiki_node
   - [ ] Call `promote_insight_to_direction` for each saved node
   - [ ] Update `insights_changed` counter per item (not per cluster) for compaction trigger
-  - [ ] Add unit test: verify multiple wiki_nodes created from multi-item analysis
   - [ ] Add unit test: verify deduplication merges high-similarity items
+  - [ ] Add unit test: verify deduplication does NOT merge items with different `item_type` even at high similarity
 
 - [ ] Task: Per-item WikiNode creation — single-episode incremental path (synthesis.rs L1173-1268)
   - [ ] Remove centroid call at L1043: `calculate_centroid(&ins.source_episodes, &chunk_unprocessed)`
@@ -73,6 +78,7 @@
   - [ ] Replace monolithic WikiNode creation at L1264-1274 with per-item loop
   - [ ] Mark source outlier wiki_nodes as `node_type: "archived"` after compaction
   - [ ] Add unit test: verify outlier compaction produces atomic items
+  - [ ] Add unit test: verify outlier compacted nodes have non-null embeddings
 
 - [ ] Task: Update wisdom graduation to use `item_type` routing (synthesis.rs L3226-3337)
   - [ ] Inspect `node.item_type` in `promote_insight_to_direction` before promotion
