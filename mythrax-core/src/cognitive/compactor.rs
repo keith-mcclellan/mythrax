@@ -1140,7 +1140,7 @@ CRITICAL ARBOR RULES:
                 store.write_file(&relative_path, &file_content)?;
 
                 let content_embedding = if let Some(ref emb) = embedder {
-                    let text_to_embed = format!("{}: {}", item.title, item.content);
+                    let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
                     emb.embed(&text_to_embed).await.ok()
                 } else {
                     None
@@ -1342,7 +1342,7 @@ CRITICAL ARBOR RULES:
                 store.write_file(&relative_path, &file_content)?;
 
                 let content_embedding = if let Some(ref emb) = embedder {
-                    let text_to_embed = format!("{}: {}", item.title, item.content);
+                    let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
                     emb.embed(&text_to_embed).await.ok()
                 } else {
                     None

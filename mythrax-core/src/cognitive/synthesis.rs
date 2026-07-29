@@ -1247,7 +1247,7 @@ impl DreamCoordinator {
                                 }
 
                                 let content_embedding = if let Some(ref emb) = embedder {
-                                    let text_to_embed = format!("{}: {}", ins.title, updated_summary);
+                                    let text_to_embed = format!("lesson_learned: {} - {}", ins.title, updated_summary);
                                     emb.embed(&text_to_embed).await.ok()
                                 } else {
                                     None
@@ -1581,7 +1581,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                 store.write_file(&relative_path, &insight_content)?;
 
                                 let content_embedding = if let Some(ref emb) = embedder {
-                                    let text_to_embed = format!("{}: {}", item.title, item.content);
+                                    let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
                                     emb.embed(&text_to_embed).await.ok()
                                 } else {
                                     None
@@ -1589,7 +1589,20 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
 
                                 let mut is_duplicate = false;
                                 if let Some(ref new_emb) = content_embedding {
-                                    let existing_nodes = db.get_wiki_nodes_paginated(100, 0).await.unwrap_or_default();
+                                    let mut existing_nodes = Vec::new();
+                                    let mut page_offset = 0;
+                                    loop {
+                                        let page = db.get_wiki_nodes_paginated(250, page_offset).await.unwrap_or_default();
+                                        if page.is_empty() {
+                                            break;
+                                        }
+                                        let page_len = page.len();
+                                        existing_nodes.extend(page);
+                                        if page_len < 250 {
+                                            break;
+                                        }
+                                        page_offset += page_len as u32;
+                                    }
                                     for ext in existing_nodes {
                                         if ext.scope == scope && ext.item_type.as_deref() == Some(&item.item_type) {
                                             if let Some(ref ext_emb) = ext.embedding {

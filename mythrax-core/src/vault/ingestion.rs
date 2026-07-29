@@ -678,10 +678,30 @@ pub async fn bulk_ingest_vault(
                         };
 
                         if log_exists || has_md {
-                            let mtime = std::fs::metadata(&path)
-                                .and_then(|m| m.modified())
-                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                            dirs_with_time.push((path, mtime));
+                            let mut timestamp_ns: u128 = 0;
+                            if log_exists {
+                                let transcript_file = path.join(".system_generated/logs/transcript.jsonl");
+                                if let Ok(file) = std::fs::File::open(&transcript_file) {
+                                    use std::io::BufRead;
+                                    let reader = std::io::BufReader::new(file);
+                                    if let Some(Ok(line)) = reader.lines().next() {
+                                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+                                            if let Some(ts_str) = v.get("timestamp").and_then(|t| t.as_str()) {
+                                                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                                                    timestamp_ns = dt.timestamp_nanos_opt().unwrap_or(0) as u128;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if timestamp_ns == 0 {
+                                let mtime = std::fs::metadata(&path)
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                timestamp_ns = mtime.duration_since(std::time::SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+                            }
+                            dirs_with_time.push((path, timestamp_ns));
                         }
                     }
                 }

@@ -6486,4 +6486,46 @@ async fn test_execute_skill_merge() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_atomic_insight_item_validation() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::{AtomicInsightItem, ClusterAnalysis};
+
+    let valid_item = AtomicInsightItem {
+        title: "Test Insight".to_string(),
+        item_type: "lesson".to_string(),
+        content: "What was tried: A. What happened: B. Why: C.".to_string(),
+        metacognitive_confidence: Some(90),
+    };
+    assert_eq!(valid_item.title, "Test Insight");
+    assert_eq!(valid_item.item_type, "lesson");
+
+    let fallback_analysis = ClusterAnalysis {
+        items: vec![],
+        title: Some("Fallback Title".to_string()),
+        summary: Some("Fallback Summary".to_string()),
+        metacognitive_confidence: Some(85),
+        node_type: Some("lesson".to_string()),
+    };
+    let items = fallback_analysis.resolved_items("raw fallback text");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title, "Fallback Title");
+    assert_eq!(items[0].content, "Fallback Summary");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_synthesis_system_prompt_formatting() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::build_synthesis_prompt;
+
+    let sys_prompt = build_synthesis_prompt("Extract items array containing title, item_type, content, metacognitive_confidence.");
+    assert!(sys_prompt.contains("Strunk & White"));
+    assert!(sys_prompt.contains("items"));
+    assert!(sys_prompt.contains("title"));
+    assert!(sys_prompt.contains("item_type"));
+    assert!(sys_prompt.contains("content"));
+    assert!(sys_prompt.contains("metacognitive_confidence"));
+    Ok(())
+}
+
 }
