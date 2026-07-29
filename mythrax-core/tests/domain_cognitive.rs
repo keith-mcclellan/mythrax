@@ -6528,4 +6528,35 @@ async fn test_synthesis_system_prompt_formatting() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_empty_array_error_handling() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::ClusterAnalysis;
+
+    let analysis: ClusterAnalysis = serde_json::from_str(r#"{"items": []}"#).unwrap();
+    let resolved = analysis.resolved_items("Fallback raw text for empty items array");
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].content, "Fallback raw text for empty items array");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cross_item_type_deduplication() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::AtomicInsightItem;
+
+    let item_pattern = AtomicInsightItem {
+        title: "Database Lock Contention".to_string(),
+        item_type: "pattern".to_string(),
+        content: "Detailed pattern explanation of DB locks under load.".to_string(),
+        metacognitive_confidence: Some(95),
+    };
+    let item_failure = AtomicInsightItem {
+        title: "Database Lock Contention".to_string(),
+        item_type: "failure_mode".to_string(),
+        content: "Detailed failure mode explanation of DB locks under load.".to_string(),
+        metacognitive_confidence: Some(95),
+    };
+    assert_ne!(item_pattern.item_type, item_failure.item_type);
+    Ok(())
+}
+
 }

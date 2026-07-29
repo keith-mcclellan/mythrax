@@ -2176,6 +2176,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                 is_procedural: bool,
                 temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
                 temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
+                item_type: Option<String>,
             }
 
             let mut candidates = Vec::new();
@@ -2197,6 +2198,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                     is_procedural: false,
                                     temporal_range_start: node.temporal_range_start,
                                     temporal_range_end: node.temporal_range_end,
+                                    item_type: node.item_type.clone(),
                                 });
                             }
                         }
@@ -2226,6 +2228,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                 is_procedural: true,
                                 temporal_range_start: ep_start,
                                 temporal_range_end: ep.temporal_range_end.or(ep_start),
+                                item_type: Some("lesson".to_string()),
                             });
                         }
                     }
@@ -2351,6 +2354,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                             is_procedural: false,
                             temporal_range_start: node.temporal_range_start,
                             temporal_range_end: node.temporal_range_end,
+                            item_type: node.item_type.clone(),
                         });
                     }
                 }
@@ -2400,6 +2404,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                             is_procedural: true,
                             temporal_range_start: ep_start,
                             temporal_range_end: ep.temporal_range_end.or(ep_start),
+                            item_type: Some("lesson".to_string()),
                         });
                     }
                 }
@@ -2554,7 +2559,12 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                         status: None,
                                         superseded_at: None,
                                         superseded_by: None,
-                                        rule_type: Some("aesthetic".to_string()),
+                                        rule_type: Some(
+                                            processed_members
+                                                .iter()
+                                                .find_map(|m| m.item_type.clone())
+                                                .unwrap_or_else(|| "lesson".to_string()),
+                                        ),
 
                                         ..Default::default()
                                     };
