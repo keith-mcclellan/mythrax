@@ -3407,46 +3407,84 @@ pub async fn promote_insight_to_direction(
     };
 
     if drift > target_drift || high_conf_count > target_high_conf {
-        let mut dir_node = node.clone();
-        dir_node.id = None; // Ensure a new node is created for the direction
-        dir_node.name = format!("{} Direction", node.name);
-        dir_node.node_type = Some("direction".to_string());
+        let item_type_str = node.item_type.as_deref().unwrap_or("lesson");
+        match item_type_str {
+            "failure_mode" => {
+                let ep_ids: Vec<String> = episodes.iter().filter_map(|e| e.id.clone()).collect();
+                let rule = WisdomRule {
+                    target_pattern: node.name.clone(),
+                    action_to_avoid: node.content.clone(),
+                    causal_explanation: format!("Failure mode detected in scope '{}': {}", node.scope, node.content),
+                    prescribed_remedy: format!("Avoid pattern described in failure mode: {}", node.name),
+                    utility: node.metacognitive_confidence.map(|c| c as f32 / 100.0),
+                    source_episodes: ep_ids,
+                    embedding: node.embedding.clone(),
+                    scope: node.scope.clone(),
+                    vault_path: None,
+                    ..Default::default()
+                };
+                let _ = save_wisdom_rule_with_deduplication(db, _store, &rule).await;
+            }
+            "constraint" => {
+                let ep_ids: Vec<String> = episodes.iter().filter_map(|e| e.id.clone()).collect();
+                let rule = WisdomRule {
+                    target_pattern: node.name.clone(),
+                    action_to_avoid: format!("Violating constraint: {}", node.name),
+                    causal_explanation: node.content.clone(),
+                    prescribed_remedy: format!("Adhere to constraint: {}", node.content),
+                    utility: node.metacognitive_confidence.map(|c| c as f32 / 100.0),
+                    source_episodes: ep_ids,
+                    embedding: node.embedding.clone(),
+                    scope: node.scope.clone(),
+                    vault_path: None,
+                    ..Default::default()
+                };
+                let _ = save_wisdom_rule_with_deduplication(db, _store, &rule).await;
+            }
+            _ => {
+                let mut dir_node = node.clone();
+                dir_node.id = None; // Ensure a new node is created for the direction
+                dir_node.name = format!("{} Direction", node.name);
+                dir_node.node_type = Some("direction".to_string());
+                dir_node.item_type = node.item_type.clone();
 
-        let slug = crate::cognitive::synthesis::slugify_title(&dir_node.name);
-        let rel_path = format!("wiki/{}/directions/{}.md", dir_node.scope, slug);
-        dir_node.vault_path = Some(rel_path.clone());
+                let slug = crate::cognitive::synthesis::slugify_title(&dir_node.name);
+                let rel_path = format!("wiki/{}/directions/{}.md", dir_node.scope, slug);
+                dir_node.vault_path = Some(rel_path.clone());
 
-        let new_content = format!(
-            "---\ntitle: \"{}\"\nscope: \"{}\"\nnode_type: \"direction\"\n---\n\n## Current Understanding\n{}",
-            dir_node.name, dir_node.scope, dir_node.content
-        );
-        let _ = _store.write_file(&rel_path, &new_content);
+                let new_content = format!(
+                    "---\ntitle: \"{}\"\nscope: \"{}\"\nnode_type: \"direction\"\nitem_type: \"{}\"\n---\n\n## Current Understanding\n{}",
+                    dir_node.name, dir_node.scope, item_type_str, dir_node.content
+                );
+                let _ = _store.write_file(&rel_path, &new_content);
 
-        match db.save_wiki_node(&dir_node).await {
-            Ok(dir_id) => {
-                println!("Save succeeded: {}", dir_id);
-                if let Some(ref insight_id) = node.id {
-                    let _ = db
-                        .relate_nodes(
-                            insight_id,
-                            &dir_id,
-                            node.temporal_range_start,
-                            node.temporal_range_end,
-                            Some(1.0),
-                        )
-                        .await;
-                    let _ = db
-                        .relate_nodes(
-                            &dir_id,
-                            insight_id,
-                            node.temporal_range_start,
-                            node.temporal_range_end,
-                            Some(1.0),
-                        )
-                        .await;
+                match db.save_wiki_node(&dir_node).await {
+                    Ok(dir_id) => {
+                        println!("Save succeeded: {}", dir_id);
+                        if let Some(ref insight_id) = node.id {
+                            let _ = db
+                                .relate_nodes(
+                                    insight_id,
+                                    &dir_id,
+                                    node.temporal_range_start,
+                                    node.temporal_range_end,
+                                    Some(1.0),
+                                )
+                                .await;
+                            let _ = db
+                                .relate_nodes(
+                                    &dir_id,
+                                    insight_id,
+                                    node.temporal_range_start,
+                                    node.temporal_range_end,
+                                    Some(1.0),
+                                )
+                                .await;
+                        }
+                    }
+                    Err(e) => println!("Save failed: {:?}", e),
                 }
             }
-            Err(e) => println!("Save failed: {:?}", e),
         }
 
         let embs: Vec<&[f32]> = episodes

@@ -6559,4 +6559,63 @@ async fn test_cross_item_type_deduplication() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_item_type_routing_promote_insight_to_direction() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::promote_insight_to_direction;
+    use mythrax_core::contracts::{Episode, WikiNode};
+    use mythrax_core::db::backend::SurrealBackend;
+    use mythrax_core::store::MarkdownStore;
+    use tempfile::tempdir;
+
+    let dir = tempdir()?;
+    let store = MarkdownStore::new(dir.path())?;
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    let failure_node = WikiNode {
+        id: Some("wiki_node:fail1".to_string()),
+        name: "Catastrophic Deadlock".to_string(),
+        content: "Holding mutexes across async boundary causes deadlock.".to_string(),
+        scope: "test_scope".to_string(),
+        item_type: Some("failure_mode".to_string()),
+        metacognitive_confidence: Some(90),
+        ..Default::default()
+    };
+    backend.save_wiki_node(&failure_node).await?;
+
+    let eps = vec![
+        Episode { id: Some("ep1".to_string()), confidence: Some(5.0), ..Default::default() },
+        Episode { id: Some("ep2".to_string()), confidence: Some(5.0), ..Default::default() },
+        Episode { id: Some("ep3".to_string()), confidence: Some(5.0), ..Default::default() },
+        Episode { id: Some("ep4".to_string()), confidence: Some(5.0), ..Default::default() },
+    ];
+
+    promote_insight_to_direction(&backend, &store, &failure_node, &eps).await?;
+
+    let rules = backend.get_all_wisdom_rules().await?;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].target_pattern, "Catastrophic Deadlock");
+    assert_eq!(rules[0].action_to_avoid, "Holding mutexes across async boundary causes deadlock.");
+
+    let pattern_node = WikiNode {
+        id: Some("wiki_node:pat1".to_string()),
+        name: "Lock Free Queue".to_string(),
+        content: "Use atomic crossbeam queue for low contention.".to_string(),
+        scope: "test_scope".to_string(),
+        item_type: Some("pattern".to_string()),
+        metacognitive_confidence: Some(90),
+        ..Default::default()
+    };
+    backend.save_wiki_node(&pattern_node).await?;
+
+    promote_insight_to_direction(&backend, &store, &pattern_node, &eps).await?;
+
+    let nodes = backend.get_all_wiki_nodes().await?;
+    let dir_nodes: Vec<_> = nodes.into_iter().filter(|n| n.node_type.as_deref() == Some("direction")).collect();
+    assert_eq!(dir_nodes.len(), 1);
+    assert_eq!(dir_nodes[0].item_type.as_deref(), Some("pattern"));
+
+    Ok(())
+}
+
 }

@@ -321,7 +321,7 @@ pub async fn distill_transcript_file(
             "Analyze the following segment of a coding transcript. Extract ONLY the 4-field memory contract (hn, rn, ιn, µn) per the Arbor framework specification:
             1. Hypothesis (h_n): core problem statement or goal.
             2. Raw Evidence (r_n): list of concrete log lines, errors, or evidence snippets.
-            3. Causal Insight (iota_n): root cause mechanism and preventative rule.
+            3. Causal Insight (iota_n): array of atomic insight items detailing title, item_type (pattern|constraint|failure_mode|lesson), content, and confidence.
             4. Artifact Refs (mu_n): list of files modified or referenced.
 
             Transcript Content:
@@ -333,7 +333,14 @@ pub async fn distill_transcript_file(
               \"scope\": \"general\",
               \"hypothesis\": \"Core task goal or hypothesis\",
               \"raw_evidence\": [\"evidence snippet 1\"],
-              \"causal_insight\": \"Causal explanation and rule\",
+              \"causal_insight\": [
+                {{
+                  \"title\": \"Atomic Insight Title\",
+                  \"item_type\": \"lesson\",
+                  \"content\": \"Causal explanation of what was tried, what happened, and why\",
+                  \"metacognitive_confidence\": 90
+                }}
+              ],
               \"artifact_refs\": [\"src/file.rs\"]
             }}",
             chunk_text
@@ -413,7 +420,7 @@ pub async fn distill_transcript_file(
             actions_to_avoid: Option<Vec<String>>,
             hypothesis: Option<String>,
             raw_evidence: Option<Vec<String>>,
-            causal_insight: Option<String>,
+            causal_insight: Option<serde_json::Value>,
             artifact_refs: Option<Vec<String>>,
             summary: Option<String>,
             key_takeaways: Option<Vec<String>>,
@@ -441,7 +448,13 @@ pub async fn distill_transcript_file(
             key_takeaways: parsed.key_takeaways.unwrap_or_default(),
             hypothesis: parsed.hypothesis,
             raw_evidence: parsed.raw_evidence.unwrap_or_default(),
-            causal_insight: parsed.causal_insight.or_else(|| {
+            causal_insight: parsed.causal_insight.as_ref().map(|v| {
+                if let Some(s) = v.as_str() {
+                    s.to_string()
+                } else {
+                    serde_json::to_string(v).unwrap_or_default()
+                }
+            }).or_else(|| {
                 let mut parts = Vec::new();
                 if let Some(ref m) = parsed.mistakes_failures {
                     if !m.is_empty() {
