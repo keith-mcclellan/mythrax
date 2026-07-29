@@ -469,6 +469,7 @@ struct WikiFrontmatter {
     edges: Option<Vec<FrontmatterEdge>>,
     metacognitive_confidence: Option<i32>,
     node_type: Option<String>,
+    item_type: Option<String>,
 }
 
 pub struct TargetResolveCache {
@@ -931,19 +932,54 @@ pub async fn sync_file_to_db_with_cache(
                 .to_string()
         });
 
+        let file_stem = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let deduced_item_type = if file_stem == "spec.md" || file_stem.contains("spec") {
+            Some("constraint".to_string())
+        } else if file_stem.ends_with("_review.md") || file_stem.ends_with("_audit.md") {
+            Some("failure_mode".to_string())
+        } else if file_stem.starts_with("analysis_") {
+            Some("analysis".to_string())
+        } else if file_stem == "implementation_plan.md" {
+            Some("design_pattern".to_string())
+        } else {
+            Some("lesson".to_string())
+        };
+
         let node = WikiNode {
             id: None,
             name: name.clone(),
             content: plain_body.clone(),
-            scope: frontmatter.scope.unwrap_or_else(|| "general".to_string()),
+            scope: frontmatter.scope.clone().unwrap_or_else(|| "general".to_string()),
             vault_path: Some(rel_path),
             embedding: None,
             metacognitive_confidence: frontmatter.metacognitive_confidence,
-            node_type: frontmatter.node_type,
+            node_type: frontmatter.node_type.clone(),
+            item_type: frontmatter.item_type.or(deduced_item_type),
             ..Default::default()
         };
 
         let db_id = backend.save_wiki_node(&node).await?;
+
+        let scope_for_wisdom = node.scope.clone();
+        let content_for_wisdom = plain_body.clone();
+        if file_stem == "spec.md"
+            || file_stem == "implementation_plan.md"
+            || file_stem.ends_with("_review.md")
+            || file_stem.ends_with("_audit.md")
+        {
+            let backend_clone = backend.clone();
+            tokio::spawn(async move {
+                let _ = crate::vault::distillation::extract_wisdom_from_document(
+                    &*backend_clone,
+                    &content_for_wisdom,
+                    &scope_for_wisdom,
+                )
+                .await;
+            });
+        }
 
         if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
         {

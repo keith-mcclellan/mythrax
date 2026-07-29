@@ -41,74 +41,74 @@
 
 ## Phase 2: Pipeline Propagation
 
-- [ ] Task: Update cluster compaction to preserve atomicity (compactor.rs L1004-1075)
-  - [ ] Replace free-text summary LLM prompt with atomic itemization prompt (same as synthesis)
-  - [ ] Input structured `items` from child wiki_nodes instead of raw content concatenation
-  - [ ] Output new `AtomicInsightItem` entries at higher abstraction level
-  - [ ] Create per-item wiki_nodes from compaction output
-  - [ ] Mark input wiki_nodes as `node_type: "archived"` after successful compaction
-  - [ ] Generate content-derived embeddings synchronously (fix `embedding: None` at L1117)
-  - [ ] Add unit test: verify compaction produces atomic items, not monolithic summary
-  - [ ] Add unit test: verify compacted nodes have non-null embeddings
+- [x] Task: Update cluster compaction to preserve atomicity (compactor.rs L1004-1075)
+  - [x] Replace free-text summary LLM prompt with atomic itemization prompt (same as synthesis)
+  - [x] Input structured `items` from child wiki_nodes instead of raw content concatenation
+  - [x] Output new `AtomicInsightItem` entries at higher abstraction level
+  - [x] Create per-item wiki_nodes from compaction output
+  - [x] Mark input wiki_nodes as `node_type: "archived"` after successful compaction
+  - [x] Generate content-derived embeddings synchronously (fix `embedding: None` at L1117)
+  - [x] Add unit test: verify compaction produces atomic items, not monolithic summary
+  - [x] Add unit test: verify compacted nodes have non-null embeddings
 
-- [ ] Task: Update outlier compaction to preserve atomicity (compactor.rs L1162-1300)
-  - [ ] Replace free-text outlier summary prompt at L1175-1176 with atomic itemization prompt
-  - [ ] Parse output into `AtomicInsightItem` entries
-  - [ ] Create per-item wiki_nodes with content-derived embeddings (not single miscellaneous node)
-  - [ ] Replace monolithic WikiNode creation at L1264-1274 with per-item loop
-  - [ ] Mark source outlier wiki_nodes as `node_type: "archived"` after compaction
-  - [ ] Add unit test: verify outlier compaction produces atomic items
-  - [ ] Add unit test: verify outlier compacted nodes have non-null embeddings
+- [x] Task: Update outlier compaction to preserve atomicity (compactor.rs L1162-1300)
+  - [x] Replace free-text outlier summary prompt at L1175-1176 with atomic itemization prompt
+  - [x] Parse output into `AtomicInsightItem` entries
+  - [x] Create per-item wiki_nodes with content-derived embeddings (not single miscellaneous node)
+  - [x] Replace monolithic WikiNode creation at L1264-1274 with per-item loop
+  - [x] Mark source outlier wiki_nodes as `node_type: "archived"` after compaction
+  - [x] Add unit test: verify outlier compaction produces atomic items
+  - [x] Add unit test: verify outlier compacted nodes have non-null embeddings
 
-- [ ] Task: Update wisdom graduation to use `item_type` routing (synthesis.rs L3226-3337)
-  - [ ] Inspect `node.item_type` in `promote_insight_to_direction` before promotion
-  - [ ] Route `failure_mode` → WisdomRule with `action_to_avoid`
-  - [ ] Route `constraint` → WisdomRule with `target_pattern` and `prescribed_remedy`
-  - [ ] Route `pattern`/`lesson` → positive direction node (current behavior)
-  - [ ] Include `item_type` in direction node metadata for downstream queryability
-  - [ ] Add unit test: verify failure_mode produces WisdomRule with action_to_avoid
-  - [ ] Add unit test: verify pattern produces positive direction node
-  - [ ] Note: Cross-scope graduation at L2057-2250 benefits automatically from atomicity — no code changes needed
+- [x] Task: Update wisdom graduation to use `item_type` routing (synthesis.rs L3226-3337)
+  - [x] Inspect `node.item_type` in `promote_insight_to_direction` before promotion
+  - [x] Route `failure_mode` → WisdomRule with `action_to_avoid`
+  - [x] Route `constraint` → WisdomRule with `target_pattern` and `prescribed_remedy`
+  - [x] Route `pattern`/`lesson` → positive direction node (current behavior)
+  - [x] Include `item_type` in direction node metadata for downstream queryability
+  - [x] Add unit test: verify failure_mode produces WisdomRule with action_to_avoid
+  - [x] Add unit test: verify pattern produces positive direction node
+  - [x] Note: Cross-scope graduation at L2057-2250 benefits automatically from atomicity — no code changes needed
 
-- [ ] Task: Enrich distillation with structured `causal_insight` extraction (distillation.rs L320-338)
-  - [ ] Update distillation LLM prompt to extract atomic `causal_insight` items per transcript chunk
-  - [ ] Parse structured items into episode's `causal_insight` field as JSON array (not flat string)
-  - [ ] Add unit test: verify distilled episodes contain structured causal_insight JSON
+- [x] Task: Enrich distillation with structured `causal_insight` extraction (distillation.rs L320-338)
+  - [x] Update distillation LLM prompt to extract atomic `causal_insight` items per transcript chunk
+  - [x] Parse structured items into episode's `causal_insight` field as JSON array (not flat string)
+  - [x] Add unit test: verify distilled episodes contain structured causal_insight JSON
 
-- [ ] Task: Phase 2 Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase 2 Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Raw Markdown Asset Mining
 
-- [ ] Task: Expand `ingest_artifacts_in_dir` to handle ALL `.md` files (distillation.rs L533-604)
-  - [ ] Replace hardcoded filename checks with universal `.md` handler for unmatched files
-  - [ ] For each unmatched `.md` file: read content, run atomic itemization LLM prompt
-  - [ ] Create individual wiki_node entries per extracted item with proper `item_type`
-  - [ ] Generate content-derived embeddings per item
-  - [ ] Preserve existing special handling for `walkthrough.md`, `task.md` as episode saves
-  - [ ] Upgrade `implementation_plan.md` handling from regex `extract_decisions()` to full LLM atomic extraction
-  - [ ] Add unit test: verify spec.md files are processed (not ignored)
-  - [ ] Add unit test: verify walkthrough.md still creates episode (not wiki_node)
+- [x] Task: Expand `ingest_artifacts_in_dir` to handle ALL `.md` files (distillation.rs L533-604)
+  - [x] Replace hardcoded filename checks with universal `.md` handler for unmatched files
+  - [x] For each unmatched `.md` file: read content, run atomic itemization LLM prompt
+  - [x] Create individual wiki_node entries per extracted item with proper `item_type`
+  - [x] Generate content-derived embeddings per item
+  - [x] Preserve existing special handling for `walkthrough.md`, `task.md` as episode saves
+  - [x] Upgrade `implementation_plan.md` handling from regex `extract_decisions()` to full LLM atomic extraction
+  - [x] Add unit test: verify spec.md files are processed (not ignored)
+  - [x] Add unit test: verify walkthrough.md still creates episode (not wiki_node)
 
-- [ ] Task: Add LLM extraction to `sync_file_to_db` for markdown assets (watcher.rs L921-930)
-  - [ ] When non-episode/non-wisdom `.md` file synced, queue for background atomic extraction via CognitiveTask
-  - [ ] Don't block watcher — create task asynchronously
-  - [ ] Cognitive task runs atomic itemization prompt and creates per-item wiki_nodes
-  - [ ] Add unit test: verify watcher queues cognitive task for markdown files
+- [x] Task: Add LLM extraction to `sync_file_to_db` for markdown assets (watcher.rs L921-930)
+  - [x] When non-episode/non-wisdom `.md` file synced, queue for background atomic extraction via CognitiveTask
+  - [x] Don't block watcher — create task asynchronously
+  - [x] Cognitive task runs atomic itemization prompt and creates per-item wiki_nodes
+  - [x] Add unit test: verify watcher queues cognitive task for markdown files
 
-- [ ] Task: Retroactive reprocessing of existing vault markdown
-  - [ ] Add `manage(action="reprocess_markdown")` MCP endpoint
-  - [ ] Query all wiki_node records where `item_type IS NONE` and `node_type` is NULL or "wiki"
-  - [ ] For each, read vault file content and run atomic extraction
-  - [ ] Create new atomic wiki_node entries per extracted item
-  - [ ] Mark original monolithic node as `node_type: "archived"`
-  - [ ] Add unit test: verify reprocessing creates atomic items and archives originals
+- [x] Task: Retroactive reprocessing of existing vault markdown
+  - [x] Add `manage(action="reprocess_markdown")` MCP endpoint
+  - [x] Query all wiki_node records where `item_type IS NONE` and `node_type` is NULL or "wiki"
+  - [x] For each, read vault file content and run atomic extraction
+  - [x] Create new atomic wiki_node entries per extracted item
+  - [x] Mark original monolithic node as `node_type: "archived"`
+  - [x] Add unit test: verify reprocessing creates atomic items and archives originals
 
-- [ ] Task: Direct WisdomRule generation from spec/plan risk sections (distillation.rs)
-  - [ ] Add `extract_wisdom_from_document()` function
-  - [ ] Identify risk tables, constraint sections, failure mode descriptions via LLM extraction
-  - [ ] Generate WisdomRule entries with proper field mapping
-  - [ ] Save with `generator_name: "document_extraction"` for provenance tracking
-  - [ ] Call during artifact ingestion for `spec.md`, `*_review.md`, `*_audit.md` files
-  - [ ] Add unit test: verify WisdomRule generated from spec risk section
+- [x] Task: Direct WisdomRule generation from spec/plan risk sections (distillation.rs)
+  - [x] Add `extract_wisdom_from_document()` function
+  - [x] Identify risk tables, constraint sections, failure mode descriptions via LLM extraction
+  - [x] Generate WisdomRule entries with proper field mapping
+  - [x] Save with `generator_name: "document_extraction"` for provenance tracking
+  - [x] Call during artifact ingestion for `spec.md`, `*_review.md`, `*_audit.md` files
+  - [x] Add unit test: verify WisdomRule generated from spec risk section
 
-- [ ] Task: Phase 3 Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase 3 Verification & Checkpoint (Refer to workflow.md)

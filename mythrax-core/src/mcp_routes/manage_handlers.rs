@@ -161,7 +161,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 
             return Ok(json!({ "status": "success" }));
         }
-        "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk"
+        "verify" | "organize" | "reprocess" | "reprocess_markdown" | "summarize" | "audit" | "ingest_bulk"
         | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
             match mapped_action {
                 "ingest_bulk" => {

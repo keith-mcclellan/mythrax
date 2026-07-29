@@ -135,6 +135,54 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 ]
             }))
         }
+        "reprocess_markdown" => {
+            let all_nodes = state.backend.get_all_wiki_nodes().await?;
+            let mut count = 0;
+            for node in all_nodes {
+                let is_unitemized = node.item_type.is_none()
+                    && (node.node_type.is_none() || node.node_type.as_deref() == Some("wiki"));
+                if is_unitemized {
+                    let item_type = if node.name == "spec.md" || node.name.contains("spec") {
+                        "constraint"
+                    } else if node.name.ends_with("_review.md") || node.name.ends_with("_audit.md") {
+                        "failure_mode"
+                    } else if node.name.starts_with("analysis_") {
+                        "analysis"
+                    } else if node.name == "implementation_plan.md" {
+                        "design_pattern"
+                    } else {
+                        "lesson"
+                    };
+
+                    let new_node = WikiNode {
+                        id: None,
+                        name: format!("Itemized: {}", node.name),
+                        content: node.content.clone(),
+                        scope: node.scope.clone(),
+                        vault_path: node.vault_path.clone(),
+                        embedding: None,
+                        item_type: Some(item_type.to_string()),
+                        node_type: Some(item_type.to_string()),
+                        ..Default::default()
+                    };
+                    state.backend.save_wiki_node(&new_node).await?;
+
+                    let mut orig = node.clone();
+                    orig.node_type = Some("archived".to_string());
+                    state.backend.save_wiki_node(&orig).await?;
+
+                    count += 1;
+                }
+            }
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Reprocessed {} monolithic markdown wiki nodes into atomic items.", count)
+                    }
+                ]
+            }))
+        }
         "summarize" => {
             let scope = args
                 .get("scope")

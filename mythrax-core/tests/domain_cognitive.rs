@@ -6618,4 +6618,55 @@ async fn test_item_type_routing_promote_insight_to_direction() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_phase3_extract_wisdom_from_spec_risk_section() -> Result<()> {
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    let spec_content = r#"# Specification
+
+## Risk Assessment
+Holding database locks across network RPC boundaries triggers lock contention and deadlocks under concurrency.
+
+## Failure Modes
+OOM occurs when un-evicted vector models exceed GPU VRAM memory budget.
+"#;
+
+    mythrax_core::vault::distillation::extract_wisdom_from_document(&backend, spec_content, "test_scope").await?;
+
+    let rules = backend.get_all_wisdom_rules().await?;
+    assert!(!rules.is_empty());
+    assert_eq!(rules[0].generator_name, "document_extraction");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_phase3_ingest_artifacts_markdown() -> Result<()> {
+    let dir = tempdir()?;
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    let walkthrough_path = dir.path().join("walkthrough.md");
+    std::fs::write(&walkthrough_path, "# Walkthrough\nCompleted phase 3 changes.")?;
+
+    let spec_path = dir.path().join("spec.md");
+    std::fs::write(&spec_path, "# Spec\n## Risk\nSystem failure occurs on unhandled panic.")?;
+
+    mythrax_core::vault::distillation::ingest_artifacts_in_dir(&backend, dir.path(), "session_123", "test_scope").await?;
+
+    let eps = backend.get_all_episodes().await?;
+    assert_eq!(eps.len(), 1);
+    assert_eq!(eps[0].node_type.as_deref(), Some("walkthrough"));
+
+    let nodes = backend.get_all_wiki_nodes().await?;
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].item_type.as_deref(), Some("constraint"));
+
+    let rules = backend.get_all_wisdom_rules().await?;
+    assert!(!rules.is_empty());
+
+    Ok(())
+}
+
 }

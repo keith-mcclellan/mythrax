@@ -543,6 +543,72 @@ pub fn extract_completed_tasks(content: &str) -> String {
     }
 }
 
+pub async fn extract_wisdom_from_document(
+    db: &dyn StorageBackend,
+    content: &str,
+    scope: &str,
+) -> Result<()> {
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut current_heading = "General".to_string();
+    let mut current_block = String::new();
+
+    for line in lines {
+        if line.starts_with('#') {
+            if !current_block.trim().is_empty() {
+                process_wisdom_block(db, &current_heading, &current_block, scope).await?;
+            }
+            current_heading = line.trim_start_matches('#').trim().to_string();
+            current_block.clear();
+        } else {
+            current_block.push_str(line);
+            current_block.push('\n');
+        }
+    }
+    if !current_block.trim().is_empty() {
+        process_wisdom_block(db, &current_heading, &current_block, scope).await?;
+    }
+
+    Ok(())
+}
+
+async fn process_wisdom_block(
+    db: &dyn StorageBackend,
+    heading: &str,
+    block: &str,
+    scope: &str,
+) -> Result<()> {
+    let lower_heading = heading.to_lowercase();
+    let lower_block = block.to_lowercase();
+
+    let is_risk = lower_heading.contains("risk")
+        || lower_heading.contains("guard")
+        || lower_heading.contains("constraint")
+        || lower_heading.contains("failure")
+        || lower_block.contains("risk")
+        || lower_block.contains("warning")
+        || lower_block.contains("caution");
+
+    if is_risk && block.trim().len() >= 20 {
+        let rule = WisdomRule {
+            target_pattern: heading.to_string(),
+            action_to_avoid: format!("Ignoring risks in section '{}'", heading),
+            causal_explanation: block.trim().to_string(),
+            prescribed_remedy: format!("Enforce guidelines from section '{}'", heading),
+            utility: Some(0.85),
+            scope: scope.to_string(),
+            generator_name: "document_extraction".to_string(),
+            ..Default::default()
+        };
+        let store = crate::store::MarkdownStore::new(std::path::Path::new("."))?;
+        let _ = crate::cognitive::synthesis::save_wisdom_rule_with_deduplication(db, &store, &rule).await;
+    }
+    Ok(())
+}
+
 pub async fn ingest_artifacts_in_dir(
     db: &dyn StorageBackend,
     dir_path: &Path,
@@ -561,6 +627,10 @@ pub async fn ingest_artifacts_in_dir(
                 let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
                 let rel_path_str = path.to_string_lossy().to_string();
 
+                if !file_name.ends_with(".md") {
+                    continue;
+                }
+
                 if file_name == "walkthrough.md" {
                     let content = std::fs::read_to_string(&path)?;
                     let save = EpisodeSave::builder("Walkthrough".to_string(), content)
@@ -569,19 +639,6 @@ pub async fn ingest_artifacts_in_dir(
                         .node_type(Some("walkthrough".to_string()))
                         .session_id(Some(conversation_id.to_string()))
                         .build();
-                    db.save_episode(&save).await?;
-                } else if file_name == "implementation_plan.md" {
-                    let content = std::fs::read_to_string(&path)?;
-                    let decisions_text = extract_decisions(&content);
-                    let save = EpisodeSave::builder(
-                        "Decisions from Implementation Plan".to_string(),
-                        decisions_text,
-                    )
-                    .scope(Some(scope.to_string()))
-                    .vault_path(Some(rel_path_str))
-                    .node_type(Some("decision".to_string()))
-                    .session_id(Some(conversation_id.to_string()))
-                    .build();
                     db.save_episode(&save).await?;
                 } else if file_name == "task.md" {
                     let content = std::fs::read_to_string(&path)?;
@@ -594,22 +651,40 @@ pub async fn ingest_artifacts_in_dir(
                             .session_id(Some(conversation_id.to_string()))
                             .build();
                     db.save_episode(&save).await?;
-                } else if (file_name.starts_with("analysis_") && file_name.ends_with(".md"))
-                    || (file_name.ends_with("_critique.md"))
-                {
+                } else {
                     let content = std::fs::read_to_string(&path)?;
+                    let item_type = if file_name == "spec.md" || file_name.contains("spec") {
+                        "constraint"
+                    } else if file_name.ends_with("_review.md") || file_name.ends_with("_audit.md") {
+                        "failure_mode"
+                    } else if file_name.starts_with("analysis_") {
+                        "analysis"
+                    } else if file_name == "implementation_plan.md" {
+                        "design_pattern"
+                    } else {
+                        "lesson"
+                    };
+
                     let node = WikiNode {
                         id: None,
                         name: file_name.to_string(),
-                        content,
+                        content: content.clone(),
                         scope: scope.to_string(),
                         vault_path: Some(rel_path_str),
                         embedding: None,
-                        item_type: Some("analysis".to_string()),
-                        node_type: Some("analysis".to_string()),
+                        item_type: Some(item_type.to_string()),
+                        node_type: Some(item_type.to_string()),
                         ..Default::default()
                     };
                     db.save_wiki_node(&node).await?;
+
+                    if file_name == "spec.md"
+                        || file_name == "implementation_plan.md"
+                        || file_name.ends_with("_review.md")
+                        || file_name.ends_with("_audit.md")
+                    {
+                        let _ = extract_wisdom_from_document(db, &content, scope).await;
+                    }
                 }
             }
         }
