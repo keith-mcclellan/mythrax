@@ -7,5 +7,5 @@
 - [~] **Track: Arbor Framework Alignment & Single-Pass Chunked Ingestion**
   *Link: [./tracks/arbor_alignment_20260726/index.md](./tracks/arbor_alignment_20260726/index.md)*
 
-- [ ] **Track: Atomic Insight Itemization & Full-Pipeline Arbor Alignment**
+- [~] **Track: Atomic Insight Itemization & Full-Pipeline Arbor Alignment**
   *Link: [./tracks/atomic_insights_20260729/index.md](./tracks/atomic_insights_20260729/index.md)*
