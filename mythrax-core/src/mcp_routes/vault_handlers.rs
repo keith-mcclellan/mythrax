@@ -138,50 +138,95 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
         "reprocess_markdown" => {
             let all_nodes = state.backend.get_all_wiki_nodes().await?;
             let mut count = 0;
+            let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+Analyze the markdown document and extract distilled causal items (ι_n). Output a JSON object matching this schema:
+{
+  "items": [
+    {
+      "title": "<Abstract Noun-Phrase Title>",
+      "item_type": "<pattern | constraint | failure_mode | lesson>",
+      "content": "<2-3 sentence causal explanation of what was tried, what happened, and why>",
+      "metacognitive_confidence": 90
+    }
+  ]
+}
+"#;
+            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
+
             for node in all_nodes {
                 let is_unitemized = node.item_type.is_none()
                     && (node.node_type.is_none() || node.node_type.as_deref() == Some("wiki"));
                 if is_unitemized {
-                    let item_type = if node.name == "spec.md" || node.name.contains("spec") {
-                        "constraint"
-                    } else if node.name.ends_with("_review.md") || node.name.ends_with("_audit.md") {
-                        "failure_mode"
-                    } else if node.name.starts_with("analysis_") {
-                        "analysis"
-                    } else if node.name == "implementation_plan.md" {
-                        "design_pattern"
-                    } else {
-                        "lesson"
-                    };
+                    let prompt_text = format!(
+                        "Extract atomic causal items from markdown document '{}':\n\n{}\nRespond ONLY with valid JSON matching {{\"items\": [...]}}.",
+                        node.name, node.content
+                    );
 
-                    let text_to_embed = format!("{}: {} - {}", item_type, node.name, node.content);
-                    let content_embedding = state.backend.embed(&text_to_embed).await.ok();
+                    let mut items = Vec::new();
+                    let llm_client = crate::llm::LLMClient::default();
+                    if let Ok(llm_res) = llm_client.routed_completion(
+                        &*state.backend,
+                        &crate::contracts::TaskProfile::new(
+                            crate::contracts::TaskArchetype::Summarization,
+                        ),
+                        Some(&sys_prompt),
+                        &prompt_text,
+                    ).await {
+                        if let Ok(analysis) = serde_json::from_str::<crate::cognitive::synthesis::ClusterAnalysis>(&llm_res) {
+                            items = analysis.resolved_items("reprocess_markdown");
+                        }
+                    }
 
-                    let new_node = WikiNode {
-                        id: None,
-                        name: format!("Itemized: {}", node.name),
-                        content: node.content.clone(),
-                        scope: node.scope.clone(),
-                        vault_path: node.vault_path.clone(),
-                        embedding: content_embedding,
-                        item_type: Some(item_type.to_string()),
-                        node_type: Some(item_type.to_string()),
-                        ..Default::default()
-                    };
-                    state.backend.save_wiki_node(&new_node).await?;
+                    if items.is_empty() {
+                        let fallback_type = if node.name == "spec.md" || node.name.contains("spec") {
+                            "constraint"
+                        } else if node.name.ends_with("_review.md") || node.name.ends_with("_audit.md") {
+                            "failure_mode"
+                        } else if node.name.starts_with("analysis_") {
+                            "analysis"
+                        } else if node.name == "implementation_plan.md" {
+                            "design_pattern"
+                        } else {
+                            "lesson"
+                        };
+                        items.push(crate::cognitive::synthesis::AtomicInsightItem {
+                            title: format!("Itemized: {}", node.name),
+                            item_type: fallback_type.to_string(),
+                            content: node.content.clone(),
+                            metacognitive_confidence: Some(90),
+                        });
+                    }
+
+                    for item in items {
+                        let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
+                        let content_embedding = state.backend.embed(&text_to_embed).await.ok();
+
+                        let new_node = WikiNode {
+                            id: None,
+                            name: item.title.clone(),
+                            content: item.content.clone(),
+                            scope: node.scope.clone(),
+                            vault_path: node.vault_path.clone(),
+                            embedding: content_embedding,
+                            item_type: Some(item.item_type.clone()),
+                            node_type: Some("insight".to_string()),
+                            metacognitive_confidence: item.metacognitive_confidence,
+                            ..Default::default()
+                        };
+                        state.backend.save_wiki_node(&new_node).await?;
+                        count += 1;
+                    }
 
                     let mut orig = node.clone();
                     orig.node_type = Some("archived".to_string());
                     state.backend.save_wiki_node(&orig).await?;
-
-                    count += 1;
                 }
             }
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("Reprocessed {} monolithic markdown wiki nodes into atomic items with content-derived embeddings.", count)
+                        "text": format!("Reprocessed unitemized markdown wiki nodes into {} atomic items with LLM extraction and content-derived embeddings.", count)
                     }
                 ]
             }))
