@@ -100,7 +100,7 @@ impl Compactor {
             }
         }
 
-        let sys_prompt = "You are a master systems architect implementing the Arbor memory framework. Analyze the sequence of checkpoints and summarize the architectural evolution. Focus on: 1) Structural state shifts and design transitions, 2) Root causes of resolved errors and failure modes, and 3) Preserved architectural invariants across iterations. Omit transient step logs.";
+        let sys_prompt = "You are a master systems architect implementing the Mythrax Cognitive Memory System. Analyze the sequence of checkpoints and summarize the architectural evolution. Focus on: 1) Structural state shifts and design transitions, 2) Root causes of resolved errors and failure modes, and 3) Preserved architectural invariants across iterations. Omit transient step logs.";
         let summary = self
             .llm
             .routed_completion(
@@ -1019,8 +1019,8 @@ impl Compactor {
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
-Synthesize cluster insights per the Arbor specification into distilled atomic insights (ι_n). Output a JSON object matching this schema:
+            let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
+Synthesize cluster insights into distilled atomic insights (ι_n). Output a JSON object matching this schema:
 {
   "items": [
     {
@@ -1223,8 +1223,8 @@ CRITICAL ARBOR RULES:
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
-Synthesize outlier insights per the Arbor specification into distilled atomic insights (ι_n). Output a JSON object matching this schema:
+            let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
+Synthesize outlier insights into distilled atomic insights (ι_n). Output a JSON object matching this schema:
 {
   "items": [
     {

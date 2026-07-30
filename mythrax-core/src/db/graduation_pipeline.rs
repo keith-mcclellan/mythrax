@@ -44,6 +44,17 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
 
             let sim = cosine_similarity(local_emb, other_emb);
             if sim >= 0.85 {
+                // Block graduation if either source node is flagged as contradicted
+                if local.node_type.as_deref() == Some("conflict")
+                    || other.node_type.as_deref() == Some("conflict")
+                {
+                    tracing::info!(
+                        "Graduation blocked: source node flagged as conflict (local='{}', other='{}')",
+                        local.name, other.name
+                    );
+                    continue;
+                }
+
                 let uuid = uuid::Uuid::new_v4().to_string();
                 let global_rule = WisdomRule {
                     id: Some(format!("wisdom:{}", uuid)),

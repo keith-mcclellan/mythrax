@@ -138,7 +138,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
         "reprocess_markdown" => {
             let all_nodes = state.backend.get_all_wiki_nodes().await?;
             let mut count = 0;
-            let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+            let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
 Analyze the markdown document and extract distilled causal items (ι_n). Output a JSON object matching this schema:
 {
   "items": [

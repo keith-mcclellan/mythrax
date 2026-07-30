@@ -162,7 +162,7 @@ pub async fn run_summarization_task(
     client: &LLMClient,
     content: &str,
 ) -> Result<String> {
-    let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Structure your summary according to the Arbor 4-Field Memory Contract:\n\
+    let sys_prompt = "You are a master systems architect implementing the Mythrax Cognitive Memory System. Structure your summary according to the 4-Field Memory Contract:\n\
                       ### 🎯 Intent & Hypothesis (hn)\n\
                       ### 📊 Factual Result & Raw Evidence (rn) (Preserve compiler error tracebacks, diffs, and tool outputs verbatim without LLM truncation)\n\
                       ### 🧠 Distilled Insight & Causal Lessons (ιn) (Detail what worked, what failed, root causes, and architectural principles)\n\
@@ -295,9 +295,9 @@ pub async fn distill_transcript_file(
             }
         }
 
-        // Formulate LLM distillation prompt to parse semantic elements and 4 Arbor fields
+        // Formulate LLM distillation prompt to parse semantic elements and 4 memory fields
         let prompt = format!(
-            "Analyze the following segment of a coding transcript. Extract ONLY the 4-field memory contract (hn, rn, ιn, µn) per the Arbor framework specification:
+            "Analyze the following segment of a coding transcript. Extract ONLY the 4-field memory contract (hn, rn, ιn, µn) per the Mythrax memory specification:
             1. Hypothesis (h_n): core problem statement or goal.
             2. Raw Evidence (r_n): list of concrete log lines, errors, or evidence snippets.
             3. Causal Insight (iota_n): array of atomic insight items detailing title, item_type (pattern|constraint|failure_mode|lesson), content, and confidence.

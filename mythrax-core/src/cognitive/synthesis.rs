@@ -1131,7 +1131,7 @@ impl DreamCoordinator {
                                     new_source_episodes.push(ep_id_str);
                                 }
 
-                                let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+                                let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
 Analyze the existing architectural insight and the new event, then extract distilled causal insights (ι_n). Output a JSON object matching this schema:
 {
   "items": [
@@ -1384,7 +1384,7 @@ Analyze the existing architectural insight and the new event, then extract disti
                                 ));
                             }
 
-                            let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+                            let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
 Analyze the events and extract distilled causal insights (ι_n). Output a JSON object matching this schema:
 {
   "items": [
@@ -1887,7 +1887,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                 }
 
                                 // Call LLM Synthesizer with AtomicInsightItem prompt
-                                let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+                                let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
 Analyze the events and extract distilled causal insights (ι_n). Output a JSON object matching this schema:
 {
   "items": [
