@@ -1,0 +1,25 @@
+name: Architect Scan
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+permissions:
+  pull-requests: write
+  contents: read
+  issues: write
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Run Architect Scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/architect_scan.py
