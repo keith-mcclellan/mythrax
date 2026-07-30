@@ -161,7 +161,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 
             return Ok(json!({ "status": "success" }));
         }
-        "verify" | "organize" | "reprocess" | "summarize" | "audit" | "ingest_bulk"
+        "verify" | "organize" | "reprocess" | "reprocess_markdown" | "summarize" | "audit" | "ingest_bulk"
         | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
             match mapped_action {
                 "ingest_bulk" => {
@@ -821,6 +821,22 @@ pub async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value
             }))
         }
         "set" => {
+            let val_owned = args.get("value").map(|v| v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string()));
+            if let (Some(k), Some(v)) = (
+                args.get("key").and_then(|v| v.as_str()),
+                val_owned.as_deref(),
+            ) {
+                state.backend.save_profile_key(k, v).await?;
+                return Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Profile key '{}' set to '{}'.", k, v)
+                        }
+                    ]
+                }));
+            }
+
             let provider = args
                 .get("provider")
                 .and_then(|v| v.as_str())

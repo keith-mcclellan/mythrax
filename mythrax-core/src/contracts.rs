@@ -634,6 +634,8 @@ pub struct WikiNode {
     pub causal_insight: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_refs: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_type: Option<String>,
 }
 
 pub trait ArborNode {

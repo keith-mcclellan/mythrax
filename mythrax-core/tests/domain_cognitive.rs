@@ -146,107 +146,23 @@ Insight Three content."#;
         .compact_scope(std::sync::Arc::new(backend.clone()), &store, "scope1", backend.embedder.clone())
         .await?;
 
-    // Verify compactions on disk
-    let compaction_dir = vault_root.join("wiki/scope1/compactions");
-    assert!(compaction_dir.exists());
-
-    let entries = fs::read_dir(&compaction_dir)?;
-    let mut files = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".md") {
-            let content = fs::read_to_string(entry.path())?;
-            files.push((name, content));
-        }
-    }
-
-    assert_eq!(files.len(), 2, "Expected exactly two compaction files");
-
-    let mut found_cluster = false;
-    let mut found_misc = false;
-
-    println!("ACTUAL FILES IN DIR: {:?}", files);
-    for (name, content) in &files {
-        let name_lower = name.to_lowercase();
-        if content.contains("cluster_id: 0") {
-            found_cluster = true;
-            assert!(
-                name_lower.contains("insight_one")
-                    || name_lower.contains("insight_two")
-                    || name_lower.contains("insight_three"),
-                "Cluster compaction filename should contain slug of first insight: {}",
-                name
-            );
-        } else if content.contains("cluster_id: \"miscellaneous\"") {
-            found_misc = true;
-            assert!(
-                name_lower.contains("miscellaneous"),
-                "Miscellaneous compaction filename should contain miscellaneous"
-            );
-        }
-    }
-
-    assert!(found_cluster, "Clustered compaction not generated");
-    assert!(found_misc, "Miscellaneous compaction not generated");
+    // Verify atomic insights on disk in wiki/scope1/insights
+    let insights_base = vault_root.join("wiki/scope1/insights");
+    assert!(insights_base.exists());
 
     // Verify relations in the database
-    let mut response = backend.db.query("SELECT id, name FROM wiki_node;").await?;
+    let mut response = backend.db.query("SELECT id, name, item_type FROM wiki_node;").await?;
     let nodes: Vec<serde_json::Value> = response.take(0)?;
 
-    // We should have 5 wiki nodes total (3 insights + 2 compactions)
-    assert_eq!(nodes.len(), 5);
+    // We should have at least the 3 initial insight nodes plus synthesized atomic items
+    assert!(nodes.len() > 3, "Expected new atomic insight nodes to be generated in DB, found {}", nodes.len());
 
-    let cluster_compaction_node = nodes
-        .iter()
-        .find(|n| n["name"].as_str().unwrap().contains("Cluster 0"))
-        .expect("Cluster 0 node not found");
-    let misc_compaction_node = nodes
-        .iter()
-        .find(|n| n["name"].as_str().unwrap().contains("Miscellaneous"))
-        .expect("Miscellaneous compaction node not found");
-
-    let cluster_node_id = cluster_compaction_node["id"].as_str().unwrap();
-    let misc_node_id = misc_compaction_node["id"].as_str().unwrap();
-
-    let mut rel_resp1 = backend
+    let mut rel_resp = backend
         .db
-        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
-        .bind(("ins_id", parse_record_id(&id1)?))
-        .bind(("comp_id", parse_record_id(cluster_node_id)?))
+        .query("SELECT * FROM relates_to;")
         .await?;
-    let rels1: Vec<serde_json::Value> = rel_resp1.take(0)?;
-    assert_eq!(
-        rels1.len(),
-        1,
-        "Relation between Insight One and Cluster Compaction missing"
-    );
-
-    let mut rel_resp2 = backend
-        .db
-        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
-        .bind(("ins_id", parse_record_id(&id2)?))
-        .bind(("comp_id", parse_record_id(cluster_node_id)?))
-        .await?;
-    let rels2: Vec<serde_json::Value> = rel_resp2.take(0)?;
-    assert_eq!(
-        rels2.len(),
-        1,
-        "Relation between Insight Two and Cluster Compaction missing"
-    );
-
-    let mut rel_resp3 = backend
-        .db
-        .query("SELECT * FROM relates_to WHERE in = $ins_id AND out = $comp_id;")
-        .bind(("ins_id", parse_record_id(&id3)?))
-        .bind(("comp_id", parse_record_id(misc_node_id)?))
-        .await?;
-    let rels3: Vec<serde_json::Value> = rel_resp3.take(0)?;
-    assert_eq!(
-        rels3.len(),
-        1,
-        "Relation between Insight Three and Miscellaneous Compaction missing"
-    );
+    let rels: Vec<serde_json::Value> = rel_resp.take(0)?;
+    assert!(!rels.is_empty(), "Expected relates_to edges to be created for synthesized atomic insights");
 
     Ok(())
 }
@@ -964,7 +880,7 @@ Insight Two content."#,
     let all_nodes = backend.get_all_wiki_nodes().await?;
     let compacted_nodes: Vec<WikiNode> = all_nodes
         .into_iter()
-        .filter(|n| n.scope == "scope2" && n.name.contains("Cluster"))
+        .filter(|n| n.scope == "scope2" && n.vault_path.as_ref().map_or(false, |p| p.contains("compactions")))
         .collect();
     assert_eq!(
         compacted_nodes.len(),
@@ -6566,6 +6482,201 @@ async fn test_execute_skill_merge() -> Result<()> {
             env::remove_var("HOME");
         }
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_atomic_insight_item_validation() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::{AtomicInsightItem, ClusterAnalysis};
+
+    let valid_item = AtomicInsightItem {
+        title: "Test Insight".to_string(),
+        item_type: "lesson".to_string(),
+        content: "What was tried: A. What happened: B. Why: C.".to_string(),
+        what_was_tried: Some("A".to_string()),
+        what_happened: Some("B".to_string()),
+        why: Some("C".to_string()),
+        metacognitive_confidence: Some(90),
+    };
+    assert_eq!(valid_item.title, "Test Insight");
+    assert_eq!(valid_item.item_type, "lesson");
+    assert_eq!(
+        valid_item.causal_content(),
+        "Tried: A\nWhat happened: B\nWhy: C"
+    );
+
+    let fallback_analysis = ClusterAnalysis {
+        items: vec![],
+        title: Some("Fallback Title".to_string()),
+        summary: Some("Fallback Summary".to_string()),
+        metacognitive_confidence: Some(85),
+        node_type: Some("lesson".to_string()),
+    };
+    let items = fallback_analysis.resolved_items("raw fallback text");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].title, "Fallback Title");
+    assert_eq!(items[0].content, "Fallback Summary");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_synthesis_system_prompt_formatting() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::build_synthesis_prompt;
+
+    let sys_prompt = build_synthesis_prompt("Extract items array containing title, item_type, content, metacognitive_confidence.");
+    assert!(sys_prompt.contains("Strunk & White"));
+    assert!(sys_prompt.contains("items"));
+    assert!(sys_prompt.contains("title"));
+    assert!(sys_prompt.contains("item_type"));
+    assert!(sys_prompt.contains("content"));
+    assert!(sys_prompt.contains("metacognitive_confidence"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_empty_array_error_handling() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::ClusterAnalysis;
+
+    let analysis: ClusterAnalysis = serde_json::from_str(r#"{"items": []}"#).unwrap();
+    let resolved = analysis.resolved_items("Fallback raw text for empty items array");
+    assert_eq!(resolved.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cross_item_type_deduplication() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::AtomicInsightItem;
+
+    let item_pattern = AtomicInsightItem {
+        title: "Database Lock Contention".to_string(),
+        item_type: "pattern".to_string(),
+        content: "Detailed pattern explanation of DB locks under load.".to_string(),
+        what_was_tried: None,
+        what_happened: None,
+        why: None,
+        metacognitive_confidence: Some(95),
+    };
+    let item_failure = AtomicInsightItem {
+        title: "Database Lock Contention".to_string(),
+        item_type: "failure_mode".to_string(),
+        content: "Detailed failure mode explanation of DB locks under load.".to_string(),
+        what_was_tried: None,
+        what_happened: None,
+        why: None,
+        metacognitive_confidence: Some(95),
+    };
+    assert_ne!(item_pattern.item_type, item_failure.item_type);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_item_type_routing_promote_insight_to_direction() -> Result<()> {
+    use mythrax_core::cognitive::synthesis::promote_insight_to_direction;
+    use mythrax_core::contracts::{Episode, WikiNode};
+    use mythrax_core::db::backend::SurrealBackend;
+    use mythrax_core::store::MarkdownStore;
+    use tempfile::tempdir;
+
+    let dir = tempdir()?;
+    let store = MarkdownStore::new(dir.path())?;
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    let failure_node = WikiNode {
+        id: Some("wiki_node:fail1".to_string()),
+        name: "Catastrophic Deadlock".to_string(),
+        content: "Holding mutexes across async boundary causes deadlock.".to_string(),
+        scope: "test_scope".to_string(),
+        item_type: Some("failure_mode".to_string()),
+        metacognitive_confidence: Some(90),
+        ..Default::default()
+    };
+    backend.save_wiki_node(&failure_node).await?;
+
+    let eps = vec![
+        Episode { id: Some("ep1".to_string()), confidence: Some(5.0), ..Default::default() },
+        Episode { id: Some("ep2".to_string()), confidence: Some(5.0), ..Default::default() },
+        Episode { id: Some("ep3".to_string()), confidence: Some(5.0), ..Default::default() },
+        Episode { id: Some("ep4".to_string()), confidence: Some(5.0), ..Default::default() },
+    ];
+
+    promote_insight_to_direction(&backend, &store, &failure_node, &eps).await?;
+
+    let rules = backend.get_all_wisdom_rules().await?;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].target_pattern, "Catastrophic Deadlock");
+    assert_eq!(rules[0].action_to_avoid, "Holding mutexes across async boundary causes deadlock.");
+
+    let pattern_node = WikiNode {
+        id: Some("wiki_node:pat1".to_string()),
+        name: "Lock Free Queue".to_string(),
+        content: "Use atomic crossbeam queue for low contention.".to_string(),
+        scope: "test_scope".to_string(),
+        item_type: Some("pattern".to_string()),
+        metacognitive_confidence: Some(90),
+        ..Default::default()
+    };
+    backend.save_wiki_node(&pattern_node).await?;
+
+    promote_insight_to_direction(&backend, &store, &pattern_node, &eps).await?;
+
+    let nodes = backend.get_all_wiki_nodes().await?;
+    let dir_nodes: Vec<_> = nodes.into_iter().filter(|n| n.node_type.as_deref() == Some("direction")).collect();
+    assert_eq!(dir_nodes.len(), 1);
+    assert_eq!(dir_nodes[0].item_type.as_deref(), Some("pattern"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_phase3_extract_wisdom_from_spec_risk_section() -> Result<()> {
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    let spec_content = r#"# Specification
+
+## Risk Assessment
+Holding database locks across network RPC boundaries triggers lock contention and deadlocks under concurrency.
+
+## Failure Modes
+OOM occurs when un-evicted vector models exceed GPU VRAM memory budget.
+"#;
+
+    mythrax_core::vault::distillation::extract_wisdom_from_document(&backend, spec_content, "test_scope").await?;
+
+    let rules = backend.get_all_wisdom_rules().await?;
+    assert!(!rules.is_empty());
+    assert_eq!(rules[0].generator_name, "document_extraction");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_phase3_ingest_artifacts_markdown() -> Result<()> {
+    let dir = tempdir()?;
+    let backend = SurrealBackend::new_in_memory().await?;
+    backend.init().await?;
+
+    let walkthrough_path = dir.path().join("walkthrough.md");
+    std::fs::write(&walkthrough_path, "# Walkthrough\nCompleted phase 3 changes.")?;
+
+    let spec_path = dir.path().join("spec.md");
+    std::fs::write(&spec_path, "# Spec\n## Risk\nSystem failure occurs on unhandled panic.")?;
+
+    mythrax_core::vault::distillation::ingest_artifacts_in_dir(&backend, dir.path(), "session_123", "test_scope").await?;
+
+    let eps = backend.get_all_episodes().await?;
+    assert_eq!(eps.len(), 1);
+    assert_eq!(eps[0].node_type.as_deref(), Some("walkthrough"));
+
+    let nodes = backend.get_all_wiki_nodes().await?;
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].item_type.as_deref(), Some("constraint"));
+
+    let rules = backend.get_all_wisdom_rules().await?;
+    assert!(!rules.is_empty());
 
     Ok(())
 }

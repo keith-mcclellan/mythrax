@@ -100,7 +100,7 @@ impl Compactor {
             }
         }
 
-        let sys_prompt = "You are a master systems architect implementing the Arbor memory framework. Analyze the sequence of checkpoints and summarize the architectural evolution. Focus on: 1) Structural state shifts and design transitions, 2) Root causes of resolved errors and failure modes, and 3) Preserved architectural invariants across iterations. Omit transient step logs.";
+        let sys_prompt = "You are a master systems architect implementing the Mythrax Cognitive Memory System. Analyze the sequence of checkpoints and summarize the architectural evolution. Focus on: 1) Structural state shifts and design transitions, 2) Root causes of resolved errors and failure modes, and 3) Preserved architectural invariants across iterations. Omit transient step logs.";
         let summary = self
             .llm
             .routed_completion(
@@ -118,7 +118,7 @@ impl Compactor {
         db: std::sync::Arc<dyn StorageBackend>,
         store: &MarkdownStore,
         scope: &str,
-        _embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
+        embedder: Option<std::sync::Arc<dyn crate::embeddings::TextEmbedder>>,
     ) -> Result<()> {
         crate::daemon::update_last_activity();
         if crate::vault::ingestion::IS_INGESTING.load(std::sync::atomic::Ordering::SeqCst) {
@@ -184,6 +184,12 @@ impl Compactor {
             let _ = surreal_backend
                 .db
                 .query("DELETE relates_to WHERE weight < 0.1;")
+                .await;
+            let _ = surreal_backend
+                .db
+                .query(
+                    "UPDATE wiki_node SET status = 'archived' WHERE count(->relates_to) = 0 AND count(<-relates_to) = 0 AND node_type = 'insight';"
+                )
                 .await;
         }
 
@@ -1013,7 +1019,24 @@ impl Compactor {
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Synthesize cluster insights per the Arbor specification into distilled insights (ιn).\n\nCRITICAL ARBOR RULES:\n- Title: Must be an abstract, noun-phrase topic or reusable design pattern. NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed').\n- Summary: Focus on causal lessons, structural design patterns, and systemic constraints (what worked, what failed, root causes).\n- Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+            let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
+Synthesize cluster insights into distilled atomic insights (ι_n). Output a JSON object matching this schema:
+{
+  "items": [
+    {
+      "title": "<Abstract Noun-Phrase Title>",
+      "item_type": "<pattern | constraint | failure_mode | lesson>",
+      "content": "<2-3 sentence causal explanation of what was tried, what happened, and why>",
+      "metacognitive_confidence": 90
+    }
+  ]
+}
+
+CRITICAL ARBOR RULES:
+1. Title: Abstract noun-phrase topic or reusable design pattern. NEVER use event-record passive voice or completion status.
+2. Return at most 5 items per cluster.
+3. Content MUST be at least 2-3 sentences explaining causal mechanisms and root causes."#;
+            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self
                 .llm
@@ -1022,11 +1045,10 @@ impl Compactor {
                     &crate::contracts::TaskProfile::new(
                         crate::contracts::TaskArchetype::Summarization,
                     ),
-                    Some(sys_prompt),
+                    Some(&sys_prompt),
                     &prompt_text,
                 )
                 .await?;
-            let summary = page_markdown_code_blocks(&*db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -1035,44 +1057,6 @@ impl Compactor {
                     all_anchors.push(sa);
                 }
             }
-
-            let first_title = member_insights
-                .first()
-                .map(|(c, _)| c.title.as_str())
-                .unwrap_or("compaction");
-            let slug = first_title.to_lowercase().replace([' ', '/'], "_");
-            let relative_path = format!(
-                "wiki/{}/compactions/{}_cluster_{}.md",
-                scope, slug, cluster_id
-            );
-
-            let mut file_content = format!(
-                "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
-                scope, cluster_id, scope, summary
-            );
-
-            file_content.push_str("\n\n## Component Insights\n");
-            for (ins, _) in member_insights {
-                let link_target = if !ins.vault_path.is_empty() {
-                    let clean_vp = if ins.vault_path.ends_with(".md") {
-                        &ins.vault_path[..ins.vault_path.len() - 3]
-                    } else {
-                        &ins.vault_path
-                    };
-                    format!("{}|{}", clean_vp, ins.title)
-                } else {
-                    ins.title.clone()
-                };
-                file_content.push_str(&format!("- [[{}]]\n", link_target));
-            }
-
-            if !all_anchors.is_empty() {
-                file_content.push_str("\n\n## Attention Anchors\n");
-                for anchor in &all_anchors {
-                    file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
-                }
-            }
-            store.write_file(&relative_path, &file_content)?;
 
             let mut starts = Vec::new();
             let mut ends = Vec::new();
@@ -1108,43 +1092,110 @@ impl Compactor {
             let merged_start = starts.iter().filter_map(|&opt| opt).min();
             let merged_end = ends.iter().filter_map(|&opt| opt).max();
 
-            let node_contract = WikiNode {
-                id: None,
-                name: format!("Compaction: {} - Cluster {}", scope, cluster_id),
-                content: summary.clone(),
-                scope: scope.to_string(),
-                vault_path: Some(relative_path.clone()),
-                embedding: None,
-                temporal_range_start: merged_start,
-                temporal_range_end: merged_end,
-                ..Default::default()
+            let analysis: crate::cognitive::synthesis::ClusterAnalysis = match serde_json::from_str(&summary) {
+                Ok(a) => a,
+                Err(_) => crate::cognitive::synthesis::ClusterAnalysis {
+                    items: Vec::new(),
+                    title: Some(format!("Compaction Cluster {}", cluster_id)),
+                    summary: Some(summary.clone()),
+                    metacognitive_confidence: None,
+                    node_type: None,
+                },
             };
-            if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
-                for (_, insight_id) in member_insights {
-                    if !insight_id.is_empty() {
-                        let _ = db
-                            .relate_nodes(insight_id, &compaction_id, None, None, None)
-                            .await;
+            let resolved_items = analysis.resolved_items("compaction");
+
+            for mut item in resolved_items {
+                item.content = page_markdown_code_blocks(&*db, &item.content).await?;
+                if let Err(reason) = crate::cognitive::synthesis::validate_insight_item(&item) {
+                    tracing::warn!("Atomic insight quality gate REJECTED item in compactor: {}", reason);
+                    continue;
+                }
+
+                let slug = crate::cognitive::synthesis::slugify_title(&item.title);
+                let relative_path = format!(
+                    "wiki/{}/compactions/{}/{}_cluster_{}.md",
+                    scope, item.item_type, slug, cluster_id
+                );
+
+                let mut file_content = format!(
+                    "---\ntype: \"compaction\"\nscope: \"{}\"\nitem_type: \"{}\"\ncluster_id: {}\nmetacognitive_confidence: {}\n---\n\n# Architectural Compaction: {}\n\n{}",
+                    scope, item.item_type, cluster_id, item.metacognitive_confidence.unwrap_or(80), item.title, item.content
+                );
+
+                file_content.push_str("\n\n## Component Insights\n");
+                for (ins, _) in member_insights {
+                    let link_target = if !ins.vault_path.is_empty() {
+                        let clean_vp = if ins.vault_path.ends_with(".md") {
+                            &ins.vault_path[..ins.vault_path.len() - 3]
+                        } else {
+                            &ins.vault_path
+                        };
+                        format!("{}|{}", clean_vp, ins.title)
+                    } else {
+                        ins.title.clone()
+                    };
+                    file_content.push_str(&format!("- [[{}]]\n", link_target));
+                }
+
+                if !all_anchors.is_empty() {
+                    file_content.push_str("\n\n## Attention Anchors\n");
+                    for anchor in &all_anchors {
+                        file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
                     }
                 }
-                if let Some(surreal_backend) = db
-                    .as_any()
-                    .downcast_ref::<crate::db::backend::SurrealBackend>()
-                {
-                    for ep_id in &ep_ids {
-                        let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
-                            relation: 'derived_from',
-                            created_at: time::now()
-                        };";
-                        if let (Ok(from_thing), Ok(to_thing)) =
-                            (parse_record_id(&compaction_id), parse_record_id(ep_id))
-                        {
-                            let _ = surreal_backend
-                                .db
-                                .query(rel_sql)
-                                .bind(("from", from_thing))
-                                .bind(("to", to_thing))
+                let file_content = page_markdown_code_blocks(&*db, &file_content).await?;
+                store.write_file(&relative_path, &file_content)?;
+
+                let content_embedding = if let Some(ref emb) = embedder {
+                    let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
+                    emb.embed(&text_to_embed).await.ok()
+                } else {
+                    None
+                };
+
+                let node_contract = WikiNode {
+                    id: None,
+                    name: item.title.clone(),
+                    content: item.content.clone(),
+                    scope: scope.to_string(),
+                    vault_path: Some(relative_path.clone()),
+                    embedding: content_embedding,
+                    temporal_range_start: merged_start,
+                    temporal_range_end: merged_end,
+                    item_type: Some(item.item_type.clone()),
+                    node_type: Some("insight".to_string()),
+                    metacognitive_confidence: item.metacognitive_confidence,
+                    ..Default::default()
+                };
+
+                if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
+                    for (_, insight_id) in member_insights {
+                        if !insight_id.is_empty() {
+                            let _ = db
+                                .relate_nodes(insight_id, &compaction_id, None, None, None)
                                 .await;
+                        }
+                    }
+
+                    if let Some(surreal_backend) = db
+                        .as_any()
+                        .downcast_ref::<crate::db::backend::SurrealBackend>()
+                    {
+                        for ep_id in &ep_ids {
+                            let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                                relation: 'derived_from',
+                                created_at: time::now()
+                            };";
+                            if let (Ok(from_thing), Ok(to_thing)) =
+                                (parse_record_id(&compaction_id), parse_record_id(ep_id))
+                            {
+                                let _ = surreal_backend
+                                    .db
+                                    .query(rel_sql)
+                                    .bind(("from", from_thing))
+                                    .bind(("to", to_thing))
+                                    .await;
+                            }
                         }
                     }
                 }
@@ -1172,7 +1223,24 @@ impl Compactor {
             // Extract anchors and clean content
             let (cleaned_content, extracted_anchors) = extract_attention_anchors(&combined_content);
 
-            let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Synthesize cluster insights per the Arbor specification into distilled insights (ιn).\n\nCRITICAL ARBOR RULES:\n- Title: Must be an abstract, noun-phrase topic or reusable design pattern. NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed').\n- Summary: Focus on causal lessons, structural design patterns, and systemic constraints (what worked, what failed, root causes).\n- Write clearly and concisely (Rules from Strunk & White's Elements of Style):\n- Omit needless words: make every word tell. Do not use filler or throat-clearing phrasing.\n- Use active voice, positive form, and definite, specific, concrete language.";
+            let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
+Synthesize outlier insights into distilled atomic insights (ι_n). Output a JSON object matching this schema:
+{
+  "items": [
+    {
+      "title": "<Abstract Noun-Phrase Title>",
+      "item_type": "<pattern | constraint | failure_mode | lesson>",
+      "content": "<2-3 sentence causal explanation of what was tried, what happened, and why>",
+      "metacognitive_confidence": 85
+    }
+  ]
+}
+
+CRITICAL ARBOR RULES:
+1. Title: Abstract noun-phrase topic or reusable design pattern. NEVER use event-record passive voice or completion status.
+2. Return at most 5 items per group.
+3. Content MUST be at least 2-3 sentences explaining causal mechanisms and root causes."#;
+            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
             let prompt_text = format!("Insights:\n\n{}", cleaned_content);
             let summary = self
                 .llm
@@ -1181,11 +1249,10 @@ impl Compactor {
                     &crate::contracts::TaskProfile::new(
                         crate::contracts::TaskArchetype::Summarization,
                     ),
-                    Some(sys_prompt),
+                    Some(&sys_prompt),
                     &prompt_text,
                 )
                 .await?;
-            let summary = page_markdown_code_blocks(&*db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -1194,36 +1261,6 @@ impl Compactor {
                     all_anchors.push(sa);
                 }
             }
-
-            let relative_path = format!("wiki/{}/compactions/miscellaneous.md", scope);
-
-            let mut file_content = format!(
-                "---\ntype: \"compaction\"\nscope: \"{}\"\ncluster_id: \"miscellaneous\"\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
-                scope, scope, summary
-            );
-
-            file_content.push_str("\n\n## Component Insights\n");
-            for (ins, _) in &outlier_insights {
-                let link_target = if !ins.vault_path.is_empty() {
-                    let clean_vp = if ins.vault_path.ends_with(".md") {
-                        &ins.vault_path[..ins.vault_path.len() - 3]
-                    } else {
-                        &ins.vault_path
-                    };
-                    format!("{}|{}", clean_vp, ins.title)
-                } else {
-                    ins.title.clone()
-                };
-                file_content.push_str(&format!("- [[{}]]\n", link_target));
-            }
-
-            if !all_anchors.is_empty() {
-                file_content.push_str("\n\n## Attention Anchors\n");
-                for anchor in &all_anchors {
-                    file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
-                }
-            }
-            store.write_file(&relative_path, &file_content)?;
 
             let mut starts = Vec::new();
             let mut ends = Vec::new();
@@ -1261,43 +1298,106 @@ impl Compactor {
             let merged_start = starts.iter().filter_map(|&opt| opt).min();
             let merged_end = ends.iter().filter_map(|&opt| opt).max();
 
-            let node_contract = WikiNode {
-                id: None,
-                name: format!("Compaction: {} - Miscellaneous", scope),
-                content: summary.clone(),
-                scope: scope.to_string(),
-                vault_path: Some(relative_path.clone()),
-                embedding: None,
-                temporal_range_start: merged_start,
-                temporal_range_end: merged_end,
-                ..Default::default()
+            let analysis: crate::cognitive::synthesis::ClusterAnalysis = match serde_json::from_str(&summary) {
+                Ok(a) => a,
+                Err(_) => crate::cognitive::synthesis::ClusterAnalysis {
+                    items: Vec::new(),
+                    title: Some("Miscellaneous Compaction".to_string()),
+                    summary: Some(summary.clone()),
+                    metacognitive_confidence: None,
+                    node_type: None,
+                },
             };
-            if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
-                for (_, insight_id) in &outlier_insights {
-                    if !insight_id.is_empty() {
-                        let _ = db
-                            .relate_nodes(insight_id, &compaction_id, None, None, None)
-                            .await;
+            let resolved_items = analysis.resolved_items("compaction");
+
+            for mut item in resolved_items {
+                item.content = page_markdown_code_blocks(&*db, &item.content).await?;
+                if let Err(reason) = crate::cognitive::synthesis::validate_insight_item(&item) {
+                    tracing::warn!("Atomic insight quality gate REJECTED outlier item in compactor: {}", reason);
+                    continue;
+                }
+
+                let slug = crate::cognitive::synthesis::slugify_title(&item.title);
+                let relative_path = format!("wiki/{}/compactions/{}/{}.md", scope, item.item_type, slug);
+
+                let mut file_content = format!(
+                    "---\ntype: \"compaction\"\nscope: \"{}\"\nitem_type: \"{}\"\ncluster_id: \"miscellaneous\"\nmetacognitive_confidence: {}\n---\n\n# Architectural Compaction: {} (Miscellaneous)\n\n{}",
+                    scope, item.item_type, item.metacognitive_confidence.unwrap_or(80), item.title, item.content
+                );
+
+                file_content.push_str("\n\n## Component Insights\n");
+                for (ins, _) in &outlier_insights {
+                    let link_target = if !ins.vault_path.is_empty() {
+                        let clean_vp = if ins.vault_path.ends_with(".md") {
+                            &ins.vault_path[..ins.vault_path.len() - 3]
+                        } else {
+                            &ins.vault_path
+                        };
+                        format!("{}|{}", clean_vp, ins.title)
+                    } else {
+                        ins.title.clone()
+                    };
+                    file_content.push_str(&format!("- [[{}]]\n", link_target));
+                }
+
+                if !all_anchors.is_empty() {
+                    file_content.push_str("\n\n## Attention Anchors\n");
+                    for anchor in &all_anchors {
+                        file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
                     }
                 }
-                if let Some(surreal_backend) = db
-                    .as_any()
-                    .downcast_ref::<crate::db::backend::SurrealBackend>()
-                {
-                    for ep_id in &ep_ids {
-                        let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
-                            relation: 'derived_from',
-                            created_at: time::now()
-                        };";
-                        if let (Ok(from_thing), Ok(to_thing)) =
-                            (parse_record_id(&compaction_id), parse_record_id(ep_id))
-                        {
-                            let _ = surreal_backend
-                                .db
-                                .query(rel_sql)
-                                .bind(("from", from_thing))
-                                .bind(("to", to_thing))
+                let file_content = page_markdown_code_blocks(&*db, &file_content).await?;
+                store.write_file(&relative_path, &file_content)?;
+
+                let content_embedding = if let Some(ref emb) = embedder {
+                    let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
+                    emb.embed(&text_to_embed).await.ok()
+                } else {
+                    None
+                };
+
+                let node_contract = WikiNode {
+                    id: None,
+                    name: item.title.clone(),
+                    content: item.content.clone(),
+                    scope: scope.to_string(),
+                    vault_path: Some(relative_path.clone()),
+                    embedding: content_embedding,
+                    temporal_range_start: merged_start,
+                    temporal_range_end: merged_end,
+                    item_type: Some(item.item_type.clone()),
+                    node_type: Some("insight".to_string()),
+                    metacognitive_confidence: item.metacognitive_confidence,
+                    ..Default::default()
+                };
+
+                if let Ok(compaction_id) = db.save_wiki_node(&node_contract).await {
+                    for (_, insight_id) in &outlier_insights {
+                        if !insight_id.is_empty() {
+                            let _ = db
+                                .relate_nodes(insight_id, &compaction_id, None, None, None)
                                 .await;
+                        }
+                    }
+                    if let Some(surreal_backend) = db
+                        .as_any()
+                        .downcast_ref::<crate::db::backend::SurrealBackend>()
+                    {
+                        for ep_id in &ep_ids {
+                            let rel_sql = "RELATE $from -> relates_to -> $to UNIQUE CONTENT {
+                                relation: 'derived_from',
+                                created_at: time::now()
+                            };";
+                            if let (Ok(from_thing), Ok(to_thing)) =
+                                (parse_record_id(&compaction_id), parse_record_id(ep_id))
+                            {
+                                let _ = surreal_backend
+                                    .db
+                                    .query(rel_sql)
+                                    .bind(("from", from_thing))
+                                    .bind(("to", to_thing))
+                                    .await;
+                            }
                         }
                     }
                 }
@@ -1895,18 +1995,13 @@ pub fn compact_hierarchical_dbscan(
         }
 
         for (lc_id, cluster_members) in local_clusters {
-            let mut centroid_emb = vec![0.0f32; cluster_members[0].2.len()];
             let mut combined_content = String::new();
             for member in &cluster_members {
-                for (k, val) in member.2.iter().enumerate() {
-                    centroid_emb[k] += val;
-                }
                 combined_content.push_str(&member.0.content);
                 combined_content.push('\n');
             }
-            for val in &mut centroid_emb {
-                *val /= cluster_members.len() as f32;
-            }
+
+            let centroid_emb = cluster_members[0].2.clone();
 
             let summary_ins = crate::cognitive::synthesis::InsightNote {
                 title: format!("Sub-cluster Summary ({} - {})", bucket_name, lc_id),

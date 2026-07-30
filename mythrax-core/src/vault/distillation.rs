@@ -113,7 +113,7 @@ pub fn chunk_transcript(steps: &[TranscriptStep]) -> Vec<Vec<TranscriptStep>> {
 }
 
 pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
-    let mut result = if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
+    let result = if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
         let sub = &input[start_idx..];
         let mut end_idx = sub.len();
         for (i, line) in sub.lines().enumerate() {
@@ -154,27 +154,6 @@ pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
         output.to_string()
     };
 
-    // Task 2.6: Preserve raw evidence file paths and artifact references
-    let file_path_regex = regex::Regex::new(r"(/[\w\.\-]+)+").ok();
-    if let Some(re) = file_path_regex {
-        let mut missing_paths = Vec::new();
-        for cap in re.find_iter(input) {
-            let path_str = cap.as_str();
-            if (path_str.contains('/') || path_str.contains('.')) && !result.contains(path_str) {
-                missing_paths.push(path_str);
-            }
-        }
-        if !missing_paths.is_empty() {
-            missing_paths.dedup();
-            if !result.contains("### Referenced Artifacts & Files") {
-                result.push_str("\n\n### Referenced Artifacts & Files\n");
-                for p in missing_paths.iter().take(10) {
-                    result.push_str(&format!("- `{}`\n", p));
-                }
-            }
-        }
-    }
-
     result
 }
 
@@ -183,7 +162,7 @@ pub async fn run_summarization_task(
     client: &LLMClient,
     content: &str,
 ) -> Result<String> {
-    let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). Structure your summary according to the Arbor 4-Field Memory Contract:\n\
+    let sys_prompt = "You are a master systems architect implementing the Mythrax Cognitive Memory System. Structure your summary according to the 4-Field Memory Contract:\n\
                       ### 🎯 Intent & Hypothesis (hn)\n\
                       ### 📊 Factual Result & Raw Evidence (rn) (Preserve compiler error tracebacks, diffs, and tool outputs verbatim without LLM truncation)\n\
                       ### 🧠 Distilled Insight & Causal Lessons (ιn) (Detail what worked, what failed, root causes, and architectural principles)\n\
@@ -316,12 +295,12 @@ pub async fn distill_transcript_file(
             }
         }
 
-        // Formulate LLM distillation prompt to parse semantic elements and 4 Arbor fields
+        // Formulate LLM distillation prompt to parse semantic elements and 4 memory fields
         let prompt = format!(
-            "Analyze the following segment of a coding transcript. Extract ONLY the 4-field memory contract (hn, rn, ιn, µn) per the Arbor framework specification:
+            "Analyze the following segment of a coding transcript. Extract ONLY the 4-field memory contract (hn, rn, ιn, µn) per the Mythrax memory specification:
             1. Hypothesis (h_n): core problem statement or goal.
             2. Raw Evidence (r_n): list of concrete log lines, errors, or evidence snippets.
-            3. Causal Insight (iota_n): root cause mechanism and preventative rule.
+            3. Causal Insight (iota_n): array of atomic insight items detailing title, item_type (pattern|constraint|failure_mode|lesson), content, and confidence.
             4. Artifact Refs (mu_n): list of files modified or referenced.
 
             Transcript Content:
@@ -333,7 +312,14 @@ pub async fn distill_transcript_file(
               \"scope\": \"general\",
               \"hypothesis\": \"Core task goal or hypothesis\",
               \"raw_evidence\": [\"evidence snippet 1\"],
-              \"causal_insight\": \"Causal explanation and rule\",
+              \"causal_insight\": [
+                {{
+                  \"title\": \"Atomic Insight Title\",
+                  \"item_type\": \"lesson\",
+                  \"content\": \"Causal explanation of what was tried, what happened, and why\",
+                  \"metacognitive_confidence\": 90
+                }}
+              ],
               \"artifact_refs\": [\"src/file.rs\"]
             }}",
             chunk_text
@@ -413,7 +399,7 @@ pub async fn distill_transcript_file(
             actions_to_avoid: Option<Vec<String>>,
             hypothesis: Option<String>,
             raw_evidence: Option<Vec<String>>,
-            causal_insight: Option<String>,
+            causal_insight: Option<serde_json::Value>,
             artifact_refs: Option<Vec<String>>,
             summary: Option<String>,
             key_takeaways: Option<Vec<String>>,
@@ -441,7 +427,13 @@ pub async fn distill_transcript_file(
             key_takeaways: parsed.key_takeaways.unwrap_or_default(),
             hypothesis: parsed.hypothesis,
             raw_evidence: parsed.raw_evidence.unwrap_or_default(),
-            causal_insight: parsed.causal_insight.or_else(|| {
+            causal_insight: parsed.causal_insight.as_ref().map(|v| {
+                if let Some(s) = v.as_str() {
+                    s.to_string()
+                } else {
+                    serde_json::to_string(v).unwrap_or_default()
+                }
+            }).or_else(|| {
                 let mut parts = Vec::new();
                 if let Some(ref m) = parsed.mistakes_failures {
                     if !m.is_empty() {
@@ -473,43 +465,7 @@ pub async fn distill_transcript_file(
     Ok(distilled_chunks)
 }
 
-pub fn extract_decisions(content: &str) -> String {
-    let mut decisions = Vec::new();
-    let mut in_decisions_section = false;
 
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.to_lowercase().starts_with("#") && trimmed.to_lowercase().contains("decision") {
-            in_decisions_section = true;
-            continue;
-        } else if trimmed.to_lowercase().starts_with("#") && in_decisions_section {
-            in_decisions_section = false;
-        }
-
-        if in_decisions_section {
-            if !trimmed.is_empty() {
-                decisions.push(line.to_string());
-            }
-        } else {
-            let lower = trimmed.to_lowercase();
-            if (trimmed.starts_with("-")
-                || trimmed.starts_with("*")
-                || (trimmed.chars().next().map_or(false, |c| c.is_ascii_digit())))
-                && (lower.contains("decision")
-                    || lower.contains("decided")
-                    || lower.contains("decide"))
-            {
-                decisions.push(line.to_string());
-            }
-        }
-    }
-
-    if decisions.is_empty() {
-        "No explicit decisions extracted.".to_string()
-    } else {
-        decisions.join("\n")
-    }
-}
 
 pub fn extract_completed_tasks(content: &str) -> String {
     let mut completed = Vec::new();
@@ -530,6 +486,72 @@ pub fn extract_completed_tasks(content: &str) -> String {
     }
 }
 
+pub async fn extract_wisdom_from_document(
+    db: &dyn StorageBackend,
+    content: &str,
+    scope: &str,
+) -> Result<()> {
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut current_heading = "General".to_string();
+    let mut current_block = String::new();
+
+    for line in lines {
+        if line.starts_with('#') {
+            if !current_block.trim().is_empty() {
+                process_wisdom_block(db, &current_heading, &current_block, scope).await?;
+            }
+            current_heading = line.trim_start_matches('#').trim().to_string();
+            current_block.clear();
+        } else {
+            current_block.push_str(line);
+            current_block.push('\n');
+        }
+    }
+    if !current_block.trim().is_empty() {
+        process_wisdom_block(db, &current_heading, &current_block, scope).await?;
+    }
+
+    Ok(())
+}
+
+async fn process_wisdom_block(
+    db: &dyn StorageBackend,
+    heading: &str,
+    block: &str,
+    scope: &str,
+) -> Result<()> {
+    let lower_heading = heading.to_lowercase();
+    let lower_block = block.to_lowercase();
+
+    let is_risk = lower_heading.contains("risk")
+        || lower_heading.contains("guard")
+        || lower_heading.contains("constraint")
+        || lower_heading.contains("failure")
+        || lower_block.contains("risk")
+        || lower_block.contains("warning")
+        || lower_block.contains("caution");
+
+    if is_risk && block.trim().len() >= 20 {
+        let rule = WisdomRule {
+            target_pattern: heading.to_string(),
+            action_to_avoid: format!("Ignoring risks in section '{}'", heading),
+            causal_explanation: block.trim().to_string(),
+            prescribed_remedy: format!("Enforce guidelines from section '{}'", heading),
+            utility: Some(0.85),
+            scope: scope.to_string(),
+            generator_name: "document_extraction".to_string(),
+            ..Default::default()
+        };
+        let store = crate::store::MarkdownStore::new(std::path::Path::new("."))?;
+        let _ = crate::cognitive::synthesis::save_wisdom_rule_with_deduplication(db, &store, &rule).await;
+    }
+    Ok(())
+}
+
 pub async fn ingest_artifacts_in_dir(
     db: &dyn StorageBackend,
     dir_path: &Path,
@@ -548,6 +570,10 @@ pub async fn ingest_artifacts_in_dir(
                 let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
                 let rel_path_str = path.to_string_lossy().to_string();
 
+                if !file_name.ends_with(".md") {
+                    continue;
+                }
+
                 if file_name == "walkthrough.md" {
                     let content = std::fs::read_to_string(&path)?;
                     let save = EpisodeSave::builder("Walkthrough".to_string(), content)
@@ -556,19 +582,6 @@ pub async fn ingest_artifacts_in_dir(
                         .node_type(Some("walkthrough".to_string()))
                         .session_id(Some(conversation_id.to_string()))
                         .build();
-                    db.save_episode(&save).await?;
-                } else if file_name == "implementation_plan.md" {
-                    let content = std::fs::read_to_string(&path)?;
-                    let decisions_text = extract_decisions(&content);
-                    let save = EpisodeSave::builder(
-                        "Decisions from Implementation Plan".to_string(),
-                        decisions_text,
-                    )
-                    .scope(Some(scope.to_string()))
-                    .vault_path(Some(rel_path_str))
-                    .node_type(Some("decision".to_string()))
-                    .session_id(Some(conversation_id.to_string()))
-                    .build();
                     db.save_episode(&save).await?;
                 } else if file_name == "task.md" {
                     let content = std::fs::read_to_string(&path)?;
@@ -581,20 +594,40 @@ pub async fn ingest_artifacts_in_dir(
                             .session_id(Some(conversation_id.to_string()))
                             .build();
                     db.save_episode(&save).await?;
-                } else if (file_name.starts_with("analysis_") && file_name.ends_with(".md"))
-                    || (file_name.ends_with("_critique.md"))
-                {
+                } else {
                     let content = std::fs::read_to_string(&path)?;
+                    let item_type = if file_name == "spec.md" || file_name.contains("spec") {
+                        "constraint"
+                    } else if file_name.ends_with("_review.md") || file_name.ends_with("_audit.md") {
+                        "failure_mode"
+                    } else if file_name.starts_with("analysis_") {
+                        "analysis"
+                    } else if file_name == "implementation_plan.md" {
+                        "design_pattern"
+                    } else {
+                        "lesson"
+                    };
+
                     let node = WikiNode {
                         id: None,
                         name: file_name.to_string(),
-                        content,
+                        content: content.clone(),
                         scope: scope.to_string(),
                         vault_path: Some(rel_path_str),
                         embedding: None,
+                        item_type: Some(item_type.to_string()),
+                        node_type: Some(item_type.to_string()),
                         ..Default::default()
                     };
                     db.save_wiki_node(&node).await?;
+
+                    if file_name == "spec.md"
+                        || file_name == "implementation_plan.md"
+                        || file_name.ends_with("_review.md")
+                        || file_name.ends_with("_audit.md")
+                    {
+                        let _ = extract_wisdom_from_document(db, &content, scope).await;
+                    }
                 }
             }
         }

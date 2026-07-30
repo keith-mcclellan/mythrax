@@ -678,10 +678,30 @@ pub async fn bulk_ingest_vault(
                         };
 
                         if log_exists || has_md {
-                            let mtime = std::fs::metadata(&path)
-                                .and_then(|m| m.modified())
-                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                            dirs_with_time.push((path, mtime));
+                            let mut timestamp_ns: u128 = 0;
+                            if log_exists {
+                                let transcript_file = path.join(".system_generated/logs/transcript.jsonl");
+                                if let Ok(file) = std::fs::File::open(&transcript_file) {
+                                    use std::io::BufRead;
+                                    let reader = std::io::BufReader::new(file);
+                                    if let Some(Ok(line)) = reader.lines().next() {
+                                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+                                            if let Some(ts_str) = v.get("timestamp").and_then(|t| t.as_str()) {
+                                                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                                                    timestamp_ns = dt.timestamp_nanos_opt().unwrap_or(0) as u128;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if timestamp_ns == 0 {
+                                let mtime = std::fs::metadata(&path)
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                timestamp_ns = mtime.duration_since(std::time::SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+                            }
+                            dirs_with_time.push((path, timestamp_ns));
                         }
                     }
                 }
@@ -712,7 +732,7 @@ pub async fn bulk_ingest_vault(
                         prompt.push_str(&format!("{}(:|-|:){}\n", i + 1, dir_name));
                     }
 
-                    let sys_prompt = "You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1). For each provided transcript directory/content, generate an abstract, noun-phrase topic or design pattern title (e.g., 'Adversarial CTO Subagent Validation Protocol', '50-Chunk Single-Pass Ingestion'). NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed', 'CTO Review Approved'). Format strictly as index(:|-|:)title, one per line.";
+                    let sys_prompt = "You are a master systems architect implementing the Mythrax Cognitive Memory System. For each provided transcript directory/content, generate an abstract, noun-phrase topic or design pattern title (e.g., 'Adversarial CTO Subagent Validation Protocol', '50-Chunk Single-Pass Ingestion'). NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed', 'CTO Review Approved'). Format strictly as index(:|-|:)title, one per line.";
                     let llm_resp = llm
                         .routed_completion(
                             db,
@@ -744,7 +764,7 @@ pub async fn bulk_ingest_vault(
                         let fb_prompt =
                             format!("Generate an abstract noun-phrase Arbor title for transcript: {}", dir_name);
                         let sys_prompt = "You are a title generator implementing Arbor (arXiv:2606.11926v1). Generate an abstract, noun-phrase topic title. NEVER write event status like 'X Was Validated'. Format strictly as index(:|-|:)title, one per line.";
-                        llm.routed_completion(
+                        let resolved_title = llm.routed_completion(
                             db,
                             &crate::contracts::TaskProfile::new(
                                 crate::contracts::TaskArchetype::Extraction,
@@ -752,8 +772,33 @@ pub async fn bulk_ingest_vault(
                             Some(sys_prompt),
                             &fb_prompt,
                         )
-                        .await
-                        .unwrap_or_else(|_| format!("antigravity_{}", dir_name))
+                        .await;
+
+                        match resolved_title {
+                            Ok(t) if !t.is_empty() => t,
+                            _ => {
+                                if let Some(surreal) =
+                                    db.as_any().downcast_ref::<crate::db::SurrealBackend>()
+                                {
+                                    let task = crate::db::cognitive_tasks::CognitiveTask {
+                                        id: format!("cognitive_task:{}", uuid::Uuid::new_v4()),
+                                        task_type: "Extraction".to_string(),
+                                        prompt: fb_prompt,
+                                        system_instruction: sys_prompt.to_string(),
+                                        expected_format: "Any".to_string(),
+                                        priority: "Normal".to_string(),
+                                        created_at: chrono::Utc::now(),
+                                        status: "Pending".to_string(),
+                                        result: None,
+                                        ttl_minutes: 60,
+                                        injected_at: None,
+                                        session_id: Some(dir_name.clone()),
+                                    };
+                                    let _ = surreal.create_cognitive_task(&task).await;
+                                }
+                                format!("antigravity_{}", dir_name)
+                            }
+                        }
                     };
 
                     let part1_title = format!("{}_part1", title);
@@ -1141,6 +1186,8 @@ pub async fn bulk_ingest_vault(
                             scope: resolved_scope.clone(),
                             vault_path: Some(wiki_rel),
                             embedding: None,
+                            item_type: Some("episode_summary".to_string()),
+                            node_type: Some("episode_summary".to_string()),
                             ..Default::default()
                         };
 

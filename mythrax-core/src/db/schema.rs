@@ -88,6 +88,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS raw_evidence ON wiki_node TYPE option<array<string>>;
     DEFINE FIELD IF NOT EXISTS causal_insight ON wiki_node TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS artifact_refs ON wiki_node TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS item_type ON wiki_node TYPE option<string>;
     DEFINE INDEX OVERWRITE wiki_node_name ON TABLE wiki_node FIELDS name, scope UNIQUE;
     DEFINE INDEX IF NOT EXISTS wiki_node_scope ON wiki_node FIELDS scope;
     DEFINE INDEX IF NOT EXISTS idx_wiki_node_hash ON wiki_node FIELDS content_hash;
