@@ -1886,18 +1886,25 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                     ));
                                 }
 
-                                // Call LLM Synthesizer
-                                let base_sys = "You are a systems synthesizer. Analyze the cluster of events and output a JSON object containing the fields: 'title', 'summary', 'metacognitive_confidence', and 'node_type'.\n\n\
-                            For 'metacognitive_confidence', use the following strict integer rubric (1-5):\n\
-                            - 1: Anecdotal / Single Episode\n\
-                            - 3: Corroborated / Tested\n\
-                            - 5: Proven / Universal\n\n\
-                            For 'node_type', actively check the events for contradictory evidence. If any conflicting or contradictory evidence is detected, set 'node_type' to 'conflict'. Otherwise, set it to 'insight'.";
+                                // Call LLM Synthesizer with AtomicInsightItem prompt
+                                let base_sys = r#"You are a master systems architect implementing the Arbor memory framework (arXiv:2606.11926v1).
+Analyze the events and extract distilled causal insights (ι_n). Output a JSON object matching this schema:
+{
+  "items": [
+    {
+      "title": "<Abstract Noun-Phrase Title>",
+      "item_type": "<pattern | constraint | failure_mode | lesson>",
+      "content": "<2-3 sentence causal explanation of what was tried, what happened, and why>",
+      "metacognitive_confidence": 90
+    }
+  ]
+}
+"#;
                                 let sys_prompt =
                                     crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
 
                                 let prompt_text = format!(
-                                    "Please analyze these events:\n\n{}Respond ONLY with JSON matching: {{ \"title\": \"...\", \"summary\": \"...\", \"metacognitive_confidence\": 3, \"node_type\": \"insight\" }}",
+                                    "Synthesize atomic causal insights from these events:\n\n{}\nRespond ONLY with valid JSON matching {{\"items\": [...]}}.",
                                     events_text
                                 );
 
@@ -1919,119 +1926,115 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                         &llm_res,
                                         original_tokens,
                                     );
-                                    #[derive(serde::Deserialize)]
-                                    struct ClusterAnalysis {
-                                        title: String,
-                                        summary: String,
-                                        #[serde(default)]
-                                        metacognitive_confidence: Option<i32>,
-                                        #[serde(default)]
-                                        node_type: Option<String>,
-                                    }
 
-                                    let analysis: ClusterAnalysis =
-                                        match serde_json::from_str(&llm_res) {
-                                            Ok(a) => a,
-                                            Err(_) => ClusterAnalysis {
-                                                title: format!(
-                                                    "Split Analysis {}",
-                                                    &uuid::Uuid::new_v4().to_string()[..8]
-                                                ),
-                                                summary: llm_res,
-                                                metacognitive_confidence: None,
-                                                node_type: None,
-                                            },
-                                        };
-
-                                    // Write new insight to disk
-                                    let clean_title = slugify_title(&analysis.title);
-                                    let relative_path =
-                                        format!("wiki/{}/insights/{}.md", scope, clean_title);
-
-                                    let mut source_ep_links = Vec::new();
-                                    for ep in &group {
-                                        if let Some(ref path) = ep.vault_path {
-                                            let target = path.strip_suffix(".md").unwrap_or(path);
-                                            source_ep_links
-                                                .push(format!("- [[{}|{}]]", target, ep.title));
-                                        }
-                                    }
-                                    let source_ep_section = if !source_ep_links.is_empty() {
-                                        format!(
-                                            "\n\n## Source Episodes\n{}",
-                                            source_ep_links.join("\n")
-                                        )
-                                    } else {
-                                        String::new()
+                                    let analysis: ClusterAnalysis = match serde_json::from_str(&llm_res) {
+                                        Ok(a) => a,
+                                        Err(_) => ClusterAnalysis {
+                                            items: Vec::new(),
+                                            title: Some(format!(
+                                                "Split Analysis {}",
+                                                &uuid::Uuid::new_v4().to_string()[..8]
+                                            )),
+                                            summary: Some(llm_res.clone()),
+                                            metacognitive_confidence: None,
+                                            node_type: None,
+                                        },
                                     };
 
-                                    let insight_content = format!(
-                                        "---\ntitle: \"{}\"\nscope: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"{}\"\n---\n\n{}{}",
-                                        analysis.title,
-                                        scope,
-                                        group
-                                            .iter()
-                                            .map(|ep| format!(
-                                                "  - \"{}\"",
-                                                ep.id.as_ref().unwrap_or(&String::new())
-                                            ))
-                                            .collect::<Vec<_>>()
-                                            .join("\n"),
-                                        analysis.metacognitive_confidence.unwrap_or(3),
-                                        analysis.node_type.as_deref().unwrap_or("insight"),
-                                        analysis.summary,
-                                        source_ep_section
-                                    );
-                                    let write_res =
-                                        store.write_file(&relative_path, &insight_content);
+                                    for item in analysis.resolved_items(&llm_res) {
+                                        let clean_title = slugify_title(&item.title);
+                                        let relative_path =
+                                            format!("wiki/{}/insights/{}.md", scope, clean_title);
 
-                                    if write_res.is_ok() {
+                                        let mut source_ep_links = Vec::new();
                                         for ep in &group {
                                             if let Some(ref path) = ep.vault_path {
-                                                let _ = store.append_link_to_file(
-                                                    path,
-                                                    "Insights & Summaries",
-                                                    &relative_path,
-                                                    &analysis.title,
-                                                );
+                                                let target = path.strip_suffix(".md").unwrap_or(path);
+                                                source_ep_links
+                                                    .push(format!("- [[{}|{}]]", target, ep.title));
                                             }
                                         }
-
-                                        // Save WikiNode to SurrealDB
-                                        let group_starts: Vec<_> = group
-                                            .iter()
-                                            .filter_map(|ep| {
-                                                ep.temporal_range_start.or_else(|| {
-                                                    ep.created_at
-                                                        .as_ref()
-                                                        .and_then(|s| {
-                                                            chrono::DateTime::parse_from_rfc3339(s)
-                                                                .ok()
-                                                        })
-                                                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                                                })
-                                            })
-                                            .collect();
-                                        let temporal_start = group_starts.iter().min().cloned();
-                                        let temporal_end = group_starts.iter().max().cloned();
-
-                                        let node_contract = WikiNode {
-                                            id: None,
-                                            name: analysis.title.clone(),
-                                            content: analysis.summary.clone(),
-                                            scope: scope.to_string(),
-                                            vault_path: Some(relative_path.clone()),
-                                            embedding: None,
-                                            metacognitive_confidence: analysis
-                                                .metacognitive_confidence,
-                                            node_type: analysis
-                                                .node_type
-                                                .clone()
-                                                .or(Some("insight".to_string())),
-                                            temporal_range_start: temporal_start,
-                                            temporal_range_end: temporal_end,
-                                            ..Default::default()
+                                        let source_ep_section = if !source_ep_links.is_empty() {
+                                            format!(
+                                                "\n\n## Source Episodes\n{}",
+                                                source_ep_links.join("\n")
+                                            )
+                                        } else {
+                                            String::new()
                                         };
+
+                                        let insight_content = format!(
+                                            "---\ntitle: \"{}\"\nscope: \"{}\"\nitem_type: \"{}\"\nsource_episodes:\n{}\nmetacognitive_confidence: {}\nnode_type: \"insight\"\n---\n\n{}{}",
+                                            item.title,
+                                            scope,
+                                            item.item_type,
+                                            group
+                                                .iter()
+                                                .map(|ep| format!(
+                                                    "  - \"{}\"",
+                                                    ep.id.as_ref().unwrap_or(&String::new())
+                                                ))
+                                                .collect::<Vec<_>>()
+                                                .join("\n"),
+                                            item.metacognitive_confidence.unwrap_or(80),
+                                            item.content,
+                                            source_ep_section
+                                        );
+                                        let write_res =
+                                            store.write_file(&relative_path, &insight_content);
+
+                                        if write_res.is_ok() {
+                                            for ep in &group {
+                                                if let Some(ref path) = ep.vault_path {
+                                                    let _ = store.append_link_to_file(
+                                                        path,
+                                                        "Insights & Summaries",
+                                                        &relative_path,
+                                                        &item.title,
+                                                    );
+                                                }
+                                            }
+
+                                            // Save WikiNode to SurrealDB
+                                            let group_starts: Vec<_> = group
+                                                .iter()
+                                                .filter_map(|ep| {
+                                                    ep.temporal_range_start.or_else(|| {
+                                                        ep.created_at
+                                                            .as_ref()
+                                                            .and_then(|s| {
+                                                                chrono::DateTime::parse_from_rfc3339(s)
+                                                                    .ok()
+                                                            })
+                                                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                                                    })
+                                                })
+                                                .collect();
+                                            let temporal_start = group_starts.iter().min().cloned();
+                                            let temporal_end = group_starts.iter().max().cloned();
+
+                                            let content_embedding = if let Some(ref emb) = embedder {
+                                                let text = format!("{}: {} - {}", item.item_type, item.title, item.content);
+                                                emb.embed(&text).await.ok()
+                                            } else {
+                                                None
+                                            };
+
+                                            let node_contract = WikiNode {
+                                                id: None,
+                                                name: item.title.clone(),
+                                                content: item.content.clone(),
+                                                scope: scope.to_string(),
+                                                vault_path: Some(relative_path.clone()),
+                                                embedding: content_embedding,
+                                                item_type: Some(item.item_type.clone()),
+                                                metacognitive_confidence: item
+                                                    .metacognitive_confidence,
+                                                node_type: Some("insight".to_string()),
+                                                temporal_range_start: temporal_start,
+                                                temporal_range_end: temporal_end,
+                                                ..Default::default()
+                                            };
 
                                         let group_ep_ids = group
                                             .iter()
@@ -2069,6 +2072,7 @@ For metacognitive_confidence, use an integer scale (1-100)."#;
                                     }
                                 }
                             }
+                        }
 
                             // 8. Delete old drifting insight
                             let _ = std::fs::remove_file(Path::new(&ins.vault_path));
