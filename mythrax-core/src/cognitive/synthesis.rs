@@ -69,7 +69,33 @@ pub struct AtomicInsightItem {
     pub item_type: String, // "pattern" | "constraint" | "failure_mode" | "lesson"
     pub content: String,
     #[serde(default)]
+    pub what_was_tried: Option<String>,
+    #[serde(default)]
+    pub what_happened: Option<String>,
+    #[serde(default)]
+    pub why: Option<String>,
+    #[serde(default)]
     pub metacognitive_confidence: Option<i32>,
+}
+
+impl AtomicInsightItem {
+    pub fn causal_content(&self) -> String {
+        if let (Some(tried), Some(happened), Some(why)) = (
+            &self.what_was_tried,
+            &self.what_happened,
+            &self.why,
+        ) {
+            if !tried.trim().is_empty() && !happened.trim().is_empty() && !why.trim().is_empty() {
+                return format!(
+                    "Tried: {}\nWhat happened: {}\nWhy: {}",
+                    tried.trim(),
+                    happened.trim(),
+                    why.trim()
+                );
+            }
+        }
+        self.content.clone()
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
@@ -88,7 +114,7 @@ pub struct ClusterAnalysis {
 }
 
 impl ClusterAnalysis {
-    pub fn resolved_items(self, llm_res_fallback: &str) -> Vec<AtomicInsightItem> {
+    pub fn resolved_items(self, _llm_res_fallback: &str) -> Vec<AtomicInsightItem> {
         if !self.items.is_empty() {
             return self.items;
         }
@@ -102,18 +128,12 @@ impl ClusterAnalysis {
                     },
                     item_type: "lesson".to_string(),
                     content: s,
+                    what_was_tried: None,
+                    what_happened: None,
+                    why: None,
                     metacognitive_confidence: self.metacognitive_confidence,
                 }];
             }
-        }
-        if !llm_res_fallback.trim().is_empty() {
-            tracing::warn!("ClusterAnalysis produced empty items and no fallback fields; using raw output fallback");
-            return vec![AtomicInsightItem {
-                title: format!("Cluster Analysis {}", &uuid::Uuid::new_v4().to_string()[..8]),
-                item_type: "lesson".to_string(),
-                content: llm_res_fallback.to_string(),
-                metacognitive_confidence: None,
-            }];
         }
         tracing::warn!("ClusterAnalysis produced empty items and no fallback fields");
         Vec::new()
@@ -653,7 +673,7 @@ impl DreamCoordinator {
                 // Strip markdown code block wrappers if any
                 let clean_resp = crate::llm::strip_code_fences(&resp_str);
                 if let Ok(res) = serde_json::from_str::<ContradictionResponse>(&clean_resp) {
-                    if res.contradicts && res.confidence >= 0.80 {
+                    if res.contradicts && res.confidence >= 0.80 && existing_node.node_type.as_deref() != Some("conflict") {
                         if let Some(resolution) = res.resolution {
                             // 1. Create conflict node preserving BOTH positions
                             let conflict_content = format!(

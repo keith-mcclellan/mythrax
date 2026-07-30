@@ -6494,10 +6494,17 @@ async fn test_atomic_insight_item_validation() -> Result<()> {
         title: "Test Insight".to_string(),
         item_type: "lesson".to_string(),
         content: "What was tried: A. What happened: B. Why: C.".to_string(),
+        what_was_tried: Some("A".to_string()),
+        what_happened: Some("B".to_string()),
+        why: Some("C".to_string()),
         metacognitive_confidence: Some(90),
     };
     assert_eq!(valid_item.title, "Test Insight");
     assert_eq!(valid_item.item_type, "lesson");
+    assert_eq!(
+        valid_item.causal_content(),
+        "Tried: A\nWhat happened: B\nWhy: C"
+    );
 
     let fallback_analysis = ClusterAnalysis {
         items: vec![],
@@ -6534,8 +6541,7 @@ async fn test_empty_array_error_handling() -> Result<()> {
 
     let analysis: ClusterAnalysis = serde_json::from_str(r#"{"items": []}"#).unwrap();
     let resolved = analysis.resolved_items("Fallback raw text for empty items array");
-    assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].content, "Fallback raw text for empty items array");
+    assert_eq!(resolved.len(), 0);
     Ok(())
 }
 
@@ -6547,12 +6553,18 @@ async fn test_cross_item_type_deduplication() -> Result<()> {
         title: "Database Lock Contention".to_string(),
         item_type: "pattern".to_string(),
         content: "Detailed pattern explanation of DB locks under load.".to_string(),
+        what_was_tried: None,
+        what_happened: None,
+        why: None,
         metacognitive_confidence: Some(95),
     };
     let item_failure = AtomicInsightItem {
         title: "Database Lock Contention".to_string(),
         item_type: "failure_mode".to_string(),
         content: "Detailed failure mode explanation of DB locks under load.".to_string(),
+        what_was_tried: None,
+        what_happened: None,
+        why: None,
         metacognitive_confidence: Some(95),
     };
     assert_ne!(item_pattern.item_type, item_failure.item_type);

@@ -154,27 +154,6 @@ pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
         output.to_string()
     };
 
-    // Task 2.6: Preserve raw evidence file paths and artifact references
-    let file_path_regex = regex::Regex::new(r"(/[\w\.\-]+)+").ok();
-    if let Some(re) = file_path_regex {
-        let mut missing_paths = Vec::new();
-        for cap in re.find_iter(input) {
-            let path_str = cap.as_str();
-            if (path_str.contains('/') || path_str.contains('.')) && !result.contains(path_str) {
-                missing_paths.push(path_str);
-            }
-        }
-        if !missing_paths.is_empty() {
-            missing_paths.dedup();
-            if !result.contains("### Referenced Artifacts & Files") {
-                result.push_str("\n\n### Referenced Artifacts & Files\n");
-                for p in missing_paths.iter().take(10) {
-                    result.push_str(&format!("- `{}`\n", p));
-                }
-            }
-        }
-    }
-
     result
 }
 

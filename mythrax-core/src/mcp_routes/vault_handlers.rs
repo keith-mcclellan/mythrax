@@ -193,6 +193,9 @@ Analyze the markdown document and extract distilled causal items (ι_n). Output 
                             title: format!("Itemized: {}", node.name),
                             item_type: fallback_type.to_string(),
                             content: node.content.clone(),
+                            what_was_tried: None,
+                            what_happened: None,
+                            why: None,
                             metacognitive_confidence: Some(90),
                         });
                     }

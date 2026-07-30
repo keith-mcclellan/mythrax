@@ -185,6 +185,12 @@ impl Compactor {
                 .db
                 .query("DELETE relates_to WHERE weight < 0.1;")
                 .await;
+            let _ = surreal_backend
+                .db
+                .query(
+                    "UPDATE wiki_node SET status = 'archived' WHERE count(->relates_to) = 0 AND count(<-relates_to) = 0 AND node_type = 'insight';"
+                )
+                .await;
         }
 
         let _ = db.prune_stale_memories(&store.vault_root).await;
@@ -1987,18 +1993,13 @@ pub fn compact_hierarchical_dbscan(
         }
 
         for (lc_id, cluster_members) in local_clusters {
-            let mut centroid_emb = vec![0.0f32; cluster_members[0].2.len()];
             let mut combined_content = String::new();
             for member in &cluster_members {
-                for (k, val) in member.2.iter().enumerate() {
-                    centroid_emb[k] += val;
-                }
                 combined_content.push_str(&member.0.content);
                 combined_content.push('\n');
             }
-            for val in &mut centroid_emb {
-                *val /= cluster_members.len() as f32;
-            }
+
+            let centroid_emb = cluster_members[0].2.clone();
 
             let summary_ins = crate::cognitive::synthesis::InsightNote {
                 title: format!("Sub-cluster Summary ({} - {})", bucket_name, lc_id),
