@@ -372,8 +372,22 @@ async fn test_ingestion_chunking_and_linking() -> Result<()> {
     // We should have 8 parts and 1 parent index
     assert_eq!(all_eps.len(), 9);
 
-    let ep_part1 = all_eps.iter().find(|e| e.title.contains("part1")).unwrap();
-    let ep_part2 = all_eps.iter().find(|e| e.title.contains("part2")).unwrap();
+    let ep_part1 = all_eps
+        .iter()
+        .find(|e| {
+            e.title.to_lowercase().contains("part 1")
+                || e.title.to_lowercase().contains("part1")
+                || e.vault_path.as_ref().map_or(false, |p| p.contains("_part1"))
+        })
+        .unwrap();
+    let ep_part2 = all_eps
+        .iter()
+        .find(|e| {
+            e.title.to_lowercase().contains("part 2")
+                || e.title.to_lowercase().contains("part2")
+                || e.vault_path.as_ref().map_or(false, |p| p.contains("_part2"))
+        })
+        .unwrap();
 
     // 2. Verify links inside files in Obsidian
     let ep_part1_file = fs::read_to_string(vault_root.join(ep_part1.vault_path.as_ref().unwrap()))?;

@@ -610,7 +610,7 @@ impl RealLlmProvider {
             {
                 return Ok("This is a refined direction content containing Backpropagated Evidence and Child Insight.".to_string());
             } else if prompt.contains("Insights:") {
-                return Ok("Here is an architectural compaction summary containing a code block:\n\n```rust\npub fn test_fn() {}\n```".to_string());
+                return Ok(r#"{"items": [{"title": "Paged Symbol Compaction Pattern", "item_type": "pattern", "content": "Compacting architectural insights extracts code symbols into structural references to maintain page boundary safety across large context windows. This ensures that large code blocks do not overflow token limits when stored in memory.\n\n```rust\npub fn page_fn_test_fn() {}\n```", "metacognitive_confidence": 90}]}"#.to_string());
             } else if prompt.contains("consistency checker") || prompt.contains("NEW INSIGHT") {
                 return Ok(r#"{"contradicts": true, "conflicting_field": "database", "resolution": "We should use SurrealDB for the database because Postgres was deprecated.", "confidence": 0.95}"#.to_string());
             } else if prompt.contains("Please merge and generalize these two similar rules") {

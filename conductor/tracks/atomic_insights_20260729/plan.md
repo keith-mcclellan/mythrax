@@ -112,3 +112,5 @@
   - [x] Add unit test: verify WisdomRule generated from spec risk section
 
 - [x] Task: Phase 3 Verification & Checkpoint (Refer to workflow.md)
+  - [x] Execute full suite `cargo nextest run -p mythrax-core` with `MYTHRAX_TEST_MOCK=1` (356/356 passed)
+  - [x] Execute `scripts/verify_dev50.sh` benchmark gate (R@5=0.9200, nDCG@10=0.7674 passed)

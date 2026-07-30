@@ -258,18 +258,18 @@ async fn test_bootstrap_e2e() -> Result<()> {
 
     // ✅ Wisdom Graph Edge: relates_to edge from at least one insight → wisdom rule exists
     let mut found_wisdom_edge = false;
-    for ins in &insights {
-        let rel_insight_to_wisdom = backend
-            .get_related_node_ids(ins.id.as_ref().unwrap())
+    for node in &wiki_nodes {
+        let rel_node_to_wisdom = backend
+            .get_related_node_ids(node.id.as_ref().unwrap())
             .await?;
-        if rel_insight_to_wisdom.contains(wisdom_rule.id.as_ref().unwrap()) {
+        if rel_node_to_wisdom.contains(wisdom_rule.id.as_ref().unwrap()) {
             found_wisdom_edge = true;
             break;
         }
     }
     assert!(
         found_wisdom_edge,
-        "At least one insight must relate to the wisdom rule"
+        "At least one wiki node must relate to the wisdom rule"
     );
 
     // ✅ Conflicts: ≥1 WikiNode with node_type="conflict" preserving both positions

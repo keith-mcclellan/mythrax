@@ -1049,7 +1049,6 @@ CRITICAL ARBOR RULES:
                     &prompt_text,
                 )
                 .await?;
-            let summary = page_markdown_code_blocks(&*db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -1105,7 +1104,8 @@ CRITICAL ARBOR RULES:
             };
             let resolved_items = analysis.resolved_items("compaction");
 
-            for item in resolved_items {
+            for mut item in resolved_items {
+                item.content = page_markdown_code_blocks(&*db, &item.content).await?;
                 if let Err(reason) = crate::cognitive::synthesis::validate_insight_item(&item) {
                     tracing::warn!("Atomic insight quality gate REJECTED item in compactor: {}", reason);
                     continue;
@@ -1143,6 +1143,7 @@ CRITICAL ARBOR RULES:
                         file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
                     }
                 }
+                let file_content = page_markdown_code_blocks(&*db, &file_content).await?;
                 store.write_file(&relative_path, &file_content)?;
 
                 let content_embedding = if let Some(ref emb) = embedder {
@@ -1252,7 +1253,6 @@ CRITICAL ARBOR RULES:
                     &prompt_text,
                 )
                 .await?;
-            let summary = page_markdown_code_blocks(&*db, &summary).await?;
 
             let stm_anchors = get_active_stm_anchors(&store.vault_root);
             let mut all_anchors = extracted_anchors;
@@ -1310,7 +1310,8 @@ CRITICAL ARBOR RULES:
             };
             let resolved_items = analysis.resolved_items("compaction");
 
-            for item in resolved_items {
+            for mut item in resolved_items {
+                item.content = page_markdown_code_blocks(&*db, &item.content).await?;
                 if let Err(reason) = crate::cognitive::synthesis::validate_insight_item(&item) {
                     tracing::warn!("Atomic insight quality gate REJECTED outlier item in compactor: {}", reason);
                     continue;
@@ -1345,6 +1346,7 @@ CRITICAL ARBOR RULES:
                         file_content.push_str(&format!("- [ANCHOR: {}]\n", anchor));
                     }
                 }
+                let file_content = page_markdown_code_blocks(&*db, &file_content).await?;
                 store.write_file(&relative_path, &file_content)?;
 
                 let content_embedding = if let Some(ref emb) = embedder {

@@ -1051,6 +1051,10 @@ fn test_inspect_calibrated_score_pairs() {
 
     let home = std::env::var("HOME").unwrap();
     let model_dir = Path::new(&home).join(".mythrax/models/mxbai-rerank-large-v2");
+    if !model_dir.exists() || std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
+        println!("Skipping real reranker model test: model dir missing or mock mode active");
+        return;
+    }
     let mut reranker = MxbaiReranker::load(&model_dir).expect("Failed to load reranker");
 
     let query = "Who wrote 'To Kill a Mockingbird'?";

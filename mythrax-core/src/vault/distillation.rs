@@ -113,7 +113,7 @@ pub fn chunk_transcript(steps: &[TranscriptStep]) -> Vec<Vec<TranscriptStep>> {
 }
 
 pub fn enforce_symbol_integrity(input: &str, output: &str) -> String {
-    let mut result = if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
+    let result = if let Some(start_idx) = input.find("### Key Code Symbols & Paths") {
         let sub = &input[start_idx..];
         let mut end_idx = sub.len();
         for (i, line) in sub.lines().enumerate() {

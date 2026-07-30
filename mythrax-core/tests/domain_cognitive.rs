@@ -880,7 +880,7 @@ Insight Two content."#,
     let all_nodes = backend.get_all_wiki_nodes().await?;
     let compacted_nodes: Vec<WikiNode> = all_nodes
         .into_iter()
-        .filter(|n| n.scope == "scope2" && n.name.contains("Cluster"))
+        .filter(|n| n.scope == "scope2" && n.vault_path.as_ref().map_or(false, |p| p.contains("compactions")))
         .collect();
     assert_eq!(
         compacted_nodes.len(),

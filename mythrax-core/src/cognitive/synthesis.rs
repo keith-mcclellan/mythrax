@@ -3601,6 +3601,9 @@ mod tests {
             title: "Short Item".to_string(),
             item_type: "lesson".to_string(),
             content: "Too short.".to_string(),
+            what_was_tried: None,
+            what_happened: None,
+            why: None,
             metacognitive_confidence: Some(80),
         };
         assert!(validate_insight_item(&short_item).is_err());
@@ -3612,6 +3615,9 @@ mod tests {
             title: "Passive Item".to_string(),
             item_type: "lesson".to_string(),
             content: "Was configured to run cleanup routines after every single task completed successfully in the background queue.".to_string(),
+            what_was_tried: None,
+            what_happened: None,
+            why: None,
             metacognitive_confidence: Some(80),
         };
         assert!(validate_insight_item(&passive_item).is_err());
