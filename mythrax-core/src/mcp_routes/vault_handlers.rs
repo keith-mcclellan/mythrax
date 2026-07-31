@@ -50,6 +50,9 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 
                 for ep in &page {
                     if let Some(ref vp) = ep.vault_path {
+                        if vp.starts_with("episodes/") {
+                            continue;
+                        }
                         let path = state.store.vault_root.join(vp);
                         if !path.exists() {
                             missing_count += 1;

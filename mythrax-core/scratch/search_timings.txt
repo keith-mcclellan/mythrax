@@ -10351,3 +10351,4 @@ query: "Single-Paragraph", profile: 1us, embed: 15116us, terms: 27144us, db: 736
 query: "Body content", profile: 1us, embed: 3258us, terms: 60us, db: 10072us, rerank_start: 3504us, total: 16994us
 query: "bidirectional sync", profile: 3795us, embed: 11587us, terms: 65us, db: 8795us, rerank_start: 1322us, total: 25630us
 query: "updated body", profile: 2us, embed: 7889us, terms: 85us, db: 6956us, rerank_start: 1999us, total: 17048us
+query: "memory", profile: 2607us, embed: 1143252us, terms: 398us, db: 18358us, rerank_start: 1563us, total: 1174287us
