@@ -229,6 +229,54 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }
             super::htr_handlers::handle_manage_htr(state, modified_args).await
         }
+        "extract" => {
+            let doc_path = args.get("doc_path").and_then(|v| v.as_str()).context("Missing doc_path")?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let facts = crate::cognitive::pipeline::extract_from_document(
+                &*state.backend,
+                None,
+                "",
+                doc_path,
+                scope,
+            ).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Extracted {} facts from document {}", facts.len(), doc_path) }]
+            }))
+        }
+        "extract_code" => {
+            let file_path = args.get("file_path").and_then(|v| v.as_str()).context("Missing file_path")?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let facts = crate::cognitive::pipeline::extract_from_code(
+                &*state.backend,
+                None,
+                "",
+                file_path,
+                scope,
+            ).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Extracted {} facts from code {}", facts.len(), file_path) }]
+            }))
+        }
+        "hypothesize" => {
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let ideas = crate::cognitive::pipeline::form_hypotheses(&*state.backend, None, scope).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Formed {} hypotheses for scope {}", ideas.len(), scope) }]
+            }))
+        }
+        "refine" => {
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let logs = crate::cognitive::pipeline::refine_hypotheses(&*state.backend, None, scope).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Refined hypotheses with {} log entries for scope {}", logs.len(), scope) }]
+            }))
+        }
+        "config" => {
+            let cfg = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&cfg).unwrap_or_default() }]
+            }))
+        }
         "pre_invocation" => {
             let _session_id = args
                 .get("session_id")

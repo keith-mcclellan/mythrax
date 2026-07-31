@@ -11,6 +11,7 @@ pub struct Harvester {
 #[derive(Debug, Clone)]
 struct SkillInfo {
     name: String,
+    #[allow(dead_code)]
     description: String,
     body: String,
 }

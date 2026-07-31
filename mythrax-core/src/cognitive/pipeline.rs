@@ -267,11 +267,14 @@ pub async fn forge_document(
     source_path: &str,
     scope: &str,
     llm: Option<&LLMClient>,
+    content_override: Option<&str>,
 ) -> Result<Vec<Fact>> {
-    let content = if source_path.ends_with(".pdf") {
+    let content = if let Some(c) = content_override {
+        c.to_string()
+    } else if source_path.ends_with(".pdf") {
         crate::cognitive::forge::extract_pdf_text(Path::new(source_path))?
     } else {
-        std::fs::read_to_string(source_path)?
+        std::fs::read_to_string(source_path).unwrap_or_else(|_| source_path.to_string())
     };
 
     let toc = crate::cognitive::forge::parse_markdown_toc(&content);
@@ -676,17 +679,27 @@ pub async fn merge_validated_nodes(
         if is_code_impacting && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
             let gate_dir = format!("/tmp/admission-gate-{}", idea.id.as_deref().unwrap_or("unknown"));
             let gate_path = std::path::Path::new(&gate_dir);
+            let _ = std::fs::create_dir_all(gate_path);
+            let test_cmd = if mu_n_vec.iter().any(|m| m.ends_with(".py")) {
+                "pytest".to_string()
+            } else if mu_n_vec.iter().any(|m| m.ends_with(".ts")) {
+                "npm test".to_string()
+            } else if mu_n_vec.iter().any(|m| m.ends_with(".go")) {
+                "go test ./...".to_string()
+            } else {
+                "cargo nextest run".to_string()
+            };
             let evaluator = crate::cognitive::arbor::TestCommandEvaluator {
-                test_command: "cargo nextest run".to_string(),
+                test_command: test_cmd,
             };
             use crate::cognitive::arbor::HeldOutEvaluator;
-            if let Ok(score) = evaluator.evaluate("main", gate_path) {
-                if score < 0.80 {
-                    idea.confidence = 0.50;
-                    idea.status = IdeaStatus::Pending;
-                    let _ = db::save_idea_node(backend, &idea).await;
-                    continue;
-                }
+            let score = evaluator.evaluate("main", gate_path).unwrap_or(0.0);
+            let _ = std::fs::remove_dir_all(gate_path);
+            if score < 0.80 {
+                idea.confidence = 0.50;
+                idea.status = IdeaStatus::Pending;
+                let _ = db::save_idea_node(backend, &idea).await;
+                continue;
             }
         }
 

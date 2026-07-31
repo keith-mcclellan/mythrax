@@ -964,7 +964,7 @@ pub async fn sync_file_to_db_with_cache(
         let db_id = backend.save_wiki_node(&node).await?;
 
         let scope_for_wisdom = node.scope.clone();
-        let content_for_wisdom = plain_body.clone();
+        let _content_for_wisdom = plain_body.clone();
         if file_stem == "spec.md"
             || file_stem == "implementation_plan.md"
             || file_stem.ends_with("_review.md")
@@ -972,10 +972,9 @@ pub async fn sync_file_to_db_with_cache(
         {
             let backend_clone = backend.clone();
             tokio::spawn(async move {
-                let _ = crate::cognitive::pipeline::extract_from_document(
+                let _ = crate::cognitive::db::queue_cognitive_task(
                     &*backend_clone,
-                    None,
-                    &content_for_wisdom,
+                    "extract_from_document",
                     &rel_path,
                     &scope_for_wisdom,
                 )

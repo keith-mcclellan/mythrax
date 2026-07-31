@@ -1,4 +1,6 @@
 #![allow(dead_code, unused_imports)]
+use std::sync::Mutex;
+static GLOBAL_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 mod compactor {
 use anyhow::Result;
@@ -9,8 +11,8 @@ use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::{Arc, Mutex};
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use std::sync::Arc;
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_dbscan_insight_compaction() -> Result<()> {
@@ -1355,6 +1357,7 @@ async fn test_contradiction_detection_resolution() -> Result<()> {
         std::env::remove_var("MYTHRAX_VAULT_ROOT");
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
+        std::env::set_var("MYTHRAX_TEST_MOCK", "1");
     }
 
     let backend = SurrealBackend::new_in_memory().await?;
@@ -5136,6 +5139,7 @@ async fn test_save_forged_section_lifecycle() -> Result<()> {
     unsafe {
         std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
         std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
+        std::env::set_var("MYTHRAX_VAULT_PATH", vault_root.to_str().unwrap());
     }
 
     let backend = SurrealBackend::new_in_memory().await?;
@@ -5354,6 +5358,7 @@ async fn test_mcp_forge_tools() -> Result<()> {
     unsafe {
         std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
         std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
+        std::env::set_var("MYTHRAX_VAULT_PATH", vault_root.to_str().unwrap());
     }
 
     let backend = std::sync::Arc::new(SurrealBackend::new_in_memory().await?);

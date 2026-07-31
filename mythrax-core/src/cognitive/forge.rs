@@ -1,4 +1,3 @@
-use crate::contracts::{ForgedConcept, ForgedRule};
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
 use anyhow::{Context, Result};
@@ -44,82 +43,10 @@ impl Forge {
             _source_name,
             scope,
             Some(&self.llm),
+            Some(content),
         )
         .await?;
         Ok(())
-    }
-
-    async fn extract_concepts(&self, chunk_text: &str) -> Result<Vec<ForgedConcept>> {
-        let system_instruction = "You are a concept extraction assistant. Extract Wiki Concepts as a JSON array of objects, with no markdown fences, explanation, or other text.";
-        let prompt = format!(
-            "Identify and extract key concepts from the text below. For each concept, provide:\n\
-             - name: the name of the concept\n\
-             - content: a brief definition or explanation of the concept\n\n\
-             Text:\n\
-             \"\"\"\n\
-             {}\n\
-             \"\"\"\n\n\
-             Respond ONLY with a JSON array, like:\n\
-             [\n\
-               {{\"name\": \"Concept Name\", \"content\": \"Concept explanation.\"}}\n\
-             ]",
-            chunk_text
-        );
-
-        let res = self
-            .llm
-            .routed_completion(
-                self.backend.as_ref(),
-                &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction),
-                Some(system_instruction),
-                &prompt,
-            )
-            .await?;
-        let stripped = crate::llm::strip_code_fences(&res);
-
-        let concepts: Vec<ForgedConcept> =
-            serde_json::from_str(&stripped).context("Failed to parse concepts JSON")?;
-        Ok(concepts)
-    }
-
-    async fn extract_rules(&self, chunk_text: &str) -> Result<Vec<ForgedRule>> {
-        let system_instruction = "You are a wisdom extraction assistant for the Mythrax memory system. Extract system-level, non-obvious Wisdom Rules focus on causal failure modes, structural design constraints, and non-negotiable architectural remedies as a JSON array of objects, with no markdown fences, explanation, or other text.";
-        let prompt = format!(
-            "Identify and extract Wisdom Rules from the text below. For each rule, provide:\n\
-             - target_pattern: the name or pattern to avoid/address\n\
-             - action_to_avoid: the specific bad action or mistake\n\
-             - causal_explanation: the reason why it is bad\n\
-             - prescribed_remedy: the specific fix or best practice\n\n\
-             Text:\n\
-             \"\"\"\n\
-             {}\n\
-             \"\"\"\n\n\
-             Respond ONLY with a JSON array, like:\n\
-             [\n\
-               {{\n\
-                 \"target_pattern\": \"Avoid Hardcoded API Keys\",\n\
-                 \"action_to_avoid\": \"hardcoding api_key = 'sk-...'\n\",\n\
-                 \"causal_explanation\": \"This leaks credentials to source control.\",\n\
-                 \"prescribed_remedy\": \"Use environment variables or vault references instead.\"\n\
-               }}\n\
-             ]",
-            chunk_text
-        );
-
-        let res = self
-            .llm
-            .routed_completion(
-                self.backend.as_ref(),
-                &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction),
-                Some(system_instruction),
-                &prompt,
-            )
-            .await?;
-        let stripped = crate::llm::strip_code_fences(&res);
-
-        let rules: Vec<ForgedRule> =
-            serde_json::from_str(&stripped).context("Failed to parse rules JSON")?;
-        Ok(rules)
     }
 
     /// Extract Table of Contents from document content using LLM pre-pass

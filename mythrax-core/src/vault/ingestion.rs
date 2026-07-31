@@ -2173,11 +2173,15 @@ pub async fn sync_workspace_docs_to_vault(
             }
         }
 
+        let ws_scope = workspace_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace_ref");
         if needs_write {
             store.write_file(&vault_rel_path, &file.content)?;
             index_reference_doc(&file.rel_path, &vault_rel_path, &file.content, &file.hash, backend).await?;
             if file.rel_path.ends_with(".rs") || file.rel_path.ends_with(".py") || file.rel_path.ends_with(".ts") || file.rel_path.ends_with(".go") {
-                let _ = crate::cognitive::pipeline::extract_from_code(backend, None, &file.content, &file.rel_path, "mythrax").await;
+                let _ = crate::cognitive::pipeline::extract_from_code(backend, None, &file.content, &file.rel_path, ws_scope).await;
             }
         }
     }

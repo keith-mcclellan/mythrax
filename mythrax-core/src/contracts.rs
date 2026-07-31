@@ -674,6 +674,16 @@ pub enum WorkspaceFileType {
     Code,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct CognitiveTask {
+    pub id: Option<String>,
+    pub task_type: String,
+    pub payload: String,
+    pub scope: String,
+    pub status: String,
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandoffSave {
     pub parent_conversation_id: String,

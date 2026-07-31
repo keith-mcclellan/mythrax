@@ -106,6 +106,32 @@ pub async fn save_pipeline_config(
     backend.save_pipeline_config(config).await
 }
 
+pub async fn queue_cognitive_task(
+    backend: &dyn StorageBackend,
+    task_type: &str,
+    payload: &str,
+    scope: &str,
+) -> Result<String> {
+    let task = crate::contracts::CognitiveTask {
+        id: None,
+        task_type: task_type.to_string(),
+        payload: payload.to_string(),
+        scope: scope.to_string(),
+        status: "pending".to_string(),
+        created_at: Some(chrono::Utc::now()),
+    };
+    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let record_id = crate::db::parse_record_id(&format!("cognitive_task:{}", task_id))?;
+        let mut save = task.clone();
+        save.id = None;
+        let _res: Option<crate::contracts::CognitiveTask> = surreal.db.upsert(record_id).content(save).await?;
+        Ok(task_id)
+    } else {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
