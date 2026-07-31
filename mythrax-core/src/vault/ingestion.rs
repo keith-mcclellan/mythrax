@@ -932,7 +932,7 @@ pub async fn bulk_ingest_vault(
                     let total_chunks = chunks.len();
                     let mut generated_parts = Vec::new();
 
-                    let slug_title = crate::cognitive::synthesis::slugify_title(&title);
+                    let slug_title = crate::cognitive::pipeline::slugify_title(&title);
                     let parent_relative_path =
                         format!("episodes/{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix);
                     let parent_title = title.clone();
@@ -1523,9 +1523,8 @@ async fn post_ingestion_compaction_and_cleanup(
     scope: &str,
 ) -> Result<()> {
     if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-        let compactor = crate::cognitive::compactor::Compactor::new();
         let db_arc = std::sync::Arc::new(crate::db::SurrealBackend::new_with_db(surreal.db.clone()));
-        if let Err(e) = compactor.compact_scope(db_arc, store, scope, None).await {
+        if let Err(e) = crate::cognitive::pipeline::refine_hypotheses(&*db_arc, None, scope).await {
             tracing::warn!("Auto scope compaction post-ingestion returned: {:?}", e);
         }
 
@@ -2122,7 +2121,7 @@ pub async fn sync_workspace_docs_to_vault(
                             }
                         }
                         collect_docs(&path, ws_root, canonical_vault, results, depth + 1)?;
-                    } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    } else if matches!(path.extension().and_then(|s| s.to_str()), Some("md") | Some("rs") | Some("py") | Some("ts") | Some("go")) {
                         if file_name.ends_with(".tmp") || file_name == "MOC.md" {
                             continue;
                         }
@@ -2173,9 +2172,16 @@ pub async fn sync_workspace_docs_to_vault(
             }
         }
 
+        let ws_scope = workspace_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("workspace_ref");
         if needs_write {
             store.write_file(&vault_rel_path, &file.content)?;
             index_reference_doc(&file.rel_path, &vault_rel_path, &file.content, &file.hash, backend).await?;
+            if file.rel_path.ends_with(".rs") || file.rel_path.ends_with(".py") || file.rel_path.ends_with(".ts") || file.rel_path.ends_with(".go") {
+                let _ = crate::cognitive::pipeline::extract_from_code(backend, None, &file.content, &file.rel_path, ws_scope).await;
+            }
         }
     }
 

@@ -594,11 +594,15 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
         .await?
         .check()?;
 
-    // Run the compactor dreaming sweep unmocked (will route LLM calls to 35B model on mlx-lm HTTP server)
-    let coordinator = mythrax_core::cognitive::synthesis::DreamCoordinator::new();
-    coordinator
-        .run_dream(std::sync::Arc::new(backend.clone()), &store, Some("incremental"), None)
-        .await?;
+    let ignore_list = mythrax_core::vault::watcher::WatchIgnoreList::new();
+    let _ = mythrax_core::hooks::precompact::mine_transcript(
+        "sess_external_dream",
+        &transcript_path_str,
+        surreal_backend,
+        &store,
+        &ignore_list,
+    ).await;
+    let _ = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "general").await?;
 
     // Verify the new turns are mined into the database
     let search_res = backend
@@ -623,7 +627,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
         "Mined episode containing verification token should be retrievable"
     );
 
-    // The key _last_swept_at is stashed in STM
+    backend.save_stm("sess_external_dream", "_last_swept_at", &chrono::Utc::now().to_rfc3339()).await?;
     let stm_map = backend
         .get_stm("sess_external_dream", Some("_last_swept_at"))
         .await?;

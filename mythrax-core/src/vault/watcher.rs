@@ -2,7 +2,6 @@ use crate::contracts::{Entity, EpisodeSave, WikiNode, WisdomRule};
 use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
 use crate::vault::markdown::{extract_plain_text, parse_frontmatter};
-use crate::vault::organization::organize_file;
 use anyhow::{Context, Result};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::hash_map::DefaultHasher;
@@ -705,7 +704,137 @@ pub async fn sync_file_to_db_with_cache(
         canonical_path.to_string_lossy().to_string()
     };
 
-    if rel_path.contains("episodes/") {
+    if rel_path.contains("wiki/") {
+        let json_yaml = yaml_opt.as_ref().and_then(|y| serde_json::to_value(y).ok());
+        let name = json_yaml
+            .as_ref()
+            .and_then(|j| j.get("name").or_else(|| j.get("title")))
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Untitled")
+            })
+            .to_string();
+
+        let scope = json_yaml
+            .as_ref()
+            .and_then(|j| j.get("scope"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("general")
+            .to_string();
+
+        let wiki_node = WikiNode {
+            id: None,
+            name,
+            content: plain_body.clone(),
+            scope,
+            vault_path: Some(rel_path.clone()),
+            embedding: None,
+            temporal_range_start: None,
+            temporal_range_end: None,
+            metacognitive_confidence: None,
+            node_type: Some("insight".to_string()),
+            content_hash: None,
+            hypothesis: None,
+            raw_evidence: None,
+            causal_insight: None,
+            artifact_refs: None,
+            item_type: None,
+        };
+
+        let db_id = backend.save_wiki_node(&wiki_node).await?;
+
+        if let Some(surreal_backend) =
+            backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+        {
+            if let Ok(from_id) = crate::db::parse_record_id(&db_id) {
+                let body_links = crate::parser::extract_wiki_links(&body);
+                let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();
+
+                #[derive(serde::Deserialize)]
+                struct RawEdge {
+                    target: String,
+                    relation: Option<String>,
+                    strength: Option<f32>,
+                }
+
+                if let Some(edges_val) = json_yaml.as_ref().and_then(|j| j.get("edges")) {
+                    if let Ok(edges) = serde_json::from_value::<Vec<RawEdge>>(edges_val.clone()) {
+                        for edge in edges {
+                            if let Some(target_id) =
+                                resolve_target_to_id(&edge.target, surreal_backend, cache).await
+                            {
+                                let relation = edge
+                                    .relation
+                                    .clone()
+                                    .unwrap_or_else(|| "related".to_string());
+                                desired.push((target_id, relation, edge.strength));
+                            }
+                        }
+                    }
+                }
+
+                for link in body_links {
+                    if let Some(target_id) =
+                        resolve_target_to_id(&link, surreal_backend, cache).await
+                    {
+                        if !desired
+                            .iter()
+                            .any(|(tid, rel, _)| tid == &target_id && rel == "related")
+                        {
+                            desired.push((target_id, "related".to_string(), None));
+                        }
+                    }
+                }
+
+                if let Ok(mut existing_resp) = surreal_backend
+                    .db
+                    .query("SELECT id, out, relation FROM relates_to WHERE in = $from;")
+                    .bind(("from", from_id.clone()))
+                    .await
+                {
+                    #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                    struct RelatesToRawLight {
+                        id: surrealdb::types::RecordId,
+                        out: surrealdb::types::RecordId,
+                        relation: String,
+                    }
+                    if let Ok(existing) = existing_resp.take::<Vec<RelatesToRawLight>>(0) {
+                        for ext in &existing {
+                            if !desired
+                                .iter()
+                                .any(|(tid, rel, _)| tid == &ext.out && rel == &ext.relation)
+                            {
+                                let _ = surreal_backend
+                                    .db
+                                    .query("DELETE FROM relates_to WHERE id = $rel_id;")
+                                    .bind(("rel_id", ext.id.clone()))
+                                    .await;
+                            }
+                        }
+                        for (des_id, rel, strength) in &desired {
+                            if !existing
+                                .iter()
+                                .any(|ext| &ext.out == des_id && &ext.relation == rel)
+                            {
+                                let relate_query =
+                                    "RELATE ($from)->relates_to->($to) CONTENT { relation: $relation, strength: $strength, created_at: time::now() };";
+                                let _ = surreal_backend
+                                    .db
+                                    .query(relate_query)
+                                    .bind(("from", from_id.clone()))
+                                    .bind(("to", des_id.clone()))
+                                    .bind(("relation", rel.as_str()))
+                                    .bind(("strength", *strength))
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if rel_path.contains("episodes/") {
         let frontmatter: EpisodeFrontmatter = yaml_opt
             .and_then(|y| serde_json::to_value(y).ok())
             .and_then(|v| serde_json::from_value(v).ok())
@@ -728,61 +857,7 @@ pub async fn sync_file_to_db_with_cache(
             .vault_path(Some(rel_path))
             .build();
 
-        let db_id = backend.save_episode(&episode).await?;
-
-        if let Some(surreal_backend) =
-            backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
-        {
-            if let Ok(from_id) = crate::db::parse_record_id(&db_id) {
-                let body_links = crate::parser::extract_wiki_links(&body);
-                let mut desired: Vec<surrealdb::types::RecordId> = Vec::new();
-                for link in body_links {
-                    if let Some(target_id) =
-                        resolve_target_to_id(&link, surreal_backend, cache).await
-                    {
-                        if !desired.contains(&target_id) {
-                            desired.push(target_id);
-                        }
-                    }
-                }
-
-                if let Ok(mut existing_resp) = surreal_backend
-                    .db
-                    .query("SELECT id, out FROM relates_to WHERE in = $from;")
-                    .bind(("from", from_id.clone()))
-                    .await
-                {
-                    #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
-                    struct RelatesToRawLight {
-                        id: surrealdb::types::RecordId,
-                        out: surrealdb::types::RecordId,
-                    }
-                    if let Ok(existing) = existing_resp.take::<Vec<RelatesToRawLight>>(0) {
-                        for ext in &existing {
-                            if !desired.contains(&ext.out) {
-                                let _ = surreal_backend
-                                    .db
-                                    .query("DELETE FROM relates_to WHERE id = $rel_id;")
-                                    .bind(("rel_id", ext.id.clone()))
-                                    .await;
-                            }
-                        }
-                        for des in &desired {
-                            if !existing.iter().any(|ext| &ext.out == des) {
-                                let relate_query =
-                                    "RELATE $from -> relates_to -> $to CONTENT { relation: 'related', created_at: time::now() };";
-                                let _ = surreal_backend
-                                    .db
-                                    .query(relate_query)
-                                    .bind(("from", from_id.clone()))
-                                    .bind(("to", des.clone()))
-                                    .await;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let _ = backend.save_episode(&episode).await?;
     } else if rel_path.contains("wisdom/") || rel_path.starts_with("global/") {
         if let Some(yaml_val) = yaml_opt {
             let frontmatter: WisdomFrontmatter =
@@ -953,7 +1028,7 @@ pub async fn sync_file_to_db_with_cache(
             name: name.clone(),
             content: plain_body.clone(),
             scope: frontmatter.scope.clone().unwrap_or_else(|| "general".to_string()),
-            vault_path: Some(rel_path),
+            vault_path: Some(rel_path.clone()),
             embedding: None,
             metacognitive_confidence: frontmatter.metacognitive_confidence,
             node_type: frontmatter.node_type.clone(),
@@ -964,7 +1039,7 @@ pub async fn sync_file_to_db_with_cache(
         let db_id = backend.save_wiki_node(&node).await?;
 
         let scope_for_wisdom = node.scope.clone();
-        let content_for_wisdom = plain_body.clone();
+        let _content_for_wisdom = plain_body.clone();
         if file_stem == "spec.md"
             || file_stem == "implementation_plan.md"
             || file_stem.ends_with("_review.md")
@@ -972,9 +1047,10 @@ pub async fn sync_file_to_db_with_cache(
         {
             let backend_clone = backend.clone();
             tokio::spawn(async move {
-                let _ = crate::vault::distillation::extract_wisdom_from_document(
+                let _ = crate::cognitive::db::queue_cognitive_task(
                     &*backend_clone,
-                    &content_for_wisdom,
+                    "extract_from_document",
+                    &rel_path,
                     &scope_for_wisdom,
                 )
                 .await;
@@ -1088,45 +1164,31 @@ pub fn slugify(text: &str) -> String {
     slug
 }
 
-/// Save an episode both to the database and back to the vault, with loop prevention
+/// Save an episode to database and STM (episodes are retained in database & STM, physical disk writes suppressed per Arbor spec)
 pub async fn save_episode_bidirectional(
     episode: &EpisodeSave,
     backend: &dyn StorageBackend,
-    store: &Arc<MarkdownStore>,
-    ignore_list: &WatchIgnoreList,
+    _store: &Arc<MarkdownStore>,
+    _ignore_list: &WatchIgnoreList,
 ) -> Result<String> {
-    // 1. Determine relative path
+    // 1. Determine relative path slug for DB tracking if not provided
     let rel_path = match episode.vault_path {
         Some(ref vp) if !vp.is_empty() => vp.clone(),
         _ => {
             let slug = slugify(&episode.title);
-            let filename = format!("{}.md", slug);
-
-            // Format markdown to check for collisions/duplicates
-            let markdown = format_episode_markdown(episode);
-
-            let resolved_abs = organize_file(&store.vault_root, "episodes", &filename, &markdown)?;
-            resolved_abs
-                .strip_prefix(&store.vault_root)
-                .unwrap_or(&resolved_abs)
-                .to_string_lossy()
-                .to_string()
+            let uuid_part = &uuid::Uuid::new_v4().to_string()[..8];
+            format!("episodes/{}_{}.md", slug, uuid_part)
         }
     };
 
-    // 2. Prepare EpisodeSave with resolved vault path
+    // 2. Prepare EpisodeSave with DB vault path reference
     let mut episode_to_save = episode.clone();
-    episode_to_save.vault_path = Some(rel_path.clone());
+    episode_to_save.vault_path = Some(rel_path);
 
-    // 3. Save to database
+    // 3. Save directly to database
     let db_id = backend.save_episode(&episode_to_save).await?;
 
-    // 4. Save to vault
-    let markdown = format_episode_markdown(&episode_to_save);
-    let abs_path = store.vault_root.join(&rel_path);
-
-    // Queue write operation to coalescing write-behind queue
-    ignore_list.queue_write(abs_path, &markdown, store.clone());
+    // Physical disk write to vault_root/episodes/ is intentionally suppressed per Arbor Vault Redesign spec
 
     Ok(db_id)
 }
@@ -1302,18 +1364,7 @@ mod tests {
             .unwrap();
         assert!(ep_id.contains("episode:"));
 
-        // Yield to allow the background write-behind queue to flush and update the ignore list
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-        // Check that file was written to vault
-        let expected_rel_path = "episodes/bidirectional_test.md";
-        let abs_path = temp.path().join(expected_rel_path);
-        assert!(abs_path.exists());
-
-        // 2. Loop Prevention Check: Check that the written file path is in the ignore list
-        assert!(ignore_list.is_ignored(&abs_path));
-
-        // Verify content in DB
+        // Verify content in DB directly (physical disk flushes suppressed per Arbor Vault Redesign)
         let results = backend
             .search(crate::contracts::SearchParams::from_positional(
                 "bidirectional sync",
@@ -1335,12 +1386,11 @@ mod tests {
         assert_eq!(results.results.len(), 1);
         assert_eq!(results.results[0].title, "Bidirectional Test");
 
-        // 3. Watcher side: modify file directly in vault and sync to DB
-        // Wait 2.1 seconds so the ignore list entry expires
-        tokio::time::sleep(tokio::time::Duration::from_millis(2100)).await;
-        assert!(!ignore_list.is_ignored(&abs_path));
+        // 2. Watcher side: create wiki node file directly in vault and sync to DB
+        let wiki_rel_path = "wiki/bi-testing/watcher_test.md";
+        let abs_path = temp.path().join(wiki_rel_path);
+        std::fs::create_dir_all(abs_path.parent().unwrap()).unwrap();
 
-        // Write new content directly to vault
         let new_content = "---\ntitle: \"Watcher Test Updated\"\nscope: \"bi-testing\"\n---\nNew updated body content.";
         std::fs::write(&abs_path, new_content).unwrap();
 

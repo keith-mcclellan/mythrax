@@ -465,4 +465,29 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS document_frequency ON idf_index TYPE int;
     DEFINE FIELD IF NOT EXISTS scope ON idf_index TYPE string DEFAULT 'general';
     DEFINE INDEX IF NOT EXISTS idx_idf_term ON idf_index FIELDS term, scope UNIQUE;
+
+    DEFINE TABLE IF NOT EXISTS code_symbol SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS name ON code_symbol TYPE string;
+    DEFINE FIELD IF NOT EXISTS symbol_type ON code_symbol TYPE string;
+    DEFINE FIELD IF NOT EXISTS file_path ON code_symbol TYPE string;
+    DEFINE FIELD IF NOT EXISTS file_slug ON code_symbol TYPE string;
+    DEFINE FIELD IF NOT EXISTS start_line ON code_symbol TYPE int;
+    DEFINE FIELD IF NOT EXISTS end_line ON code_symbol TYPE int;
+    DEFINE FIELD IF NOT EXISTS signature ON code_symbol TYPE string;
+    DEFINE FIELD IF NOT EXISTS doc_comment ON code_symbol TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS call_graph ON code_symbol TYPE option<array<string>>;
+    DEFINE FIELD IF NOT EXISTS scope ON code_symbol TYPE string DEFAULT 'general';
+    DEFINE FIELD IF NOT EXISTS embedding ON code_symbol TYPE option<array<float>>;
+    DEFINE FIELD IF NOT EXISTS created_at ON code_symbol TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS idx_code_symbol_file ON code_symbol FIELDS file_path, name UNIQUE;
+    DEFINE INDEX OVERWRITE code_symbol_hnsw ON TABLE code_symbol FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
+
+    DEFINE TABLE IF NOT EXISTS subagent_worktree SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS subagent_id ON subagent_worktree TYPE string;
+    DEFINE FIELD IF NOT EXISTS worktree_path ON subagent_worktree TYPE string;
+    DEFINE FIELD IF NOT EXISTS base_branch ON subagent_worktree TYPE string;
+    DEFINE FIELD IF NOT EXISTS feature_branch ON subagent_worktree TYPE string;
+    DEFINE FIELD IF NOT EXISTS created_at ON subagent_worktree TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS status ON subagent_worktree TYPE string DEFAULT 'active';
+    DEFINE INDEX IF NOT EXISTS idx_subagent_wt ON subagent_worktree FIELDS subagent_id UNIQUE;
 ";

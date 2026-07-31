@@ -255,3 +255,15 @@ pub async fn harvest_completed_reflections(backend: &SurrealBackend) -> Result<(
     }
     Ok(())
 }
+
+pub async fn collect_policy_context(backend: &dyn StorageBackend, scope: &str) -> Result<String> {
+    let pruned_nodes = crate::cognitive::db::get_pruned_idea_nodes(backend, scope, 0.20).await?;
+    if pruned_nodes.is_empty() {
+        return Ok(String::new());
+    }
+    let mut out = String::from("\n> [!CAUTION]\n> **Actions to Avoid (Negative Policy Constraints):**\n");
+    for node in pruned_nodes {
+        out.push_str(&format!("> - {}\n", node.claim));
+    }
+    Ok(out)
+}

@@ -162,7 +162,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             return Ok(json!({ "status": "success" }));
         }
         "verify" | "organize" | "reprocess" | "reprocess_markdown" | "summarize" | "audit" | "ingest_bulk"
-        | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
+        | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" | "reset_unprocessed" => {
             match mapped_action {
                 "ingest_bulk" => {
                     let _source = args
@@ -229,6 +229,62 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }
             super::htr_handlers::handle_manage_htr(state, modified_args).await
         }
+        "extract" => {
+            let doc_path = args.get("doc_path").and_then(|v| v.as_str()).context("Missing doc_path")?;
+            if doc_path.contains("..") {
+                anyhow::bail!("Path traversal disallowed in doc_path");
+            }
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let content = std::fs::read_to_string(state.store.vault_root.join(doc_path)).unwrap_or_default();
+            let facts = crate::cognitive::pipeline::extract_from_document(
+                &*state.backend,
+                None,
+                &content,
+                doc_path,
+                scope,
+            ).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Extracted {} facts from document {}", facts.len(), doc_path) }]
+            }))
+        }
+        "extract_code" => {
+            let file_path = args.get("file_path").and_then(|v| v.as_str()).context("Missing file_path")?;
+            if file_path.contains("..") {
+                anyhow::bail!("Path traversal disallowed in file_path");
+            }
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let content = std::fs::read_to_string(file_path).unwrap_or_default();
+            let facts = crate::cognitive::pipeline::extract_from_code(
+                &*state.backend,
+                None,
+                &content,
+                file_path,
+                scope,
+            ).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Extracted {} facts from code {}", facts.len(), file_path) }]
+            }))
+        }
+        "hypothesize" => {
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let ideas = crate::cognitive::pipeline::form_hypotheses(&*state.backend, None, scope).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Formed {} hypotheses for scope {}", ideas.len(), scope) }]
+            }))
+        }
+        "refine" => {
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let logs = crate::cognitive::pipeline::refine_hypotheses(&*state.backend, None, scope).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Refined hypotheses with {} log entries for scope {}", logs.len(), scope) }]
+            }))
+        }
+        "config" => {
+            let cfg = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": serde_json::to_string_pretty(&cfg).unwrap_or_default() }]
+            }))
+        }
         "pre_invocation" => {
             let _session_id = args
                 .get("session_id")
@@ -243,20 +299,38 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             let session_id = args
                 .get("session_id")
                 .and_then(|v| v.as_str())
-                .context("Missing session_id parameter for precompact")?;
+                .context("Missing session_id parameter for precompact")?
+                .to_string();
+            let fallback_path = format!(
+                "/Users/keith/.gemini/antigravity/brain/{}/.system_generated/logs/transcript.jsonl",
+                session_id
+            );
             let transcript_path_str = args
                 .get("transcript_path")
                 .and_then(|v| v.as_str())
-                .context("Missing transcript_path parameter for precompact")?;
-            let count = crate::hooks::precompact::mine_transcript(
-                session_id,
-                transcript_path_str,
-                state.backend.as_ref(),
-                state.store.as_ref(),
-                &state.ignore_list,
-            )
-            .await?;
-            Ok(json!({ "status": "success", "episodes_saved": count }))
+                .unwrap_or(&fallback_path)
+                .to_string();
+
+            let backend_clone = state.backend.clone();
+            let store_clone = state.store.clone();
+            let ignore_clone = state.ignore_list.clone();
+
+            let session_id_clone = session_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::hooks::precompact::mine_transcript(
+                    &session_id_clone,
+                    &transcript_path_str,
+                    backend_clone.as_ref(),
+                    store_clone.as_ref(),
+                    &ignore_clone,
+                )
+                .await
+                {
+                    tracing::error!("Background precompaction failed for session '{}': {:?}", session_id_clone, e);
+                }
+            });
+
+            Ok(json!({ "status": "background_processing_started", "message": format!("Precompaction background process started for session {}", session_id) }))
         }
         "stop" => {
             let session_id = args

@@ -187,7 +187,8 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                             break;
                                         }
                                         if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
-                                            let text_to_embed = if let Some(ref insight) = ep.causal_insight.as_ref().or(ep.causal_explanation.as_ref()) {
+                                            let insight_str = ep.causal_insight.as_ref().map(|v| v.to_string()).or_else(|| ep.causal_explanation.clone());
+                                            let text_to_embed = if let Some(ref insight) = insight_str {
                                                 format!("{}: {}", ep.title, insight)
                                             } else if let Some(ref summary) = ep.summary {
                                                 format!("{}: {}", ep.title, summary)
@@ -429,16 +430,11 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 let store_dream = store.clone();
                 let cancel_token_dream = cancel_token.clone();
                 tokio::spawn(async move {
-                    let dream_coordinator = cognitive::synthesis::DreamCoordinator::new();
-                    let compactor = cognitive::compactor::Compactor::new();
-
                     // Spawn daily scheduler
                     let backend_daily = backend_dream.clone();
-                    let store_daily = store_dream.clone();
+                    let _store_daily = store_dream.clone();
                     let cancel_token_daily = cancel_token_dream.clone();
                     tokio::spawn(async move {
-                        let dc = cognitive::synthesis::DreamCoordinator::new();
-                        let cmp = cognitive::compactor::Compactor::new();
                         loop {
                             tokio::select! {
                                 _ = cancel_token_daily.cancelled() => {
@@ -460,18 +456,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     }
 
                                     tracing::info!("Daily scheduled deep dreaming starting...");
-                                    if let Err(e) = dc.run_dream(backend_daily.clone(), &store_daily, Some("deep"), backend_daily.embedder.clone()).await {
-                                        tracing::error!("Daily deep dreaming failed: {:?}", e);
-                                    } else {
-                                        tracing::info!("Deep dreaming synthesis completed. Running compactions...");
-                                        let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
-                                        if scopes.is_empty() {
-                                            scopes.push("general".to_string());
-                                        }
-                                        for scope in scopes {
-                                            let _ = cmp.compact_scope(backend_daily.clone(), &store_daily, &scope, backend_daily.embedder.clone()).await;
-                                        }
-
+                                    let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
+                                    if scopes.is_empty() {
+                                        scopes.push("general".to_string());
+                                    }
+                                    for scope in scopes {
+                                        let _ = cognitive::pipeline::refine_hypotheses(backend_daily.as_ref(), None, &scope).await;
                                     }
 
                                     tracing::info!("Daily scheduled auditor calibration starting...");
@@ -516,17 +506,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
                                             && unprocessed.len() >= 50 {
                                                 tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
-                                                if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
-                                                    tracing::error!("Threshold dreaming failed: {:?}", e);
-                                                } else {
-                                                    let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                    if scopes.is_empty() {
-                                                        scopes.push("general".to_string());
-                                                    }
-                                                    for scope in scopes {
-                                                        let _ = compactor.compact_scope(backend_dream.clone(), &store_dream, &scope, backend_dream.embedder.clone()).await;
-                                                    }
-
+                                                let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                if scopes.is_empty() {
+                                                    scopes.push("general".to_string());
+                                                }
+                                                for scope in scopes {
+                                                    let _ = cognitive::pipeline::refine_hypotheses(backend_dream.as_ref(), None, &scope).await;
                                                 }
                                                 pending_debounce = false;
                                                 continue;
@@ -545,17 +530,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
                                         && !unprocessed.is_empty() {
                                             tracing::info!("Idle debounced synthesis starting...");
-                                            if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
-                                                tracing::error!("Debounced incremental dreaming failed: {:?}", e);
-                                            } else {
-                                                let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                if scopes.is_empty() {
-                                                    scopes.push("general".to_string());
-                                                }
-                                                for scope in scopes {
-                                                    let _ = compactor.compact_scope(backend_dream.clone(), &store_dream, &scope, backend_dream.embedder.clone()).await;
-                                                }
-
+                                            let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                            if scopes.is_empty() {
+                                                scopes.push("general".to_string());
+                                            }
+                                            for scope in scopes {
+                                                let _ = cognitive::pipeline::refine_hypotheses(backend_dream.as_ref(), None, &scope).await;
                                             }
                                         }
 

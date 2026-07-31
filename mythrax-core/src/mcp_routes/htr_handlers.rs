@@ -71,23 +71,32 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
-            let coordinator = ArborCoordinator::new(
-                surreal_backend.db.clone(),
-                state.store.vault_root.clone(),
-                current_dir,
-                llm,
-                scope,
-                "".to_string(),
-                vec![],
-            )
-            .await;
-            coordinator.trigger_ideation(&node).await?;
+            let db_clone = surreal_backend.db.clone();
+            let vault_root_clone = state.store.vault_root.clone();
+            let scope_clone = scope.clone();
+
+            let node_clone = node.clone();
+            tokio::spawn(async move {
+                let coordinator = ArborCoordinator::new(
+                    db_clone,
+                    vault_root_clone,
+                    current_dir,
+                    llm,
+                    scope_clone,
+                    "".to_string(),
+                    vec![],
+                )
+                .await;
+                if let Err(e) = coordinator.trigger_ideation(&node_clone).await {
+                    tracing::error!("Background HTR ideation failed for node '{}': {:?}", node_clone, e);
+                }
+            });
 
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("HTR ideation complete for node: {}", node)
+                        "text": format!("HTR ideation started in background for node: {}", node)
                     }
                 ]
             }))
@@ -107,23 +116,32 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
 
             let llm = crate::llm::LLMClient::default();
             let current_dir = std::env::current_dir()?;
-            let coordinator = ArborCoordinator::new(
-                surreal_backend.db.clone(),
-                state.store.vault_root.clone(),
-                current_dir,
-                llm,
-                scope,
-                test_command,
-                vec![],
-            )
-            .await;
-            coordinator.execute_node(&node).await?;
+            let db_clone = surreal_backend.db.clone();
+            let vault_root_clone = state.store.vault_root.clone();
+            let scope_clone = scope.clone();
+
+            let node_clone = node.clone();
+            tokio::spawn(async move {
+                let coordinator = ArborCoordinator::new(
+                    db_clone,
+                    vault_root_clone,
+                    current_dir,
+                    llm,
+                    scope_clone,
+                    test_command,
+                    vec![],
+                )
+                .await;
+                if let Err(e) = coordinator.execute_node(&node_clone).await {
+                    tracing::error!("Background HTR execution failed for node '{}': {:?}", node_clone, e);
+                }
+            });
 
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("HTR execution complete for node: {}", node)
+                        "text": format!("HTR execution started in background for node: {}", node)
                     }
                 ]
             }))

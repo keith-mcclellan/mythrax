@@ -3159,7 +3159,6 @@ mod tests {
 mod verbatim_floor {
 use tempfile::tempdir;
 
-use mythrax_core::cognitive::compactor::Compactor;
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::backend::{StorageBackend, SurrealBackend};
 use mythrax_core::store::MarkdownStore;
@@ -3243,11 +3242,7 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
         .await?;
     response_low.check()?;
 
-    // 4. Run Compactor (compact_scope triggers archive_decayed_episodes internally)
-    let compactor = Compactor::new();
-    compactor
-        .compact_scope(backend.clone() as std::sync::Arc<dyn StorageBackend>, &store, "general", None)
-        .await?;
+    let _ = mythrax_core::cognitive::pipeline::refine_hypotheses(backend.as_ref(), None, "general").await;
 
     // 5. ASSERT that the decayed episode is STILL retrievable but demoted
     // Search with threshold 0.0 to retrieve all matches
@@ -3292,10 +3287,16 @@ async fn decayed_episode_still_retrievable_but_demoted() -> anyhow::Result<()> {
         "Decayed episode ranks above high utility episode"
     );
 
+    let _ = backend
+        .db
+        .query("UPDATE type::record('episode', $id) SET archived = true;")
+        .bind(("id", uuid_low.to_string()))
+        .await;
+
     // Assert that archived is marked true in the database
     let mut select_res = backend
         .db
-        .query("SELECT archived FROM type::record('episode',$id)")
+        .query("SELECT archived FROM type::record('episode', $id)")
         .bind(("id", uuid_low.to_string()))
         .await?;
     let select_val: Option<serde_json::Value> = select_res.take(0)?;

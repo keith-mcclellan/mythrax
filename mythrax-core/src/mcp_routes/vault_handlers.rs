@@ -1,7 +1,5 @@
 use crate::api::ApiState;
-use crate::cognitive::compactor::Compactor;
 use crate::cognitive::forge::Forge;
-use crate::cognitive::synthesis::DreamCoordinator;
 use crate::contracts::*;
 use crate::db::SurrealBackend;
 use crate::vault::ingestion::bulk_ingest_vault;
@@ -138,98 +136,27 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
         "reprocess_markdown" => {
             let all_nodes = state.backend.get_all_wiki_nodes().await?;
             let mut count = 0;
-            let base_sys = r#"You are a master systems architect implementing the Mythrax Cognitive Memory System.
-Analyze the markdown document and extract distilled causal items (ι_n). Output a JSON object matching this schema:
-{
-  "items": [
-    {
-      "title": "<Abstract Noun-Phrase Title>",
-      "item_type": "<pattern | constraint | failure_mode | lesson>",
-      "content": "<2-3 sentence causal explanation of what was tried, what happened, and why>",
-      "metacognitive_confidence": 90
-    }
-  ]
-}
-"#;
-            let sys_prompt = crate::cognitive::synthesis::build_synthesis_prompt(base_sys);
-
             for node in all_nodes {
-                let is_unitemized = node.item_type.is_none()
-                    && (node.node_type.is_none() || node.node_type.as_deref() == Some("wiki"));
-                if is_unitemized {
-                    let prompt_text = format!(
-                        "Extract atomic causal items from markdown document '{}':\n\n{}\nRespond ONLY with valid JSON matching {{\"items\": [...]}}.",
-                        node.name, node.content
-                    );
-
-                    let mut items = Vec::new();
-                    let llm_client = crate::llm::LLMClient::default();
-                    if let Ok(llm_res) = llm_client.routed_completion(
+                let is_target = node.name == "spec.md"
+                    || node.name == "implementation_plan.md"
+                    || node.name.ends_with("_review.md")
+                    || node.name.ends_with("_audit.md");
+                if is_target {
+                    let _ = crate::cognitive::db::queue_cognitive_task(
                         &*state.backend,
-                        &crate::contracts::TaskProfile::new(
-                            crate::contracts::TaskArchetype::Summarization,
-                        ),
-                        Some(&sys_prompt),
-                        &prompt_text,
-                    ).await {
-                        if let Ok(analysis) = serde_json::from_str::<crate::cognitive::synthesis::ClusterAnalysis>(&llm_res) {
-                            items = analysis.resolved_items("reprocess_markdown");
-                        }
-                    }
-
-                    if items.is_empty() {
-                        let fallback_type = if node.name == "spec.md" || node.name.contains("spec") {
-                            "constraint"
-                        } else if node.name.ends_with("_review.md") || node.name.ends_with("_audit.md") {
-                            "failure_mode"
-                        } else if node.name.starts_with("analysis_") {
-                            "analysis"
-                        } else if node.name == "implementation_plan.md" {
-                            "design_pattern"
-                        } else {
-                            "lesson"
-                        };
-                        items.push(crate::cognitive::synthesis::AtomicInsightItem {
-                            title: format!("Itemized: {}", node.name),
-                            item_type: fallback_type.to_string(),
-                            content: node.content.clone(),
-                            what_was_tried: None,
-                            what_happened: None,
-                            why: None,
-                            metacognitive_confidence: Some(90),
-                        });
-                    }
-
-                    for item in items {
-                        let text_to_embed = format!("{}: {} - {}", item.item_type, item.title, item.content);
-                        let content_embedding = state.backend.embed(&text_to_embed).await.ok();
-
-                        let new_node = WikiNode {
-                            id: None,
-                            name: item.title.clone(),
-                            content: item.content.clone(),
-                            scope: node.scope.clone(),
-                            vault_path: node.vault_path.clone(),
-                            embedding: content_embedding,
-                            item_type: Some(item.item_type.clone()),
-                            node_type: Some("insight".to_string()),
-                            metacognitive_confidence: item.metacognitive_confidence,
-                            ..Default::default()
-                        };
-                        state.backend.save_wiki_node(&new_node).await?;
-                        count += 1;
-                    }
-
-                    let mut orig = node.clone();
-                    orig.node_type = Some("archived".to_string());
-                    state.backend.save_wiki_node(&orig).await?;
+                        "extract_from_document",
+                        node.vault_path.as_deref().unwrap_or(&node.name),
+                        &node.scope,
+                    )
+                    .await;
+                    count += 1;
                 }
             }
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
-                        "text": format!("Reprocessed unitemized markdown wiki nodes into {} atomic items with LLM extraction and content-derived embeddings.", count)
+                        "text": format!("Queued {} markdown documents for background cognitive fact extraction.", count)
                     }
                 ]
             }))
@@ -239,107 +166,29 @@ Analyze the markdown document and extract distilled causal items (ι_n). Output 
                 .get("scope")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let async_mode = args
-                .get("async_mode")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
 
             let scope_clone = scope.clone();
-            if async_mode {
-                let state_clone = state.clone();
-                tokio::spawn(async move {
-                    let compactor = Compactor::new();
-                    let coordinator = DreamCoordinator::new();
-                    let embedder = if let Some(backend) = state_clone
-                        .backend
-                        .as_any()
-                        .downcast_ref::<crate::db::backend::SurrealBackend>(
-                    ) {
-                        backend.embedder.clone()
-                    } else {
-                        None
-                    };
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                let scope_name = scope_clone.as_deref().unwrap_or("general");
+                if let Err(e) = crate::cognitive::pipeline::refine_hypotheses(state_clone.backend.as_ref(), None, scope_name).await {
+                    tracing::error!("Background refinement failed for scope '{}': {:?}", scope_name, e);
+                }
 
-                    if let Err(e) = coordinator
-                        .run_dream(
-                            state_clone.backend.clone(),
-                            &state_clone.store,
-                            None,
-                            embedder.clone(),
-                        )
-                        .await
+                crate::embeddings::evict_global_embedder();
+                if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+                    broker.evict_unused_models().await;
+                }
+            });
+
+            Ok(json!({
+                "content": [
                     {
-                        tracing::error!("Background dream run failed: {:?}", e);
+                        "type": "text",
+                        "text": format!("Compaction and synthesis dreaming started in the background for scope '{}'.", scope.as_deref().unwrap_or("general"))
                     }
-
-                    let scopes_to_compact = if let Some(ref s) = scope {
-                        if s == "all" || s.is_empty() {
-                            state_clone.backend.get_active_scopes().await.unwrap_or_else(|_| vec!["general".to_string(), "mythrax".to_string()])
-                        } else {
-                            vec![s.clone()]
-                        }
-                    } else {
-                        state_clone.backend.get_active_scopes().await.unwrap_or_else(|_| vec!["general".to_string(), "mythrax".to_string()])
-                    };
-
-                    for scope_name in scopes_to_compact {
-                        if let Err(e) = compactor
-                            .compact_scope(
-                                state_clone.backend.clone(),
-                                &state_clone.store,
-                                &scope_name,
-                                embedder.clone(),
-                            )
-                            .await
-                        {
-                            tracing::error!("Background compact_scope failed for scope '{}': {:?}", scope_name, e);
-                        }
-                    }
-                    crate::embeddings::evict_global_embedder();
-                    if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
-                        broker.evict_unused_models().await;
-                    }
-                });
-
-                Ok(json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": format!("Compaction and synthesis dreaming started in the background for scope '{}'.", scope_clone.as_deref().unwrap_or("general"))
-                        }
-                    ]
-                }))
-            } else {
-                let compactor = Compactor::new();
-                let coordinator = DreamCoordinator::new();
-                let embedder = if let Some(backend) = state
-                    .backend
-                    .as_any()
-                    .downcast_ref::<crate::db::backend::SurrealBackend>(
-                ) {
-                    backend.embedder.clone()
-                } else {
-                    None
-                };
-
-                coordinator
-                    .run_dream(state.backend.clone(), &state.store, None, embedder.clone())
-                    .await?;
-
-                let scope_name = scope.as_deref().unwrap_or("general");
-                compactor
-                    .compact_scope(state.backend.clone(), &state.store, scope_name, embedder)
-                    .await?;
-
-                Ok(json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": format!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name)
-                        }
-                    ]
-                }))
-            }
+                ]
+            }))
         }
         "audit" => {
             let workspace_path_str = args
@@ -572,6 +421,33 @@ Analyze the markdown document and extract distilled causal items (ι_n). Output 
                     ]
                 }))
             }
+        }
+        "organize" => {
+            let synced_count =
+                crate::vault::operations::sync_vault_to_db(&state.backend, &state.store).await?;
+            let report = format!(
+                "Vault organization complete. Synced {} files between physical vault and database.",
+                synced_count
+            );
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": report
+                    }
+                ]
+            }))
+        }
+        "reset_unprocessed" => {
+            state.backend.reset_unprocessed_episodes().await?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Successfully reset processed_in_dream flag on all episodes to false."
+                    }
+                ]
+            }))
         }
         _ => anyhow::bail!("Invalid action for manage_vault: {}", action),
     }

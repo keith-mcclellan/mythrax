@@ -9,3 +9,7 @@
 
 - [x] **Track: Atomic Insight Itemization & Full-Pipeline Arbor Alignment**
   *Link: [./tracks/atomic_insights_20260729/index.md](./tracks/atomic_insights_20260729/index.md)*
+
+- [x] **Track: Arbor-Aligned Cognitive Memory Engine Replacement**
+  *Link: [./tracks/arbor_cognitive_engine_20260730/index.md](./tracks/arbor_cognitive_engine_20260730/index.md)*
+

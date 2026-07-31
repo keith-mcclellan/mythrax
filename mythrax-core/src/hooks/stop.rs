@@ -54,7 +54,16 @@ pub async fn mine_if_due(
         .await
         .context("Failed to mine transcript in stop hook")?;
 
-        // 5. Update the persistent state in STM with the new count
+        // 5. Queue background fact extraction via CognitiveTask SurrealDB table
+        let _ = crate::cognitive::db::queue_cognitive_task(
+            backend.as_ref(),
+            "extract_facts",
+            session,
+            "mythrax",
+        )
+        .await;
+
+        // 6. Update the persistent state in STM with the new count
         backend
             .save_stm(session, "last_human_message_count", &new_count.to_string())
             .await

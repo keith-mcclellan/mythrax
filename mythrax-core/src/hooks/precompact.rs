@@ -380,26 +380,16 @@ pub async fn mine_transcript(
                             backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
                         {
                             let backend_clone = Arc::new(surreal.clone());
-                            let store_clone = store_arc.clone();
-                            let content_clone = extracted.clone();
-                            let scope_clone = Some("general".to_string());
-                            let ep_id_clone = Some(saved_id.clone());
+                            let _scope_clone = Some("general".to_string());
+                            let _ep_id_clone = Some(saved_id.clone());
 
                             tokio::spawn(async move {
-                                if let Err(e) = crate::mcp_routes::write_handlers::run_llm_critic(
-                                    backend_clone,
-                                    store_clone,
-                                    content_clone,
-                                    scope_clone,
-                                    ep_id_clone,
+                                let _ = crate::cognitive::pipeline::refine_hypotheses(
+                                    &*backend_clone,
+                                    None,
+                                    "general",
                                 )
-                                .await
-                                {
-                                    tracing::error!(
-                                        "Error running LLM critic in precompact: {:?}",
-                                        e
-                                    );
-                                }
+                                .await;
                             });
                         }
                     }

@@ -10,6 +10,11 @@ pub enum CognitiveTaskType {
     Compaction,
     Extraction,
     Refinement,
+    ExtractCode,
+    ExtractDocument,
+    ExtractSkill,
+    ExtractHandoff,
+    GraduateWisdom,
     Custom(String),
 }
 
@@ -20,6 +25,11 @@ impl std::fmt::Display for CognitiveTaskType {
             Self::Compaction => write!(f, "Compaction"),
             Self::Extraction => write!(f, "Extraction"),
             Self::Refinement => write!(f, "Refinement"),
+            Self::ExtractCode => write!(f, "ExtractCode"),
+            Self::ExtractDocument => write!(f, "ExtractDocument"),
+            Self::ExtractSkill => write!(f, "ExtractSkill"),
+            Self::ExtractHandoff => write!(f, "ExtractHandoff"),
+            Self::GraduateWisdom => write!(f, "GraduateWisdom"),
             Self::Custom(s) => write!(f, "{}", s),
         }
     }
@@ -33,6 +43,11 @@ impl std::str::FromStr for CognitiveTaskType {
             "Compaction" => Ok(Self::Compaction),
             "Extraction" => Ok(Self::Extraction),
             "Refinement" => Ok(Self::Refinement),
+            "ExtractCode" => Ok(Self::ExtractCode),
+            "ExtractDocument" => Ok(Self::ExtractDocument),
+            "ExtractSkill" => Ok(Self::ExtractSkill),
+            "ExtractHandoff" => Ok(Self::ExtractHandoff),
+            "GraduateWisdom" => Ok(Self::GraduateWisdom),
             other => Ok(Self::Custom(other.to_string())),
         }
     }
@@ -280,14 +295,14 @@ impl SurrealBackend {
 
     pub async fn get_pending_cognitive_tasks(&self) -> Result<Vec<CognitiveTask>> {
         let query_str =
-            "SELECT * FROM cognitive_task WHERE status = 'Pending' ORDER BY created_at ASC;";
+            "SELECT * FROM cognitive_task WHERE status = 'Pending' ORDER BY created_at ASC LIMIT 50;";
         let mut response = self.db.query(query_str).await?;
         let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
         Ok(tasks.into_iter().map(CognitiveTask::from).collect())
     }
 
     pub async fn get_injected_tasks_older_than_ttl(&self) -> Result<Vec<CognitiveTask>> {
-        let query_str = "SELECT * FROM cognitive_task WHERE status = 'Injected';";
+        let query_str = "SELECT * FROM cognitive_task WHERE status = 'Injected' LIMIT 50;";
         let mut response = self.db.query(query_str).await?;
         let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
 
@@ -366,7 +381,7 @@ impl SurrealBackend {
         task_type: &str,
     ) -> Result<Vec<CognitiveTask>> {
         let query_str =
-            "SELECT * FROM cognitive_task WHERE status = 'Completed' AND task_type = $task_type;";
+            "SELECT * FROM cognitive_task WHERE status = 'Completed' AND task_type = $task_type LIMIT 50;";
         let mut response = self
             .db
             .query(query_str)

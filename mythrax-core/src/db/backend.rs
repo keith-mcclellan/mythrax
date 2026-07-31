@@ -106,6 +106,7 @@ pub trait StorageBackend: Send + Sync {
         offset: u32,
     ) -> Result<Vec<Episode>>;
     async fn mark_episode_processed(&self, id: &str) -> Result<()>;
+    async fn reset_unprocessed_episodes(&self) -> Result<()>;
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()>;
     async fn get_all_episodes(&self) -> Result<Vec<Episode>>;
     /// Retrieves a paginated subset of episodes from SurrealDB (`LIMIT $limit START $offset`).
@@ -228,6 +229,42 @@ pub trait StorageBackend: Send + Sync {
         &self,
         session_id: &str,
     ) -> Result<Option<chrono::DateTime<chrono::Utc>>>;
+
+    // ─── ARBOR COGNITIVE ENGINE STORAGE METHODS ─────────────────
+    async fn save_fact(&self, _fact: &crate::contracts::Fact) -> Result<String> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+    async fn get_fact(&self, _id: &str) -> Result<Option<crate::contracts::Fact>> {
+        Ok(None)
+    }
+    async fn get_facts_by_scope(&self, _scope: &str) -> Result<Vec<crate::contracts::Fact>> {
+        Ok(Vec::new())
+    }
+    async fn get_unassociated_facts(&self, _scope: &str) -> Result<Vec<crate::contracts::Fact>> {
+        Ok(Vec::new())
+    }
+    async fn delete_fact(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn save_idea_node(&self, _idea: &crate::contracts::IdeaNode) -> Result<String> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+    async fn get_idea_node(&self, _id: &str) -> Result<Option<crate::contracts::IdeaNode>> {
+        Ok(None)
+    }
+    async fn get_idea_nodes_by_scope(&self, _scope: &str) -> Result<Vec<crate::contracts::IdeaNode>> {
+        Ok(Vec::new())
+    }
+    async fn delete_idea_node(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn get_pipeline_config(&self) -> Result<Option<crate::contracts::PipelineConfig>> {
+        Ok(Some(crate::contracts::PipelineConfig::default()))
+    }
+    async fn save_pipeline_config(&self, _config: &crate::contracts::PipelineConfig) -> Result<()> {
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
@@ -984,8 +1021,9 @@ impl SurrealBackend {
             llm: Some(crate::llm::LLMClient::new_mock()),
         };
         let backend = Self::new("mem://", config).await?;
+        let random_ns = format!("ns_{}", Uuid::new_v4().to_string().replace("-", "_"));
         let random_db = format!("db_{}", Uuid::new_v4().to_string().replace("-", "_"));
-        backend.db.use_ns("mythrax").use_db(&random_db).await?;
+        backend.db.use_ns(&random_ns).use_db(&random_db).await?;
         Ok(backend)
     }
 
@@ -1199,7 +1237,7 @@ pub struct EpisodeRaw {
     #[serde(default)]
     pub raw_evidence: Option<Vec<String>>,
     #[serde(default)]
-    pub causal_insight: Option<String>,
+    pub causal_insight: Option<serde_json::Value>,
     #[serde(default)]
     pub artifact_refs: Option<Vec<String>>,
 }
@@ -1317,6 +1355,93 @@ impl WikiNodeRaw {
     }
 }
 
+#[derive(serde::Deserialize, Debug, SurrealValue)]
+pub struct FactRaw {
+    pub(crate) id: surrealdb::types::RecordId,
+    pub(crate) source_type: crate::contracts::FactSource,
+    pub(crate) source_id: String,
+    #[serde(default)]
+    pub(crate) source_version: u32,
+    pub(crate) scope: String,
+    #[serde(default)]
+    pub(crate) idea_node_id: Option<String>,
+    #[serde(default)]
+    pub(crate) hypothesis: Option<String>,
+    #[serde(default)]
+    pub(crate) causal_insight: Option<String>,
+    #[serde(default)]
+    pub(crate) raw_evidence: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) artifact_refs: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) embedding: Option<Vec<f32>>,
+    #[serde(default)]
+    pub(crate) metacognitive_confidence: Option<i32>,
+    #[serde(default)]
+    pub(crate) created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<FactRaw> for crate::contracts::Fact {
+    fn from(raw: FactRaw) -> Self {
+        crate::contracts::Fact {
+            id: Some(format_record_id(&raw.id)),
+            source_type: raw.source_type,
+            source_id: raw.source_id,
+            source_version: raw.source_version,
+            scope: raw.scope,
+            idea_node_id: raw.idea_node_id,
+            hypothesis: raw.hypothesis,
+            causal_insight: raw.causal_insight,
+            raw_evidence: raw.raw_evidence.unwrap_or_default(),
+            artifact_refs: raw.artifact_refs.unwrap_or_default(),
+            embedding: raw.embedding,
+            metacognitive_confidence: raw.metacognitive_confidence.unwrap_or(0),
+            created_at: raw.created_at,
+        }
+    }
+}
+
+#[derive(serde::Deserialize, Debug, SurrealValue)]
+pub struct IdeaNodeRaw {
+    pub(crate) id: surrealdb::types::RecordId,
+    #[serde(default)]
+    pub(crate) parent_id: Option<String>,
+    pub(crate) claim: String,
+    #[serde(default)]
+    pub(crate) evidence: Vec<String>,
+    #[serde(default)]
+    pub(crate) artifact_refs: Vec<String>,
+    pub(crate) insight: String,
+    #[serde(default)]
+    pub(crate) artifact_path: Option<String>,
+    pub(crate) status: crate::contracts::IdeaStatus,
+    pub(crate) confidence: f32,
+    pub(crate) scope: String,
+    #[serde(default)]
+    pub(crate) created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub(crate) updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<IdeaNodeRaw> for crate::contracts::IdeaNode {
+    fn from(raw: IdeaNodeRaw) -> Self {
+        crate::contracts::IdeaNode {
+            id: Some(format_record_id(&raw.id)),
+            parent_id: raw.parent_id,
+            claim: raw.claim,
+            evidence: raw.evidence,
+            artifact_refs: raw.artifact_refs,
+            insight: raw.insight,
+            artifact_path: raw.artifact_path,
+            status: raw.status,
+            confidence: raw.confidence,
+            scope: raw.scope,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at,
+        }
+    }
+}
+
 #[derive(serde::Deserialize, SurrealValue)]
 pub(crate) struct ScoredEdge {
     pub(crate) out: surrealdb::types::RecordId,
@@ -1353,6 +1478,81 @@ pub(crate) static PROFILE_CACHE: std::sync::OnceLock<
 impl StorageBackend for SurrealBackend {
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    async fn save_fact(&self, fact: &crate::contracts::Fact) -> Result<String> {
+        let fact_id = fact.id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let record_id = parse_record_id(&format!("fact:{}", fact_id))?;
+        let mut save = fact.clone();
+        save.id = None;
+        let _res: Option<FactRaw> = self.db.upsert(record_id).content(save).await?;
+        Ok(fact_id)
+    }
+
+    async fn get_fact(&self, id: &str) -> Result<Option<crate::contracts::Fact>> {
+        let id_clean = id.trim_start_matches("fact:");
+        if let Ok(record_id) = parse_record_id(&format!("fact:{}", id_clean)) {
+            let raw: Option<FactRaw> = self.db.select(record_id).await?;
+            Ok(raw.map(Into::into))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn get_facts_by_scope(&self, scope: &str) -> Result<Vec<crate::contracts::Fact>> {
+        let sql = "SELECT * FROM fact WHERE scope = $scope;";
+        let mut res = self.db.query(sql).bind(("scope", scope.to_string())).await?;
+        let raw_facts: Vec<FactRaw> = res.take(0).unwrap_or_default();
+        Ok(raw_facts.into_iter().map(Into::into).collect())
+    }
+
+    async fn get_unassociated_facts(&self, scope: &str) -> Result<Vec<crate::contracts::Fact>> {
+        let sql = "SELECT * FROM fact WHERE scope = $scope AND (idea_node_id IS NONE OR idea_node_id = '');";
+        let mut res = self.db.query(sql).bind(("scope", scope.to_string())).await?;
+        let raw_facts: Vec<FactRaw> = res.take(0).unwrap_or_default();
+        Ok(raw_facts.into_iter().map(Into::into).collect())
+    }
+
+    async fn delete_fact(&self, id: &str) -> Result<()> {
+        let id_clean = id.trim_start_matches("fact:");
+        if let Ok(record_id) = parse_record_id(&format!("fact:{}", id_clean)) {
+            let _: Option<FactRaw> = self.db.delete(record_id).await?;
+        }
+        Ok(())
+    }
+
+    async fn save_idea_node(&self, idea: &crate::contracts::IdeaNode) -> Result<String> {
+        let node_id = idea.id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let record_id = parse_record_id(&format!("idea_node:{}", node_id))?;
+        let mut save = idea.clone();
+        save.id = None;
+        let _res: Option<IdeaNodeRaw> = self.db.upsert(record_id).content(save).await?;
+        Ok(node_id)
+    }
+
+    async fn get_idea_node(&self, id: &str) -> Result<Option<crate::contracts::IdeaNode>> {
+        let id_clean = id.trim_start_matches("idea_node:");
+        if let Ok(record_id) = parse_record_id(&format!("idea_node:{}", id_clean)) {
+            let raw: Option<IdeaNodeRaw> = self.db.select(record_id).await?;
+            Ok(raw.map(Into::into))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn get_idea_nodes_by_scope(&self, scope: &str) -> Result<Vec<crate::contracts::IdeaNode>> {
+        let sql = "SELECT * FROM idea_node WHERE scope = $scope;";
+        let mut res = self.db.query(sql).bind(("scope", scope.to_string())).await?;
+        let raw_ideas: Vec<IdeaNodeRaw> = res.take(0).unwrap_or_default();
+        Ok(raw_ideas.into_iter().map(Into::into).collect())
+    }
+
+    async fn delete_idea_node(&self, id: &str) -> Result<()> {
+        let id_clean = id.trim_start_matches("idea_node:");
+        if let Ok(record_id) = parse_record_id(&format!("idea_node:{}", id_clean)) {
+            let _: Option<IdeaNodeRaw> = self.db.delete(record_id).await?;
+        }
+        Ok(())
     }
 
     async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>> {
@@ -1722,6 +1922,10 @@ impl StorageBackend for SurrealBackend {
 
     async fn mark_episode_processed(&self, id: &str) -> Result<()> {
         self.mark_episode_processed_db(id).await
+    }
+
+    async fn reset_unprocessed_episodes(&self) -> Result<()> {
+        self.reset_unprocessed_episodes_db().await
     }
 
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()> {
