@@ -2120,6 +2120,7 @@ Analyze the events and extract distilled causal insights (ι_n). Output a JSON o
                 name: String,
                 content: String,
                 embedding: Vec<f32>,
+                embedding_norm: f32,
                 is_procedural: bool,
                 temporal_range_start: Option<chrono::DateTime<chrono::Utc>>,
                 temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
@@ -2142,6 +2143,7 @@ Analyze the events and extract distilled causal insights (ι_n). Output a JSON o
                                     name: node.name,
                                     content: node.content,
                                     embedding: emb.clone(),
+                                    embedding_norm: emb.iter().map(|x| x * x).sum::<f32>().sqrt(),
                                     is_procedural: false,
                                     temporal_range_start: node.temporal_range_start,
                                     temporal_range_end: node.temporal_range_end,
@@ -2172,6 +2174,7 @@ Analyze the events and extract distilled causal insights (ι_n). Output a JSON o
                                 name: ep.title,
                                 content: ep.content,
                                 embedding: emb.clone(),
+                                embedding_norm: emb.iter().map(|x| x * x).sum::<f32>().sqrt(),
                                 is_procedural: true,
                                 temporal_range_start: ep_start,
                                 temporal_range_end: ep.temporal_range_end.or(ep_start),
@@ -2278,10 +2281,8 @@ Analyze the events and extract distilled causal insights (ι_n). Output a JSON o
                                     .zip(other.embedding.iter())
                                     .map(|(a, b)| a * b)
                                     .sum();
-                                let norm_u: f32 =
-                                    cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 =
-                                    other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_u: f32 = cand.embedding_norm;
+                                let norm_v: f32 = other.embedding_norm;
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
                                 } else {
@@ -2295,12 +2296,15 @@ Analyze the events and extract distilled causal insights (ι_n). Output a JSON o
                     }
                 } else {
                     for node in matches_wiki {
+                        let embedding = node.embedding.unwrap_or_default();
+                        let embedding_norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                         cluster.push(GradCandidate {
                             id: node.id.unwrap_or_default().replace("`", ""),
                             scope: node.scope,
                             name: node.name,
                             content: node.content,
-                            embedding: node.embedding.unwrap_or_default(),
+                            embedding,
+                            embedding_norm,
                             is_procedural: false,
                             temporal_range_start: node.temporal_range_start,
                             temporal_range_end: node.temporal_range_end,
@@ -2319,10 +2323,8 @@ Analyze the events and extract distilled causal insights (ι_n). Output a JSON o
                                     .zip(other.embedding.iter())
                                     .map(|(a, b)| a * b)
                                     .sum();
-                                let norm_u: f32 =
-                                    cand.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let norm_v: f32 =
-                                    other.embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let norm_u: f32 = cand.embedding_norm;
+                                let norm_v: f32 = other.embedding_norm;
                                 if norm_u == 0.0 || norm_v == 0.0 {
                                     0.0
                                 } else {
@@ -2345,12 +2347,15 @@ Analyze the events and extract distilled causal insights (ι_n). Output a JSON o
                                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                                 .map(|dt| dt.with_timezone(&chrono::Utc))
                         });
+                        let embedding = ep.embedding.unwrap_or_default();
+                        let embedding_norm = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
                         cluster.push(GradCandidate {
                             id: ep.id.unwrap_or_default().replace("`", ""),
                             scope: ep_scope,
                             name: ep.title,
                             content: ep.content,
-                            embedding: ep.embedding.unwrap_or_default(),
+                            embedding,
+                            embedding_norm,
                             is_procedural: true,
                             temporal_range_start: ep_start,
                             temporal_range_end: ep.temporal_range_end.or(ep_start),
