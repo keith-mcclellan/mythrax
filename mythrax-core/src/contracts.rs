@@ -774,6 +774,13 @@ impl ArborNode for Episode {
             if let Some(s) = val.as_str() {
                 return Some(s);
             }
+            if let Some(arr) = val.as_array() {
+                if let Some(first_fact) = arr.first() {
+                    if let Some(s) = first_fact.get("causal_insight").and_then(|v| v.as_str()) {
+                        return Some(s);
+                    }
+                }
+            }
         }
         self.summary.as_deref()
     }

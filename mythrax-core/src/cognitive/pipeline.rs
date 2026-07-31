@@ -465,7 +465,7 @@ pub async fn form_hypotheses(
     }
 
     // Fetch pruned past attempts to inject as negative constraints
-    let pruned_nodes = db::get_pruned_idea_nodes(backend, config.prune_threshold).await?;
+    let pruned_nodes = db::get_pruned_idea_nodes(backend, scope, config.prune_threshold).await?;
     let pruned_constraints: Vec<String> = pruned_nodes.iter().map(|n| n.claim.clone()).collect();
 
     let mut formed_ideas = Vec::new();
@@ -547,7 +547,7 @@ pub async fn form_hypotheses(
 
 /// HTR Backpropagation Refinement Pass:
 /// Evaluates facts against hypotheses, updating confidence scores.
-/// CTO Remediation 6 (Garbage Collection): Prunes 0-degree orphaned Fact and IdeaNode records when confidence <= 0.20.
+/// CTO Remediation 6 (Garbage Collection): Prunes 0-degree orphaned Fact records when confidence <= 0.20 while retaining IdeaStatus::Pruned for negative constraints.
 pub async fn refine_hypotheses(
     backend: &dyn StorageBackend,
     llm: Option<&LLMClient>,
@@ -622,17 +622,11 @@ pub async fn refine_hypotheses(
             };
             logs.push(log);
 
-            // CTO Remediation 6: Garbage Collection for Pruned Orphaned Nodes
+            // CTO Remediation 6: Garbage Collection for Pruned Orphaned Child Fact Nodes
             if idea.status == IdeaStatus::Pruned {
                 if let Some(ref fid) = fact.id {
                     let _ = db::delete_fact(backend, fid).await;
                 }
-            }
-        }
-
-        if idea.status == IdeaStatus::Pruned {
-            if let Some(ref iid) = idea.id {
-                let _ = db::delete_idea_node(backend, iid).await;
             }
         }
     }
@@ -659,13 +653,12 @@ pub async fn merge_validated_nodes(
     let mut merged_nodes = Vec::new();
 
     for mut idea in validated {
-        // Collect & flatten child evidence (r_n) and artifact refs (mu_n)
-        let facts = db::get_facts_by_scope(backend, scope).await?;
+        // Collect & flatten child evidence (r_n) and artifact refs (mu_n) via direct ID lookup
         let mut flattened_r_n = HashSet::new();
         let mut flattened_mu_n = HashSet::new();
 
-        for fact in &facts {
-            if idea.evidence.contains(&fact.id.clone().unwrap_or_default()) {
+        for fid in &idea.evidence {
+            if let Ok(Some(fact)) = db::get_fact(backend, fid).await {
                 for r in fact.r_n() {
                     flattened_r_n.insert(r.clone());
                 }
@@ -677,6 +670,25 @@ pub async fn merge_validated_nodes(
 
         let r_n_vec: Vec<String> = flattened_r_n.into_iter().collect();
         let mu_n_vec: Vec<String> = flattened_mu_n.into_iter().collect();
+
+        // ─── GIT WORKTREE ADMISSION GATE FOR CODE HYPOTHESES ─────────
+        let is_code_impacting = mu_n_vec.iter().any(|m| m.ends_with(".rs") || m.ends_with(".py") || m.ends_with(".ts") || m.ends_with(".go"));
+        if is_code_impacting && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
+            let gate_dir = format!("/tmp/admission-gate-{}", idea.id.as_deref().unwrap_or("unknown"));
+            let gate_path = std::path::Path::new(&gate_dir);
+            let evaluator = crate::cognitive::arbor::TestCommandEvaluator {
+                test_command: "cargo nextest run".to_string(),
+            };
+            use crate::cognitive::arbor::HeldOutEvaluator;
+            if let Ok(score) = evaluator.evaluate("main", gate_path) {
+                if score < 0.80 {
+                    idea.confidence = 0.50;
+                    idea.status = IdeaStatus::Pending;
+                    let _ = db::save_idea_node(backend, &idea).await;
+                    continue;
+                }
+            }
+        }
 
         let (sys, user) = prompts::build_ancestor_merge_prompt(
             &format!("Claim: {}\nInsight: {}", idea.claim, idea.insight),

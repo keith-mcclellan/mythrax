@@ -4831,7 +4831,7 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
     }
 
@@ -6579,6 +6579,10 @@ async fn test_item_type_routing_promote_insight_to_direction() -> Result<()> {
     use mythrax_core::store::MarkdownStore;
     use tempfile::tempdir;
 
+    unsafe {
+        std::env::set_var("MYTHRAX_TEST_MOCK", "1");
+    }
+
     let dir = tempdir()?;
     let store = MarkdownStore::new(dir.path())?;
     let backend = SurrealBackend::new_in_memory().await?;
@@ -6644,11 +6648,10 @@ Holding database locks across network RPC boundaries triggers lock contention an
 OOM occurs when un-evicted vector models exceed GPU VRAM memory budget.
 "#;
 
-    mythrax_core::vault::distillation::extract_wisdom_from_document(&backend, spec_content, "test_scope").await?;
+    let facts = mythrax_core::cognitive::pipeline::extract_from_document(&backend, None, spec_content, "spec.md", "test_scope").await?;
 
-    let rules = backend.get_all_wisdom_rules().await?;
-    assert!(!rules.is_empty());
-    assert_eq!(rules[0].generator_name, "document_extraction");
+    assert!(!facts.is_empty());
+    assert_eq!(facts[0].source_type, mythrax_core::contracts::FactSource::Document);
 
     Ok(())
 }
@@ -6675,8 +6678,8 @@ async fn test_phase3_ingest_artifacts_markdown() -> Result<()> {
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0].item_type.as_deref(), Some("constraint"));
 
-    let rules = backend.get_all_wisdom_rules().await?;
-    assert!(!rules.is_empty());
+    let facts = backend.get_facts_by_scope("test_scope").await?;
+    assert!(!facts.is_empty());
 
     Ok(())
 }

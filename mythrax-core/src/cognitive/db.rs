@@ -60,21 +60,25 @@ pub async fn get_validated_idea_nodes(
 
 pub async fn get_pruned_idea_nodes(
     backend: &dyn StorageBackend,
+    scope: &str,
     max_confidence: f32,
 ) -> Result<Vec<IdeaNode>> {
-    let nodes = backend.get_idea_nodes_by_scope("general").await?;
-    let mut all_pruned: Vec<IdeaNode> = nodes
-        .into_iter()
-        .filter(|n| n.status == IdeaStatus::Pruned || n.confidence <= max_confidence)
-        .collect();
-
-    // Also collect project-specific pruned nodes
-    if let Ok(proj_nodes) = backend.get_idea_nodes_by_scope("mythrax").await {
+    let mut all_pruned = Vec::new();
+    if let Ok(nodes) = backend.get_idea_nodes_by_scope(scope).await {
         all_pruned.extend(
-            proj_nodes
+            nodes
                 .into_iter()
                 .filter(|n| n.status == IdeaStatus::Pruned || n.confidence <= max_confidence),
         );
+    }
+    if scope != "general" {
+        if let Ok(gen_nodes) = backend.get_idea_nodes_by_scope("general").await {
+            all_pruned.extend(
+                gen_nodes
+                    .into_iter()
+                    .filter(|n| n.status == IdeaStatus::Pruned || n.confidence <= max_confidence),
+            );
+        }
     }
     Ok(all_pruned)
 }

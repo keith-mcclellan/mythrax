@@ -953,7 +953,7 @@ pub async fn sync_file_to_db_with_cache(
             name: name.clone(),
             content: plain_body.clone(),
             scope: frontmatter.scope.clone().unwrap_or_else(|| "general".to_string()),
-            vault_path: Some(rel_path),
+            vault_path: Some(rel_path.clone()),
             embedding: None,
             metacognitive_confidence: frontmatter.metacognitive_confidence,
             node_type: frontmatter.node_type.clone(),
@@ -972,9 +972,11 @@ pub async fn sync_file_to_db_with_cache(
         {
             let backend_clone = backend.clone();
             tokio::spawn(async move {
-                let _ = crate::vault::distillation::extract_wisdom_from_document(
+                let _ = crate::cognitive::pipeline::extract_from_document(
                     &*backend_clone,
+                    None,
                     &content_for_wisdom,
+                    &rel_path,
                     &scope_for_wisdom,
                 )
                 .await;

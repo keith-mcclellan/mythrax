@@ -23,15 +23,15 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Infrastructure Extensions, Vault Ingestion & Legacy Cleanup (`forge.rs`, `distillation.rs`, `ingestion.rs`, `arbor.rs`)
-- [ ] Task: Write TDD unit tests for `forge_document()` dual-path vault writing (Path A raw reference chunks, Path B fact extraction) and `forge_skill()`
-- [ ] Task: Refactor `cognitive/forge.rs` to replace monolithic `ingest_document()` with `pipeline::forge_document()`, retaining PDF text extraction, TOC parsing, and section chunking
-- [ ] Task: Refactor `cognitive/harvest.rs` to replace batch harvester with `pipeline::forge_skill()`, writing raw skill pages to `/wiki/skills/` and extracting `FactSource::Skill` Arbor triplets
-- [ ] Task: Refactor `vault/distillation.rs`, deleting legacy regex functions (`extract_wisdom_from_document`, `process_wisdom_block`, `extract_decisions`) and routing document processing through `pipeline::extract_from_document()`
-- [ ] Task: Extend `sync_workspace_docs_to_vault` in `vault/ingestion.rs` to collect source code files (`.rs`, `.py`, `.ts`, `.go`), tag as `WorkspaceFileType::Code`, and queue `extract_from_code()`
-- [ ] Task: Wire git worktree test admission gate (`HeldOutEvaluator`, `TestCommandEvaluator`) in `cognitive/arbor.rs` into `merge_validated_nodes()` for code-impacting hypotheses
-- [ ] Task: Run Conductor Principal Engineer Review (conductor-review)
-- [ ] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Write TDD unit tests for `forge_document()` dual-path vault writing (Path A raw reference chunks, Path B fact extraction) and `forge_skill()`
+- [x] Task: Refactor `cognitive/forge.rs` to replace monolithic `ingest_document()` with `pipeline::forge_document()`, retaining PDF text extraction, TOC parsing, and section chunking
+- [x] Task: Refactor `cognitive/harvest.rs` to replace batch harvester with `pipeline::forge_skill()`, writing raw skill pages to `/wiki/skills/` and extracting `FactSource::Skill` Arbor triplets
+- [x] Task: Refactor `vault/distillation.rs`, deleting legacy regex functions (`extract_wisdom_from_document`, `process_wisdom_block`, `extract_decisions`) and routing document processing through `pipeline::extract_from_document()`
+- [x] Task: Extend `sync_workspace_docs_to_vault` in `vault/ingestion.rs` to collect source code files (`.rs`, `.py`, `.ts`, `.go`), tag as `WorkspaceFileType::Code`, and queue `extract_from_code()`
+- [x] Task: Wire git worktree test admission gate (`HeldOutEvaluator`, `TestCommandEvaluator`) in `cognitive/arbor.rs` into `merge_validated_nodes()` for code-impacting hypotheses
+- [x] Task: Run Conductor Principal Engineer Review (conductor-review)
+- [x] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 4: Hook Architecture & Route Handler Integration (`stop.rs`, `precompact.rs`, `watcher.rs`, `vault_handlers.rs`, `reflect.rs`, `manage_handlers.rs`)
 - [ ] Task: Write TDD tests for stop hook background fact extraction trigger in `hooks/stop.rs`

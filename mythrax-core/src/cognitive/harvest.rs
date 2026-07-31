@@ -1,9 +1,7 @@
-use crate::contracts::WisdomRule;
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
 use crate::store::MarkdownStore;
 use anyhow::Result;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub struct Harvester {
@@ -91,114 +89,15 @@ impl Harvester {
         let mut skills = scan_skills_in_dir(&global_skills_dir);
         skills.extend(scan_skills_in_dir(&project_skills_dir));
 
-        if skills.is_empty() {
-            return Ok(());
-        }
-
-        // Generate embeddings for clustering
-        let mut emb_refs: Vec<Vec<f32>> = Vec::new();
-        for skill in &skills {
-            let emb = db.embed(&skill.description).await?;
-            emb_refs.push(emb);
-        }
-
-        // Perform DBSCAN clustering
-        let emb_refs_slices: Vec<&[f32]> = emb_refs.iter().map(|v| v.as_slice()).collect();
-        let cluster_assignments = crate::cognitive::synthesis::dbscan(&emb_refs_slices, 0.10, 2);
-
-        // Group skills by cluster ID, ignoring noise (None)
-        let mut clusters: HashMap<usize, Vec<SkillInfo>> = HashMap::new();
-        for (i, cluster_id) in cluster_assignments.iter().enumerate() {
-            if let Some(cid) = cluster_id {
-                clusters
-                    .entry(*cid)
-                    .or_insert_with(Vec::new)
-                    .push(skills[i].clone());
-            }
-        }
-
-        // Process each cluster with size >= 2
-        for (_cid, cluster_skills) in clusters {
-            if cluster_skills.len() < 2 {
-                continue;
-            }
-
-            let mut skills_prompt = String::new();
-            for skill in &cluster_skills {
-                skills_prompt.push_str(&format!(
-                    "Skill Name: {}\nDescription: {}\nInstructions:\n{}\n\n",
-                    skill.name, skill.description, skill.body
-                ));
-            }
-
-            let sys_prompt = "You are a cognitive harvester. Analyze the following developer skills/playbooks and perform a cross-skill interaction analysis. Identify potential conflicts, overlapping constraints, or compounding rules. Formulate resulting Wisdom Rules to resolve conflicts or enforce compounding constraints.";
-            let prompt_text = format!(
-                "Skills:\n\n{}Respond ONLY with a JSON array of Wisdom Rules, each containing:\n- target_pattern\n- action_to_avoid\n- causal_explanation\n- prescribed_remedy",
-                skills_prompt
-            );
-            let response = self
-                .llm
-                .routed_completion(
-                    db,
-                    &crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Reasoning),
-                    Some(sys_prompt),
-                    &prompt_text,
-                )
-                .await?;
-
-            #[derive(serde::Deserialize)]
-            struct RawWisdom {
-                target_pattern: String,
-                action_to_avoid: String,
-                causal_explanation: String,
-                prescribed_remedy: String,
-            }
-
-            if let Ok(rules) = serde_json::from_str::<Vec<RawWisdom>>(&response) {
-                for r in rules {
-                    let rule_uuid = uuid::Uuid::new_v4().to_string();
-                    let rule_path = format!(
-                        "wisdom/skills/{}_{}.md",
-                        r.target_pattern.replace([' ', '/'], "_"),
-                        &rule_uuid[..8]
-                    );
-                    let rule_md = format!(
-                        "---\ntarget_pattern: \"{}\"\naction_to_avoid: \"{}\"\ncausal_explanation: \"{}\"\nprescribed_remedy: \"{}\"\ntier: \"skills\"\nscope: \"general\"\ngenerator_name: \"CrossSkillHarvester\"\n---\n\n# Wisdom Rule: {}\n\n**Action to Avoid:** {}\n\n**Why:** {}\n\n**Prescribed Remedy:** {}",
-                        r.target_pattern,
-                        r.action_to_avoid,
-                        r.causal_explanation,
-                        r.prescribed_remedy,
-                        r.target_pattern,
-                        r.action_to_avoid,
-                        r.causal_explanation,
-                        r.prescribed_remedy
-                    );
-                    store.write_file(&rule_path, &rule_md)?;
-
-                    let rule_contract = WisdomRule {
-                        id: None,
-                        target_pattern: r.target_pattern,
-                        action_to_avoid: r.action_to_avoid,
-                        causal_explanation: r.causal_explanation,
-                        prescribed_remedy: r.prescribed_remedy,
-                        tier: crate::contracts::Tier::Wisdom,
-                        scope: "general".to_string(),
-                        vault_path: Some(rule_path),
-                        embedding: None,
-                        source_episodes: vec![],
-                        generator_name: "CrossSkillHarvester".to_string(),
-                        similarity: None,
-                        utility: None,
-                        status: None,
-                        superseded_at: None,
-                        superseded_by: None,
-                        rule_type: None,
-
-                        ..Default::default()
-                    };
-                    let _ = db.save_wisdom_rule(&rule_contract).await;
-                }
-            }
+        for skill in skills {
+            let _facts = crate::cognitive::pipeline::forge_skill(
+                db,
+                &skill.body,
+                &skill.name,
+                "skills",
+                Some(&self.llm),
+            )
+            .await?;
         }
 
         Ok(())

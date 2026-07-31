@@ -6698,3 +6698,235 @@ query: "Bulk Content 19", profile: 1us, embed: 34153us, terms: 69985us, db: 5304
 query: "Bulk Content 19", profile: 1us, embed: 3166us, terms: 1730us, db: 9164us, rerank_start: 545us, total: 14644us
 query: "EXTERNAL_DREAM_VERIFICATION_TOKEN", profile: 5us, embed: 8990us, terms: 1360us, db: 9153us, rerank_start: 2993us, total: 22594us
 query: "STM handoff synthesis input sources data flow", profile: 877us, embed: 407096us, terms: 107737us, db: 122979us, rerank_start: 3913us, total: 648608us
+query: "Redis", profile: 1us, embed: 10513us, terms: 1445us, db: 4770us, rerank_start: 3768us, total: 29069us
+query: "Concurrency", profile: 1us, embed: 2757us, terms: 37us, db: 6175us, rerank_start: 627us, total: 9743us
+query: "failure", profile: 0us, embed: 3294us, terms: 34us, db: 3772us, rerank_start: 744us, total: 7889us
+query: "Parent Insight", profile: 1us, embed: 26822us, terms: 11879us, db: 5198us, rerank_start: 12225us, total: 58340us
+query: "Parent Insight", profile: 1us, embed: 28544us, terms: 6115us, db: 16437us, rerank_start: 10356us, total: 66252us
+query: "Parent Insight", profile: 1us, embed: 5137us, terms: 19us, db: 8411us, rerank_start: 2366us, total: 21196us
+query: "Parent Insight", profile: 0query: us, embed: "3911second step beforeus, terms: "54, profile: us, db: 32575265us, embed: us, rerank_start: 71982350us, terms: us, total: 34118368us, db: us
+4500us, rerank_start: 6805us, total: 22229us
+query: "secret", profile: 1us, embed: 2756us, terms: 2048us, db: 5505us, rerank_start: 1434us, total: 11834us
+query: "Secret", profile: 2us, embed: 5964us, terms: 46us, db: 1494us, rerank_start: 1066us, total: 8595us
+query: "secret", profile: 0us, embed: 2935us, terms: 1698us, db: 4137us, rerank_start: 808us, total: 9622us
+query: "Secret", profile: 1us, embed: 3997us, terms: 56us, db: 3696us, rerank_start: 800us, total: 8641us
+query: "Avoid", profile: 1us, embed: 3204us, terms: 2920us, db: 3999us, rerank_start: 750us, total: 28464us
+query: "Multi-Paragraph", profile: 2us, embed: 2922us, terms: 2091us, db: 3104us, rerank_start: 1214us, total: 38392us
+query: "Pattern", profile: 2us, embed: 3117us, terms: 35us, db: 4192us, rerank_start: 652us, total: 14866us
+query: "redis", profile: 1us, embed: 8514us, terms: 54us, db: 9447us, rerank_start: 3873us, total: 21988us
+query: "Avoid", profile: 1us, embed: 2889us, terms: 10193us, db: 5026us, rerank_start: 8171us, total: 29878us
+query: "Multi-Paragraph", profile: 1us, embed: 8823us, terms: 9763us, db: 10518us, rerank_start: 816us, total: 33447us
+query: "Single-Paragraph", profile: 1us, embed: 3767us, terms: 5501us, db: 6076us, rerank_start: 2032us, total: 27263us
+query: "Hello, how do I optimize the pipeline?", profile: 3120us, embed: 12671us, terms: 3993us, db: 4248us, rerank_start: 3775us, total: 27892us
+query: "current status", profile: 1687us, embed: 3538us, terms: 1857us, db: 2951us, rerank_start: 1862us, total: 11920us
+query: "Database index compression", profile: 4us, embed: 13629us, terms: 2214us, db: 14385us, rerank_start: 3225us, total: 33535us
+query: "Database index compression", profile: 72910us, embed: 3888us, terms: 36us, db: 8996us, rerank_start: 3058us, total: 88918us
+query: "Sure, OK", profile: 7us, embed: 8617us, terms: 2248us, db: 4336us, rerank_start: 2478us, total: 17745us
+query: "This episode is pruned", profile: 7us, embed: 10321us, terms: 3349us, db: 3491us, rerank_start: 1529query: us, total: "Sure thing", profile: 018727us
+us, embed: 9554us, terms: 29us, db: 4222us, rerank_start: 676us, total: 14529us
+query: "troubleshooting process", profile: 6us, embed: 8711us, terms: 1328us, db: 3907us, rerank_start: 1623us, total: 15902us
+query: "What compile actions did I run?", profile: 4us, embed: 14700us, terms: 2055us, db: 6798us, rerank_start: 19509us, total: 48737us
+query: "Hydration", profile: 5us, embed: 8026us, terms: 1172us, db: 3725us, rerank_start: 2005us, total: 15026us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 2us, embed: 7179us, terms: 1721us, db: 5495us, rerank_start: 1573us, total: 16069us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 15408us, terms: 46us, db: 4814us, rerank_start: 694us, total: 21049us
+query: "Hello, how do I optimize the pipeline?", profile: 6757us, embed: 10649us, terms: 4794us, db: 4450us, rerank_start: 4279us, total: 30980us
+query: "current status", profile: 2186us, embed: 3208us, terms: 1758us, db: 3170us, rerank_start: 1636us, total: 11980us
+query: "Database index compression", profile: 4us, embed: 12312us, terms: 1883us, db: 13033us, rerank_start: 2936us, total: 30237us
+query: "Database index compression", profile: 70257us, embed: 3482us, terms: 34us, db: 7423us, rerank_start: 2665us, total: 83898us
+query: "This episode is pruned", profile: 5us, embed: 8053us, terms: 1606us, db: 3432us, rerank_start: 1546us, total: 14674us
+query: "troubleshooting process", profile: 5us, embed: 9078us, terms: 1550us, db: 4046us, rerank_start: 1634us, total: 16392us
+query: "Sure, OK", profile: 7us, embed: 7954us, terms: 1322us, db: 4382us, rerank_start: 1390us, total: 15113us
+query: "Sure thing", profile: 1us, embed: 9351us, terms: 31us, db: 3729us, rerank_start: 571us, total: 13740us
+query: "Hydration", profile: 5us, embed: 7392us, terms: 1301us, db: 3672us, rerank_start: 1547us, total: 13987us
+query: "What compile actions did I run?", profile: 4us, embed: 9398us, terms: 1492us, db: 5585us, rerank_start: 18513us, total: 41203us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 3us, embed: 9142us, terms: 1834us, db: 5385us, rerank_start: 1810us, total: 18281us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 15605us, terms: 48us, db: 5378us, rerank_start: 658us, total: 21778us
+query: "Hello, how do I optimize the pipeline?", profile: 3894us, embed: 12690us, terms: 5079us, db: 4035us, rerank_start: 3594us, total: 29344us
+query: "current status", profile: 1728us, embed: 3730us, terms: 1705us, db: 2913us, rerank_start: 1624us, total: 11726us
+query: "Database index compression", profile: 5us, embed: 10869us, terms: 2584us, db: 12518us, rerank_start: 2742us, total: 28817us
+query: "Database index compression", profile: 68727us, embed: 3463us, terms: 42us, db: 8327us, rerank_start: 2857us, total: 83443us
+query: "Sure, OK", profile: 5us, embed: 7892us, terms: 1427us, db: 4112us, rerank_start: 2104us, total: 15647us
+query: "This episode is pruned", profile: 5us, embed: 9325us, terms: 1749us, db: 3220us, rerank_start: 1471us, total: 15804us
+query: "query: troubleshooting process"Sure thing"", profile: 1, profile: us, embed: 510117us, embed: us, terms: 1045723us, terms: us, db: 21034065us, db: us, rerank_start: 530us, total: 14773us
+4857us, rerank_start: 1571us, total: 19074us
+query: "Hydration", profile: 4us, embed: 7621us, terms: 1741us, db: 3854us, rerank_start: 1578us, total: 14880us
+query: "What compile actions did I run?", profile: 3us, embed: 9348us, terms: 1685us, db: 5626us, rerank_start: 19260us, total: 41781us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 4us, embed: 8888us, terms: 1558us, db: 6280us, rerank_start: 1535us, total: 18363us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 15172us, terms: 31us, db: 5758us, rerank_start: 680us, total: 21725us
+query: "Hello, how do I optimize the pipeline?", profile: 2787us, embed: 11688us, terms: 4277us, db: 3596us, rerank_start: 3497us, total: 25899us
+query: "current status", profile: 1958us, embed: 3054us, terms: 1700us, db: 2796us, rerank_start: 1370us, total: 10900us
+query: "Database index compression", profile: 5us, embed: 15676us, terms: 2957us, db: 15283us, rerank_start: 2761us, total: 36773us
+query: "Database index compression", profile: 67545us, embed: 3916us, terms: 39us, db: 8572us, rerank_start: 2650us, total: 82754us
+query: "Sure, OK", profile: 5us, embed: 11708us, terms: 3333us, db: 4381us, rerank_start: 4534us, total: 24226us
+query: "Sure thing", profile: 1us, embed: 16725us, terms: 33us, db: 4282us, rerank_start: 629us, total: 21715us
+query: "troubleshooting process", profile: 6us, embed: 13283us, terms: 3767us, db: 5018us, rerank_start: 3701us, total: 25941us
+query: "This episode is pruned", profile: 7us, embed: 13217us, terms: 3135us, db: 6992us, rerank_start: 2681us, total: 26069us
+query: "Hydration", profile: 6us, embed: 10698us, terms: 1708us, db: 4568us, rerank_start: 1716us, total: 18768us
+query: "What compile actions did I run?", profile: 6us, embed: 14529us, terms: 1725us, db: 7752us, rerank_start: 22665us, total: 54117us
+query: "Big Episode", profile: 9us, embed: 22663us, terms: 2957us, db: 10460us, rerank_start: 7467us, total: 47442us
+query: "Episode", profile: 6us, embed: 18062us, terms: 3895us, db: 6125us, rerank_start: 3671us, total: 32078us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 6us, embed: 15191us, terms: 4049us, db: 5568us, rerank_start: 3868us, total: 28985us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 1us, embed: 19515us, terms: 46us, db: 5201us, rerank_start: 912us, total: 25757us
+query: "Big Episode", profile: 1us, embed: 3404us, terms: 41us, db: 11035us, rerank_start: 1889us, total: 19841us
+query: "test query", profile: 6727us, embed: 13718us, terms: 8272us, db: 6220us, rerank_start: 7873us, total: 42846us
+query: "Timeline Episode 3", profile: 5us, embed: 11269us, terms: 1536us, db: 6834us, rerank_start: 2193us, total: 21995us
+query: "mythrax-core project context", profile: 4173us, embed: 7579us, terms: 3159us, db: 3514us, rerank_start: 2362us, total: 20822us
+query: "mythrax-core project context", profile: 4412us, embed: 8331us, terms: 3756us, db: 4055us, rerank_start: 2440us, total: 23037us
+query: "mythrax-core project context", profile: 2870us, embed: 8246us, terms: 3052us, db: 3219us, rerank_start: 2844us, total: 20276us
+query: "mythrax-core project context", profile: 2312us, embed: 7251us, terms: 3591us, db: 4833us, rerank_start: 2158us, total: 20181us
+query: "mythrax-core project context", profile: 1889us, embed: 6707us, terms: 1035us, db: 4229us, rerank_start: 2253us, total: 16233us
+query: "Hello, how do I optimize the pipeline?", profile: 2734us, embed: 11800us, terms: 4590us, db: 3986us, rerank_start: 3083us, total: 26264us
+query: "current status", profile: 1822us, embed: 2993us, terms: 1550us, db: 2632us, rerank_start: 1568us, total: 10588us
+query: "Database index compression", profile: 6us, embed: 12725us, terms: 2158us, db: 12499us, rerank_start: 2700us, total: 30194us
+query: "Database index compression", profile: 62952us, embed: 3493us, terms: 33us, db: 9016us, rerank_start: 2334us, total: 77855us
+query: "Sure, OK", profile: 5us, embed: 13173us, terms: 2115us, db: 4639us, rerank_start: 2432us, total: 22432us
+query: "Sure thing", profile: 1us, embed: 13783us, terms: 31us, db: 5518us, rerank_start: 623us, total: 20006us
+query: "troubleshooting process", profile: 10us, embed: 9986us, terms: 2196us, db: 4818us, rerank_start: 2212us, total: 19302us
+query: "This episode is pruned", profile: 5us, embed: 8978us, terms: 2384us, db: 5255us, rerank_start: 2721us, total: 19380us
+query: "What compile actions did I run?", profile: 6us, embed: 16888us, terms: 2291us, db: 8604us, rerank_start: 25078us, total: 60800us
+query: "Hydration", profile: 6us, embed: 16046us, terms: 2517us, db: 5278us, rerank_start: 2648us, total: 26628us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 5us, embed: 16556us, terms: 3659us, db: 6089us, rerank_start: 3824us, total: 30323us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 1us, embed: 16111us, terms: 42us, db: 6170us, rerank_start: 783us, total: 23291us
+query: "Big Episode", profile: 7us, embed: 19232us, terms: 3789us, db: 13210us, rerank_start: 5196us, total: 43865us
+query: "Big Episode", profile: 2us, embed: 4593us, terms: 130us, db: 11077us, rerank_start: 1648us, total: 20315us
+query: "Episode", profile: 7us, embed: 18586us, terms: 4489us, db: 7444us, rerank_start: 4772us, total: 35612us
+query: "test query", profile: 4526us, embed: 15401us, terms: 5287us, db: 4092us, rerank_start: 5796us, total: 35153us
+query: "Timeline Episode 3", profile: 5us, embed: 12100us, terms: 2277us, db: 7698us, rerank_start: 2104us, total: 24368us
+query: "mythrax-core project context", profile: 3182us, embed: 8126us, terms: 3529us, db: 3415us, rerank_start: 2704us, total: 20993us
+query: "mythrax-core project context", profile: 3710us, embed: 8350us, terms: 3030us, db: 3162us, rerank_start: 2225us, total: 20514us
+query: "mythrax-core project context", profile: 2019us, embed: 7419us, terms: 3200us, db: 3665us, rerank_start: 2429us, total: 18767us
+query: "mythrax-core project context", profile: 3597us, embed: 7790us, terms: 3743us, db: 4827us, rerank_start: 2357us, total: 22365us
+query: "mythrax-core project context", profile: 1799us, embed: 6646us, terms: 1282us, db: 4151us, rerank_start: 2540us, total: 16543us
+query: "Hello, how do I optimize the pipeline?", profile: 2737us, embed: 11353us, terms: 3389us, db: 3207us, rerank_start: 3275us, total: 24013us
+query: "current status", profile: 1727us, embed: 3463us, terms: 1773us, db: 3022us, rerank_start: 1374us, total: 11381us
+query: "Database index compression", profile: 4us, embed: 11259us, terms: 1668us, db: 11973us, rerank_start: 2398us, total: 27378us
+query: "Database index compression", profile: 63445us, embed: 3328us, terms: 62us, db: 7688us, rerank_start: 2624us, total: 77189us
+query: "Sure, OK", profile: 5us, embed: 10108us, terms: 3347us, db: 4708us, rerank_start: 3176us, total: 21510us
+query: "Sure thing", profile: 1us, embed: 9145us, terms: 127us, db: 3790us, rerank_start: 1947us, total: 15105us
+query: "troubleshooting process", profile: 5us, embed: 14027us, terms: 3233us, db: 5633us, rerank_start: 1721us, total: 24708us
+query: "This episode is pruned", profile: 6us, embed: 11872us, terms: 1941us, db: 3713us, rerank_start: 1786us, total: 19353us
+query: "What compile actions did I run?", profile: 10us, embed: 14959us, terms: 1666us, db: 8123us, rerank_start: 25154us, total: 57889us
+query: "Hydration", profile: 6us, embed: 12472us, terms: 2265us, db: 5499us, rerank_start: 2621us, total: 22939us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 8us, embed: 16275us, terms: 4670us, db: 5244us, rerank_start: 2542us, total: 28932us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 1us, embed: 18703us, terms: 40us, db: 5316us, rerank_start: 1211us, total: 25356us
+query: "Episode", profile: 6us, embed: 19855us, terms: 3957us, db: 8414us, rerank_start: 2372us, total: 34928us
+query: "Big Episode", profile: 10us, embed: 18921us, terms: 7694us, db: 14149us, rerank_start: 5490us, total: 49529us
+query: "test query", profile: 4357us, embed: 14738us, terms: 5244us, db: 4693us, rerank_start: 5321us, total: 34388us
+query: "Timeline Episode 3", profile: 5us, embed: 17399us, terms: 2139us, db: 7910us, rerank_start: 2773us, total: 30403us
+query: "Big Episode", profile: 2us, embed: 3593us, terms: 31us, db: 12184us, rerank_start: 1334us, total: 20534us
+query: "mythrax-core project context", profile: 3920us, embed: 12863us, terms: 4091us, db: 3500us, rerank_start: 3457us, total: 27893us
+query: "mythrax-core project context", profile: 2758us, embed: 9157us, terms: 3225us, db: 4059us, rerank_start: 3208us, total: 22440us
+query: "mythrax-core project context", profile: 5569us, embed: 13823us, terms: 10539us, db: 5118us, rerank_start: 10046us, total: 45226us
+query: "mythrax-core project context", profile: 4266us, embed: 14665us, terms: 10276us, db: 7782us, rerank_start: 8322us, total: 45375us
+query: "mythrax-core project context", profile: 1867us, embed: 6570us, terms: 1049us, db: 4292us, rerank_start: 2710us, total: 16613us
+query: "Hello, how do I optimize the pipeline?", profile: 2753us, embed: 7129us, terms: 3099us, db: 2904us, rerank_start: 2709us, total: 18626us
+query: "current status", profile: 1846us, embed: 2671us, terms: 2363us, db: 2912us, rerank_start: 2009us, total: 11854us
+query: "Database index compression", profile: 1us, embed: 2797us, terms: 67us, db: 8451us, rerank_start: 1104us, total: 12635us
+query: "Database index compression", profile: 47032us, embed: 3595us, terms: 119us, db: 8378us, rerank_start: 4427us, total: 63645us
+query: "Sure, OK", profile: 2us, embed: 3499us, terms: 41us, db: 6156us, rerank_start: 965us, total: 10719us
+query: "Sure thing", profile: 0us, embed: 10182us, terms: 61us, db: 3981us, rerank_start: 648us, total: 14967us
+query: "troubleshooting process", profile: 2us, embed: 3444us, terms: 56us, db: 3912us, rerank_start: 783us, total: 8273us
+query: "This episode is pruned", profile: 1us, embed: 2678us, terms: 30us, db: 3467us, rerank_start: 474us, total: 6678us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 1us, embed: 2924us, terms: 43us, db: 5049us, rerank_start: 826us, total: 8925us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 15524us, terms: 35us, db: 5201us, rerank_start: 677us, total: 21527us
+query: "Hydration", profile: 1us, embed: 2725us, terms: 39us, db: 3828us, rerank_start: 609us, total: 7251us
+query: "What compile actions did I run?", profile: 2us, embed: 4503us, terms: 38us, db: 6284us, rerank_start: 17351us, total: 33969us
+query: "Big Episode", profile: 1us, embed: 2823us, terms: 33us, db: 10663us, rerank_start: 1083us, total: 17033us
+query: "test query", profile: 3420us, embed: 2708us, terms: 1961us, db: 2772us, rerank_start: 1431us, total: 12314us
+query: "Big Episode", profile: 1us, embed: 2775us, terms: 37us, db: 10908us, rerank_start: 1371us, total: 17510us
+query: "workspace project context", profile: 2345us, embed: 2907us, terms: 1692us, db: 3436us, rerank_start: 1618us, total: 12029us
+query: "workspace project context", profile: 2710us, embed: 2895us, terms: 1842us, db: 3639us, rerank_start: 1645us, total: 12763us
+query: "workspace project context", profile: 1974us, embed: 2867us, terms: 2074us, db: 4766us, rerank_start: 1438us, total: 13148us
+query: "Episode", profile: 1us, embed: 3255us, terms: 32us, db: 5272us, rerank_start: 714us, total: 9392us
+query: "workspace project context", profile: 3023us, embed: 3024us, terms: 1923us, db: 3124us, rerank_start: 1641us, total: 12769us
+query: "Timeline Episode 3", profile: 3us, embed: 5480us, terms: 489us, db: 5730us, rerank_start: 851us, total: 12675us
+query: "workspace project context", profile: 1388us, embed: 2476us, terms: 45us, db: 3643us, rerank_start: 1327us, total: 8997us
+query: "test query", profile: 7459us, embed: 25966us, terms: 11847us, db: 13705us, rerank_start: 3166us, total: 62204us
+query: "Database index compression", profile: 5us, embed: 6868us, terms: 1280us, db: 9570us, rerank_start: 2507us, total: 20646us
+query: "Database index compression", profile: 49263us, embed: 2772us, terms: 38us, db: 6393us, rerank_start: 1782us, total: 60277us
+query: "Hello, how do I optimize the pipeline?", profile: 1360us, embed: 2970us, terms: 1517us, db: 2839us, rerank_start: 1330us, total: 10058us
+query: "current status", profile: 1423us, embed: 2684us, terms: 1602us, db: 3021us, rerank_start: 1211us, total: 9969us
+query: "Sure, OK", profile: 3us, embed: 3431us, terms: 63us, db: 10133us, rerank_start: 1505us, total: 15201us
+query: "Sure thing", profile: 0us, embed: 12032us, terms: 62us, db: 4949us, rerank_start: 1517us, total: 18630us
+query: "troubleshooting process", profile: 2us, embed: 3166us, terms: 35us, db: 4137us, rerank_start: 630us, total: 8041us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 2us, embed: 3241us, terms: 39us, db: 5465us, rerank_start: 700us, total: 9540us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 17888us, terms: 61us, db: 5277us, rerank_start: 1321us, total: 24637us
+query: "This episode is pruned", profile: 1us, embed: 3120us, terms: 33us, db: 3418us, rerank_start: 464us, total: 7060us
+query: "What compile actions did I run?", profile: 3us, embed: 7221us, terms: 50us, db: 6690us, rerank_start: 17743us, total: 37770us
+query: "Hydration", profile: 1us, embed: 2741us, terms: 37us, db: 3796us, rerank_start: 610us, total: 7243us
+query: "Big Episode", profile: 1us, embed: 2914us, terms: 42us, db: 10710us, rerank_start: 1168us, total: 17208us
+query: "Big Episode", profile: 2us, embed: 3263us, terms: 41us, db: 10509us, rerank_start: 1199us, total: 17381us
+query: "Episode", profile: 1us, embed: 2907us, terms: 30us, db: 4807us, rerank_start: 725us, total: 8600us
+query: "Timeline Episode 3", profile: 2us, embed: 5288us, terms: 777us, db: 6516us, rerank_start: 1019us, total: 13719us
+query: "test query", profile: 1513us, embed: 2479us, terms: 1557us, db: 3052us, rerank_start: 1240us, total: 9865us
+query: "workspace project context", profile: 1511us, embed: 2526us, terms: 54us, db: 5546us, rerank_start: 2467us, total: 12229us
+query: "workspace project context", profile: 1328us, embed: 2703us, terms: 1615us, db: 3287us, rerank_start: 1190us, total: 10149us
+query: "workspace project context", profile: 1487us, embed: 2639us, terms: 1958us, db: 5103us, rerank_start: 1268us, total: 12489us
+query: "workspace project context", profile: 1533us, embed: 2769us, terms: 1656us, db: 4156us, rerank_start: 1194us, total: 11336us
+query: "workspace project context", profile: 1458us, embed: 2717us, terms: 2286us, db: 3223us, rerank_start: 1360us, total: 11073us
+query: "Hello, how do I optimize the pipeline?", profile: 2191us, embed: 7051us, terms: 4187us, db: 2964us, rerank_start: 2524us, total: 18997us
+query: "current status", profile: 1865us, embed: 3956us, terms: 1827us, db: 3231us, rerank_start: 1572us, total: 12480us
+query: "Database index compression", profile: 1us, embed: 6960us, terms: 63us, db: 9474us, rerank_start: 1301us, total: 18036us
+query: "Database index compression", profile: 52374us, embed: 3680us, terms: 36us, db: 7041us, rerank_start: 3030us, total: 66358us
+query: "Sure, OK", profile: 2us, embed: 2941us, terms: 84us, db: 3857us, rerank_start: 780us, total: 7748us
+query: "Sure thing", profile: 1us, embed: 10112us, terms: 51us, db: 4615us, rerank_start: 897us, total: 15736us
+query: "troubleshooting process", profile: 1us, embed: 3542us, terms: 32us, db: 4087us, rerank_start: 583us, total: 8310us
+query: "This episode is pruned", profile: 1us, embed: 2911us, terms: 31us, db: 3138us, rerank_start: 517us, total: 6621us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 1us, embed: 3035us, terms: 66us, db: 5322us, rerank_start: 1004us, total: 9511us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 15205us, terms: 36us, db: 5451us, rerank_start: 670us, total: 21439us
+query: "Hydration", profile: 1us, embed: 2731us, terms: 41us, db: 3682us, rerank_start: 769us, total: 7280us
+query: "What compile actions did I run?", profile: 1us, embed: 4787us, terms: 45us, db: 5976us, rerank_start: 16950us, total: 33105us
+query: "test query", profile: 4373us, embed: 2713us, terms: 1889us, db: 2875us, rerank_start: 1549us, total: 13424us
+query: "Big Episode", profile: 1us, embed: 2846us, terms: 37us, db: 10391us, rerank_start: 1203us, total: 16874us
+query: "Big Episode", profile: 2us, embed: 3063us, terms: 34us, db: 10275us, rerank_start: 1235us, total: 17001us
+query: "workspace project context", profile: 2261us, embed: 3174us, terms: 2638us, db: 3904us, rerank_start: 1391us, total: 13401us
+query: "workspace project context", profile: 2150us, embed: 3568us, terms: 4914us, db: 4390us, rerank_start: 1609us, total: 16680us
+query: "workspace project context", profile: 1912us, embed: 2968us, terms: 2528us, db: 5889us, rerank_start: 2779us, total: 16121us
+query: "Episode", profile: 1us, embed: 2877us, terms: 34us, db: 4857us, rerank_start: 920us, total: 8816us
+query: "workspace project context", profile: 2226us, embed: 3650us, terms: 2260us, db: 3435us, rerank_start: 1602us, total: 13206us
+query: "Timeline Episode 3", profile: 3us, embed: 4871us, terms: 643us, db: 6217us, rerank_start: 851us, total: 12684us
+query: "workspace project context", profile: 1614us, embed: 2525us, terms: 42us, db: 3718us, rerank_start: 1570us, total: 9587us
+query: "Database index compression", profile: 5us, embed: 6820us, terms: 1134us, db: 8236us, rerank_start: 1603us, total: 17854us
+query: "Database index compression", profile: 46090us, embed: 2614us, terms: 50us, db: 6666us, rerank_start: 1983us, total: 57435us
+query: "Hello, how do I optimize the pipeline?", profile: 1383us, embed: 2783us, terms: 1723us, db: 2699us, rerank_start: 1296us, total: 9921us
+query: "current status", profile: 1427us, embed: 2582us, terms: 2413us, db: 3064us, rerank_start: 1453us, total: 10970us
+query: "Sure, OK", profile: 2us, embed: 2960us, terms: 32us, db: 3786us, rerank_start: 622us, total: 7452us
+query: "Sure thing", profile: 0us, embed: 8913us, terms: 26us, db: 3656us, rerank_start: 518us, total: 13160us
+query: "troubleshooting process", profile: 2us, embed: 2967us, terms: 32us, db: 3825us, rerank_start: 601us, total: 7499us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 2us, embed: 3212us, terms: 39us, db: 5414us, rerank_start: 685us, total: 9445us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 15585us, terms: 39us, db: 5863us, rerank_start: 743us, total: 22328us
+query: "This episode is pruned", profile: 1us, embed: 2771us, terms: 32us, db: 3184us, rerank_start: 454us, total: 6466us
+query: "What compile actions did I run?", profile: 7us, embed: 9555us, terms: 47us, db: 6180us, rerank_start: 15912us, total: 37193us
+query: "Hydration", profile: 1us, embed: 2947us, terms: 34us, db: 3469us, rerank_start: 572us, total: 7076us
+query: "Big Episode", profile: 1us, embed: 2605us, terms: 35us, db: 9821us, rerank_start: 1001us, total: 15732us
+query: "Big Episode", profile: 3us, embed: 3590us, terms: 62us, db: 11561us, rerank_start: 1881us, total: 19545us
+query: "Episode", profile: 1us, embed: 2928us, terms: 27us, db: 4747us, rerank_start: 792us, total: 8637us
+query: "Timeline Episode 3", profile: 2us, embed: 5212us, terms: 988us, db: 6221us, rerank_start: 1197us, total: 13757us
+query: "test query", profile: 1549us, embed: 2630us, terms: 1607us, db: 3543us, rerank_start: 1258us, total: 10612us
+query: "workspace project context", profile: 1811us, embed: 3414us, terms: 78us, db: 5053us, rerank_start: 4209us, total: 14795us
+query: "workspace project context", profile: 1441us, embed: 2658us, terms: 1817us, db: 3631us, rerank_start: 1251us, total: 10825us
+query: "workspace project context", profile: 1403us, embed: 2522us, terms: 2471us, db: 4726us, rerank_start: 1378us, total: 12530us
+query: "workspace project context", profile: 2133us, embed: 3058us, terms: 1940us, db: 3883us, rerank_start: 1336us, total: 12379us
+query: "workspace project context", profile: 1543us, embed: 2615us, terms: 2124us, db: 3313us, rerank_start: 1463us, total: 11088us
+query: "Hello, how do I optimize the pipeline?", profile: 2328us, embed: 11066us, terms: 4237us, db: 4771us, rerank_start: 2902us, total: 25343us
+query: "current status", profile: 1986us, embed: 3184us, terms: 1739us, db: 2737us, rerank_start: 1471us, total: 11138us
+query: "Database index compression", profile: 1us, embed: 10665us, terms: 1637us, db: 11252us, rerank_start: 2422us, total: 26032us
+query: "Database index compression", profile: 62053us, embed: 3860us, terms: 28us, db: 8067us, rerank_start: 2355us, total: 76408us
+query: "Sure, OK", profile: 5us, embed: 14362us, terms: 2990us, db: 4085us, rerank_start: 2305us, total: 23882us
+query: "This episode is pruned", profile: 4us, embed: 14443us, terms: 3542us, db: 3324us, rerank_start: 5208us, total: 26729us
+query: "Sure thing", profile: 1us, embed: 16624us, terms: 58us, db: 4099us, rerank_start: 1681us, total: 22651us
+query: "troubleshooting process", profile: 2us, embed: 16376us, terms: 4905us, db: 6676us, rerank_start: 2796us, total: 30881us
+query: "What compile actions did I run?", profile: 2us, embed: 14609us, terms: 2089us, db: 8122us, rerank_start: 24369us, total: 56999us
+query: "Hydration", profile: 4us, embed: 11940us, terms: 1940us, db: 5472us, rerank_start: 2320us, total: 21738us
+query: "Big Episode", profile: 4us, embed: 11807us, terms: 2201us, db: 13406us, rerank_start: 3077us, total: 33684us
+query: "Big Episode", profile: 1us, embed: 4081us, terms: 68us, db: 15362us, rerank_start: 4078us, total: 30119us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 1us, embed: 18440us, terms: 3145us, db: 5806us, rerank_start: 4405us, total: 31899us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 17405us, terms: 72us, db: 6071us, rerank_start: 1900us, total: 25537us
+query: "Episode", profile: 6us, embed: 16514us, terms: 4434us, db: 5749us, rerank_start: 2405us, total: 29548us
+query: "test query", profile: 2157us, embed: 15666us, terms: 9164us, db: 3460us, rerank_start: 8215us, total: 38692us
+query: "Timeline Episode 3", profile: 2us, embed: 13749us, terms: 1954us, db: 8303us, rerank_start: 2300us, total: 26461us
+query: "mythrax-core project context", profile: 3416us, embed: 13623us, terms: 7418us, db: 4951us, rerank_start: 6548us, total: 35989us
+query: "mythrax-core project context", profile: 3278us, embed: 16246us, terms: 5046us, db: 3310us, rerank_start: 5232us, total: 33144us
+query: "mythrax-core project context", profile: 8066us, embed: 22134us, terms: 8673us, db: 4076us, rerank_start: 8117us, total: 51149us
+query: "mythrax-core project context", profile: 5461us, embed: 18341us, terms: 9436us, db: 5882us, rerank_start: 5016us, total: 44272us
+query: "mythrax-core project context", profile: 2097us, embed: 7280us, terms: 1069us, db: 4242us, rerank_start: 2117us, total: 16944us
