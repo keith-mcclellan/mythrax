@@ -432,7 +432,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 tokio::spawn(async move {
                     // Spawn daily scheduler
                     let backend_daily = backend_dream.clone();
-                    let store_daily = store_dream.clone();
+                    let _store_daily = store_dream.clone();
                     let cancel_token_daily = cancel_token_dream.clone();
                     tokio::spawn(async move {
                         loop {
@@ -456,18 +456,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     }
 
                                     tracing::info!("Daily scheduled deep dreaming starting...");
-                                    if let Err(e) = dc.run_dream(backend_daily.clone(), &store_daily, Some("deep"), backend_daily.embedder.clone()).await {
-                                        tracing::error!("Daily deep dreaming failed: {:?}", e);
-                                    } else {
-                                        tracing::info!("Deep dreaming synthesis completed. Running compactions...");
-                                        let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
-                                        if scopes.is_empty() {
-                                            scopes.push("general".to_string());
-                                        }
-                                        for scope in scopes {
-                                            let _ = cmp.compact_scope(backend_daily.clone(), &store_daily, &scope, backend_daily.embedder.clone()).await;
-                                        }
-
+                                    let mut scopes = backend_daily.get_active_scopes().await.unwrap_or_default();
+                                    if scopes.is_empty() {
+                                        scopes.push("general".to_string());
+                                    }
+                                    for scope in scopes {
+                                        let _ = cognitive::pipeline::refine_hypotheses(backend_daily.as_ref(), None, &scope).await;
                                     }
 
                                     tracing::info!("Daily scheduled auditor calibration starting...");
@@ -517,7 +511,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                     scopes.push("general".to_string());
                                                 }
                                                 for scope in scopes {
-                                                    let _ = cognitive::pipeline::refine_hypotheses(&backend_dream, None, &scope).await;
+                                                    let _ = cognitive::pipeline::refine_hypotheses(backend_dream.as_ref(), None, &scope).await;
                                                 }
                                                 pending_debounce = false;
                                                 continue;
@@ -541,7 +535,7 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                                 scopes.push("general".to_string());
                                             }
                                             for scope in scopes {
-                                                let _ = cognitive::pipeline::refine_hypotheses(&backend_dream, None, &scope).await;
+                                                let _ = cognitive::pipeline::refine_hypotheses(backend_dream.as_ref(), None, &scope).await;
                                             }
                                         }
 

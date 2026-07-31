@@ -154,7 +154,7 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
             let tier_str = args.get("tier").and_then(|v| v.as_str()).unwrap_or("wisdom");
             let tier = tier_str.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom);
             
-            let rule_path = crate::cognitive::synthesis::resolve_rule_path(&scope, &action_to_avoid);
+            let rule_path = crate::cognitive::pipeline::resolve_rule_path(&scope, &action_to_avoid);
             
             let rule = crate::contracts::WisdomRule {
                 id: None,

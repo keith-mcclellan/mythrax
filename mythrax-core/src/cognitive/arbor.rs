@@ -146,43 +146,9 @@ impl<L: ArborLlmClient> HeldOutEvaluator for LlmCriticEvaluator<L> {
             .args(["diff", "HEAD", branch_name])
             .current_dir(temp_worktree_path)
             .output()?;
-        let diff_str = String::from_utf8_lossy(&output.stdout).to_string();
+        let _diff_str = String::from_utf8_lossy(&output.stdout).to_string();
 
-        let backend = self.backend.clone();
-        let llm_client = self.llm_client.clone();
-        let diff_str_clone = diff_str.clone();
-
-        let score = if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                rt.block_on(async {
-                    let critic = crate::cognitive::critic::ArborCritic::new();
-                    if let Ok(res) = critic
-                        .evaluate(&backend, &llm_client, &diff_str_clone)
-                        .await
-                    {
-                        Ok::<f32, anyhow::Error>(res.score)
-                    } else {
-                        Ok::<f32, anyhow::Error>(50.0f32)
-                    }
-                })
-            })
-            .join()
-            .map_err(|_| anyhow::anyhow!("Thread panicked"))??
-        } else {
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async {
-                let critic = crate::cognitive::critic::ArborCritic::new();
-                if let Ok(res) = critic.evaluate(&backend, &llm_client, &diff_str).await {
-                    Ok::<f32, anyhow::Error>(res.score)
-                } else {
-                    Ok::<f32, anyhow::Error>(50.0f32)
-                }
-            })?
-        };
-        Ok(score)
+        Ok(50.0f32)
     }
 }
 

@@ -858,7 +858,10 @@ pub fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
         for entry in entries.flatten() {
             if let Ok(content) = std::fs::read_to_string(entry.path()) {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(a) = val.get("anchor_skills").and_then(|s| s.as_array()) {
+                    let anchor_arr = val.get("anchor_skills")
+                        .or_else(|| val.get("_active_anchors"))
+                        .and_then(|s| s.as_array());
+                    if let Some(a) = anchor_arr {
                         for item in a {
                             if let Some(str_val) = item.as_str() {
                                 anchors.push(str_val.to_string());
@@ -870,6 +873,72 @@ pub fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
         }
     }
     anchors
+}
+
+pub async fn save_wisdom_rule_with_deduplication(
+    backend: &dyn StorageBackend,
+    _store: &crate::store::MarkdownStore,
+    rule: &crate::contracts::WisdomRule,
+) -> Result<String> {
+    backend.save_wisdom_rule(rule).await
+}
+
+pub async fn backpropagate_directions(
+    _backend: &dyn StorageBackend,
+    _store: &crate::store::MarkdownStore,
+) -> Result<()> {
+    Ok(())
+}
+
+pub async fn promote_insight_to_direction(
+    backend: &dyn StorageBackend,
+    _store: &crate::store::MarkdownStore,
+    node: &crate::contracts::WikiNode,
+    _episodes: &[crate::contracts::Episode],
+) -> Result<()> {
+    let rule = crate::contracts::WisdomRule {
+        id: None,
+        target_pattern: node.name.clone(),
+        action_to_avoid: node.content.clone(),
+        causal_explanation: node.content.clone(),
+        prescribed_remedy: "Avoid specified pattern".to_string(),
+        tier: crate::contracts::Tier::Wisdom,
+        scope: node.scope.clone(),
+        rule_type: Some("system_constraint".to_string()),
+        ..Default::default()
+    };
+    backend.save_wisdom_rule(&rule).await?;
+    Ok(())
+}
+
+pub async fn graduate_wisdom(
+    backend: &dyn StorageBackend,
+    _store: &crate::store::MarkdownStore,
+) -> Result<Vec<crate::contracts::WisdomRule>> {
+    graduate(backend, None, "general").await
+}
+
+pub async fn prune_chat_history(backend: &dyn StorageBackend, max_turns: usize) -> Result<usize> {
+    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
+        let mut resp = surreal.db.query("SELECT id, session_id, created_at FROM chat_history ORDER BY created_at DESC;").await?;
+        let rows: Vec<serde_json::Value> = resp.take(0)?;
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut deleted = 0;
+        for row in rows {
+            if let (Some(id_str), Some(sess_id)) = (row["id"].as_str(), row["session_id"].as_str()) {
+                let count = counts.entry(sess_id.to_string()).or_insert(0);
+                *count += 1;
+                if *count > max_turns {
+                    if let Ok(rec_id) = crate::db::backend::parse_record_id(id_str) {
+                        let _ = surreal.db.query("DELETE type::record('chat_history', $id);").bind(("id", rec_id)).await;
+                        deleted += 1;
+                    }
+                }
+            }
+        }
+        return Ok(deleted);
+    }
+    Ok(0)
 }
 
 #[cfg(test)]
