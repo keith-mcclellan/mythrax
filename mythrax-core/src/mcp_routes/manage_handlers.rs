@@ -98,7 +98,11 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                                     const STM_VALUE_MAX_CHARS: usize = 32_000;
                                     if val_str.len() > STM_VALUE_MAX_CHARS {
                                         let original_len = val_str.len();
-                                        val_str.truncate(STM_VALUE_MAX_CHARS);
+                                        let mut trunc_idx = STM_VALUE_MAX_CHARS;
+                                        while trunc_idx > 0 && !val_str.is_char_boundary(trunc_idx) {
+                                            trunc_idx -= 1;
+                                        }
+                                        val_str.truncate(trunc_idx);
                                         let msg = if let Some(path) = abs_handoff_path.to_str() {
                                             format!("... <Value truncated. Full value at: {}>", path)
                                         } else {
@@ -681,7 +685,11 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                                             const STM_VALUE_MAX_CHARS: usize = 32_000;
                                             if val_str.len() > STM_VALUE_MAX_CHARS {
                                                 let original_len = val_str.len();
-                                                val_str.truncate(STM_VALUE_MAX_CHARS);
+                                                let mut trunc_idx = STM_VALUE_MAX_CHARS;
+                                                while trunc_idx > 0 && !val_str.is_char_boundary(trunc_idx) {
+                                                    trunc_idx -= 1;
+                                                }
+                                                val_str.truncate(trunc_idx);
                                                 let msg = if let Some(path) = abs_handoff_path.to_str() {
                                                     format!("... <Value truncated. Full value at: {}>", path)
                                                 } else {

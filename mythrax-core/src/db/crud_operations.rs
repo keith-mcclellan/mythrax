@@ -2633,6 +2633,9 @@ impl SurrealBackend {
             if depth >= limit_depth {
                 continue;
             }
+            if queue.len() >= 1000 {
+                break;
+            }
 
             let sql = if relation.is_some() {
                 if as_of.is_some() {

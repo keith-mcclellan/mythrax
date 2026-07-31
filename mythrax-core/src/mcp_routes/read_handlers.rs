@@ -268,11 +268,20 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                 
                 let mut content_slice = r.content.clone();
                 if !full_content && content_slice.len() > 500 {
-                    let mut truncate_idx = 500;
-                    if let Some(idx) = content_slice[..500].rfind("\n\n") {
+                    let mut safe_len = 500;
+                    while safe_len > 0 && !content_slice.is_char_boundary(safe_len) {
+                        safe_len -= 1;
+                    }
+                    let mut truncate_idx = safe_len;
+                    if let Some(idx) = content_slice[..safe_len].rfind("
+
+") {
                         truncate_idx = idx;
-                    } else if let Some(idx) = content_slice[..500].rfind(". ") {
+                    } else if let Some(idx) = content_slice[..safe_len].rfind(". ") {
                         truncate_idx = idx + 1;
+                    }
+                    while truncate_idx > 0 && !content_slice.is_char_boundary(truncate_idx) {
+                        truncate_idx -= 1;
                     }
                     content_slice = format!("{}... [truncated]", &content_slice[..truncate_idx]);
                 }
