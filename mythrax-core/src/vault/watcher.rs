@@ -1204,7 +1204,7 @@ pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-    let mut body = format!("---\n{}---\n{}", yaml_str.trim(), episode.content);
+    let mut body = format!("---\n{}\n---\n{}", yaml_str.trim(), episode.content);
 
     // Task 3.2: Append ## Related Nodes with [[wikilinks]]
     let mut related_links = Vec::new();

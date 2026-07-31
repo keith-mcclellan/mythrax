@@ -89,7 +89,7 @@ pub fn format_arbor_wiki_node_markdown(node: &crate::contracts::WikiNode, relate
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-    let mut body = format!("---\n{}---\n# {}\n\n", yaml_str.trim(), node.name);
+    let mut body = format!("---\n{}\n---\n# {}\n\n", yaml_str.trim(), node.name);
 
     if let Some(ref h) = node.hypothesis {
         body.push_str(&format!("## Claim ($h_n$)\n{}\n\n", h));
