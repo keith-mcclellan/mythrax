@@ -957,33 +957,28 @@ pub async fn bulk_ingest_vault(
                             parent_title, resolved_scope, parent_title, parent_parts_list
                         );
 
-                        if store
-                            .write_file(&parent_relative_path, &parent_content)
-                            .is_ok()
-                        {
-                            let parent_ep_save = crate::contracts::EpisodeSave::builder(
-                                parent_title.clone(),
-                                parent_content,
-                            )
-                            .scope(Some(resolved_scope.clone()))
-                            .vault_path(Some(parent_relative_path.clone()))
-                            .session_id(Some(dir_name.clone()))
-                            .created_at(Some(created_at_opt.clone()))
-                            .temporal_range_start(
-                                chrono::DateTime::parse_from_rfc3339(&created_at_opt)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc)),
-                            )
-                            .temporal_range_end(
-                                chrono::DateTime::parse_from_rfc3339(&created_at_opt)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc)),
-                            )
-                            .build();
-                            if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
-                                success_count += 1;
-                                parent_saved_id = ep_id;
-                            }
+                        let parent_ep_save = crate::contracts::EpisodeSave::builder(
+                            parent_title.clone(),
+                            parent_content,
+                        )
+                        .scope(Some(resolved_scope.clone()))
+                        .vault_path(Some(parent_relative_path.clone()))
+                        .session_id(Some(dir_name.clone()))
+                        .created_at(Some(created_at_opt.clone()))
+                        .temporal_range_start(
+                            chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&chrono::Utc)),
+                        )
+                        .temporal_range_end(
+                            chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&chrono::Utc)),
+                        )
+                        .build();
+                        if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
+                            success_count += 1;
+                            parent_saved_id = ep_id;
                         }
                     }
 
@@ -1059,30 +1054,28 @@ pub async fn bulk_ingest_vault(
                             nav_callout
                         );
 
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save = crate::contracts::EpisodeSave::builder(
-                                part_title.clone(),
-                                note_content,
-                            )
-                            .scope(Some(resolved_scope.clone()))
-                            .vault_path(Some(relative_path.clone()))
-                            .session_id(Some(dir_name.clone()))
-                            .created_at(Some(created_at_opt.clone()))
-                            .temporal_range_start(
-                                chrono::DateTime::parse_from_rfc3339(&created_at_opt)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc)),
-                            )
-                            .temporal_range_end(
-                                chrono::DateTime::parse_from_rfc3339(&created_at_opt)
-                                    .ok()
-                                    .map(|dt| dt.with_timezone(&chrono::Utc)),
-                            )
-                            .build();
-                            if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
-                                success_count += 1;
-                                generated_parts.push((part_title, relative_path, episode_saved_id));
-                            }
+                        let ep_save = crate::contracts::EpisodeSave::builder(
+                            part_title.clone(),
+                            note_content,
+                        )
+                        .scope(Some(resolved_scope.clone()))
+                        .vault_path(Some(relative_path.clone()))
+                        .session_id(Some(dir_name.clone()))
+                        .created_at(Some(created_at_opt.clone()))
+                        .temporal_range_start(
+                            chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&chrono::Utc)),
+                        )
+                        .temporal_range_end(
+                            chrono::DateTime::parse_from_rfc3339(&created_at_opt)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&chrono::Utc)),
+                        )
+                        .build();
+                        if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
+                            success_count += 1;
+                            generated_parts.push((part_title, relative_path, episode_saved_id));
                         }
                     }
 
@@ -1230,15 +1223,13 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"claude\"\n---\n\n{}",
                             title, scope, content
                         );
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {
@@ -1264,15 +1255,13 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"cursor\"\n---\n\n{}",
                             title, scope, content
                         );
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {
@@ -1304,15 +1293,13 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"codex\"\n---\n\n{}",
                             title, scope, content
                         );
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {
@@ -1342,15 +1329,13 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"opencode\"\n---\n\n{}",
                             title, scope, content
                         );
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {
@@ -1380,15 +1365,13 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"openclaw\"\n---\n\n{}",
                             title, scope, content
                         );
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {
@@ -1414,15 +1397,13 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"hermes\"\n---\n\n{}",
                             title, scope, content
                         );
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {
@@ -1454,15 +1435,13 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"generic_jsonl\"\n---\n\n{}",
                             title, scope, content
                         );
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {
@@ -1487,15 +1466,13 @@ pub async fn bulk_ingest_vault(
                         let uuid = uuid::Uuid::new_v4().to_string();
                         let relative_path = format!("episodes/{}_{}.md", file_stem, &uuid[..8]);
 
-                        if store.write_file(&relative_path, &note_content).is_ok() {
-                            let ep_save =
-                                crate::contracts::EpisodeSave::builder(title, note_content)
-                                    .scope(Some(scope.to_string()))
-                                    .vault_path(Some(relative_path))
-                                    .build();
-                            if db.save_episode(&ep_save).await.is_ok() {
-                                success_count += 1;
-                            }
+                        let ep_save =
+                            crate::contracts::EpisodeSave::builder(title, note_content)
+                                .scope(Some(scope.to_string()))
+                                .vault_path(Some(relative_path))
+                                .build();
+                        if db.save_episode(&ep_save).await.is_ok() {
+                            success_count += 1;
                         }
                     }
                     Err(e) => {

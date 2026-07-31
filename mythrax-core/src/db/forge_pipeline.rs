@@ -85,7 +85,7 @@ impl SurrealBackend {
         let mut written_files = Vec::new();
 
         // 1. Write files to disk and track them for rollback
-        let chunk_rel_path = format!("episodes/forge/{}/chunk_{}.md", doc_slug, batch.chunk_index);
+        let chunk_rel_path = format!("reference/forged/{}/chunk_{}.md", doc_slug, batch.chunk_index);
         let ep_title = format!("{} - Chunk {}", batch.doc_title, batch.chunk_index);
         let ep_file_content = format!(
             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"forge\"\n---\n\n{}",
