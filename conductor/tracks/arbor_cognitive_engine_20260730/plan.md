@@ -11,16 +11,16 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Core Cognitive Pipeline & Prompts Module (`cognitive/pipeline.rs`, `prompts.rs`, `db.rs`)
-- [ ] Task: Write TDD unit tests in `prompts.rs` verifying JSON schema validation for all 9 callback prompts
-- [ ] Task: Implement prompt builders in `cognitive/prompts.rs` (Prompts 1-9: Episode, Doc, Code, Forge, Skill, Hypothesis, Refinement, Ancestor Merge Synthesis, Graduation)
-- [ ] Task: Implement SurrealDB CRUD operations for `Fact`, `IdeaNode`, `PipelineConfig`, and `RefinementLog` in `cognitive/db.rs`
-- [ ] Task: Write TDD unit tests for greedy cosine clustering `cluster_facts()` (verifying cosine $\ge 0.75$, min size 3, content-derived embeddings, zero centroid vector math)
-- [ ] Task: Implement `extract_facts()`, `extract_from_document()`, `extract_from_code()`, `forge_document()`, `forge_skill()` in `cognitive/pipeline.rs`
-- [ ] Task: Implement HTR lifecycle functions: `form_hypotheses()`, `refine_hypotheses()`, `merge_validated_nodes()`, `graduate()` in `cognitive/pipeline.rs`
-- [ ] Task: Implement evidence flattening ($r_n$, $\mu_n$) during `merge_validated_nodes()` and 0-degree orphaned node GC sweep ($\le 0.20$) in `refine_hypotheses()`
-- [ ] Task: Run Conductor Principal Engineer Review (conductor-review)
-- [ ] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Write TDD unit tests in `prompts.rs` verifying JSON schema validation for all 9 callback prompts
+- [x] Task: Implement prompt builders in `cognitive/prompts.rs` (Prompts 1-9: Episode, Doc, Code, Forge, Skill, Hypothesis, Refinement, Ancestor Merge Synthesis, Graduation)
+- [x] Task: Implement SurrealDB CRUD operations for `Fact`, `IdeaNode`, `PipelineConfig`, and `RefinementLog` in `cognitive/db.rs`
+- [x] Task: Write TDD unit tests for greedy cosine clustering `cluster_facts()` (verifying cosine $\ge 0.75$, min size 3, content-derived embeddings, zero centroid vector math)
+- [x] Task: Implement `extract_facts()`, `extract_from_document()`, `extract_from_code()`, `forge_document()`, `forge_skill()` in `cognitive/pipeline.rs`
+- [x] Task: Implement HTR lifecycle functions: `form_hypotheses()`, `refine_hypotheses()`, `merge_validated_nodes()`, `graduate()` in `cognitive/pipeline.rs`
+- [x] Task: Implement evidence flattening ($r_n$, $\mu_n$) during `merge_validated_nodes()` and 0-degree orphaned node GC sweep ($\le 0.20$) in `refine_hypotheses()`
+- [x] Task: Run Conductor Principal Engineer Review (conductor-review)
+- [x] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Infrastructure Extensions, Vault Ingestion & Legacy Cleanup (`forge.rs`, `distillation.rs`, `ingestion.rs`, `arbor.rs`)
 - [ ] Task: Write TDD unit tests for `forge_document()` dual-path vault writing (Path A raw reference chunks, Path B fact extraction) and `forge_skill()`

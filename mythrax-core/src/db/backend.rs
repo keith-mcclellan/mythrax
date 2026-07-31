@@ -229,6 +229,42 @@ pub trait StorageBackend: Send + Sync {
         &self,
         session_id: &str,
     ) -> Result<Option<chrono::DateTime<chrono::Utc>>>;
+
+    // ─── ARBOR COGNITIVE ENGINE STORAGE METHODS ─────────────────
+    async fn save_fact(&self, _fact: &crate::contracts::Fact) -> Result<String> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+    async fn get_fact(&self, _id: &str) -> Result<Option<crate::contracts::Fact>> {
+        Ok(None)
+    }
+    async fn get_facts_by_scope(&self, _scope: &str) -> Result<Vec<crate::contracts::Fact>> {
+        Ok(Vec::new())
+    }
+    async fn get_unassociated_facts(&self, _scope: &str) -> Result<Vec<crate::contracts::Fact>> {
+        Ok(Vec::new())
+    }
+    async fn delete_fact(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn save_idea_node(&self, _idea: &crate::contracts::IdeaNode) -> Result<String> {
+        Ok(uuid::Uuid::new_v4().to_string())
+    }
+    async fn get_idea_node(&self, _id: &str) -> Result<Option<crate::contracts::IdeaNode>> {
+        Ok(None)
+    }
+    async fn get_idea_nodes_by_scope(&self, _scope: &str) -> Result<Vec<crate::contracts::IdeaNode>> {
+        Ok(Vec::new())
+    }
+    async fn delete_idea_node(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
+    async fn get_pipeline_config(&self) -> Result<Option<crate::contracts::PipelineConfig>> {
+        Ok(Some(crate::contracts::PipelineConfig::default()))
+    }
+    async fn save_pipeline_config(&self, _config: &crate::contracts::PipelineConfig) -> Result<()> {
+        Ok(())
+    }
+
     fn as_any(&self) -> &dyn std::any::Any;
 }
 

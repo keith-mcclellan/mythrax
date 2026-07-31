@@ -1,0 +1,124 @@
+use crate::contracts::{Fact, IdeaNode, IdeaStatus, PipelineConfig};
+use crate::db::StorageBackend;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use surrealdb_types::SurrealValue;
+
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct RefinementLog {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub idea_node_id: String,
+    pub fact_id: String,
+    pub action: String, // "support", "contradict", "irrelevant"
+    pub previous_confidence: f32,
+    pub new_confidence: f32,
+    pub reasoning: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub async fn save_fact(backend: &dyn StorageBackend, fact: &Fact) -> Result<String> {
+    backend.save_fact(fact).await
+}
+
+pub async fn get_fact(backend: &dyn StorageBackend, id: &str) -> Result<Option<Fact>> {
+    backend.get_fact(id).await
+}
+
+pub async fn get_facts_by_scope(backend: &dyn StorageBackend, scope: &str) -> Result<Vec<Fact>> {
+    backend.get_facts_by_scope(scope).await
+}
+
+pub async fn get_unassociated_facts(backend: &dyn StorageBackend, scope: &str) -> Result<Vec<Fact>> {
+    backend.get_unassociated_facts(scope).await
+}
+
+pub async fn save_idea_node(backend: &dyn StorageBackend, idea: &IdeaNode) -> Result<String> {
+    backend.save_idea_node(idea).await
+}
+
+pub async fn get_idea_node(backend: &dyn StorageBackend, id: &str) -> Result<Option<IdeaNode>> {
+    backend.get_idea_node(id).await
+}
+
+pub async fn get_idea_nodes_by_scope(backend: &dyn StorageBackend, scope: &str) -> Result<Vec<IdeaNode>> {
+    backend.get_idea_nodes_by_scope(scope).await
+}
+
+pub async fn get_validated_idea_nodes(
+    backend: &dyn StorageBackend,
+    scope: &str,
+    min_confidence: f32,
+) -> Result<Vec<IdeaNode>> {
+    let nodes = backend.get_idea_nodes_by_scope(scope).await?;
+    Ok(nodes
+        .into_iter()
+        .filter(|n| n.status == IdeaStatus::Validated && n.confidence >= min_confidence)
+        .collect())
+}
+
+pub async fn get_pruned_idea_nodes(
+    backend: &dyn StorageBackend,
+    max_confidence: f32,
+) -> Result<Vec<IdeaNode>> {
+    let nodes = backend.get_idea_nodes_by_scope("general").await?;
+    let mut all_pruned: Vec<IdeaNode> = nodes
+        .into_iter()
+        .filter(|n| n.status == IdeaStatus::Pruned || n.confidence <= max_confidence)
+        .collect();
+
+    // Also collect project-specific pruned nodes
+    if let Ok(proj_nodes) = backend.get_idea_nodes_by_scope("mythrax").await {
+        all_pruned.extend(
+            proj_nodes
+                .into_iter()
+                .filter(|n| n.status == IdeaStatus::Pruned || n.confidence <= max_confidence),
+        );
+    }
+    Ok(all_pruned)
+}
+
+pub async fn delete_fact(backend: &dyn StorageBackend, id: &str) -> Result<()> {
+    backend.delete_fact(id).await
+}
+
+pub async fn delete_idea_node(backend: &dyn StorageBackend, id: &str) -> Result<()> {
+    backend.delete_idea_node(id).await
+}
+
+pub async fn get_pipeline_config(backend: &dyn StorageBackend) -> Result<PipelineConfig> {
+    if let Ok(Some(cfg)) = backend.get_pipeline_config().await {
+        Ok(cfg)
+    } else {
+        Ok(PipelineConfig::default())
+    }
+}
+
+pub async fn save_pipeline_config(
+    backend: &dyn StorageBackend,
+    config: &PipelineConfig,
+) -> Result<()> {
+    backend.save_pipeline_config(config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_refinement_log_struct() {
+        let log = RefinementLog {
+            id: Some("log_1".to_string()),
+            idea_node_id: "idea_1".to_string(),
+            fact_id: "fact_1".to_string(),
+            action: "support".to_string(),
+            previous_confidence: 0.50,
+            new_confidence: 0.65,
+            reasoning: "Fact confirms claim".to_string(),
+            created_at: None,
+        };
+        assert_eq!(log.action, "support");
+        assert_eq!(log.new_confidence, 0.65);
+    }
+}

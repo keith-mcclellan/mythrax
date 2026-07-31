@@ -173,6 +173,15 @@ impl LLMClient {
             .await
     }
 
+    pub async fn complete_json(
+        &self,
+        db: &dyn StorageBackend,
+        system_instruction: &str,
+        prompt: &str,
+    ) -> Result<String> {
+        self.completion(db, Some(system_instruction), prompt).await
+    }
+
     pub async fn routed_completion(
         &self,
         db: &dyn StorageBackend,

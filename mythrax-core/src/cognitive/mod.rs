@@ -10,5 +10,9 @@ pub mod meta_skill;
 pub mod paging;
 pub mod synthesis;
 
+pub mod db;
+pub mod pipeline;
+pub mod prompts;
+
 pub use arbor::*;
 pub use governor::*;
