@@ -606,7 +606,7 @@ pub async fn bulk_ingest_vault(
     db: &dyn StorageBackend,
     offset: Option<usize>,
     limit: Option<usize>,
-    skip_llm: bool,
+    _skip_llm: bool,
 ) -> Result<(usize, Vec<String>, bool)> {
     let _ingestion_guard = IngestionGuard::new();
     crate::daemon::update_last_activity();
@@ -719,87 +719,18 @@ pub async fn bulk_ingest_vault(
                 .map(|d| d.0.clone())
                 .collect();
 
-            let llm = crate::llm::LLMClient::default();
             let mut last_episode_id: Option<String> = None;
 
-            for (chunk_idx, dir_chunk) in dirs.chunks(50).enumerate() {
-                let batched_titles = if skip_llm {
-                    Vec::new()
-                } else {
-                    let mut prompt = String::new();
-                    for (i, path) in dir_chunk.iter().enumerate() {
-                        let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                        prompt.push_str(&format!("{}(:|-|:){}\n", i + 1, dir_name));
-                    }
-
-                    let sys_prompt = "You are a master systems architect implementing the Mythrax Cognitive Memory System. For each provided transcript directory/content, generate an abstract, noun-phrase topic or design pattern title (e.g., 'Adversarial CTO Subagent Validation Protocol', '50-Chunk Single-Pass Ingestion'). NEVER use event-record passive voice or completion status (DO NOT write 'X Was Validated', 'Y Was Completed', 'CTO Review Approved'). Format strictly as index(:|-|:)title, one per line.";
-                    let llm_resp = llm
-                        .routed_completion(
-                            db,
-                            &crate::contracts::TaskProfile::new(
-                                crate::contracts::TaskArchetype::Extraction,
-                            ),
-                            Some(sys_prompt),
-                            &prompt,
-                        )
-                        .await
-                        .unwrap_or_default();
-                    parse_batched_titles(&llm_resp, dir_chunk.len())
-                };
-
+            for dir_chunk in dirs.chunks(50) {
                 for (local_idx, path) in dir_chunk.iter().enumerate() {
-                    let current_index = start + chunk_idx * 50 + local_idx;
+                    let current_index = start + local_idx;
                     let dir_name = path
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned();
 
-                    let title = if skip_llm {
-                        format!("antigravity_{}", dir_name)
-                    } else if local_idx < batched_titles.len() {
-                        batched_titles[local_idx].clone()
-                    } else {
-                        tracing::warn!("Title for {} missing from batch, falling back", dir_name);
-                        let fb_prompt =
-                            format!("Generate an abstract noun-phrase Arbor title for transcript: {}", dir_name);
-                        let sys_prompt = "You are a title generator implementing Arbor (arXiv:2606.11926v1). Generate an abstract, noun-phrase topic title. NEVER write event status like 'X Was Validated'. Format strictly as index(:|-|:)title, one per line.";
-                        let resolved_title = llm.routed_completion(
-                            db,
-                            &crate::contracts::TaskProfile::new(
-                                crate::contracts::TaskArchetype::Extraction,
-                            ),
-                            Some(sys_prompt),
-                            &fb_prompt,
-                        )
-                        .await;
-
-                        match resolved_title {
-                            Ok(t) if !t.is_empty() => t,
-                            _ => {
-                                if let Some(surreal) =
-                                    db.as_any().downcast_ref::<crate::db::SurrealBackend>()
-                                {
-                                    let task = crate::db::cognitive_tasks::CognitiveTask {
-                                        id: format!("cognitive_task:{}", uuid::Uuid::new_v4()),
-                                        task_type: "Extraction".to_string(),
-                                        prompt: fb_prompt,
-                                        system_instruction: sys_prompt.to_string(),
-                                        expected_format: "Any".to_string(),
-                                        priority: "Normal".to_string(),
-                                        created_at: chrono::Utc::now(),
-                                        status: "Pending".to_string(),
-                                        result: None,
-                                        ttl_minutes: 60,
-                                        injected_at: None,
-                                        session_id: Some(dir_name.clone()),
-                                    };
-                                    let _ = surreal.create_cognitive_task(&task).await;
-                                }
-                                format!("antigravity_{}", dir_name)
-                            }
-                        }
-                    };
+                    let title = format!("antigravity_{}", dir_name);
 
                     let part1_title = format!("{}_part1", title);
                     if existing_titles.contains(&title)
