@@ -1086,7 +1086,7 @@ pub async fn bulk_ingest_vault(
                     // 3. Process and write the artifacts, creating bidirectional wikilinks & SurrealDB edges
                     for (node_name, wiki_rel, _, chunk_text) in resolved_artifacts {
                         let mut backlink_footer = String::new();
-                        if !generated_parts.is_empty() {
+                        if !generated_parts.is_empty() && !chunk_text.contains("Source Episodes:") {
                             backlink_footer.push_str("\n\n---\nSource Episodes: ");
                             let links: Vec<String> = generated_parts
                                 .iter()
