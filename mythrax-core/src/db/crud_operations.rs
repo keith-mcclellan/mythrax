@@ -292,7 +292,8 @@ impl SurrealBackend {
             .unwrap_or_else(|| "agent_thought".to_string());
 
         let embedding_val = if self.embedder.is_some() {
-            let text_to_embed = if let Some(ref insight) = episode.causal_insight.as_ref().or(episode.causal_explanation.as_ref()) {
+            let insight_str = episode.causal_insight.as_ref().map(|v| v.to_string()).or_else(|| episode.causal_explanation.clone());
+            let text_to_embed = if let Some(ref insight) = insight_str {
                 format!("{}: {}", episode.title, insight)
             } else if let Some(ref summary) = episode.summary {
                 format!("{}: {}", episode.title, summary)
@@ -682,13 +683,12 @@ impl SurrealBackend {
 
             // Mirror WisdomRule to physical Markdown vault file
             let markdown = crate::vault::watcher::format_wisdom_markdown(rule);
-            if let Some(root) = crate::store::get_workspace_root() {
-                let full_path = root.join(vp);
-                if let Some(parent) = full_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&full_path, &markdown);
+            let root = crate::store::find_vault_root();
+            let full_path = root.join(vp);
+            if let Some(parent) = full_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
             }
+            let _ = std::fs::write(&full_path, &markdown);
         }
         let mut rule_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
@@ -1130,6 +1130,17 @@ impl SurrealBackend {
         Ok(())
     }
 
+    pub async fn reset_unprocessed_episodes_db(&self) -> Result<()> {
+        let sql = "UPDATE episode SET processed_in_dream = false;";
+        let _ = self
+            .db
+            .query(sql)
+            .await?
+            .check()
+            .context("Reset unprocessed episodes failed")?;
+        Ok(())
+    }
+
     pub async fn update_episode_metadata_db(
         &self,
         id: &str,
@@ -1428,13 +1439,12 @@ impl SurrealBackend {
             let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
             let markdown = format!("---\n{}---\n\n# {}\n\n{}\n", yaml_str.trim(), node.name, node.content);
 
-            if let Some(root) = crate::store::get_workspace_root() {
-                let full_path = root.join(vp);
-                if let Some(parent) = full_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&full_path, &markdown);
+            let root = crate::store::find_vault_root();
+            let full_path = root.join(vp);
+            if let Some(parent) = full_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
             }
+            let _ = std::fs::write(&full_path, &markdown);
         }
         let mut node_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;

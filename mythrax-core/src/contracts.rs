@@ -143,7 +143,7 @@ pub struct Episode {
     #[serde(default)]
     pub raw_evidence: Option<Vec<String>>,
     #[serde(default)]
-    pub causal_insight: Option<String>,
+    pub causal_insight: Option<serde_json::Value>,
     #[serde(default)]
     pub artifact_refs: Option<Vec<String>>,
     #[serde(default)]
@@ -220,7 +220,7 @@ pub struct EpisodeSave {
     #[serde(default)]
     pub raw_evidence: Option<Vec<String>>,
     #[serde(default)]
-    pub causal_insight: Option<String>,
+    pub causal_insight: Option<serde_json::Value>,
     #[serde(default)]
     pub artifact_refs: Option<Vec<String>>,
 }
@@ -253,7 +253,7 @@ pub struct EpisodeSaveBuilder {
     pub summary: Option<String>,
     pub hypothesis: Option<String>,
     pub raw_evidence: Option<Vec<String>>,
-    pub causal_insight: Option<String>,
+    pub causal_insight: Option<serde_json::Value>,
     pub artifact_refs: Option<Vec<String>>,
 }
 
@@ -406,7 +406,7 @@ impl EpisodeSaveBuilder {
         self
     }
 
-    pub fn causal_insight(mut self, causal_insight: Option<String>) -> Self {
+    pub fn causal_insight(mut self, causal_insight: Option<serde_json::Value>) -> Self {
         self.causal_insight = causal_insight;
         self
     }
@@ -559,10 +559,12 @@ pub struct HypothesisNode {
     pub parent_id: Option<String>,
     pub children_ids: Vec<String>,
     pub depth: i32,
+    #[serde(default)]
     pub hypothesis: String,
     pub status: String,
     pub score: Option<f32>,
     pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insight: Option<String>,
     pub code_ref: Option<String>,
     pub code_changes: Option<std::collections::HashMap<String, String>>,
@@ -572,6 +574,104 @@ pub struct HypothesisNode {
     pub constraints: Vec<String>,
     #[serde(default)]
     pub visits: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue, Serialize, Deserialize)]
+pub enum FactSource {
+    #[default]
+    Episode,
+    Document,
+    Code,
+    ForgedDocument,
+    Skill,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
+pub struct Fact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub source_type: FactSource,
+    pub source_id: String,
+    #[serde(default)]
+    pub source_version: u32,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idea_node_id: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hypothesis: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_insight: Option<String>,
+    #[serde(default)]
+    pub raw_evidence: Vec<String>,
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
+    #[serde(default)]
+    pub metacognitive_confidence: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue, Serialize, Deserialize)]
+pub enum IdeaStatus {
+    #[default]
+    Pending,
+    Validated,
+    Merged,
+    Pruned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
+pub struct IdeaNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    pub claim: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+    pub insight: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+    pub status: IdeaStatus,
+    pub confidence: f32,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct PipelineConfig {
+    pub merge_threshold: f32,
+    pub prune_threshold: f32,
+    pub cluster_similarity: f32,
+    pub cluster_min_size: usize,
+    pub version_decay_weight: f32,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            merge_threshold: 0.90,
+            prune_threshold: 0.20,
+            cluster_similarity: 0.75,
+            cluster_min_size: 3,
+            version_decay_weight: 0.80,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkspaceFileType {
+    Doc,
+    Code,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -647,6 +747,21 @@ pub trait ArborNode {
 
 static EMPTY_STR_VEC: Vec<String> = Vec::new();
 
+impl ArborNode for Fact {
+    fn h_n(&self) -> Option<&str> {
+        self.hypothesis.as_deref()
+    }
+    fn r_n(&self) -> &[String] {
+        &self.raw_evidence
+    }
+    fn iota_n(&self) -> Option<&str> {
+        self.causal_insight.as_deref()
+    }
+    fn mu_n(&self) -> &[String] {
+        &self.artifact_refs
+    }
+}
+
 impl ArborNode for Episode {
     fn h_n(&self) -> Option<&str> {
         self.hypothesis.as_deref()
@@ -655,7 +770,12 @@ impl ArborNode for Episode {
         self.raw_evidence.as_deref().unwrap_or(&EMPTY_STR_VEC)
     }
     fn iota_n(&self) -> Option<&str> {
-        self.causal_insight.as_deref().or(self.summary.as_deref())
+        if let Some(ref val) = self.causal_insight {
+            if let Some(s) = val.as_str() {
+                return Some(s);
+            }
+        }
+        self.summary.as_deref()
     }
     fn mu_n(&self) -> &[String] {
         self.artifact_refs.as_deref().unwrap_or(&EMPTY_STR_VEC)
@@ -956,3 +1076,82 @@ impl TaskProfile {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fact_arbor_node_trait_and_serialization() {
+        let fact = Fact {
+            id: Some("fact_1".to_string()),
+            source_type: FactSource::Code,
+            source_id: "src/lib.rs".to_string(),
+            source_version: 1,
+            scope: "mythrax".to_string(),
+            idea_node_id: None,
+            hypothesis: Some("Async-first DB architecture".to_string()),
+            causal_insight: Some("All storage calls use StorageBackend trait".to_string()),
+            raw_evidence: vec!["pub trait StorageBackend".to_string()],
+            artifact_refs: vec!["src/db/backend.rs".to_string()],
+            embedding: Some(vec![0.1, 0.2, 0.3]),
+            metacognitive_confidence: 95,
+            created_at: None,
+        };
+
+        assert_eq!(fact.h_n(), Some("Async-first DB architecture"));
+        assert_eq!(fact.iota_n(), Some("All storage calls use StorageBackend trait"));
+        assert_eq!(fact.r_n(), &["pub trait StorageBackend"]);
+        assert_eq!(fact.mu_n(), &["src/db/backend.rs"]);
+
+        let json = serde_json::to_string(&fact).unwrap();
+        let deserialized: Fact = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.source_type, FactSource::Code);
+        assert_eq!(deserialized.hypothesis.as_deref(), Some("Async-first DB architecture"));
+    }
+
+    #[test]
+    fn test_episode_causal_insight_typed_json_array() {
+        let fact = Fact {
+            id: Some("fact_1".to_string()),
+            source_type: FactSource::Episode,
+            source_id: "ep_1".to_string(),
+            source_version: 1,
+            scope: "general".to_string(),
+            idea_node_id: None,
+            hypothesis: Some("User prefers Rust".to_string()),
+            causal_insight: Some("User explicitly requested Rust".to_string()),
+            raw_evidence: vec!["User turn 1".to_string()],
+            artifact_refs: vec![],
+            embedding: None,
+            metacognitive_confidence: 90,
+            created_at: None,
+        };
+
+        let facts_json = serde_json::to_value(vec![fact.clone()]).unwrap();
+        let ep = Episode {
+            title: "Test Turn".to_string(),
+            content: "User message".to_string(),
+            causal_insight: Some(facts_json),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&ep).unwrap();
+        let deserialized: Episode = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.causal_insight.is_some());
+        let parsed_facts: Vec<Fact> = serde_json::from_value(deserialized.causal_insight.unwrap()).unwrap();
+        assert_eq!(parsed_facts.len(), 1);
+        assert_eq!(parsed_facts[0].hypothesis.as_deref(), Some("User prefers Rust"));
+    }
+
+    #[test]
+    fn test_pipeline_config_defaults() {
+        let config = PipelineConfig::default();
+        assert_eq!(config.merge_threshold, 0.90);
+        assert_eq!(config.prune_threshold, 0.20);
+        assert_eq!(config.cluster_similarity, 0.75);
+        assert_eq!(config.cluster_min_size, 3);
+        assert_eq!(config.version_decay_weight, 0.80);
+    }
+}
+

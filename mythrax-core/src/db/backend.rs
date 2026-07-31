@@ -106,6 +106,7 @@ pub trait StorageBackend: Send + Sync {
         offset: u32,
     ) -> Result<Vec<Episode>>;
     async fn mark_episode_processed(&self, id: &str) -> Result<()>;
+    async fn reset_unprocessed_episodes(&self) -> Result<()>;
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()>;
     async fn get_all_episodes(&self) -> Result<Vec<Episode>>;
     /// Retrieves a paginated subset of episodes from SurrealDB (`LIMIT $limit START $offset`).
@@ -1199,7 +1200,7 @@ pub struct EpisodeRaw {
     #[serde(default)]
     pub raw_evidence: Option<Vec<String>>,
     #[serde(default)]
-    pub causal_insight: Option<String>,
+    pub causal_insight: Option<serde_json::Value>,
     #[serde(default)]
     pub artifact_refs: Option<Vec<String>>,
 }
@@ -1722,6 +1723,10 @@ impl StorageBackend for SurrealBackend {
 
     async fn mark_episode_processed(&self, id: &str) -> Result<()> {
         self.mark_episode_processed_db(id).await
+    }
+
+    async fn reset_unprocessed_episodes(&self) -> Result<()> {
+        self.reset_unprocessed_episodes_db().await
     }
 
     async fn update_episode_metadata(&self, id: &str, title: &str, summary: &str) -> Result<()> {

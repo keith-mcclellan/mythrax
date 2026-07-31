@@ -1,14 +1,14 @@
 # Implementation Plan: Arbor-Aligned Cognitive Memory Engine Replacement (v1.1)
 
 ## Phase 1: Core Contracts & Arbor Triplet Schema Data Model
-- [ ] Task: Define `Fact`, `FactSource` (Episode, Document, Code, ForgedDocument, Skill), `IdeaNode`, `IdeaStatus`, `PipelineConfig` in `contracts.rs`
-- [ ] Task: Implement `ArborNode` trait on `Fact` ($h_n, \iota_n, r_n, \mu_n$)
-- [ ] Task: Update `Episode::causal_insight` in `contracts.rs:146` to `Option<serde_json::Value>` storing typed JSON arrays of extracted facts
-- [ ] Task: Write TDD unit tests for `Fact` serialization, `ArborNode` trait accessors, `Episode` JSON array persistence, and `PipelineConfig` defaults in `contracts.rs`
-- [ ] Task: Delete obsolete flat-string insight fields from legacy structs in `contracts.rs`
-- [ ] Task: Run Conductor Principal Engineer Review (conductor-review)
-- [ ] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Define `Fact`, `FactSource` (Episode, Document, Code, ForgedDocument, Skill), `IdeaNode`, `IdeaStatus`, `PipelineConfig` in `contracts.rs`
+- [x] Task: Implement `ArborNode` trait on `Fact` ($h_n, \iota_n, r_n, \mu_n$)
+- [x] Task: Update `Episode::causal_insight` in `contracts.rs:146` to `Option<serde_json::Value>` storing typed JSON arrays of extracted facts
+- [x] Task: Write TDD unit tests for `Fact` serialization, `ArborNode` trait accessors, `Episode` JSON array persistence, and `PipelineConfig` defaults in `contracts.rs`
+- [x] Task: Delete obsolete flat-string insight fields from legacy structs in `contracts.rs`
+- [x] Task: Run Conductor Principal Engineer Review (conductor-review)
+- [x] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Core Cognitive Pipeline & Prompts Module (`cognitive/pipeline.rs`, `prompts.rs`, `db.rs`)
 - [ ] Task: Write TDD unit tests in `prompts.rs` verifying JSON schema validation for all 9 callback prompts

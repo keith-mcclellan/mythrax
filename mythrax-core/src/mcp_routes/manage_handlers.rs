@@ -162,7 +162,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             return Ok(json!({ "status": "success" }));
         }
         "verify" | "organize" | "reprocess" | "reprocess_markdown" | "summarize" | "audit" | "ingest_bulk"
-        | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" => {
+        | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" | "reset_unprocessed" => {
             match mapped_action {
                 "ingest_bulk" => {
                     let _source = args
@@ -243,20 +243,38 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             let session_id = args
                 .get("session_id")
                 .and_then(|v| v.as_str())
-                .context("Missing session_id parameter for precompact")?;
+                .context("Missing session_id parameter for precompact")?
+                .to_string();
+            let fallback_path = format!(
+                "/Users/keith/.gemini/antigravity/brain/{}/.system_generated/logs/transcript.jsonl",
+                session_id
+            );
             let transcript_path_str = args
                 .get("transcript_path")
                 .and_then(|v| v.as_str())
-                .context("Missing transcript_path parameter for precompact")?;
-            let count = crate::hooks::precompact::mine_transcript(
-                session_id,
-                transcript_path_str,
-                state.backend.as_ref(),
-                state.store.as_ref(),
-                &state.ignore_list,
-            )
-            .await?;
-            Ok(json!({ "status": "success", "episodes_saved": count }))
+                .unwrap_or(&fallback_path)
+                .to_string();
+
+            let backend_clone = state.backend.clone();
+            let store_clone = state.store.clone();
+            let ignore_clone = state.ignore_list.clone();
+
+            let session_id_clone = session_id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::hooks::precompact::mine_transcript(
+                    &session_id_clone,
+                    &transcript_path_str,
+                    backend_clone.as_ref(),
+                    store_clone.as_ref(),
+                    &ignore_clone,
+                )
+                .await
+                {
+                    tracing::error!("Background precompaction failed for session '{}': {:?}", session_id_clone, e);
+                }
+            });
+
+            Ok(json!({ "status": "background_processing_started", "message": format!("Precompaction background process started for session {}", session_id) }))
         }
         "stop" => {
             let session_id = args

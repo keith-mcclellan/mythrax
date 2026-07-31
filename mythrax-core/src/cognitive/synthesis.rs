@@ -959,7 +959,7 @@ impl DreamCoordinator {
             let cooldown_secs = std::env::var("MYTHRAX_PHASE_COOLDOWN_SECS")
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(300);
+                .unwrap_or(0);
             if cooldown_secs > 0 {
                 tracing::info!(
                     "Phase A (Ingestion) finished. Cooldown sleep for {} seconds before Phase B (Synthesis).",
@@ -1284,6 +1284,17 @@ Analyze the existing architectural insight and the new event, then extract disti
                         }
                     } else {
                         candidates = new_episodes;
+                    }
+
+                    if let Some(ref emb_provider) = embedder {
+                        for ep in &mut candidates {
+                            if ep.embedding.is_none() {
+                                let text_to_embed = format!("{}: {}", ep.title, ep.content);
+                                if let Ok(vec) = emb_provider.embed(&text_to_embed).await {
+                                    ep.embedding = Some(vec);
+                                }
+                            }
+                        }
                     }
 
                     let candidate_embs: Vec<&[f32]> = candidates

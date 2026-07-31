@@ -287,13 +287,7 @@ pub fn clear_workspace_root() {
 }
 
 pub fn find_vault_root() -> PathBuf {
-    if let Some(root) = get_workspace_root() {
-        return root;
-    }
     if let Ok(val) = std::env::var("MYTHRAX_VAULT_ROOT") {
-        return PathBuf::from(val);
-    }
-    if let Ok(val) = std::env::var("MYTHRAX_WORKSPACE_ROOT") {
         return PathBuf::from(val);
     }
     let home = std::env::var("HOME").unwrap_or_default();
@@ -309,7 +303,14 @@ pub fn find_vault_root() -> PathBuf {
             }
         }
     }
-    PathBuf::from(&home).join("mythrax-vault")
+    let default_vault = PathBuf::from(&home).join("mythrax-vault");
+    if default_vault.exists() {
+        return default_vault;
+    }
+    if let Some(root) = get_workspace_root() {
+        return root;
+    }
+    default_vault
 }
 
 pub fn save_stm_file(session_id: &str, key: &str, value: &str) -> Result<()> {

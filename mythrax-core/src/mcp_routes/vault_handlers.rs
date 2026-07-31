@@ -239,80 +239,13 @@ Analyze the markdown document and extract distilled causal items (ι_n). Output 
                 .get("scope")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let async_mode = args
-                .get("async_mode")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
 
             let scope_clone = scope.clone();
-            if async_mode {
-                let state_clone = state.clone();
-                tokio::spawn(async move {
-                    let compactor = Compactor::new();
-                    let coordinator = DreamCoordinator::new();
-                    let embedder = if let Some(backend) = state_clone
-                        .backend
-                        .as_any()
-                        .downcast_ref::<crate::db::backend::SurrealBackend>(
-                    ) {
-                        backend.embedder.clone()
-                    } else {
-                        None
-                    };
-
-                    if let Err(e) = coordinator
-                        .run_dream(
-                            state_clone.backend.clone(),
-                            &state_clone.store,
-                            None,
-                            embedder.clone(),
-                        )
-                        .await
-                    {
-                        tracing::error!("Background dream run failed: {:?}", e);
-                    }
-
-                    let scopes_to_compact = if let Some(ref s) = scope {
-                        if s == "all" || s.is_empty() {
-                            state_clone.backend.get_active_scopes().await.unwrap_or_else(|_| vec!["general".to_string(), "mythrax".to_string()])
-                        } else {
-                            vec![s.clone()]
-                        }
-                    } else {
-                        state_clone.backend.get_active_scopes().await.unwrap_or_else(|_| vec!["general".to_string(), "mythrax".to_string()])
-                    };
-
-                    for scope_name in scopes_to_compact {
-                        if let Err(e) = compactor
-                            .compact_scope(
-                                state_clone.backend.clone(),
-                                &state_clone.store,
-                                &scope_name,
-                                embedder.clone(),
-                            )
-                            .await
-                        {
-                            tracing::error!("Background compact_scope failed for scope '{}': {:?}", scope_name, e);
-                        }
-                    }
-                    crate::embeddings::evict_global_embedder();
-                    if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
-                        broker.evict_unused_models().await;
-                    }
-                });
-
-                Ok(json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": format!("Compaction and synthesis dreaming started in the background for scope '{}'.", scope_clone.as_deref().unwrap_or("general"))
-                        }
-                    ]
-                }))
-            } else {
+            let state_clone = state.clone();
+            tokio::spawn(async move {
                 let compactor = Compactor::new();
                 let coordinator = DreamCoordinator::new();
-                let embedder = if let Some(backend) = state
+                let embedder = if let Some(backend) = state_clone
                     .backend
                     .as_any()
                     .downcast_ref::<crate::db::backend::SurrealBackend>(
@@ -322,24 +255,35 @@ Analyze the markdown document and extract distilled causal items (ι_n). Output 
                     None
                 };
 
-                coordinator
-                    .run_dream(state.backend.clone(), &state.store, None, embedder.clone())
-                    .await?;
+                let scope_name = scope_clone.as_deref().unwrap_or("general");
+                if let Err(e) = coordinator
+                    .run_dream(state_clone.backend.clone(), &state_clone.store, None, embedder.clone())
+                    .await
+                {
+                    tracing::error!("Background dreaming failed: {:?}", e);
+                }
 
-                let scope_name = scope.as_deref().unwrap_or("general");
-                compactor
-                    .compact_scope(state.backend.clone(), &state.store, scope_name, embedder)
-                    .await?;
+                if let Err(e) = compactor
+                    .compact_scope(state_clone.backend.clone(), &state_clone.store, scope_name, embedder)
+                    .await
+                {
+                    tracing::error!("Background compaction failed for scope '{}': {:?}", scope_name, e);
+                }
 
-                Ok(json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": format!("Compaction and synthesis dreaming completed successfully for scope '{}'.", scope_name)
-                        }
-                    ]
-                }))
-            }
+                crate::embeddings::evict_global_embedder();
+                if let Some(broker) = crate::llm::DYNAMIC_MODEL_BROKER.get() {
+                    broker.evict_unused_models().await;
+                }
+            });
+
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Compaction and synthesis dreaming started in the background for scope '{}'.", scope.as_deref().unwrap_or("general"))
+                    }
+                ]
+            }))
         }
         "audit" => {
             let workspace_path_str = args
@@ -572,6 +516,33 @@ Analyze the markdown document and extract distilled causal items (ι_n). Output 
                     ]
                 }))
             }
+        }
+        "organize" => {
+            let synced_count =
+                crate::vault::operations::sync_vault_to_db(&state.backend, &state.store).await?;
+            let report = format!(
+                "Vault organization complete. Synced {} files between physical vault and database.",
+                synced_count
+            );
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": report
+                    }
+                ]
+            }))
+        }
+        "reset_unprocessed" => {
+            state.backend.reset_unprocessed_episodes().await?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Successfully reset processed_in_dream flag on all episodes to false."
+                    }
+                ]
+            }))
         }
         _ => anyhow::bail!("Invalid action for manage_vault: {}", action),
     }
