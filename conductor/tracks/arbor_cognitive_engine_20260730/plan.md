@@ -34,25 +34,25 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 4: Hook Architecture & Route Handler Integration (`stop.rs`, `precompact.rs`, `watcher.rs`, `vault_handlers.rs`, `reflect.rs`, `manage_handlers.rs`)
-- [ ] Task: Write TDD tests for stop hook background fact extraction trigger in `hooks/stop.rs`
-- [ ] Task: Update `hooks/stop.rs` to queue `pipeline::extract_facts()` via the bounded `CognitiveTask` table upon saving mined episodes
-- [ ] Task: Update `hooks/precompact.rs` to replace monolithic `run_llm_critic` with `Fact` contradiction extraction and immediate `refine_hypotheses()` pass
-- [ ] Task: Update `vault/watcher.rs` to queue document/code extractions via bounded `CognitiveTask` table
-- [ ] Task: Update `mcp_routes/vault_handlers.rs` to route `write` and vault-wide batch `reprocess_markdown` to `pipeline::extract_from_document()` via `CognitiveTask`
-- [ ] Task: Update `hooks/reflect.rs` to inject pruned hypotheses ($\le 0.20$) as negative policy constraints ("Actions to Avoid") via `collect_policy_context()`
-- [ ] Task: Wire MCP `manage` actions (`extract`, `extract_code`, `ingest_forge`, `ingest_skill`, `hypothesize`, `refine`, `merge`, `config`) in `mcp_routes/manage_handlers.rs`
-- [ ] Task: Run Conductor Principal Engineer Review (conductor-review)
-- [ ] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Write TDD tests for stop hook background fact extraction trigger in `hooks/stop.rs`
+- [x] Task: Update `hooks/stop.rs` to queue `pipeline::extract_facts()` via the bounded `CognitiveTask` table upon saving mined episodes
+- [x] Task: Update `hooks/precompact.rs` to replace monolithic `run_llm_critic` with `Fact` contradiction extraction and immediate `refine_hypotheses()` pass
+- [x] Task: Update `vault/watcher.rs` to queue document/code extractions via bounded `CognitiveTask` table
+- [x] Task: Update `mcp_routes/vault_handlers.rs` to route `write` and vault-wide batch `reprocess_markdown` to `pipeline::extract_from_document()` via `CognitiveTask`
+- [x] Task: Update `hooks/reflect.rs` to inject pruned hypotheses ($\le 0.20$) as negative policy constraints ("Actions to Avoid") via `collect_policy_context()`
+- [x] Task: Wire MCP `manage` actions (`extract`, `extract_code`, `ingest_forge`, `ingest_skill`, `hypothesize`, `refine`, `merge`, `config`) in `mcp_routes/manage_handlers.rs`
+- [x] Task: Run Conductor Principal Engineer Review (conductor-review)
+- [x] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 5: Legacy Code Deletion & End-to-End Verification
-- [ ] Task: Delete `cognitive/synthesis.rs` (~3,838 lines)
-- [ ] Task: Delete `cognitive/compactor.rs` (~2,088 lines)
-- [ ] Task: Delete `cognitive/critic.rs` (~200 lines)
-- [ ] Task: Delete `cognitive/meta_skill.rs` (~300 lines)
-- [ ] Task: Run unit test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core domain_cognitive`
-- [ ] Task: Run full regression test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
-- [ ] Task: Run dev50 benchmark gate: `bash scripts/verify_dev50.sh`
-- [ ] Task: Run Conductor Principal Engineer Review (conductor-review)
-- [ ] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Delete `cognitive/synthesis.rs` (~3,838 lines)
+- [x] Task: Delete `cognitive/compactor.rs` (~2,088 lines)
+- [x] Task: Delete `cognitive/critic.rs` (~200 lines)
+- [x] Task: Delete `cognitive/meta_skill.rs` (~300 lines)
+- [x] Task: Run unit test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run -p mythrax-core domain_cognitive`
+- [x] Task: Run full regression test suite: `MYTHRAX_TEST_MOCK=1 cargo nextest run`
+- [x] Task: Run dev50 benchmark gate: `bash scripts/verify_dev50.sh`
+- [x] Task: Run Conductor Principal Engineer Review (conductor-review)
+- [x] Task: Run Adversarial CTO Reviewer Subagent (Fix-Resubmit Loop until unconditional APPROVED)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)

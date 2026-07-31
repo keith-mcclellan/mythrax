@@ -350,21 +350,7 @@ async fn dream_handler(
         .get("scope")
         .and_then(|v| v.as_str())
         .unwrap_or("general");
-    let compactor = crate::cognitive::compactor::Compactor::new();
-
-    let embedder = if let Some(backend) = state
-        .backend
-        .as_any()
-        .downcast_ref::<crate::db::backend::SurrealBackend>()
-    {
-        backend.embedder.clone()
-    } else {
-        None
-    };
-
-    let res_scope = compactor
-        .compact_scope(state.backend.clone(), &state.store, scope, embedder)
-        .await;
+    let res_scope = crate::cognitive::pipeline::refine_hypotheses(state.backend.as_ref(), None, scope).await;
     match res_scope {
         Ok(_) => Ok(Json(json!({ "status": "success" }))),
         _ => Err(StatusCode::INTERNAL_SERVER_ERROR),

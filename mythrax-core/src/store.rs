@@ -303,12 +303,12 @@ pub fn find_vault_root() -> PathBuf {
             }
         }
     }
+    if let Some(root) = get_workspace_root() {
+        return root;
+    }
     let default_vault = PathBuf::from(&home).join("mythrax-vault");
     if default_vault.exists() {
         return default_vault;
-    }
-    if let Some(root) = get_workspace_root() {
-        return root;
     }
     default_vault
 }
@@ -615,6 +615,7 @@ mod tests {
         assert_eq!(find_vault_root(), PathBuf::from("/tmp/vault_test_env"));
         unsafe {
             std::env::remove_var("MYTHRAX_VAULT_ROOT");
+            std::env::remove_var("MYTHRAX_VAULT_PATH");
         }
 
         set_workspace_root(PathBuf::from("/tmp/workspace_test_env"));

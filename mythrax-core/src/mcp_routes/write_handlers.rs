@@ -487,7 +487,7 @@ pub async fn run_llm_critic(
         std::env::var("MYTHRAX_ACTIVE_SCOPE").unwrap_or_else(|_| "general".to_string())
     });
 
-    let rule_path = crate::cognitive::synthesis::resolve_rule_path(
+    let rule_path = crate::cognitive::pipeline::resolve_rule_path(
         &active_scope,
         &critic_wisdom.action_to_avoid,
     );
@@ -595,7 +595,7 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
             .trim_matches('"');
 
         if !clean_title.is_empty() {
-            let slug_title = crate::cognitive::synthesis::slugify_title(clean_title);
+            let slug_title = crate::cognitive::pipeline::slugify_title(clean_title);
             if let Some(ref session_id) = task.session_id {
                 let query = "SELECT id, vault_path, name FROM episode WHERE session_id = $session_id OR id = $session_id OR vault_path CONTAINS $session_id;";
                 if let Ok(mut resp) = surreal_backend.db.query(query).bind(("session_id", session_id.clone())).await {

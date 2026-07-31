@@ -430,16 +430,11 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 let store_dream = store.clone();
                 let cancel_token_dream = cancel_token.clone();
                 tokio::spawn(async move {
-                    let dream_coordinator = cognitive::synthesis::DreamCoordinator::new();
-                    let compactor = cognitive::compactor::Compactor::new();
-
                     // Spawn daily scheduler
                     let backend_daily = backend_dream.clone();
                     let store_daily = store_dream.clone();
                     let cancel_token_daily = cancel_token_dream.clone();
                     tokio::spawn(async move {
-                        let dc = cognitive::synthesis::DreamCoordinator::new();
-                        let cmp = cognitive::compactor::Compactor::new();
                         loop {
                             tokio::select! {
                                 _ = cancel_token_daily.cancelled() => {
@@ -517,17 +512,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
                                             && unprocessed.len() >= 50 {
                                                 tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
-                                                if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
-                                                    tracing::error!("Threshold dreaming failed: {:?}", e);
-                                                } else {
-                                                    let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                    if scopes.is_empty() {
-                                                        scopes.push("general".to_string());
-                                                    }
-                                                    for scope in scopes {
-                                                        let _ = compactor.compact_scope(backend_dream.clone(), &store_dream, &scope, backend_dream.embedder.clone()).await;
-                                                    }
-
+                                                let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                                if scopes.is_empty() {
+                                                    scopes.push("general".to_string());
+                                                }
+                                                for scope in scopes {
+                                                    let _ = cognitive::pipeline::refine_hypotheses(&backend_dream, None, &scope).await;
                                                 }
                                                 pending_debounce = false;
                                                 continue;
@@ -546,17 +536,12 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
                                         && !unprocessed.is_empty() {
                                             tracing::info!("Idle debounced synthesis starting...");
-                                            if let Err(e) = dream_coordinator.run_dream(backend_dream.clone(), &store_dream, Some("incremental"), backend_dream.embedder.clone()).await {
-                                                tracing::error!("Debounced incremental dreaming failed: {:?}", e);
-                                            } else {
-                                                let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
-                                                if scopes.is_empty() {
-                                                    scopes.push("general".to_string());
-                                                }
-                                                for scope in scopes {
-                                                    let _ = compactor.compact_scope(backend_dream.clone(), &store_dream, &scope, backend_dream.embedder.clone()).await;
-                                                }
-
+                                            let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
+                                            if scopes.is_empty() {
+                                                scopes.push("general".to_string());
+                                            }
+                                            for scope in scopes {
+                                                let _ = cognitive::pipeline::refine_hypotheses(&backend_dream, None, &scope).await;
                                             }
                                         }
 

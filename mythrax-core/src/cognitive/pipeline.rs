@@ -25,6 +25,31 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
+pub fn slugify_title(title: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for c in title.chars() {
+        if c.is_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('_');
+            last_dash = true;
+        }
+    }
+    let trimmed = slug.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "rule".to_string()
+    } else {
+        trimmed
+    }
+}
+
+pub fn resolve_rule_path(scope: &str, target_pattern: &str) -> String {
+    let slug = slugify_title(target_pattern);
+    format!("wisdom/{}/rule_{}.md", scope, slug)
+}
+
 /// Greedy Cosine Clustering (CTO Mandate: Zero Centroid Vector Math)
 /// Groups unassociated facts into topically coherent clusters when pairwise cosine similarity >= threshold.
 pub fn cluster_facts(
@@ -821,6 +846,30 @@ pub async fn graduate(
     }
 
     Ok(graduated_rules)
+}
+
+pub fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
+    let handoffs_dir = vault_root.join(".handoffs");
+    if !handoffs_dir.exists() {
+        return Vec::new();
+    }
+    let mut anchors = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(handoffs_dir) {
+        for entry in entries.flatten() {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(a) = val.get("anchor_skills").and_then(|s| s.as_array()) {
+                        for item in a {
+                            if let Some(str_val) = item.as_str() {
+                                anchors.push(str_val.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    anchors
 }
 
 #[cfg(test)]

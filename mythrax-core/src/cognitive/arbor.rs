@@ -417,7 +417,7 @@ impl<L: ArborLlmClient> ArborCoordinator<L> {
             .ok_or_else(|| anyhow!("Parent node not found"))?;
 
         let files_context = self.get_current_files_context(&parent);
-        let stm_anchors = crate::cognitive::compactor::get_active_stm_anchors(&self.vault_root);
+        let stm_anchors = crate::cognitive::pipeline::get_active_stm_anchors(&self.vault_root);
         let response = self
             .llm_client
             .propose_hypotheses(

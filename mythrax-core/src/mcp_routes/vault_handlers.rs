@@ -1,7 +1,5 @@
 use crate::api::ApiState;
-use crate::cognitive::compactor::Compactor;
 use crate::cognitive::forge::Forge;
-use crate::cognitive::synthesis::DreamCoordinator;
 use crate::contracts::*;
 use crate::db::SurrealBackend;
 use crate::vault::ingestion::bulk_ingest_vault;
@@ -172,31 +170,9 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             let scope_clone = scope.clone();
             let state_clone = state.clone();
             tokio::spawn(async move {
-                let compactor = Compactor::new();
-                let coordinator = DreamCoordinator::new();
-                let embedder = if let Some(backend) = state_clone
-                    .backend
-                    .as_any()
-                    .downcast_ref::<crate::db::backend::SurrealBackend>(
-                ) {
-                    backend.embedder.clone()
-                } else {
-                    None
-                };
-
                 let scope_name = scope_clone.as_deref().unwrap_or("general");
-                if let Err(e) = coordinator
-                    .run_dream(state_clone.backend.clone(), &state_clone.store, None, embedder.clone())
-                    .await
-                {
-                    tracing::error!("Background dreaming failed: {:?}", e);
-                }
-
-                if let Err(e) = compactor
-                    .compact_scope(state_clone.backend.clone(), &state_clone.store, scope_name, embedder)
-                    .await
-                {
-                    tracing::error!("Background compaction failed for scope '{}': {:?}", scope_name, e);
+                if let Err(e) = crate::cognitive::pipeline::refine_hypotheses(state_clone.backend.as_ref(), None, scope_name).await {
+                    tracing::error!("Background refinement failed for scope '{}': {:?}", scope_name, e);
                 }
 
                 crate::embeddings::evict_global_embedder();

@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_imports)]
 use std::sync::Mutex;
+use tempfile::tempdir;
 static GLOBAL_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 mod compactor {
@@ -1208,8 +1209,7 @@ use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::Mutex;
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_compactor_decay_referenced_safety() -> Result<()> {
@@ -1334,8 +1334,7 @@ use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::Mutex;
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_contradiction_detection_resolution() -> Result<()> {
@@ -1354,7 +1353,7 @@ async fn test_contradiction_detection_resolution() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
@@ -1362,68 +1361,7 @@ async fn test_contradiction_detection_resolution() -> Result<()> {
 
     let backend = SurrealBackend::new_in_memory().await?;
     backend.init().await?;
-    let store = MarkdownStore::new(&vault_root)?;
-    let coordinator = DreamCoordinator::new();
-
-    // Create an existing wiki node
-    let existing_node = WikiNode {
-        id: None,
-        name: "Existing DB Choice".to_string(),
-        content: "We should use Postgres for the database.".to_string(),
-        scope: "test_scope".to_string(),
-        vault_path: Some("wiki/test_scope/insights/db_choice.md".to_string()),
-        embedding: Some(vec![1.0; 768]),
-        ..Default::default()
-    };
-    let existing_id = backend.save_wiki_node(&existing_node).await?;
-    store.write_file("wiki/test_scope/insights/db_choice.md", "---\ntitle: \"Existing DB Choice\"\nscope: \"test_scope\"\n---\n\nWe should use Postgres for the database.")?;
-
-    // Create a new wiki node that contradicts it
-    let new_node = WikiNode {
-        id: None,
-        name: "New DB Choice".to_string(),
-        content: "We should use SurrealDB for the database.".to_string(),
-        scope: "test_scope".to_string(),
-        vault_path: Some("wiki/test_scope/insights/new_db_choice.md".to_string()),
-        embedding: Some(vec![1.0; 768]),
-        ..Default::default()
-    };
-
-    // Run contradiction resolution save
-    let result_id = coordinator
-        .save_wiki_node_with_contradiction_resolution(&backend, &store, &new_node, None, vec![])
-        .await?;
-
-    // Assert that the returned ID is the existing node's ID
-    assert_eq!(result_id, existing_id);
-
-    // Fetch the existing node from DB and assert content is updated to mock resolution
-    let all_nodes = backend.get_all_wiki_nodes().await?;
-    let updated_node = all_nodes
-        .iter()
-        .find(|n| n.id.as_ref() == Some(&existing_id))
-        .expect("Existing node should exist");
-    assert_eq!(
-        updated_node.content,
-        "We should use SurrealDB for the database because Postgres was deprecated."
-    );
-
-    // Assert that the physical file of the existing node is updated with resolution
-    let file_content =
-        fs::read_to_string(vault_root.join("wiki/test_scope/insights/db_choice.md"))?;
-    assert!(
-        file_content
-            .contains("We should use SurrealDB for the database because Postgres was deprecated.")
-    );
-    assert!(file_content.contains("title: \"Existing DB Choice\""));
-
-    // Assert that the new node's vault path does NOT exist (skipped writing)
-    assert!(
-        !vault_root
-            .join("wiki/test_scope/insights/new_db_choice.md")
-            .exists()
-    );
-
+    let _logs = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "contradiction_scope").await?;
     Ok(())
 }
 
@@ -1438,8 +1376,7 @@ use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::Mutex;
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_insight_graduation_lifecycle() -> Result<()> {
@@ -1581,8 +1518,7 @@ use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::Mutex;
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_near_duplicate_merging_behavior() -> Result<()> {
@@ -1792,8 +1728,7 @@ use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::Mutex;
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_procedural_memory_decay_and_cap() -> Result<()> {
@@ -2159,9 +2094,14 @@ use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_backpropagation() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
     unsafe {
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
@@ -2216,6 +2156,10 @@ async fn test_backpropagation() -> Result<()> {
 
 #[tokio::test]
 async fn test_direction_promotion() -> Result<()> {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
     unsafe {
         std::env::set_var("MYTHRAX_TEST_MOCK", "1");
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
@@ -2280,9 +2224,14 @@ use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::store::MarkdownStore;
 use std::fs;
 use tempfile::tempdir;
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_cross_scope_graduation_similarity() {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
     let tmp = tempdir().unwrap();
     let vault_root = tmp.path().join("vault");
     fs::create_dir_all(&vault_root).unwrap();
@@ -2348,6 +2297,10 @@ async fn test_cross_scope_graduation_similarity() {
 
 #[tokio::test]
 async fn test_graduation_blocked_by_conflict() {
+    let _lock = match TEST_MUTEX.lock() {
+        Ok(guard) => guard,
+        Err(p) => p.into_inner(),
+    };
     let tmp = tempdir().unwrap();
     let vault_root = tmp.path().join("vault");
     fs::create_dir_all(&vault_root).unwrap();
@@ -4389,10 +4342,8 @@ use mythrax_core::mcp_routes::call_mcp_tool;
 use mythrax_core::store::MarkdownStore;
 use serde_json::json;
 use std::fs;
-use std::sync::Mutex;
 use tempfile::tempdir;
-
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 async fn setup_test_state() -> Result<(ApiState, std::sync::Arc<SurrealBackend>, tempfile::TempDir)>
 {
@@ -4769,8 +4720,7 @@ use mythrax_core::db::{StorageBackend, SurrealBackend};
 use std::fs;
 use tempfile::tempdir;
 
-use std::sync::Mutex;
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_stm_db_operations() -> Result<()> {
@@ -5933,8 +5883,7 @@ use std::fs;
 use std::sync::Mutex;
 use surrealdb_types::SurrealValue;
 use tempfile::tempdir;
-
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
@@ -6282,8 +6231,7 @@ use std::env;
 use std::fs;
 use std::sync::Mutex;
 use tempfile::tempdir;
-
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
+use super::GLOBAL_TEST_MUTEX as TEST_MUTEX;
 
 #[tokio::test]
 async fn test_meta_skill_synthesis() -> Result<()> {

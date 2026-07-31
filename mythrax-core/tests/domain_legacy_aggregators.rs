@@ -184,10 +184,14 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
         }),
     );
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await;
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     let mock_server_handle = if let Ok(l) = listener {
+        let port = l.local_addr().unwrap().port();
+        unsafe {
+            std::env::set_var("MYTHRAX_COMPLETIONS_URL", format!("http://127.0.0.1:{}/v1/chat/completions", port));
+        }
         let handle = tokio::spawn(async move {
             let _ = axum::serve(l, mock_app)
                 .with_graceful_shutdown(async {
@@ -195,16 +199,11 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
                 })
                 .await;
         });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         Some((handle, shutdown_tx))
     } else {
-        println!(
-            "WARNING: Could not bind mock server to 127.0.0.1:8080. Skipping local mock check."
-        );
         None
     };
-    unsafe {
-        std::env::set_var("MYTHRAX_COMPLETIONS_URL", "http://127.0.0.1:8080/v1/chat/completions");
-    }
 
     let backend = Arc::new(SurrealBackend::new_in_memory().await?);
     backend.init().await?;
