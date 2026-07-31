@@ -99,6 +99,82 @@ pub async fn get_pipeline_config(backend: &dyn StorageBackend) -> Result<Pipelin
     }
 }
 
+pub async fn save_code_symbol(
+    backend: &dyn StorageBackend,
+    symbol: &crate::contracts::CodeSymbol,
+) -> Result<String> {
+    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let query = "
+            UPSERT type::record('code_symbol', $slug_name) CONTENT {
+                name: $name,
+                symbol_type: $symbol_type,
+                file_path: $file_path,
+                file_slug: $file_slug,
+                start_line: $start_line,
+                end_line: $end_line,
+                signature: $signature,
+                doc_comment: $doc_comment,
+                call_graph: $call_graph,
+                scope: $scope,
+                embedding: $embedding,
+                created_at: time::now()
+            };
+        ";
+        let slug_name = format!("{}_{}", symbol.file_slug, symbol.name);
+        let mut resp = surreal
+            .db
+            .query(query)
+            .bind(("slug_name", slug_name.as_str()))
+            .bind(("name", symbol.name.as_str()))
+            .bind(("symbol_type", symbol.symbol_type.as_str()))
+            .bind(("file_path", symbol.file_path.as_str()))
+            .bind(("file_slug", symbol.file_slug.as_str()))
+            .bind(("start_line", symbol.start_line as i64))
+            .bind(("end_line", symbol.end_line as i64))
+            .bind(("signature", symbol.signature.as_str()))
+            .bind(("doc_comment", symbol.doc_comment.as_deref()))
+            .bind(("call_graph", symbol.call_graph.clone()))
+            .bind(("scope", symbol.scope.as_str()))
+            .bind(("embedding", symbol.embedding.clone()))
+            .await?;
+        let raw: Option<crate::contracts::CodeSymbol> = resp.take(0)?;
+        Ok(raw.and_then(|r| r.id).unwrap_or_else(|| slug_name))
+    } else {
+        Ok(symbol.name.clone())
+    }
+}
+
+pub async fn save_subagent_worktree(
+    backend: &dyn StorageBackend,
+    worktree: &crate::contracts::SubagentWorktree,
+) -> Result<String> {
+    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+        let query = "
+            UPSERT type::record('subagent_worktree', $subagent_id) CONTENT {
+                subagent_id: $subagent_id,
+                worktree_path: $worktree_path,
+                base_branch: $base_branch,
+                feature_branch: $feature_branch,
+                created_at: time::now(),
+                status: $status
+            };
+        ";
+        let mut resp = surreal
+            .db
+            .query(query)
+            .bind(("subagent_id", worktree.subagent_id.as_str()))
+            .bind(("worktree_path", worktree.worktree_path.as_str()))
+            .bind(("base_branch", worktree.base_branch.as_str()))
+            .bind(("feature_branch", worktree.feature_branch.as_str()))
+            .bind(("status", worktree.status.as_str()))
+            .await?;
+        let raw: Option<crate::contracts::SubagentWorktree> = resp.take(0)?;
+        Ok(raw.and_then(|r| r.id).unwrap_or_else(|| worktree.subagent_id.clone()))
+    } else {
+        Ok(worktree.subagent_id.clone())
+    }
+}
+
 pub async fn save_pipeline_config(
     backend: &dyn StorageBackend,
     config: &PipelineConfig,

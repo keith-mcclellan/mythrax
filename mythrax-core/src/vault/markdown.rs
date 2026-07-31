@@ -70,6 +70,71 @@ fn append_text(plain_text: &mut String, text: &str) {
     plain_text.push_str(text);
 }
 
+/// Formats a WikiNode into standard Arbor quadruplet Markdown format with frontmatter and Wikilinks.
+pub fn format_arbor_wiki_node_markdown(node: &crate::contracts::WikiNode, related_links: &[String]) -> String {
+    let mut yaml_val = serde_json::Map::new();
+    yaml_val.insert("name".to_string(), serde_json::json!(node.name));
+    yaml_val.insert("scope".to_string(), serde_json::json!(node.scope));
+    if let Some(ref h) = node.hypothesis {
+        yaml_val.insert("hypothesis".to_string(), serde_json::json!(h));
+    }
+    if let Some(ref ci) = node.causal_insight {
+        yaml_val.insert("causal_insight".to_string(), serde_json::json!(ci));
+    }
+    if let Some(ref ev) = node.raw_evidence {
+        yaml_val.insert("raw_evidence".to_string(), serde_json::json!(ev));
+    }
+    if let Some(ref refs) = node.artifact_refs {
+        yaml_val.insert("artifact_refs".to_string(), serde_json::json!(refs));
+    }
+
+    let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
+    let mut body = format!("---\n{}---\n# {}\n\n", yaml_str.trim(), node.name);
+
+    if let Some(ref h) = node.hypothesis {
+        body.push_str(&format!("## Claim ($h_n$)\n{}\n\n", h));
+    }
+
+    if let Some(ref ci) = node.causal_insight {
+        body.push_str(&format!("## Causal Insight ($\\iota_n$)\n{}\n\n", ci));
+    }
+
+    if !node.content.is_empty() {
+        body.push_str(&format!("## Synthesis\n{}\n\n", node.content));
+    }
+
+    if let Some(ref ev) = node.raw_evidence {
+        if !ev.is_empty() {
+            body.push_str("## Evidence ($r_n$)\n");
+            for e in ev {
+                body.push_str(&format!("- {}\n", e));
+            }
+            body.push('\n');
+        }
+    }
+
+    if let Some(ref refs) = node.artifact_refs {
+        if !refs.is_empty() {
+            body.push_str("## Artifact References ($\\mu_n$)\n");
+            for r in refs {
+                let target = r.strip_suffix(".md").unwrap_or(r);
+                body.push_str(&format!("- [[{}|{}]]\n", target, r));
+            }
+            body.push('\n');
+        }
+    }
+
+    if !related_links.is_empty() {
+        body.push_str("## Graph Relations\n");
+        for link in related_links {
+            body.push_str(&format!("- {}\n", link));
+        }
+        body.push('\n');
+    }
+
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

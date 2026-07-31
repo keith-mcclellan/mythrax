@@ -228,7 +228,7 @@ pub async fn extract_from_document(
     Ok(created_facts)
 }
 
-/// Extracts atomic facts from source code files (.rs, .py, .ts, .go).
+/// Extracts atomic facts from source code files (.rs, .py, .ts, .go) and persists AST symbols.
 pub async fn extract_from_code(
     backend: &dyn StorageBackend,
     llm: Option<&LLMClient>,
@@ -236,6 +236,11 @@ pub async fn extract_from_code(
     file_path: &str,
     scope: &str,
 ) -> Result<Vec<Fact>> {
+    let symbols = crate::cognitive::ast::extract_code_ast(file_path, code_content, scope);
+    for sym in &symbols {
+        let _ = db::save_code_symbol(backend, sym).await;
+    }
+
     let facts_dtos = if let Some(client) = llm {
         let (sys, user) = prompts::build_code_extraction_prompt(code_content, file_path);
         if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {

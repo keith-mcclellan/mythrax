@@ -231,11 +231,15 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
         }
         "extract" => {
             let doc_path = args.get("doc_path").and_then(|v| v.as_str()).context("Missing doc_path")?;
+            if doc_path.contains("..") {
+                anyhow::bail!("Path traversal disallowed in doc_path");
+            }
             let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let content = std::fs::read_to_string(state.store.vault_root.join(doc_path)).unwrap_or_default();
             let facts = crate::cognitive::pipeline::extract_from_document(
                 &*state.backend,
                 None,
-                "",
+                &content,
                 doc_path,
                 scope,
             ).await?;
@@ -245,11 +249,15 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
         }
         "extract_code" => {
             let file_path = args.get("file_path").and_then(|v| v.as_str()).context("Missing file_path")?;
+            if file_path.contains("..") {
+                anyhow::bail!("Path traversal disallowed in file_path");
+            }
             let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let content = std::fs::read_to_string(file_path).unwrap_or_default();
             let facts = crate::cognitive::pipeline::extract_from_code(
                 &*state.backend,
                 None,
-                "",
+                &content,
                 file_path,
                 scope,
             ).await?;

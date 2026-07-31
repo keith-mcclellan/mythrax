@@ -13,14 +13,11 @@ impl MarkdownStore {
         let root = vault_root.as_ref().to_path_buf();
         fs::create_dir_all(&root).context("Failed to create vault root directory")?;
 
-        // Initialize vault folders
-        fs::create_dir_all(root.join("episodes"))?;
+        // Initialize vault folders (canonical 3-directory layout created by ensure_vault_structure)
         fs::create_dir_all(root.join("wisdom/pinned"))?;
         fs::create_dir_all(root.join("wisdom/permanent"))?;
         fs::create_dir_all(root.join("wisdom/dynamic"))?;
         fs::create_dir_all(root.join("wisdom/skills"))?;
-        fs::create_dir_all(root.join("general"))?;
-        fs::create_dir_all(root.join("archive"))?;
 
         let store = Self { vault_root: root };
 
@@ -41,12 +38,13 @@ impl MarkdownStore {
     }
 
     pub fn ensure_vault_structure(&self) -> Result<()> {
-        // Create new subdirectories
-        fs::create_dir_all(self.vault_root.join("directions"))?;
-        fs::create_dir_all(self.vault_root.join("insights"))?;
-        fs::create_dir_all(self.vault_root.join("pruned"))?;
-        fs::create_dir_all(self.vault_root.join("wisdom"))?;
-        fs::create_dir_all(self.vault_root.join("reference"))?;
+        // Create canonical 3-directory layout
+        fs::create_dir_all(self.vault_root.join("wiki"))?;
+        fs::create_dir_all(self.vault_root.join("wisdom").join("skills"))?;
+        fs::create_dir_all(self.vault_root.join("wisdom").join("permanent"))?;
+        fs::create_dir_all(self.vault_root.join("wisdom").join("dynamic"))?;
+        fs::create_dir_all(self.vault_root.join("reference").join("ast"))?;
+        fs::create_dir_all(self.vault_root.join("reference").join("forged"))?;
 
         // 1. Manage gitignore to ignore .handoffs/
         let gitignore_path = self.vault_root.join(".gitignore");
@@ -77,11 +75,9 @@ impl MarkdownStore {
 Welcome to the Mythrax Vault.
 
 ## Vault Folders
-- [[directions/|Directions]]
-- [[insights/|Insights]]
-- [[pruned/|Pruned]]
-- [[wisdom/|Wisdom]]
-- [[reference/|Reference]]
+- [[wiki/|Wiki (Synthesized Arbor Nodes & Scope Maps)]]
+- [[wisdom/|Wisdom (Graduated Rules & Skills)]]
+- [[reference/|Reference (Workspace Docs & AST Metadata)]]
 "#;
         fs::write(&moc_path, moc_content)?;
         set_file_permissions_644(&moc_path)?;
@@ -673,10 +669,8 @@ mod tests {
         let tmp = tempdir().unwrap();
         let _store = MarkdownStore::new(tmp.path()).unwrap();
 
-        // 1. Check directories
-        assert!(tmp.path().join("directions").exists());
-        assert!(tmp.path().join("insights").exists());
-        assert!(tmp.path().join("pruned").exists());
+        // 1. Check canonical 3-directory layout
+        assert!(tmp.path().join("wiki").exists());
         assert!(tmp.path().join("wisdom").exists());
         assert!(tmp.path().join("reference").exists());
 
@@ -685,8 +679,9 @@ mod tests {
         assert!(moc_path.exists());
         let moc_content = fs::read_to_string(&moc_path).unwrap();
         assert!(moc_content.contains("# Map of Content (MOC)"));
-        assert!(moc_content.contains("directions/"));
-        assert!(moc_content.contains("insights/"));
+        assert!(moc_content.contains("wiki/"));
+        assert!(moc_content.contains("wisdom/"));
+        assert!(moc_content.contains("reference/"));
 
         // 3. Check gitignore content
         let gitignore_path = tmp.path().join(".gitignore");

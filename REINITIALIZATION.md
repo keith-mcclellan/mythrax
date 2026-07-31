@@ -58,12 +58,10 @@ launchctl unload ~/Library/LaunchAgents/com.mythrax.daemon.plist 2>/dev/null || 
 # 2. Delete SurrealDB local database directory and configs
 rm -rf ~/.mythrax/db.nosync ~/.mythrax/db/ ~/.mythrax/data/ ~/.mythrax/config.json
 
-# 3. Clean local Obsidian vault directories
+# 3. Clean local Obsidian vault directories (canonical 3-directory layout: /wiki/, /wisdom/, /reference/)
 rm -rf ~/mythrax-vault/.trash/
 rm -rf ~/mythrax-vault/.handoffs/
-rm -rf ~/mythrax-vault/sessions/
 rm -rf ~/mythrax-vault/wiki/
-rm -rf ~/mythrax-vault/episodes/
 rm -rf ~/mythrax-vault/wisdom/
 rm -rf ~/mythrax-vault/reference/
 ```

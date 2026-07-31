@@ -748,6 +748,39 @@ pub struct WikiNode {
     pub item_type: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
+pub struct CodeSymbol {
+    pub id: Option<String>,
+    pub name: String,
+    pub symbol_type: String,
+    pub file_path: String,
+    pub file_slug: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_graph: Option<Vec<String>>,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue, Default)]
+pub struct SubagentWorktree {
+    pub id: Option<String>,
+    pub subagent_id: String,
+    pub worktree_path: String,
+    pub base_branch: String,
+    pub feature_branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub status: String,
+}
+
 pub trait ArborNode {
     fn h_n(&self) -> Option<&str>;
     fn r_n(&self) -> &[String];

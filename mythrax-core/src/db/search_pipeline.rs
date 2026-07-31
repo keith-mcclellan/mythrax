@@ -1253,6 +1253,11 @@ impl SurrealBackend {
                 WHERE status != 'superseded'
                   AND (scope IN [$target_scope, 'general'] OR $search_all = true)
                   AND (embedding <|50, 50|> $query_embedding);
+
+                SELECT id, name AS title, signature AS content, embedding, file_path AS vault_path, (utility ?? 50.0) AS utility
+                FROM code_symbol
+                WHERE (scope IN [$target_scope, 'general'] OR $search_all = true)
+                  AND (embedding <|50, 50|> $query_embedding);
                 ",
                 wiki_node_filter = wiki_node_filter
             ));
@@ -1292,6 +1297,11 @@ impl SurrealBackend {
                 FROM wisdom
                 WHERE status != 'superseded'
                   AND (string::contains(target_pattern, $query) OR string::contains(action_to_avoid, $query) OR string::contains(causal_explanation, $query) OR string::contains(prescribed_remedy, $query))
+                  AND (scope IN [$target_scope, 'general'] OR $search_all = true);
+
+                SELECT id, name AS title, signature AS content, embedding, file_path AS vault_path, (utility ?? 50.0) AS utility
+                FROM code_symbol
+                WHERE (string::contains(name, $query) OR string::contains(signature, $query) OR string::contains(file_path, $query))
                   AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                 ",
                 wiki_node_filter = wiki_node_filter
@@ -1460,15 +1470,17 @@ impl SurrealBackend {
                              is_vector: bool|
          -> Result<Vec<SearchResult>> {
             let mut response = response?.check().context("Query check failed")?;
-            let (episodes, wiki_nodes, wisdom_rules) = if include_episodes {
+            let (episodes, wiki_nodes, wisdom_rules, code_symbols) = if include_episodes {
                 let eps: Vec<SearchRaw> = response.take(0)?;
                 let wns: Vec<SearchRaw> = response.take(1)?;
                 let wrs: Vec<SearchWisdomRaw> = response.take(2)?;
-                (eps, wns, wrs)
+                let css: Vec<SearchRaw> = response.take(3).unwrap_or_default();
+                (eps, wns, wrs, css)
             } else {
                 let wns: Vec<SearchRaw> = response.take(0)?;
                 let wrs: Vec<SearchWisdomRaw> = response.take(1)?;
-                (Vec::new(), wns, wrs)
+                let css: Vec<SearchRaw> = response.take(2).unwrap_or_default();
+                (Vec::new(), wns, wrs, css)
             };
 
             let compute_archived_demotion = |ep: &SearchRaw, similarity: f32| -> f32 {
@@ -1795,6 +1807,37 @@ impl SurrealBackend {
                         original_gate: Some(gate),
                         factor_multiplier: Some(factor_multiplier),
                         created_at: rule.created_at,
+                        ..Default::default()
+                    });
+                }
+            }
+
+            for cs in code_symbols {
+                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), cs.embedding.as_ref()) {
+                    crate::math::cosine_similarity(q_vec, e_vec)
+                } else {
+                    1.0f32
+                };
+                let factor_multiplier = get_tier_boost(crate::contracts::Tier::Project, query_category);
+                let blended_score = similarity * factor_multiplier;
+                let pass_threshold = if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 };
+                if blended_score >= pass_threshold {
+                    list.push(SearchResult {
+                        id: format_record_id(&cs.id),
+                        title: cs.title.clone(),
+                        content: cs.content.clone(),
+                        similarity: blended_score,
+                        utility: cs.utility.unwrap_or(50.0) as f32,
+                        tier: crate::contracts::Tier::Project,
+                        embedding: cs.embedding.clone(),
+                        vault_path: cs.vault_path.clone(),
+                        source_episode: None,
+                        discovery_tokens: None,
+                        related_nodes: None,
+                        raw_vector_sim: Some(similarity),
+                        original_gate: Some(1.0),
+                        factor_multiplier: Some(factor_multiplier),
+                        created_at: cs.created_at,
                         ..Default::default()
                     });
                 }

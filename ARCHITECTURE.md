@@ -101,8 +101,10 @@ The cognitive and inference capabilities in Mythrax 3.0 are managed by a hardwar
 Mythrax 3.0 decouples cognitive synthesis and memory compaction into a streaming-to-disk architecture backed by strict pagination and sliding window caps:
 
 - **Streaming-to-Disk Cognitive Pipeline**:
-  - Human-readable cognitive artifacts (episodes, summaries, insights, directions, wisdom rules, compactions) are written incrementally to Obsidian Vault markdown files (`vault/episodes/*.md`, `wiki/<scope>/*.md`, `wisdom/*.md`) as they are generated. Intermediate objects are dropped immediately rather than held in memory buffers.
+  - Human-readable cognitive artifacts (synthesized Arbor WikiNodes, wisdom rules, AST symbols, forged reference pages) are written incrementally to canonical Obsidian Vault markdown and JSON files (`wiki/<scope>/*.md`, `wisdom/*.md`, `reference/ast/*.json`) as they are generated. Raw episode `.md` file flushes to disk are intentionally suppressed; episodic turns are retained in SurrealDB (`episode` table) and Short-Term Memory (STM).
   - Ephemeral machine state (DBSCAN clusters) is stored temporarily in SurrealDB `pipeline_cluster` tables and cleaned up upon pipeline conclusion.
+- **Code AST Symbol Indexing (`code_symbol` Table & HNSW Index)**:
+  - Ingested source code files (`.rs`, `.py`, `.ts`, `.go`) undergo AST symbol extraction (`cognitive/ast.rs`), extracting function signatures, struct definitions, trait bounds, and call graph edges into SurrealDB `code_symbol` with an HNSW cosine index `code_symbol_hnsw` (768-dim) and `/reference/ast/{file_slug}.json` metadata files.
 - **Bounded Pagination & Query Constraints**:
   - All database reads avoid unbounded `get_all_*` calls, replacing them with bounded pagination (`LIMIT 50`) loops or streaming cursors.
   - HTTP handlers stream paginated records directly into chunked JSON response streams rather than accumulating full result sets in memory.
@@ -116,9 +118,9 @@ Mythrax 3.0 decouples cognitive synthesis and memory compaction into a streaming
 - **500ms File Watcher Coalescing**: Obsidian vault watcher coalesces file edit events over a 500ms sliding window.
 - **Arbor HTR Parallel Verification Loop**: Evaluates candidate changes within isolated git worktrees using distinct target folders and ports.
 - **DBSCAN Epsilon-Calibrated Compaction**: Daily dreaming compactor clusters episodic memories via dynamic epsilon calibration, writing hierarchical RAPTOR summaries to vault markdown files.
-- **Verbatim Ingestion & Sigmoid Gated Search**:
-  - Verbatim episodic memories are preserved alongside compact summaries.
-  - Search ranking passes similarity scores through a Sigmoid-gated filter ($g = \frac{1}{1 + e^{-20(\text{similarity} - 0.60)}}$) and applies a $0.4$ demotion factor to archived records ($utility < 10.0$).
+- **Verbatim Ingestion & 6-Signal Hybrid Search**:
+  - Verbatim episodic memories are preserved in database and short-term memory alongside compact summaries.
+  - Search ranking uses a 6-signal hybrid search engine combining Vector similarity (with `code_symbol_hnsw`), BM25 FTS relevance, Concept Spreading Activation, STM working memory injection, Temporal neighbor expansion, and Gaussian temporal proximity decay.
 
 ---
 
@@ -145,18 +147,19 @@ Mythrax 3.0 provides robust thread safety, async task cancellation, and signal t
 
 ## 6. End-to-End Cognitive Memory Data Flow
 
-The following data flow trace summarizes the path of session telemetry, streaming compaction, and model execution:
+The following data flow trace summarizes the path of session telemetry, streaming compaction, AST symbol extraction, and model execution:
 
 ```
-[Agent Action / Chat Turn]
+[Agent Action / Chat Turn / Code Edit]
            │
            ▼
 [Pre-Invocation Hook] ──► Extracts text & tool output verbatim (JSONL array)
            │
            ▼
-[SurrealDB Episode Ingestion] ──► SHA-256 content_hash deduplication check
+[SurrealDB Episode / AST Ingestion] ──► SHA-256 content_hash & AST symbol extraction
            │
-           ├──► [Obsidian Vault Incremental Writer] ──► Writes vault/episodes/*.md
+           ├──► [SurrealDB Database & STM] ──► Retains episode records (Disk .md writes suppressed)
+           ├──► [Code AST Parser] ──► Writes /reference/ast/*.json & code_symbol table
            │
            ▼ (Idle Session > 10m Sweep / Bounded Pagination LIMIT 50)
 [Compactor Sweep Service]
