@@ -4053,7 +4053,7 @@ async fn test_stm_mcp_and_file_sync() -> Result<()> {
     assert_eq!(db_val.get("secret_data").unwrap(), "bearer my-secret-token");
 
     // Verify it is written to disk
-    let stm_file_path = workspace_root.join(".handoffs").join("stm_sess_x.json");
+    let stm_file_path = vault_root.join(".handoffs").join("stm_sess_x.json");
     assert!(stm_file_path.exists());
 
     let file_content = fs::read_to_string(&stm_file_path)?;

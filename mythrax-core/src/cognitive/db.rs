@@ -107,12 +107,7 @@ pub async fn save_code_symbol(
 
     // Mirror AST CodeSymbol into physical Obsidian vault file
     let rel_ast_path = format!("reference/ast/{}_{}_ast.md", symbol.file_slug, symbol.name);
-    let home = std::env::var("HOME").unwrap_or_default();
-    let root = if !home.is_empty() {
-        std::path::PathBuf::from(home).join("mythrax-vault")
-    } else {
-        crate::store::find_vault_root()
-    };
+    let root = crate::store::find_vault_root();
     let full_ast_path = root.join(&rel_ast_path);
     if let Some(parent) = full_ast_path.parent() {
         let _ = std::fs::create_dir_all(parent);
