@@ -40,6 +40,23 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
     };
 
     match mapped_action {
+        "sync_workspace" => {
+            let ws_path_str = args
+                .get("workspace_path")
+                .or_else(|| args.get("source"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("/Users/keith/Documents/mythrax");
+            let ws_path = std::path::PathBuf::from(ws_path_str);
+            crate::vault::ingestion::sync_workspace_docs_to_vault(&ws_path, &state.store, &*state.backend).await?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Synchronized workspace documentation and extracted AST code symbols for workspace at {:?}", ws_path)
+                    }
+                ]
+            }))
+        }
         "complete_handoff" => {
             let task_id = args
                 .get("task_id")
@@ -2256,7 +2273,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                          > There are pending cloud cognitive task callbacks in SurrealDB, but the background Mythrax Cloud Brain is not active (no heartbeat in the last 60 seconds).\n\
                          > You MUST immediately spin up the Mythrax Cloud Brain subagent to execute dreaming and callback resolution using your cloud brain!\n\
                          > Run this tool call to boot it:\n\
-                         > `invoke_subagent(TypeName=\"self\", Role=\"Mythrax Cloud Brain\", Prompt=\"You are the Mythrax Cloud Brain. Your job is to continuously orchestrate Mythrax operations using MCP endpoints in an infinite loop. RULES: 1. In call_mcp_tool calls, ServerName MUST be exact unquoted 'mythrax', and ToolName MUST be manage, write, or read. 2. ONLY use call_mcp_tool endpoints. 3. Execute in a CONTINUOUS INFINITE LOOP. PHASE 1 (HIGHEST PRIORITY): Cognitive Callback Resolution Loop - call_mcp_tool: manage(action=\\\"pre_invocation\\\", caller=\\\"distiller\\\"); resolve each pending task via write(action=\\\"cognitive_callback\\\", callback_id=\\\"<ID>\\\", result=\\\"<OUTPUT>\\\"). PHASE 2: Ingestion & Embedding Maintenance - call_mcp_tool: manage(action=\\\"reprocess\\\"). PHASE 3 (CONDITIONAL): Dynamic Scope Dreaming & Direction Backprop - FIRST check if uncompacted work exists by inspecting active scopes/turns via read(action=\\\"nodes\\\"). ONLY if new episodes/turns have been ingested or updated since last pass, run: manage(action=\\\"precompact\\\"); then for EACH scope sequentially: manage(action=\\\"summarize\\\", scope=\\\"<scope>\\\", async_mode=false), manage(action=\\\"ideate\\\", scope=\\\"<scope>\\\", hypothesis=\\\"Auto-synthesize research directions for scope\\\"), manage(action=\\\"backprop\\\", scope=\\\"<scope>\\\"). Otherwise, SKIP Phase 3. PHASE 4 (CONDITIONAL): Wisdom Graduation, Cleaning & Vault Repair - ONLY if Phase 3 ran or vault modifications occurred, run: manage(action=\\\"audit_compliance\\\"), manage(action=\\\"clean\\\"), manage(action=\\\"verify\\\", fix=true), manage(action=\\\"organize\\\"). Otherwise, SKIP Phase 4. INNER SLEEP: Schedule 10s timer before repeating cycle from Phase 1.\")`\n"
+                         > `invoke_subagent(TypeName=\"self\", Role=\"Mythrax Cloud Brain\", Prompt=\"You are the Mythrax Cloud Brain. Your job is to continuously orchestrate Mythrax operations using MCP endpoints in an infinite loop. RULES: 1. In call_mcp_tool calls, ServerName MUST be exact unquoted 'mythrax', and ToolName MUST be manage, write, or read. 2. ONLY use call_mcp_tool endpoints. 3. Execute in a CONTINUOUS INFINITE LOOP. PHASE 1 (HIGHEST PRIORITY): Cognitive Callback Resolution Loop - call_mcp_tool: manage(session_id=\\\"<active_session_id>\\\", action=\\\"pre_invocation\\\", caller=\\\"distiller\\\"); resolve each pending task via write(action=\\\"cognitive_callback\\\", callback_id=\\\"<ID>\\\", result=\\\"<OUTPUT>\\\"). PHASE 2: Ingestion & Embedding Maintenance - call_mcp_tool: manage(action=\\\"reprocess\\\"). PHASE 3: Dynamic Scope Dreaming, Hypothesis Formation, Refinement & Insight Synthesis - call_mcp_tool: manage(action=\\\"precompact\\\"); for EACH scope in ['general', 'mythrax'] sequentially: manage(action=\\\"summarize\\\", scope=\\\"<scope>\\\", async_mode=false), manage(action=\\\"hypothesize\\\", scope=\\\"<scope>\\\"), manage(action=\\\"refine\\\", scope=\\\"<scope>\\\"), manage(action=\\\"graduate\\\", scope=\\\"<scope>\\\"). PHASE 4: Wisdom Graduation, Cleaning & Vault Repair - call_mcp_tool: manage(action=\\\"audit_compliance\\\"), manage(action=\\\"clean\\\"), manage(action=\\\"verify\\\", fix=true), manage(action=\\\"organize\\\"). INNER SLEEP: Schedule 10s timer before repeating cycle from Phase 1.\")`\n"
+
                     );
                 }
             }

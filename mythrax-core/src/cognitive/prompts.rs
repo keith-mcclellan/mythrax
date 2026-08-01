@@ -15,8 +15,12 @@ pub struct ExtractedFactDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExtractFactsResponse {
+    #[serde(default)]
     pub facts: Vec<ExtractedFactDto>,
+    #[serde(default)]
+    pub no_facts_reason: Option<String>,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FormHypothesisDto {
@@ -302,3 +306,25 @@ mod tests {
         assert_eq!(grad_parsed.scope, "universal");
     }
 }
+
+pub fn clean_json_payload(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let stripped = if trimmed.starts_with("```") {
+        let lines: Vec<&str> = trimmed.lines().collect();
+        if lines.len() >= 2 && lines.last().map(|l| l.trim()).unwrap_or("") == "```" {
+            lines[1..lines.len() - 1].join("\n")
+        } else {
+            trimmed.trim_matches('`').trim().to_string()
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    if let (Some(start), Some(end)) = (stripped.find('{'), stripped.rfind('}')) {
+        if start <= end {
+            return stripped[start..=end].to_string();
+        }
+    }
+    stripped
+}
+

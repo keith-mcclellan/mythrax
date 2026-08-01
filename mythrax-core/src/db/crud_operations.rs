@@ -1441,39 +1441,38 @@ impl SurrealBackend {
     }
 
     pub async fn save_wiki_node_db(&self, node: &WikiNode) -> Result<String> {
+        let raw_display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
+        let display_title = raw_display_title.strip_suffix(".md").unwrap_or(raw_display_title);
+
+        let (fm_opt, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
+        let mut yaml_val = match fm_opt {
+            Some(serde_yaml::Value::Mapping(map)) => map,
+            _ => serde_yaml::Mapping::new(),
+        };
+
+        yaml_val.insert(serde_yaml::Value::String("title".to_string()), serde_yaml::Value::String(display_title.to_string()));
+        yaml_val.insert(serde_yaml::Value::String("scope".to_string()), serde_yaml::Value::String(node.scope.clone()));
+        if let Some(ref nt) = node.node_type {
+            yaml_val.insert(serde_yaml::Value::String("node_type".to_string()), serde_yaml::Value::String(nt.clone()));
+        }
+        if let Some(ref it) = node.item_type {
+            yaml_val.insert(serde_yaml::Value::String("item_type".to_string()), serde_yaml::Value::String(it.clone()));
+        }
+        if let Some(mc) = node.metacognitive_confidence {
+            yaml_val.insert(serde_yaml::Value::String("metacognitive_confidence".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(mc)));
+        }
+
+        let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
+        let body_content = if raw_body.trim().is_empty() {
+            format!("# {}\n", display_title)
+        } else {
+            raw_body.trim().to_string()
+        };
+        let final_content = format!("---\n{}\n---\n\n{}\n", yaml_str.trim(), body_content);
+
+
         if let Some(ref vp) = node.vault_path {
             self.record_indexing_write(vp).await;
-
-            // Mirror WikiNode to physical Markdown vault file
-            let raw_display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
-            let display_title = raw_display_title.strip_suffix(".md").unwrap_or(raw_display_title);
-            let (fm_opt, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
-            let mut yaml_val = match fm_opt {
-                Some(serde_yaml::Value::Mapping(map)) => map,
-                _ => serde_yaml::Mapping::new(),
-            };
-
-            yaml_val.insert(serde_yaml::Value::String("title".to_string()), serde_yaml::Value::String(display_title.to_string()));
-            yaml_val.insert(serde_yaml::Value::String("scope".to_string()), serde_yaml::Value::String(node.scope.clone()));
-            if let Some(ref nt) = node.node_type {
-                yaml_val.insert(serde_yaml::Value::String("node_type".to_string()), serde_yaml::Value::String(nt.clone()));
-            }
-            if let Some(ref it) = node.item_type {
-                yaml_val.insert(serde_yaml::Value::String("item_type".to_string()), serde_yaml::Value::String(it.clone()));
-            }
-            if let Some(mc) = node.metacognitive_confidence {
-                yaml_val.insert(serde_yaml::Value::String("metacognitive_confidence".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(mc)));
-            }
-
-            let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-            let body_trimmed = raw_body.trim();
-            let body_with_h1 = if body_trimmed.starts_with("# ") {
-                body_trimmed.to_string()
-            } else {
-                format!("# {}\n\n{}", display_title, body_trimmed)
-            };
-            let markdown = format!("---\n{}\n---\n\n{}\n", yaml_str.trim(), body_with_h1);
-
             let root = crate::store::find_vault_root();
             let full_path = root.join(vp);
             if let Some(parent) = full_path.parent() {
@@ -1482,7 +1481,7 @@ impl SurrealBackend {
 
             let should_write = if full_path.exists() {
                 if let Ok(existing) = std::fs::read_to_string(&full_path) {
-                    existing.trim() != markdown.trim()
+                    existing.trim() != final_content.trim()
                 } else {
                     true
                 }
@@ -1491,9 +1490,11 @@ impl SurrealBackend {
             };
 
             if should_write {
-                let _ = std::fs::write(&full_path, &markdown);
+                let _ = std::fs::write(&full_path, &final_content);
             }
         }
+
+
         let mut node_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
 
@@ -1514,10 +1515,11 @@ impl SurrealBackend {
             is_update = true;
         }
 
+
         let content_hash = node.content_hash.clone().unwrap_or_else(|| {
             use sha2::Digest;
             let mut hasher = sha2::Sha256::new();
-            hasher.update(node.content.as_bytes());
+            hasher.update(final_content.as_bytes());
             format!("{:x}", hasher.finalize())
         });
 
@@ -1568,7 +1570,7 @@ impl SurrealBackend {
         let embedding_val = if let Some(ref emb) = node.embedding {
             Some(emb.clone())
         } else if let Some(ref _embedder) = self.embedder {
-            let text_to_embed = format!("{}: {}", node.name, node.content);
+            let text_to_embed = format!("{}: {}", node.name, final_content);
             match self.embed(&text_to_embed).await {
                 Ok(vec) => Some(vec),
                 Err(e) => {
@@ -1585,7 +1587,7 @@ impl SurrealBackend {
             .query(query_str)
             .bind(("node_uuid", node_uuid.as_str()))
             .bind(("name", node.name.as_str()))
-            .bind(("content", node.content.as_str()))
+            .bind(("content", final_content.as_str()))
             .bind(("target_scope", node.scope.as_str()))
             .bind(("vault_path", vp_val.as_str()))
             .bind(("embedding", embedding_val.clone()))

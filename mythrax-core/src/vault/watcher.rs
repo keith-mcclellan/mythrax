@@ -880,7 +880,7 @@ pub async fn sync_file_to_db_with_cache(
                 .to_string()
         });
 
-        let episode = EpisodeSave::builder(title, plain_body)
+        let episode = EpisodeSave::builder(title, content.clone())
             .entities(frontmatter.entities.unwrap_or_default())
             .scope(frontmatter.scope)
             .vault_path(Some(rel_path))

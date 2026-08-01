@@ -27941,3 +27941,91 @@ context_guard: Avoid concurrent RocksDB process lock by starting in client mode
 
 ====================================
 
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = === PROFILE FOR session_id = test_session_15test_session_15 ===
+ ===
+
+====================================
+
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_10 ===
+big_key: A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A 
+====================================
+
+=== PROFILE FOR session_id = session-1 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = test-session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = session-123 ===
+
+====================================
+
+=== PROFILE FOR session_id = root_session_789 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_15 ===
+
+====================================
+
+=== PROFILE FOR session_id = test_session_10 ===
+big_key: A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A A 
+====================================
+
+=== PROFILE FOR session_id = 0e18c8ee-0160-4460-aed2-2f80d90d0ef3 ===
+
+====================================
+

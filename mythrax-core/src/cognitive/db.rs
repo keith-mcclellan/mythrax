@@ -103,36 +103,101 @@ pub async fn save_code_symbol(
     backend: &dyn StorageBackend,
     symbol: &crate::contracts::CodeSymbol,
 ) -> Result<String> {
-    let slug_name = format!("{}_{}", symbol.file_slug, symbol.name);
+    save_code_symbols_for_file(backend, &[symbol.clone()], &symbol.file_path, &symbol.scope).await?;
+    Ok(format!("{}_{}", symbol.file_slug, symbol.name))
+}
 
-    // Mirror AST CodeSymbol into physical Obsidian vault file
-    let rel_ast_path = format!("reference/ast/{}_{}_ast.md", symbol.file_slug, symbol.name);
+pub async fn save_code_symbols_for_file(
+    backend: &dyn StorageBackend,
+    symbols: &[crate::contracts::CodeSymbol],
+    file_path: &str,
+    scope: &str,
+) -> Result<()> {
+    if symbols.is_empty() {
+        return Ok(());
+    }
+
+    let first_sym = &symbols[0];
+    let file_slug = &first_sym.file_slug;
+
+    // 1. Save each individual symbol record to SurrealDB table 'code_symbol'
+    for symbol in symbols {
+        let slug_name = format!("{}_{}", symbol.file_slug, symbol.name);
+        if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+            let query = "
+                UPSERT type::record('code_symbol', $slug_name) CONTENT {
+                    name: $name,
+                    symbol_type: $symbol_type,
+                    file_path: $file_path,
+                    file_slug: $file_slug,
+                    start_line: $start_line,
+                    end_line: $end_line,
+                    signature: $signature,
+                    doc_comment: $doc_comment,
+                    call_graph: $call_graph,
+                    scope: $scope,
+                    embedding: $embedding,
+                    created_at: time::now()
+                };
+            ";
+            let _ = surreal
+                .db
+                .query(query)
+                .bind(("slug_name", slug_name.as_str()))
+                .bind(("name", symbol.name.as_str()))
+                .bind(("symbol_type", symbol.symbol_type.as_str()))
+                .bind(("file_path", symbol.file_path.as_str()))
+                .bind(("file_slug", symbol.file_slug.as_str()))
+                .bind(("start_line", symbol.start_line as i64))
+                .bind(("end_line", symbol.end_line as i64))
+                .bind(("signature", symbol.signature.as_str()))
+                .bind(("doc_comment", symbol.doc_comment.as_deref()))
+                .bind(("call_graph", symbol.call_graph.clone()))
+                .bind(("scope", symbol.scope.as_str()))
+                .bind(("embedding", symbol.embedding.clone()))
+                .await;
+        }
+    }
+
+    let clean_scope = if scope.trim().is_empty() { "general" } else { scope.trim() };
+
+    // 2. Build ONE consolidated AST markdown file for the ENTIRE code file on disk under reference/<scope>/ast/
+    let rel_ast_path = format!("reference/{}/ast/{}_ast.md", clean_scope, file_slug);
     let root = crate::store::find_vault_root();
     let full_ast_path = root.join(&rel_ast_path);
     if let Some(parent) = full_ast_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let doc = format!(
-        "---\ntitle: \"AST: {}\"\nscope: \"{}\"\nnode_type: \"ast_symbol\"\n---\n\n# AST: {}\n\n**Symbol:** `{}` ({})\n**File:** `{}` (L{}-L{})\n**Signature:** `{}`\n\n**Doc Comment:**\n{}\n",
-        symbol.name,
-        symbol.scope,
-        symbol.name,
-        symbol.name,
-        symbol.symbol_type,
-        symbol.file_path,
-        symbol.start_line,
-        symbol.end_line,
-        symbol.signature,
-        symbol.doc_comment.as_deref().unwrap_or("None")
+
+    let mut doc = format!(
+        "---\ntitle: \"AST: {}\"\nscope: \"{}\"\nnode_type: \"ast_symbol\"\nfile_path: \"{}\"\n---\n\n# AST: {}\n\n**File Path:** `{}`\n**Symbol Count:** {}\n\n",
+        file_path,
+        clean_scope,
+        file_path,
+        file_path,
+        file_path,
+        symbols.len()
     );
+
+    for sym in symbols {
+        doc.push_str(&format!(
+            "### `{}` ({})\n- **Lines:** L{}-L{}\n- **Signature:** `{}`\n\n",
+            sym.name, sym.symbol_type, sym.start_line, sym.end_line, sym.signature
+        ));
+        if let Some(ref doc_comment) = sym.doc_comment {
+            doc.push_str(&format!("**Doc Comment:**\n{}\n\n", doc_comment.trim()));
+        }
+        doc.push_str("---\n\n");
+    }
+
     let _ = std::fs::write(&full_ast_path, &doc);
 
-    // Mirror to database via WikiNode so it's indexed regardless of backend type
+    // 3. Mirror the single consolidated file to SurrealDB as a single WikiNode under <scope>/ast/<file_slug>
     let ast_node = WikiNode {
         id: None,
-        name: format!("ast/{}", slug_name),
+        name: format!("{}/ast/{}", clean_scope, file_slug),
         content: doc,
-        scope: symbol.scope.clone(),
+        scope: clean_scope.to_string(),
         vault_path: Some(rel_ast_path),
         node_type: Some("ast_symbol".to_string()),
         item_type: Some("ast_symbol".to_string()),
@@ -140,45 +205,10 @@ pub async fn save_code_symbol(
     };
     let _ = backend.save_wiki_node(&ast_node).await;
 
-    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-        let query = "
-            UPSERT type::record('code_symbol', $slug_name) CONTENT {
-                name: $name,
-                symbol_type: $symbol_type,
-                file_path: $file_path,
-                file_slug: $file_slug,
-                start_line: $start_line,
-                end_line: $end_line,
-                signature: $signature,
-                doc_comment: $doc_comment,
-                call_graph: $call_graph,
-                scope: $scope,
-                embedding: $embedding,
-                created_at: time::now()
-            };
-        ";
-        let mut resp = surreal
-            .db
-            .query(query)
-            .bind(("slug_name", slug_name.as_str()))
-            .bind(("name", symbol.name.as_str()))
-            .bind(("symbol_type", symbol.symbol_type.as_str()))
-            .bind(("file_path", symbol.file_path.as_str()))
-            .bind(("file_slug", symbol.file_slug.as_str()))
-            .bind(("start_line", symbol.start_line as i64))
-            .bind(("end_line", symbol.end_line as i64))
-            .bind(("signature", symbol.signature.as_str()))
-            .bind(("doc_comment", symbol.doc_comment.as_deref()))
-            .bind(("call_graph", symbol.call_graph.clone()))
-            .bind(("scope", symbol.scope.as_str()))
-            .bind(("embedding", symbol.embedding.clone()))
-            .await?;
-        let raw: Option<crate::contracts::CodeSymbol> = resp.take(0)?;
-        Ok(raw.and_then(|r| r.id).unwrap_or_else(|| slug_name))
-    } else {
-        Ok(slug_name)
-    }
+
+    Ok(())
 }
+
 
 pub async fn save_subagent_worktree(
     backend: &dyn StorageBackend,

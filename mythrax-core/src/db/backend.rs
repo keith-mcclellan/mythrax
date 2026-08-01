@@ -3158,7 +3158,7 @@ mod tests {
                 10,
                 0,
                 0.0,
-                Some(20),
+                Some(12),
                 false,
                 true,
                 true,

@@ -10352,3 +10352,89 @@ query: "Body content", profile: 1us, embed: 3258us, terms: 60us, db: 10072us, re
 query: "bidirectional sync", profile: 3795us, embed: 11587us, terms: 65us, db: 8795us, rerank_start: 1322us, total: 25630us
 query: "updated body", profile: 2us, embed: 7889us, terms: 85us, db: 6956us, rerank_start: 1999us, total: 17048us
 query: "memory", profile: 2607us, embed: 1143252us, terms: 398us, db: 18358us, rerank_start: 1563us, total: 1174287us
+query: "execution context", profile: 8us, embed: 23792us, terms: 4101us, db: 7318us, rerank_start: 20110us, total: 55523us
+query: "Raptor Summary", profile: 2us, embed: 9197us, terms: 91us, db: 8684us, rerank_start: 2884us, total: 21058us
+query: "permanent wiki nodes", profile: 2us, embed: 8680us, terms: 128us, db: 8202us, rerank_start: 1976us, total: 19105us
+query: "First episode", profile: 4us, embed: 39845us, terms: 7051us, db: 14674us, rerank_start: 5991us, total: 67738us
+query: "refactored tests or fixes", profile: 5us, embed: 19432us, terms: 2473us, db: 11455us, rerank_start: 3645us, total: 37177us
+query: "security patterns", profile: query: 5"General noteus, embed: "26768us, terms: , profile: 297316us, db: us, embed: 4195128493us, rerank_start: us, terms: 51654682us, db: us, total: 103758us
+29033us, rerank_start: 6675us, total: 69012us
+query: "Write 4", profile: 5us, embed: 9260us, terms: 3700us, db: 3379us, rerank_start: 1517us, total: 17896us
+query: "Bulk Content 19", profile: 1us, embed: 3118us, terms: 2294us, db: 3839us, rerank_start: 683us, total: 9963us
+query: "Write 4", profile: 2us, embed: 3499us, terms: 2170us, db: 3594us, rerank_start: 546us, total: 9835us
+query: "Bulk Content 19", profile: 1us, embed: 3363us, terms: 2256us, db: 3775us, rerank_start: 538us, total: 9958us
+query: "Write 4", profile: 2us, embed: 3400us, terms: 2197us, db: 3680us, rerank_start: 510us, total: 9813us
+query: "Bulk Content 19", profile: 0us, embed: 2950us, terms: 2166us, db: 3524us, rerank_start: 596us, total: 9262us
+query: "Write 4", profile: 12us, embed: 3300us, terms: 2423us, db: 4027us, rerank_start: 742us, total: 10529us
+query: "Bulk Content 19", profile: 1us, embed: 3348us, terms: 2113us, db: 3914us, rerank_start: 541us, total: 9943us
+query: "Write 4", profile: 2us, embed: 106278us, terms: 97992us, db: 54835us, rerank_start: 67740us, total: 326896us
+query: "Bulk Content 19", profile: 1us, embed: 54507us, terms: 49276us, db: 10913us, rerank_start: 1000us, total: 115743us
+query: "Hello, how do I optimize the pipeline?", profile: 2157us, embed: 9284us, terms: 3862us, db: 4542us, rerank_start: 3499us, total: 23397us
+query: "current status", profile: 2305us, embed: 3772us, terms: 2866us, db: 4631us, rerank_start: 1958us, total: 15614us
+query: "Database index compression", profile: 3us, embed: 11321us, terms: 2174us, db: 12129us, rerank_start: 3249us, total: 28921us
+query: "Database index compression", profile: 62016us, embed: 3876us, terms: 54us, db: 8804us, rerank_start: 2127us, total: 76908us
+query: "Sure, OK", profile: 2us, embed: 13412us, terms: 2199us, db: 4628us, rerank_start: 1817us, total: 22244us
+query: "troubleshooting process", profile: 2us, embed: 15981us, terms: 2499us, db: 5746us, rerank_start: 3154us, total: 27990us
+query: "Sure thing", profile: 1us, embed: 13382us, terms: 30us, db: 5123us, rerank_start: 683us, total: 19661us
+query: "This episode is pruned", profile: 29us, embed: 14583us, terms: 3084us, db: 6396us, rerank_start: 2890us, total: 27015us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 1us, embed: 12362us, terms: 1862us, db: 7191us, rerank_start: 3772us, total: 25404us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 1us, embed: 18800us, terms: 84us, db: 7703us, rerank_start: 1051us, total: 28091us
+query: "What compile actions did I run?", profile: 4us, embed: 13927us, terms: 2798us, db: 9316us, rerank_start: 26442us, total: 60358us
+query: "Hydration", profile: 3us, embed: 10865us, terms: 1528us, db: 6269us, rerank_start: 2280us, total: 21067us
+query: "Big Episode", profile: 4us, embed: 11383us, terms: 1680us, db: 15588us, rerank_start: 3442us, total: 35186us
+query: "Big Episode", profile: 1us, embed: 3549us, terms: 54us, db: 15188us, rerank_start: 1684us, total: 23543us
+query: "Episode", profile: 4us, embed: 13169us, terms: 3450us, db: 6785us, rerank_start: 3215us, total: 26912us
+query: "test query", profile: 3966us, embed: 9371us, terms: 3637us, db: 4705us, rerank_start: 2492us, total: 24200us
+query: "Timeline Episode 3", profile: 3us, embed: 10430us, terms: 1953us, db: 7710us, rerank_start: 2168us, total: 22441us
+query: "mythrax-core project context", profile: 3873us, embed: 13332us, terms: 4853us, db: 4771us, rerank_start: 5524us, total: 32414us
+query: "mythrax-core project context", profile: 2876us, embed: 15453us, terms: 4421us, db: 3691us, rerank_start: 3798us, total: 30312us
+query: "mythrax-core project context", profile: 5826us, embed: 13670us, terms: 4545us, db: 4707us, rerank_start: 5647us, total: 34428us
+query: "mythrax-core project context", profile: 5735us, embed: 10757us, terms: 4011us, db: 5573us, rerank_start: 2830us, total: 28970us
+query: "mythrax-core project context", profile: 2191us, embed: 6561us, terms: 1943us, db: 5133us, rerank_start: 2789us, total: 18739us
+query: "mythrax", profile: 366us, embed: 2552us, terms: 590us, db: 26504us, rerank_start: 2422us, total: 56352us
+query: "Parent Insight", profile: 24us, embed: 20084us, terms: 4390us, db: 8643us, rerank_start: 4133us, total: 39458us
+query: "Redis", profile: 3us, embed: 22852us, terms: 4661us, db: 5536us, rerank_start: 4981us, total: 45240us
+query: "failure", profile: 1us, embed: 3189us, terms: 45us, db: 6054us, rerank_start: 1232us, total: 10609us
+query: "Parent Insight", profile: 1us, embed: 10459us, terms: 40us, db: 14163us, rerank_start: 896us, total: 54392us
+query: "second step before", profile: 8140us, embed: 27202us, terms: 5813us, db: 9833us, rerank_start: 17419us, total: 68543us
+query: "Parent Insight", profile: 5us, embed: 33632us, terms: 6694us, db: 7347us, rerank_start: 7558us, total: 59812us
+query: "Concurrency", profile: 5us, embed: 31492us, terms: 3741us, db: 9646us, rerank_start: 3893us, total: 49105us
+query: "Parent Insight", profile: 0us, embed: 2828us, terms: 30us, db: 4302us, rerank_start: 643us, total: 9970us
+query: "secret", profile: 6us, embed: 28258us, terms: 10097us, db: 6565us, rerank_start: 4947us, total: 50017us
+query: "secret", profile: 1us, embed: 5820us, terms: 1925us, db: 5513us, rerank_start: 1513us, total: 14994us
+query: "Secret", profile: 4us, embed: 12277us, terms: 1967us, db: 3781us, rerank_start: 2714us, total: 20775us
+query: "Secret", profile: 0us, embed: 4113us, terms: 37us, db: 7260us, rerank_start: 782us, total: 12275us
+query: "Multi-Paragraph", profile: 4us, embed: 17630us, terms: 7453us, db: 8643us, rerank_start: 5808us, total: 39888us
+query: "Multi-Paragraph", profile: 0us, embed: 4923us, terms: 2722us, db: 6896us, rerank_start: 1274us, total: 16042us
+query: "Single-Paragraph", profile: 1us, embed: 4809us, terms: 3362us, db: 7896us, rerank_start: 1241us, total: 17682us
+query: "Avoid", profile: 4us, embed: 14336us, terms: 5991us, db: 6195us, rerank_start: 2899us, total: 29737us
+query: "Avoid", profile: 0us, embed: 3504us, terms: 3462us, db: 5803us, rerank_start: 1089us, total: 13964us
+query: "redis", profile: 3us, embed: 14277us, terms: 2484us, db: 6676us, rerank_start: 2295us, total: 25797us
+query: "Pattern", profile: 2us, embed: 15564us, terms: 2980us, db: 6237us, rerank_start: 3329us, total: 33096us
+query: "Hello", profile: 1760us, embed: 7544us, terms: 2824us, db: 3698us, rerank_start: 2221us, total: 18084us
+query: "Hello again", profile: 1319us, embed: 2661us, terms: 1588us, db: 3292us, rerank_start: 1294us, total: 10175us
+query: "Hello, how do I optimize the pipeline?", profile: 3978us, embed: 17881us, terms: 7601us, db: 6482us, rerank_start: 4769us, total: 40813us
+query: "current status", profile: 3747us, embed: 5123us, terms: 3116us, db: 9931us, rerank_start: 4987us, total: 26938us
+query: "Database index compression", profile: 2us, embed: 20877us, terms: 4337us, db: 20332us, rerank_start: 4155us, total: 49760us
+query: "Database index compression", profile: 105800us, embed: 8992us, terms: 75us, db: 22165us, rerank_start: 9078us, total: 146142us
+query: "Sure, OK", profile: 1us, embed: 9816us, terms: 2436us, db: 6345us, rerank_start: 3016us, total: 21680us
+query: "Sure thing", profile: 0us, embed: 9349us, terms: 38us, db: 16445us, rerank_start: 19772us, total: 45751us
+query: "troubleshooting process", profile: 3us, embed: 15618us, terms: 2232us, db: 5298us, rerank_start: 2705us, total: 25945us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 2us, embed: 12206us, terms: 2103us, db: 6208us, rerank_start: 2344us, total: 22939us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 0us, embed: 46361us, terms: 65us, db: 13824us, rerank_start: 1379us, total: 61773us
+query: "This episode is pruned", profile: 3us, embed: 16559us, terms: 2586us, db: 8695us, rerank_start: 3265us, total: 31168us
+query: "What compile actions did I run?", profile: 3us, embed: 22639us, terms: 3305us, db: 11799us, rerank_start: 37498us, total: 85257us
+query: "Hydration", profile: 3us, embed: 16636us, terms: 3132us, db: 7799us, rerank_start: 3834us, total: 31521us
+query: "Episode", profile: 3us, embed: 13943us, terms: 3095us, db: 7594us, rerank_start: 4013us, total: 28846us
+query: "Big Episode", profile: 3us, embed: 10863us, terms: 10504us, db: 130507us, rerank_start: 22894us, total: 182000us
+query: "test query", profile: 5065us, embed: 12897us, terms: 4731us, db: 4048us, rerank_start: 3281us, total: 30092us
+query: "Big Episode", profile: 1us, embed: 3392us, terms: 35us, db: 18595us, rerank_start: 1423us, total: 27865us
+query: "Timeline Episode 3", profile: 5us, embed: 22161us, terms: 25697us, db: 20927us, rerank_start: 7959us, total: 76913us
+query: "mythrax-core project context", profile: 2162us, embed: 24194us, terms: 7005us, db: 6744us, rerank_start: 7517us, total: 47662us
+query: "mythrax-core project context", profile: 4340us, embed: 12182us, terms: 6409us, db: 4279us, rerank_start: 2625us, total: 29872us
+query: "mythrax-core project context", profile: 3342us, embed: 11999us, terms: 7435us, db: 6476us, rerank_start: 6816us, total: 36198us
+query: "mythrax-core project context", profile: 5552us, embed: 13379us, terms: 7258us, db: 7877us, rerank_start: 4117us, total: 38219us
+query: "mythrax-core project context", profile: 1836us, embed: 6440us, terms: 1318us, db: 4619us, rerank_start: 2672us, total: 17036us
+query: "*", profile: 28us, embed: 2017us, terms: 555us, db: 4501us, rerank_start: 520us, total: 7707us
+query: "mythrax project context", profile: 2210us, embed: 3058us, terms: 1525us, db: 2535us, rerank_start: 1078us, total: 10546us
+query: "test", profile: 67us, embed: 5727us, terms: 2389us, db: 13069us, rerank_start: 1068us, total: 22460us

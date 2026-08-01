@@ -179,8 +179,11 @@ impl LLMClient {
         system_instruction: &str,
         prompt: &str,
     ) -> Result<String> {
-        self.completion(db, Some(system_instruction), prompt).await
+        let profile = crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction);
+        self.routed_completion(db, &profile, Some(system_instruction), prompt).await
     }
+
+
 
     pub async fn routed_completion(
         &self,
@@ -246,7 +249,7 @@ impl RealLlmProvider {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        let mock_llm = match db.get_profile_key("llm.mock").await {
+        let mock_llm = crate::is_test_mock() || match db.get_profile_key("llm.mock").await {
             Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
             _ => false,
         };
@@ -255,6 +258,7 @@ impl RealLlmProvider {
                 .completion_explicit(db, "mock", "", "", system_instruction, prompt, false, true)
                 .await;
         }
+
 
         // --- 1. PRIORITY 1: COGNITIVE CALLBACK ---
         if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
@@ -306,14 +310,19 @@ impl RealLlmProvider {
                         return Ok(res);
                     }
 
+                    let _ = surreal_backend
+                        .update_cognitive_task_status(&task_id, crate::db::TaskStatus::Pending, None)
+                        .await;
                     tracing::warn!(
-                        "Cognitive callback timed out, falling back to direct cloud / local models"
+                        "Cognitive callback timed out for task {}, re-queued in Pending status for Cloud Brain resolution",
+                        task_id
                     );
                 } else {
                     tracing::warn!(
                         "Failed to create cognitive task, falling back to direct cloud / local models"
                     );
                 }
+
             }
         }
 
@@ -579,7 +588,15 @@ impl RealLlmProvider {
         is_mock: bool,
     ) -> Result<String> {
         if active_provider == "mock" || is_mock {
-            if prompt.contains("Analyze the following dialog") {
+            if system_instruction.map(|s| s.contains("facts") || s.contains("OUTPUT SCHEMA")).unwrap_or(false)
+                || prompt.contains("VAULT PATH:")
+                || prompt.contains("SOURCE CODE:")
+                || prompt.contains("REFERENCE SOURCE:")
+                || prompt.contains("FILE PATH:")
+                || prompt.contains("SKILL PATH:")
+            {
+                return Ok(r#"{"facts": [{"hypothesis": "Test Hypothesis Pattern", "causal_insight": "Test Causal Insight Explanation for behavior.", "raw_evidence": ["evidence.rs:L1-L10"], "artifact_refs": ["test_file.rs"], "metacognitive_confidence": 95}]}"#.to_string());
+            } else if prompt.contains("Analyze the following dialog") {
                 return Ok(r#"{"target_pattern": "test_pattern", "action_to_avoid": "test_action", "causal_explanation": "test_causal", "prescribed_remedy": "test_remedy"}"#.to_string());
             } else if prompt.contains("Validate if these should merge") {
                 if std::env::var("MYTHRAX_MOCK_MALFORMED_MERGE").is_ok() {
@@ -642,12 +659,23 @@ impl RealLlmProvider {
                 } else {
                     return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster containing key decisions and outcomes for this episode.", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
                 }
+            } else if system_instruction.map(|s| s.contains("FormHypothesesResponse") || s.contains("hypotheses")).unwrap_or(false) || prompt.contains("Hypotheses") {
+                return Ok(r#"{"hypotheses": [{"claim": "Test Formed Claim", "insight": "Test Formed Insight", "fact_indices": [0], "slug": "test_claim"}]}"#.to_string());
+            } else if system_instruction.map(|s| s.contains("RefineHypothesisResponse") || s.contains("refine")).unwrap_or(false) || prompt.contains("Refining") {
+                return Ok(r#"{"action": "support", "new_confidence": 0.85, "refined_insight": "Refined test insight", "reasoning": "Mock test support"}"#.to_string());
+            } else if system_instruction.map(|s| s.contains("AncestorMergeResponse") || s.contains("merge")).unwrap_or(false) || prompt.contains("Merge") {
+                return Ok("{\"suggested_path\": \"wiki/test/test_topic.md\", \"title\": \"Test Topic Title\", \"markdown_content\": \"# Test Topic\\n\\nTest content\"}".to_string());
+            } else if system_instruction.map(|s| s.contains("GraduationResponse") || s.contains("graduation")).unwrap_or(false) || prompt.contains("Graduation") {
+                return Ok(r#"{"scope": "universal", "reasoning": "Applies across projects"}"#.to_string());
             } else {
                 return Ok(
                     r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string(),
                 );
             }
         }
+
+
+
 
         let config = db.get_llm_config().await?;
 
