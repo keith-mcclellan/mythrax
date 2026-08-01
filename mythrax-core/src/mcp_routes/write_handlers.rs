@@ -368,7 +368,7 @@ pub async fn handle_record_memory(state: &ApiState, args: Value) -> Result<Value
                 serde_json::json!(thought.created_at),
             );
             let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-            let markdown = format!("---\n{}---\n{}", yaml_str.trim(), thought.content);
+            let markdown = format!("---\n{}\n---\n{}", yaml_str.trim(), thought.content);
 
             state.store.write_file(&relative_path, &markdown)?;
 
