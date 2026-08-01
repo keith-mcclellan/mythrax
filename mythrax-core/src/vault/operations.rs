@@ -363,6 +363,15 @@ pub async fn sync_vault_to_db(
                 }
             };
             let path = entry.path();
+            let path_str = path.to_string_lossy();
+            if path_str.contains("/scratch/")
+                || path_str.contains("/tests/")
+                || path_str.contains("/target/")
+                || path_str.contains("/.git/")
+                || path_str.contains("/.nosync/")
+            {
+                continue;
+            }
             if path.is_dir() {
                 dirs_to_scan.push(path);
             } else if path.is_file() {

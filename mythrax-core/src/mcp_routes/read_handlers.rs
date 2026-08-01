@@ -638,15 +638,28 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
             }))
         }
         "nodes" => {
-            let node_ids_val = args.get("node_ids").context("Missing node_ids")?;
-            let node_ids_arr = node_ids_val
-                .as_array()
-                .context("node_ids must be an array")?;
-            let mut node_ids = Vec::new();
-            for v in node_ids_arr {
-                if let Some(s) = v.as_str() {
-                    node_ids.push(s.to_string());
+            let node_ids = if let Some(node_ids_val) = args.get("node_ids") {
+                if let Some(arr) = node_ids_val.as_array() {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                } else {
+                    Vec::new()
                 }
+            } else if let Some(scope_val) = args.get("scope").and_then(|v| v.as_str()) {
+                let nodes = state.backend.get_wiki_nodes_paginated(200, 0).await.unwrap_or_default();
+                nodes.into_iter().filter(|n| n.scope == scope_val).filter_map(|n| n.id).collect()
+            } else {
+                Vec::new()
+            };
+
+            if node_ids.is_empty() {
+                return Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "No node_ids or scope specified. Provide 'node_ids': ['wiki_node:...'] or 'scope': 'mythrax'."
+                        }
+                    ]
+                }));
             }
 
             let response = state.backend.get_memory_nodes(&node_ids).await?;

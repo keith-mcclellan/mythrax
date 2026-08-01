@@ -620,6 +620,45 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
         }
     }
 
+    // Downstream WikiNode Synthesis Persistence
+    let scope_name = task.session_id.as_deref().unwrap_or("general");
+    if task.prompt.contains("Form hypotheses") || task.prompt.contains("insight") || task.prompt.contains("direction") || task.prompt.contains("wisdom") {
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(result).or_else(|_| {
+            let cleaned = crate::llm::strip_code_fences(result);
+            serde_json::from_str::<serde_json::Value>(&cleaned)
+        }) {
+            if let Some(arr) = json_val.as_array().or_else(|| json_val.get("hypotheses").and_then(|h| h.as_array())).or_else(|| json_val.get("insights").and_then(|h| h.as_array())) {
+                for item in arr {
+                    let title = item.get("title").or_else(|| item.get("claim")).and_then(|v| v.as_str()).unwrap_or("Untitled");
+                    let content = item.get("insight").or_else(|| item.get("content")).or_else(|| item.get("reasoning")).and_then(|v| v.as_str()).unwrap_or("");
+                    let node_type = if task.prompt.contains("direction") {
+                        "direction"
+                    } else if task.prompt.contains("wisdom") {
+                        "rule"
+                    } else {
+                        "insight"
+                    };
+                    let slug = title.to_lowercase().replace(' ', "_").replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+                    let vault_path = if node_type == "rule" {
+                        format!("wisdom/general/{}_rule.md", slug)
+                    } else {
+                        format!("wiki/{}/{}_{}.md", scope_name, slug, node_type)
+                    };
+                    let wiki_node = crate::contracts::WikiNode {
+                        id: None,
+                        name: format!("{}/{}", scope_name, slug),
+                        content: content.to_string(),
+                        scope: scope_name.to_string(),
+                        vault_path: Some(vault_path),
+                        node_type: Some(node_type.to_string()),
+                        ..Default::default()
+                    };
+                    let _ = surreal_backend.save_wiki_node(&wiki_node).await;
+                }
+            }
+        }
+    }
+
     let state_opt = surreal_backend.get_pipeline_state(callback_id).await?;
     if let Some(serialized_state) = state_opt {
         resume_pipeline_continuation(state, callback_id, &serialized_state, result).await?;

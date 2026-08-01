@@ -1445,21 +1445,27 @@ impl SurrealBackend {
             self.record_indexing_write(vp).await;
 
             // Mirror WikiNode to physical Markdown vault file
-            let display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
-            let mut yaml_val = serde_json::Map::new();
-            yaml_val.insert("title".to_string(), serde_json::json!(display_title));
-            yaml_val.insert("scope".to_string(), serde_json::json!(node.scope));
+            let raw_display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
+            let display_title = raw_display_title.strip_suffix(".md").unwrap_or(raw_display_title);
+            let (fm_opt, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
+            let mut yaml_val = match fm_opt {
+                Some(serde_yaml::Value::Mapping(map)) => map,
+                _ => serde_yaml::Mapping::new(),
+            };
+
+            yaml_val.insert(serde_yaml::Value::String("title".to_string()), serde_yaml::Value::String(display_title.to_string()));
+            yaml_val.insert(serde_yaml::Value::String("scope".to_string()), serde_yaml::Value::String(node.scope.clone()));
             if let Some(ref nt) = node.node_type {
-                yaml_val.insert("node_type".to_string(), serde_json::json!(nt));
+                yaml_val.insert(serde_yaml::Value::String("node_type".to_string()), serde_yaml::Value::String(nt.clone()));
             }
             if let Some(ref it) = node.item_type {
-                yaml_val.insert("item_type".to_string(), serde_json::json!(it));
+                yaml_val.insert(serde_yaml::Value::String("item_type".to_string()), serde_yaml::Value::String(it.clone()));
             }
             if let Some(mc) = node.metacognitive_confidence {
-                yaml_val.insert("metacognitive_confidence".to_string(), serde_json::json!(mc));
+                yaml_val.insert(serde_yaml::Value::String("metacognitive_confidence".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(mc)));
             }
+
             let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-            let (_, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
             let body_trimmed = raw_body.trim();
             let body_with_h1 = if body_trimmed.starts_with("# ") {
                 body_trimmed.to_string()
