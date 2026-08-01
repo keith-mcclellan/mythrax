@@ -796,6 +796,8 @@ pub async fn run_bootstrap_internal(
 
     let mut wisdom_count = 0;
     if !dry_run {
+        let harvester = crate::cognitive::harvest::Harvester::new();
+        let _ = harvester.harvest_skills(&*state.backend, &state.store).await;
         if let Ok(w_count) = crate::vault::distillation::seed_wisdom_from_rules(
             state.backend.as_ref(),
             &state.store.vault_root,

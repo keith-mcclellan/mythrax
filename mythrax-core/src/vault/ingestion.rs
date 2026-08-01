@@ -1122,6 +1122,29 @@ pub async fn bulk_ingest_vault(
                                     .relate_nodes(ep_saved_id, &wiki_node_id, None, None, None)
                                     .await;
                             }
+                            let vpath = node.vault_path.as_deref().unwrap_or("");
+                            let _ = crate::cognitive::pipeline::extract_from_document(
+                                db,
+                                None,
+                                &node.content,
+                                vpath,
+                                &resolved_scope,
+                            )
+                            .await;
+                            if vpath.ends_with(".rs")
+                                || vpath.ends_with(".py")
+                                || vpath.ends_with(".ts")
+                                || vpath.ends_with(".go")
+                            {
+                                let _ = crate::cognitive::pipeline::extract_from_code(
+                                    db,
+                                    None,
+                                    &node.content,
+                                    vpath,
+                                    &resolved_scope,
+                                )
+                                .await;
+                            }
                         }
                     }
 
