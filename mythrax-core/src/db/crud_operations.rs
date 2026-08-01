@@ -1438,13 +1438,34 @@ impl SurrealBackend {
             }
             let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
             let (_, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
-            let header_prefix = format!("# {}", node.name);
-            let clean_body = if raw_body.trim_start().starts_with(&header_prefix) {
-                let after_header = raw_body.trim_start().strip_prefix(&header_prefix).unwrap_or(&raw_body);
-                after_header.trim_start()
-            } else {
-                raw_body.trim()
+
+            // Recursively strip leading duplicate titles/headers to prevent repeated header prepending
+            let clean_body = {
+                let mut current = raw_body.trim();
+                let short_name = node.name.rsplit('/').next().unwrap_or(&node.name);
+
+                loop {
+                    let mut stripped = false;
+                    for n in &[node.name.as_str(), short_name] {
+                        let h1_prefix = format!("# {}", n);
+                        if current.starts_with(&h1_prefix) {
+                            current = current[h1_prefix.len()..].trim_start();
+                            stripped = true;
+                            break;
+                        }
+                        if current.starts_with(n) {
+                            current = current[n.len()..].trim_start();
+                            stripped = true;
+                            break;
+                        }
+                    }
+                    if !stripped {
+                        break;
+                    }
+                }
+                current
             };
+
             let markdown = format!("---\n{}\n---\n\n# {}\n\n{}\n", yaml_str.trim(), node.name, clean_body);
 
             let root = crate::store::find_vault_root();
@@ -1452,7 +1473,20 @@ impl SurrealBackend {
             if let Some(parent) = full_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = std::fs::write(&full_path, &markdown);
+
+            let should_write = if full_path.exists() {
+                if let Ok(existing) = std::fs::read_to_string(&full_path) {
+                    existing.trim() != markdown.trim()
+                } else {
+                    true
+                }
+            } else {
+                true
+            };
+
+            if should_write {
+                let _ = std::fs::write(&full_path, &markdown);
+            }
         }
         let mut node_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
