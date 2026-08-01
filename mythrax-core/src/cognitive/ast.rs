@@ -40,7 +40,7 @@ fn extract_rust_symbols(
     symbols: &mut Vec<CodeSymbol>,
 ) {
     let re = RS_SYMBOL_RE.get_or_init(|| {
-        Regex::new(r"^\s*(?:pub(?:\(crate\))?\s+)?(fn|struct|enum|trait|type|const)\s+([A-Za-z0-9_]+)").unwrap()
+        Regex::new(r"^\s*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(fn|struct|enum|trait|type|const)\s+([A-Za-z0-9_]+)").unwrap()
     });
 
     let mut current_doc = Vec::new();
