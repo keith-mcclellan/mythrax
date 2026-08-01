@@ -1460,33 +1460,11 @@ impl SurrealBackend {
             }
             let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
             let (_, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
-
-            // Recursively strip leading duplicate titles/headers to prevent repeated header prepending
-            let clean_body = {
-                let mut current = raw_body.trim();
-                let short_name = node.name.rsplit('/').next().unwrap_or(&node.name);
-
-                loop {
-                    let mut stripped = false;
-                    for n in &[node.name.as_str(), short_name] {
-                        let h1_prefix = format!("# {}", n);
-                        if current.starts_with(&h1_prefix) {
-                            current = current[h1_prefix.len()..].trim_start();
-                            stripped = true;
-                            break;
-                        }
-                    }
-                    if !stripped {
-                        break;
-                    }
-                }
-                current
-            };
-
-            let body_with_h1 = if clean_body.starts_with("# ") {
-                clean_body.to_string()
+            let body_trimmed = raw_body.trim();
+            let body_with_h1 = if body_trimmed.starts_with("# ") {
+                body_trimmed.to_string()
             } else {
-                format!("# {}\n\n{}", display_title, clean_body)
+                format!("# {}\n\n{}", display_title, body_trimmed)
             };
             let markdown = format!("---\n{}\n---\n\n{}\n", yaml_str.trim(), body_with_h1);
 
