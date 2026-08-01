@@ -283,17 +283,121 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "hypothesize" => {
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
-            let ideas = crate::cognitive::pipeline::form_hypotheses(&*state.backend, None, scope).await?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<crate::db::backend::SurrealBackend>()
+                .context("SurrealBackend required for hypothesize")?;
+
+            let config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
+            let unassociated = crate::cognitive::db::get_unassociated_facts(&*state.backend, &scope).await?;
+            if unassociated.len() < config.cluster_min_size {
+                return Ok(json!({
+                    "content": [{ "type": "text", "text": format!("Not enough unassociated facts for scope {} ({}/{})", scope, unassociated.len(), config.cluster_min_size) }]
+                }));
+            }
+
+            let embeddings: Vec<Vec<f32>> = unassociated
+                .iter()
+                .map(|f| f.embedding.clone().unwrap_or_else(|| vec![0.0; 768]))
+                .collect();
+            let clusters = crate::cognitive::pipeline::cluster_facts(&unassociated, &embeddings, &config);
+            let pruned_nodes = crate::cognitive::db::get_pruned_idea_nodes(&*state.backend, &scope, config.prune_threshold).await?;
+            let pruned_constraints: Vec<String> = pruned_nodes.iter().map(|n| n.claim.clone()).collect();
+
+            let mut queued = 0usize;
+            for cluster in &clusters {
+                let cluster_facts: Vec<&crate::contracts::Fact> = cluster.iter().map(|&idx| &unassociated[idx]).collect();
+                let facts_summary = cluster_facts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| format!("[{}] H: {} | Insight: {}", i, f.h_n().unwrap_or(""), f.iota_n().unwrap_or("")))
+                    .collect::<Vec<String>>()
+                    .join("\n");
+                let (sys, user) = crate::cognitive::prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
+                let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                let task = crate::db::CognitiveTask {
+                    id: task_id,
+                    task_type: "Synthesis".to_string(),
+                    prompt: format!("[scope:{}] Form hypotheses from facts:\n{}", scope, user),
+                    system_instruction: sys,
+                    expected_format: "Json".to_string(),
+                    priority: "Normal".to_string(),
+                    created_at: chrono::Utc::now(),
+                    status: "Pending".to_string(),
+                    result: None,
+                    ttl_minutes: 60,
+                    injected_at: None,
+                    session_id: Some(scope.clone()),
+                };
+                if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                    queued += 1;
+                }
+            }
             Ok(json!({
-                "content": [{ "type": "text", "text": format!("Formed {} hypotheses for scope {}", ideas.len(), scope) }]
+                "content": [{ "type": "text", "text": format!("Queued {} hypothesis formation tasks for scope {} ({} clusters from {} facts)", queued, scope, clusters.len(), unassociated.len()) }]
             }))
         }
         "refine" => {
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
-            let logs = crate::cognitive::pipeline::refine_hypotheses(&*state.backend, None, scope).await?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<crate::db::backend::SurrealBackend>()
+                .context("SurrealBackend required for refine")?;
+
+            let pending_ideas = crate::cognitive::db::get_idea_nodes_by_scope(&*state.backend, &scope).await?;
+            let facts = crate::cognitive::db::get_facts_by_scope(&*state.backend, &scope).await?;
+            let config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
+
+            let mut queued = 0usize;
+            for idea in &pending_ideas {
+                if idea.status == crate::contracts::IdeaStatus::Merged
+                    || idea.status == crate::contracts::IdeaStatus::Pruned
+                {
+                    continue;
+                }
+                for fact in &facts {
+                    if fact.idea_node_id.as_deref() != idea.id.as_deref() {
+                        continue;
+                    }
+                    let fact_summary = format!("H: {} | Insight: {}", fact.h_n().unwrap_or(""), fact.iota_n().unwrap_or(""));
+                    let (sys, user) = crate::cognitive::prompts::build_refinement_prompt(
+                        &idea.claim,
+                        &idea.insight,
+                        idea.confidence,
+                        &fact_summary,
+                    );
+                    let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                    let task = crate::db::CognitiveTask {
+                        id: task_id,
+                        task_type: "Refinement".to_string(),
+                        prompt: format!("[scope:{}] [idea:{}] Refine hypothesis:\n{}", scope, idea.id.as_deref().unwrap_or(""), user),
+                        system_instruction: sys,
+                        expected_format: "Json".to_string(),
+                        priority: "Normal".to_string(),
+                        created_at: chrono::Utc::now(),
+                        status: "Pending".to_string(),
+                        result: None,
+                        ttl_minutes: 60,
+                        injected_at: None,
+                        session_id: Some(scope.clone()),
+                    };
+                    if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                        queued += 1;
+                    }
+                }
+            }
             Ok(json!({
-                "content": [{ "type": "text", "text": format!("Refined hypotheses with {} log entries for scope {}", logs.len(), scope) }]
+                "content": [{ "type": "text", "text": format!("Queued {} refinement tasks for scope {} ({} pending ideas)", queued, scope, pending_ideas.len()) }]
+            }))
+        }
+        "graduate" => {
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            crate::db::graduation_pipeline::run_graduation_pipeline(&*state.backend, scope).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Graduation pipeline complete for scope {}", scope) }]
             }))
         }
         "config" => {
