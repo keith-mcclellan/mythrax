@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 /// Regex patterns for multi-language AST symbol extraction
-static RS_SYMBOL_RE: OnceLock<Regex> = OnceLock::new();
 static PY_SYMBOL_RE: OnceLock<Regex> = OnceLock::new();
 static TS_SYMBOL_RE: OnceLock<Regex> = OnceLock::new();
 static GO_SYMBOL_RE: OnceLock<Regex> = OnceLock::new();
@@ -39,9 +38,11 @@ fn extract_rust_symbols(
     scope: &str,
     symbols: &mut Vec<CodeSymbol>,
 ) {
-    let re = RS_SYMBOL_RE.get_or_init(|| {
-        Regex::new(r"^\s*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(fn|struct|enum|trait|type|const)\s+([A-Za-z0-9_]+)").unwrap()
-    });
+    let file_stem = Path::new(file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(file_slug);
+    let re = Regex::new(r"^\s*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(fn|struct|enum|trait|type|const)\s+([A-Za-z0-9_]+)").unwrap();
 
     let mut current_doc = Vec::new();
 
@@ -73,7 +74,7 @@ fn extract_rust_symbols(
                 name,
                 symbol_type,
                 file_path: file_path.to_string(),
-                file_slug: file_slug.to_string(),
+                file_slug: file_stem.to_string(),
                 start_line,
                 end_line,
                 signature,
