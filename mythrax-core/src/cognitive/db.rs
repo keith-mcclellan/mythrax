@@ -137,6 +137,28 @@ pub async fn save_code_symbol(
             .bind(("scope", symbol.scope.as_str()))
             .bind(("embedding", symbol.embedding.clone()))
             .await?;
+        // Mirror AST CodeSymbol into physical Obsidian vault file
+        let rel_ast_path = format!("reference/ast/{}_{}_ast.md", symbol.file_slug, symbol.name);
+        let root = crate::store::find_vault_root();
+        let full_ast_path = root.join(&rel_ast_path);
+        if let Some(parent) = full_ast_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let doc = format!(
+            "---\ntitle: \"AST: {}\"\nscope: \"{}\"\nnode_type: \"ast_symbol\"\n---\n\n# AST: {}\n\n**Symbol:** `{}` ({})\n**File:** `{}` (L{}-L{})\n**Signature:** `{}`\n\n**Doc Comment:**\n{}\n",
+            symbol.name,
+            symbol.scope,
+            symbol.name,
+            symbol.name,
+            symbol.symbol_type,
+            symbol.file_path,
+            symbol.start_line,
+            symbol.end_line,
+            symbol.signature,
+            symbol.doc_comment.as_deref().unwrap_or("None")
+        );
+        let _ = std::fs::write(&full_ast_path, &doc);
+
         let raw: Option<crate::contracts::CodeSymbol> = resp.take(0)?;
         Ok(raw.and_then(|r| r.id).unwrap_or_else(|| slug_name))
     } else {
