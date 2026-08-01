@@ -1445,8 +1445,9 @@ impl SurrealBackend {
             self.record_indexing_write(vp).await;
 
             // Mirror WikiNode to physical Markdown vault file
+            let display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
             let mut yaml_val = serde_json::Map::new();
-            yaml_val.insert("title".to_string(), serde_json::json!(node.name));
+            yaml_val.insert("title".to_string(), serde_json::json!(display_title));
             yaml_val.insert("scope".to_string(), serde_json::json!(node.scope));
             if let Some(ref nt) = node.node_type {
                 yaml_val.insert("node_type".to_string(), serde_json::json!(nt));
@@ -1474,11 +1475,6 @@ impl SurrealBackend {
                             stripped = true;
                             break;
                         }
-                        if current.starts_with(n) {
-                            current = current[n.len()..].trim_start();
-                            stripped = true;
-                            break;
-                        }
                     }
                     if !stripped {
                         break;
@@ -1487,8 +1483,12 @@ impl SurrealBackend {
                 current
             };
 
-            let display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
-            let markdown = format!("---\n{}\n---\n\n# {}\n\n{}\n", yaml_str.trim(), display_title, clean_body);
+            let body_with_h1 = if clean_body.starts_with("# ") {
+                clean_body.to_string()
+            } else {
+                format!("# {}\n\n{}", display_title, clean_body)
+            };
+            let markdown = format!("---\n{}\n---\n\n{}\n", yaml_str.trim(), body_with_h1);
 
             let root = crate::store::find_vault_root();
             let full_path = root.join(vp);
