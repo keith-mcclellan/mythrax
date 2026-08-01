@@ -729,7 +729,7 @@ pub async fn sync_file_to_db_with_cache(
         let wiki_node = WikiNode {
             id: None,
             name,
-            content: plain_body.clone(),
+            content: body.to_string(),
             scope,
             vault_path: Some(rel_path.clone()),
             embedding: None,
