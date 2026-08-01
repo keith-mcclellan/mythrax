@@ -359,7 +359,8 @@ pub fn start_watching(
                     // Only process modify/create/remove events for .md files
                     if event.kind.is_modify() || event.kind.is_create() {
                         for path in event.paths {
-                            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                            if !matches!(ext, "md" | "rs" | "py" | "ts" | "js" | "go") {
                                 continue;
                             }
 
@@ -387,7 +388,8 @@ pub fn start_watching(
                         }
                     } else if event.kind.is_remove() {
                         for path in event.paths {
-                            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                            if !matches!(ext, "md" | "rs" | "py" | "ts" | "js" | "go") {
                                 continue;
                             }
                             let flush_time = Instant::now() + Duration::from_millis(500);

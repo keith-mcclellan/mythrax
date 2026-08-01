@@ -45,6 +45,30 @@ pub fn slugify_title(title: &str) -> String {
     }
 }
 
+pub fn derive_slug(raw_slug: Option<&str>, fallback_text: &str) -> String {
+    let raw = raw_slug.unwrap_or("").trim();
+    let text_to_slug = if raw.is_empty() { fallback_text } else { raw };
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for c in text_to_slug.chars() {
+        if c.is_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('_');
+            last_dash = true;
+        }
+    }
+    let trimmed = slug.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "node".to_string()
+    } else if trimmed.len() > 50 {
+        trimmed.chars().take(50).collect::<String>().trim_end_matches('_').to_string()
+    } else {
+        trimmed
+    }
+}
+
 pub fn resolve_rule_path(scope: &str, target_pattern: &str) -> String {
     let slug = slugify_title(target_pattern);
     format!("wisdom/{}/rule_{}.md", scope, slug)
@@ -118,6 +142,7 @@ pub async fn extract_facts(
             raw_evidence: vec![episode.content.clone()],
             artifact_refs: vec![],
             metacognitive_confidence: 90,
+            slug: None,
         }]
     };
 
@@ -130,6 +155,10 @@ pub async fn extract_facts(
 
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
+        let slug = derive_slug(dto.slug.as_deref(), &dto.hypothesis);
+        let fact_path = format!("wiki/{}/{}_fact.md", scope, slug);
+        let fact_node_name = format!("{}/{}_fact", scope, slug);
+
         let fact = Fact {
             id: None,
             source_type: FactSource::Episode,
@@ -137,18 +166,44 @@ pub async fn extract_facts(
             source_version: 1,
             scope: scope.clone(),
             idea_node_id: None,
-            hypothesis: Some(dto.hypothesis),
-            causal_insight: Some(dto.causal_insight),
-            raw_evidence: dto.raw_evidence,
-            artifact_refs: dto.artifact_refs,
+            hypothesis: Some(dto.hypothesis.clone()),
+            causal_insight: Some(dto.causal_insight.clone()),
+            raw_evidence: dto.raw_evidence.clone(),
+            artifact_refs: dto.artifact_refs.clone(),
             embedding: embeddings.get(idx).cloned(),
             metacognitive_confidence: dto.metacognitive_confidence,
             created_at: Some(chrono::Utc::now()),
         };
         let saved_id = db::save_fact(backend, &fact).await?;
         let mut saved_fact = fact;
-        saved_fact.id = Some(saved_id);
+        saved_fact.id = Some(saved_id.clone());
         created_facts.push(saved_fact);
+
+        let fact_content = format!(
+            "---\nnode_type: fact\nscope: {}\ntitle: {}\n---\n\n# {}\n\n**Hypothesis:** {}\n\n**Causal Insight:** {}\n\n**Source Episode:** [[{}]]\n\n**Evidence:**\n- {}\n",
+            scope,
+            fact_node_name,
+            fact_node_name,
+            dto.hypothesis,
+            dto.causal_insight,
+            source_id,
+            dto.raw_evidence.join("\n- ")
+        );
+
+        let fact_node = WikiNode {
+            id: None,
+            name: fact_node_name,
+            content: fact_content,
+            scope: scope.clone(),
+            vault_path: Some(fact_path.clone()),
+            embedding: embeddings.get(idx).cloned(),
+            node_type: Some("fact".to_string()),
+            item_type: Some("fact".to_string()),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            ..Default::default()
+        };
+        let _ = backend.save_wiki_node(&fact_node).await;
+        let _ = backend.relate_nodes(&saved_id, &source_id, None, None, None).await;
     }
 
     // CTO Remediation 1: Update Episode::causal_insight as a typed JSON array
@@ -197,6 +252,7 @@ pub async fn extract_from_document(
             raw_evidence: vec![vault_path.to_string()],
             artifact_refs: vec![vault_path.to_string()],
             metacognitive_confidence: 85,
+            slug: None,
         }]
     };
 
@@ -205,6 +261,10 @@ pub async fn extract_from_document(
 
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
+        let slug = derive_slug(dto.slug.as_deref(), &dto.hypothesis);
+        let fact_path = format!("wiki/{}/{}_fact.md", scope, slug);
+        let fact_node_name = format!("{}/{}_fact", scope, slug);
+
         let fact = Fact {
             id: None,
             source_type: FactSource::Document,
@@ -212,18 +272,44 @@ pub async fn extract_from_document(
             source_version: 1,
             scope: scope.to_string(),
             idea_node_id: None,
-            hypothesis: Some(dto.hypothesis),
-            causal_insight: Some(dto.causal_insight),
-            raw_evidence: dto.raw_evidence,
-            artifact_refs: dto.artifact_refs,
+            hypothesis: Some(dto.hypothesis.clone()),
+            causal_insight: Some(dto.causal_insight.clone()),
+            raw_evidence: dto.raw_evidence.clone(),
+            artifact_refs: dto.artifact_refs.clone(),
             embedding: embeddings.get(idx).cloned(),
             metacognitive_confidence: dto.metacognitive_confidence,
             created_at: Some(chrono::Utc::now()),
         };
         let saved_id = db::save_fact(backend, &fact).await?;
         let mut saved_fact = fact;
-        saved_fact.id = Some(saved_id);
+        saved_fact.id = Some(saved_id.clone());
         created_facts.push(saved_fact);
+
+        let fact_content = format!(
+            "---\nnode_type: fact\nscope: {}\ntitle: {}\n---\n\n# {}\n\n**Hypothesis:** {}\n\n**Causal Insight:** {}\n\n**Source Document:** [[{}]]\n\n**Evidence:**\n- {}\n",
+            scope,
+            fact_node_name,
+            fact_node_name,
+            dto.hypothesis,
+            dto.causal_insight,
+            vault_path,
+            dto.raw_evidence.join("\n- ")
+        );
+
+        let fact_node = WikiNode {
+            id: None,
+            name: fact_node_name,
+            content: fact_content,
+            scope: scope.to_string(),
+            vault_path: Some(fact_path.clone()),
+            embedding: embeddings.get(idx).cloned(),
+            node_type: Some("fact".to_string()),
+            item_type: Some("fact".to_string()),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            ..Default::default()
+        };
+        let _ = backend.save_wiki_node(&fact_node).await;
+        let _ = backend.relate_nodes(&saved_id, vault_path, None, None, None).await;
     }
     Ok(created_facts)
 }
@@ -257,6 +343,7 @@ pub async fn extract_from_code(
             raw_evidence: vec![file_path.to_string()],
             artifact_refs: vec![file_path.to_string()],
             metacognitive_confidence: 90,
+            slug: None,
         }]
     };
 
@@ -265,6 +352,10 @@ pub async fn extract_from_code(
 
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
+        let slug = derive_slug(dto.slug.as_deref(), &dto.hypothesis);
+        let fact_path = format!("wiki/{}/{}_fact.md", scope, slug);
+        let fact_node_name = format!("{}/{}_fact", scope, slug);
+
         let fact = Fact {
             id: None,
             source_type: FactSource::Code,
@@ -272,18 +363,44 @@ pub async fn extract_from_code(
             source_version: 1,
             scope: scope.to_string(),
             idea_node_id: None,
-            hypothesis: Some(dto.hypothesis),
-            causal_insight: Some(dto.causal_insight),
-            raw_evidence: dto.raw_evidence,
-            artifact_refs: dto.artifact_refs,
+            hypothesis: Some(dto.hypothesis.clone()),
+            causal_insight: Some(dto.causal_insight.clone()),
+            raw_evidence: dto.raw_evidence.clone(),
+            artifact_refs: dto.artifact_refs.clone(),
             embedding: embeddings.get(idx).cloned(),
             metacognitive_confidence: dto.metacognitive_confidence,
             created_at: Some(chrono::Utc::now()),
         };
         let saved_id = db::save_fact(backend, &fact).await?;
         let mut saved_fact = fact;
-        saved_fact.id = Some(saved_id);
+        saved_fact.id = Some(saved_id.clone());
         created_facts.push(saved_fact);
+
+        let fact_content = format!(
+            "---\nnode_type: fact\nscope: {}\ntitle: {}\n---\n\n# {}\n\n**Hypothesis:** {}\n\n**Causal Insight:** {}\n\n**Source Code File:** [[{}]]\n\n**Evidence:**\n- {}\n",
+            scope,
+            fact_node_name,
+            fact_node_name,
+            dto.hypothesis,
+            dto.causal_insight,
+            file_path,
+            dto.raw_evidence.join("\n- ")
+        );
+
+        let fact_node = WikiNode {
+            id: None,
+            name: fact_node_name,
+            content: fact_content,
+            scope: scope.to_string(),
+            vault_path: Some(fact_path.clone()),
+            embedding: embeddings.get(idx).cloned(),
+            node_type: Some("fact".to_string()),
+            item_type: Some("fact".to_string()),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            ..Default::default()
+        };
+        let _ = backend.save_wiki_node(&fact_node).await;
+        let _ = backend.relate_nodes(&saved_id, file_path, None, None, None).await;
     }
     Ok(created_facts)
 }
@@ -357,6 +474,7 @@ pub async fn forge_document(
                 raw_evidence: vec![chunk_path.clone()],
                 artifact_refs: vec![source_path.to_string()],
                 metacognitive_confidence: 90,
+                slug: None,
             }]
         };
 
@@ -439,6 +557,7 @@ pub async fn forge_skill(
             raw_evidence: vec![skill_path.to_string()],
             artifact_refs: vec![skill_path.to_string()],
             metacognitive_confidence: 95,
+            slug: None,
         }]
     };
 
@@ -528,6 +647,7 @@ pub async fn form_hypotheses(
                 claim: format!("Synthesized hypothesis from {} facts", cluster_facts.len()),
                 insight: format!("Unified pattern across cluster facts"),
                 fact_indices: (0..cluster_facts.len()).collect(),
+                slug: None,
             }]
         });
 

@@ -9,6 +9,8 @@ pub struct ExtractedFactDto {
     #[serde(default)]
     pub artifact_refs: Vec<String>,
     pub metacognitive_confidence: i32,
+    #[serde(default)]
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,6 +23,8 @@ pub struct FormHypothesisDto {
     pub claim: String,
     pub insight: String,
     pub fact_indices: Vec<usize>,
+    #[serde(default)]
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

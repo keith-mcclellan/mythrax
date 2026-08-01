@@ -4356,7 +4356,7 @@ async fn test_save_forged_section_lifecycle() -> Result<()> {
     let doc_slug = "my_system_playbook";
 
     // Chunk file
-    let chunk_path = vault_root.join(format!("episodes/forge/{}/chunk_0.md", doc_slug));
+    let chunk_path = vault_root.join(format!("reference/forged/{}/chunk_0.md", doc_slug));
     assert!(chunk_path.exists());
     let chunk_content = fs::read_to_string(&chunk_path)?;
     assert!(chunk_content.contains("title: \"My System Playbook! - Chunk 0\""));
@@ -4607,7 +4607,7 @@ async fn test_mcp_forge_tools() -> Result<()> {
     assert!(save_text.contains("Successfully saved forged assets"));
 
     // Verify files on disk
-    let chunk_path = vault_root.join("episodes/forge/mcp_forge_doc/chunk_1.md");
+    let chunk_path = vault_root.join("reference/forged/mcp_forge_doc/chunk_1.md");
     assert!(chunk_path.exists());
 
     // Verify DB entry
@@ -4714,7 +4714,7 @@ async fn test_api_save_forged_assets() -> Result<()> {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
 
     // Verify files on disk
-    let chunk_path = vault_root.join("episodes/forge/api_forge_doc/chunk_2.md");
+    let chunk_path = vault_root.join("reference/forged/api_forge_doc/chunk_2.md");
     assert!(chunk_path.exists());
 
     // Verify DB entry
@@ -5710,8 +5710,8 @@ async fn test_phase3_ingest_artifacts_markdown() -> Result<()> {
     assert_eq!(eps[0].node_type.as_deref(), Some("walkthrough"));
 
     let nodes = backend.get_all_wiki_nodes().await?;
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0].item_type.as_deref(), Some("constraint"));
+    assert!(nodes.len() >= 1);
+    assert!(nodes.iter().any(|n| n.item_type.as_deref() == Some("constraint")));
 
     let facts = backend.get_facts_by_scope("test_scope").await?;
     assert!(!facts.is_empty());

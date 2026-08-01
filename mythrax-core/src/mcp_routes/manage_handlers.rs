@@ -286,10 +286,6 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "pre_invocation" => {
-            let _session_id = args
-                .get("session_id")
-                .and_then(|v| v.as_str())
-                .context("Missing session_id parameter for pre_invocation")?;
             handle_pre_invocation_hook(state, args).await
         }
         "post_invocation" => {
@@ -299,7 +295,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             let session_id = args
                 .get("session_id")
                 .and_then(|v| v.as_str())
-                .context("Missing session_id parameter for precompact")?
+                .unwrap_or("global")
                 .to_string();
             let fallback_path = format!(
                 "/Users/keith/.gemini/antigravity/brain/{}/.system_generated/logs/transcript.jsonl",
@@ -1317,7 +1313,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
-        .context("Missing session_id")?;
+        .unwrap_or("global");
     let caller = args.get("caller").and_then(|v| v.as_str());
 
     let surreal_backend = state
@@ -1330,8 +1326,14 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         let now_unix = chrono::Utc::now().timestamp();
         let _ = state
             .backend
-            .save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string())
+            .save_stm("global", "_distiller_heartbeat", &now_unix.to_string())
             .await;
+        if session_id != "global" {
+            let _ = state
+                .backend
+                .save_stm(session_id, "_distiller_heartbeat", &now_unix.to_string())
+                .await;
+        }
         let state_clone = state.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await {
@@ -2236,10 +2238,16 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     if caller != Some("distiller") {
         if let Ok(pending) = surreal_backend.get_pending_cognitive_tasks().await {
             if !pending.is_empty() {
-                let last_hb = stm_map
+                let global_hb = if let Ok(global_stm) = state.backend.get_stm("global", Some("_distiller_heartbeat")).await {
+                    global_stm.get("_distiller_heartbeat").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0)
+                } else {
+                    0
+                };
+                let local_hb = stm_map
                     .get("_distiller_heartbeat")
                     .and_then(|s| s.parse::<i64>().ok())
                     .unwrap_or(0);
+                let last_hb = global_hb.max(local_hb);
                 let now_unix = chrono::Utc::now().timestamp();
                 if now_unix - last_hb > 60 {
                     distiller_warning = format!(

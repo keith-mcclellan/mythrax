@@ -394,6 +394,16 @@ pub async fn mine_transcript(
                         }
                     }
 
+                    let ep_obj = crate::contracts::Episode {
+                        id: Some(saved_id.clone()),
+                        title: ep.title.clone(),
+                        content: ep.content.clone(),
+                        scope: ep.scope.clone(),
+                        session_id: ep.session_id.clone(),
+                        ..Default::default()
+                    };
+                    let _ = crate::cognitive::pipeline::extract_facts(backend, None, &ep_obj).await;
+
                     prev_saved_id = Some(saved_id);
                     saved_count += 1;
                 }
