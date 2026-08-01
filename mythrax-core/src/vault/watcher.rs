@@ -1282,7 +1282,7 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-    let mut body = format!("---\n{}---\n", yaml_str.trim());
+    let mut body = format!("---\n{}\n---\n", yaml_str.trim());
 
     // Task 3.3: Append ## Source Episodes section with [[episode_id]] wikilinks
     if !rule.source_episodes.is_empty() {

@@ -1437,7 +1437,15 @@ impl SurrealBackend {
                 yaml_val.insert("metacognitive_confidence".to_string(), serde_json::json!(mc));
             }
             let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-            let markdown = format!("---\n{}---\n\n# {}\n\n{}\n", yaml_str.trim(), node.name, node.content);
+            let (_, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
+            let header_prefix = format!("# {}", node.name);
+            let clean_body = if raw_body.trim_start().starts_with(&header_prefix) {
+                let after_header = raw_body.trim_start().strip_prefix(&header_prefix).unwrap_or(&raw_body);
+                after_header.trim_start()
+            } else {
+                raw_body.trim()
+            };
+            let markdown = format!("---\n{}\n---\n\n# {}\n\n{}\n", yaml_str.trim(), node.name, clean_body);
 
             let root = crate::store::find_vault_root();
             let full_path = root.join(vp);
