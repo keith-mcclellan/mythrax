@@ -890,7 +890,7 @@ pub async fn bulk_ingest_vault(
 
                         let parent_ep_save = crate::contracts::EpisodeSave::builder(
                             parent_title.clone(),
-                            parent_content,
+                            parent_content.clone(),
                         )
                         .scope(Some(resolved_scope.clone()))
                         .vault_path(Some(parent_relative_path.clone()))
@@ -908,6 +908,7 @@ pub async fn bulk_ingest_vault(
                         )
                         .build();
                         if let Ok(ep_id) = db.save_episode(&parent_ep_save).await {
+                            let _ = store.write_file(&parent_relative_path, &parent_content);
                             success_count += 1;
                             parent_saved_id = ep_id;
                         }
@@ -987,7 +988,7 @@ pub async fn bulk_ingest_vault(
 
                         let ep_save = crate::contracts::EpisodeSave::builder(
                             part_title.clone(),
-                            note_content,
+                            note_content.clone(),
                         )
                         .scope(Some(resolved_scope.clone()))
                         .vault_path(Some(relative_path.clone()))
@@ -1005,6 +1006,7 @@ pub async fn bulk_ingest_vault(
                         )
                         .build();
                         if let Ok(episode_saved_id) = db.save_episode(&ep_save).await {
+                            let _ = store.write_file(&relative_path, &note_content);
                             success_count += 1;
                             generated_parts.push((part_title, relative_path, episode_saved_id));
                         }

@@ -1,4 +1,4 @@
-use crate::contracts::{Fact, IdeaNode, IdeaStatus, PipelineConfig};
+use crate::contracts::{Fact, IdeaNode, IdeaStatus, PipelineConfig, WikiNode};
 use crate::db::StorageBackend;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -103,6 +103,48 @@ pub async fn save_code_symbol(
     backend: &dyn StorageBackend,
     symbol: &crate::contracts::CodeSymbol,
 ) -> Result<String> {
+    let slug_name = format!("{}_{}", symbol.file_slug, symbol.name);
+
+    // Mirror AST CodeSymbol into physical Obsidian vault file
+    let rel_ast_path = format!("reference/ast/{}_{}_ast.md", symbol.file_slug, symbol.name);
+    let home = std::env::var("HOME").unwrap_or_default();
+    let root = if !home.is_empty() {
+        std::path::PathBuf::from(home).join("mythrax-vault")
+    } else {
+        crate::store::find_vault_root()
+    };
+    let full_ast_path = root.join(&rel_ast_path);
+    if let Some(parent) = full_ast_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let doc = format!(
+        "---\ntitle: \"AST: {}\"\nscope: \"{}\"\nnode_type: \"ast_symbol\"\n---\n\n# AST: {}\n\n**Symbol:** `{}` ({})\n**File:** `{}` (L{}-L{})\n**Signature:** `{}`\n\n**Doc Comment:**\n{}\n",
+        symbol.name,
+        symbol.scope,
+        symbol.name,
+        symbol.name,
+        symbol.symbol_type,
+        symbol.file_path,
+        symbol.start_line,
+        symbol.end_line,
+        symbol.signature,
+        symbol.doc_comment.as_deref().unwrap_or("None")
+    );
+    let _ = std::fs::write(&full_ast_path, &doc);
+
+    // Mirror to database via WikiNode so it's indexed regardless of backend type
+    let ast_node = WikiNode {
+        id: None,
+        name: format!("ast/{}", slug_name),
+        content: doc,
+        scope: symbol.scope.clone(),
+        vault_path: Some(rel_ast_path),
+        node_type: Some("ast_symbol".to_string()),
+        item_type: Some("ast_symbol".to_string()),
+        ..Default::default()
+    };
+    let _ = backend.save_wiki_node(&ast_node).await;
+
     if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
         let query = "
             UPSERT type::record('code_symbol', $slug_name) CONTENT {
@@ -120,7 +162,6 @@ pub async fn save_code_symbol(
                 created_at: time::now()
             };
         ";
-        let slug_name = format!("{}_{}", symbol.file_slug, symbol.name);
         let mut resp = surreal
             .db
             .query(query)
@@ -137,37 +178,10 @@ pub async fn save_code_symbol(
             .bind(("scope", symbol.scope.as_str()))
             .bind(("embedding", symbol.embedding.clone()))
             .await?;
-        // Mirror AST CodeSymbol into physical Obsidian vault file
-        let rel_ast_path = format!("reference/ast/{}_{}_ast.md", symbol.file_slug, symbol.name);
-        let home = std::env::var("HOME").unwrap_or_default();
-        let root = if !home.is_empty() {
-            std::path::PathBuf::from(home).join("mythrax-vault")
-        } else {
-            crate::store::find_vault_root()
-        };
-        let full_ast_path = root.join(&rel_ast_path);
-        if let Some(parent) = full_ast_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let doc = format!(
-            "---\ntitle: \"AST: {}\"\nscope: \"{}\"\nnode_type: \"ast_symbol\"\n---\n\n# AST: {}\n\n**Symbol:** `{}` ({})\n**File:** `{}` (L{}-L{})\n**Signature:** `{}`\n\n**Doc Comment:**\n{}\n",
-            symbol.name,
-            symbol.scope,
-            symbol.name,
-            symbol.name,
-            symbol.symbol_type,
-            symbol.file_path,
-            symbol.start_line,
-            symbol.end_line,
-            symbol.signature,
-            symbol.doc_comment.as_deref().unwrap_or("None")
-        );
-        let _ = std::fs::write(&full_ast_path, &doc);
-
         let raw: Option<crate::contracts::CodeSymbol> = resp.take(0)?;
         Ok(raw.and_then(|r| r.id).unwrap_or_else(|| slug_name))
     } else {
-        Ok(symbol.name.clone())
+        Ok(slug_name)
     }
 }
 

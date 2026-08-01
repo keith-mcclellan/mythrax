@@ -162,6 +162,27 @@ impl SurrealBackend {
         }
         if let Some(ref vp) = episode.vault_path {
             self.record_indexing_write(vp).await;
+
+            let p = std::path::Path::new(vp);
+            if !p.is_absolute() {
+                let root = crate::store::find_vault_root();
+                let full_path = root.join(vp);
+                if let Some(parent) = full_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let should_write = if full_path.exists() {
+                    if let Ok(existing) = std::fs::read_to_string(&full_path) {
+                        existing.trim() != episode.content.trim()
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+                if should_write {
+                    let _ = std::fs::write(&full_path, &episode.content);
+                }
+            }
         }
         let mut ep_uuid = Uuid::new_v4().to_string();
         let mut is_update = false;
@@ -1466,7 +1487,8 @@ impl SurrealBackend {
                 current
             };
 
-            let markdown = format!("---\n{}\n---\n\n# {}\n\n{}\n", yaml_str.trim(), node.name, clean_body);
+            let display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
+            let markdown = format!("---\n{}\n---\n\n# {}\n\n{}\n", yaml_str.trim(), display_title, clean_body);
 
             let root = crate::store::find_vault_root();
             let full_path = root.join(vp);

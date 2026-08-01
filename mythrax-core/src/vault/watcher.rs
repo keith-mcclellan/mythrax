@@ -726,6 +726,33 @@ pub async fn sync_file_to_db_with_cache(
             .unwrap_or("general")
             .to_string();
 
+        let node_type = json_yaml
+            .as_ref()
+            .and_then(|j| j.get("node_type").or_else(|| j.get("type")))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                if rel_path.contains("/raw/") {
+                    "raw".to_string()
+                } else if rel_path.ends_with("_fact.md") {
+                    "fact".to_string()
+                } else if rel_path.ends_with("_rule.md") {
+                    "rule".to_string()
+                } else if rel_path.ends_with("_direction.md") {
+                    "direction".to_string()
+                } else if rel_path.ends_with("_ast.md") {
+                    "ast_symbol".to_string()
+                } else {
+                    "insight".to_string()
+                }
+            });
+
+        let item_type = json_yaml
+            .as_ref()
+            .and_then(|j| j.get("item_type"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let wiki_node = WikiNode {
             id: None,
             name,
@@ -736,13 +763,13 @@ pub async fn sync_file_to_db_with_cache(
             temporal_range_start: None,
             temporal_range_end: None,
             metacognitive_confidence: None,
-            node_type: Some("insight".to_string()),
+            node_type: Some(node_type),
             content_hash: None,
             hypothesis: None,
             raw_evidence: None,
             causal_insight: None,
             artifact_refs: None,
-            item_type: None,
+            item_type,
         };
 
         let db_id = backend.save_wiki_node(&wiki_node).await?;
@@ -1284,9 +1311,17 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-    let mut body = format!("---\n{}\n---\n", yaml_str.trim());
+    let title = rule.target_pattern.rsplit('/').next().unwrap_or(&rule.target_pattern);
+    let mut body = format!(
+        "---\n{}\n---\n\n# Rule: {}\n\n**Action to Avoid:** {}\n\n**Causal Explanation:** {}\n\n**Prescribed Remedy:** {}\n",
+        yaml_str.trim(),
+        title,
+        rule.action_to_avoid,
+        rule.causal_explanation,
+        rule.prescribed_remedy
+    );
 
-    // Task 3.3: Append ## Source Episodes section with [[episode_id]] wikilinks
+    // Append ## Source Episodes section with [[episode_id]] wikilinks
     if !rule.source_episodes.is_empty() {
         body.push_str("\n## Source Episodes\n");
         for ep_id in &rule.source_episodes {
