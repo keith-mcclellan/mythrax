@@ -164,18 +164,39 @@ pub fn organize_file(
     }
 }
 
-pub fn has_enough_disk_space(_path: &Path, min_bytes: u64) -> bool {
+pub fn has_enough_disk_space(path: &Path, min_bytes: u64) -> bool {
     use sysinfo::Disks;
     let disks = Disks::new_with_refreshed_list();
     if disks.is_empty() {
         return true;
     }
+
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut matching_disk = None;
+    let mut max_mount_len = 0;
+
     for disk in &disks {
+        let mount_point = disk.mount_point();
+        if canonical_path.starts_with(mount_point) {
+            let mount_len = mount_point.to_string_lossy().len();
+            if mount_len >= max_mount_len {
+                max_mount_len = mount_len;
+                matching_disk = Some(disk);
+            }
+        }
+    }
+
+    if let Some(disk) = matching_disk {
         if disk.available_space() > 0 && disk.available_space() < min_bytes {
-            tracing::warn!("Low disk space warning: {} bytes available", disk.available_space());
+            tracing::warn!(
+                "Low disk space warning on {:?}: {} bytes available",
+                disk.mount_point(),
+                disk.available_space()
+            );
             return false;
         }
     }
+
     true
 }
 

@@ -105,10 +105,7 @@ pub fn chunk_transcript(steps: &[TranscriptStep]) -> Vec<Vec<TranscriptStep>> {
         let step_has_edit = has_edit_calls(step);
         let step_has_tool = has_tool_calls(step);
 
-        let should_split = if current_chunk.is_empty() {
-            false
-        } else {
-            let last_step = current_chunk.last().unwrap();
+        let should_split = if let Some(last_step) = current_chunk.last() {
             let last_has_edit = has_edit_calls(last_step);
             let last_has_tool = has_tool_calls(last_step);
 
@@ -117,6 +114,8 @@ pub fn chunk_transcript(steps: &[TranscriptStep]) -> Vec<Vec<TranscriptStep>> {
                 || (step_has_tool && !last_has_tool)
                 || (!step_has_edit && last_has_edit)
                 || (!step_has_tool && last_has_tool)
+        } else {
+            false
         };
 
         if should_split {
@@ -767,21 +766,34 @@ pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) 
                     };
 
                     if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                        let mut rx = get_cognitive_task_bus().subscribe();
                         let start = std::time::Instant::now();
                         let timeout = std::time::Duration::from_secs(60);
-                        while start.elapsed() < timeout {
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                            if let Ok(Some(updated)) =
-                                surreal_backend.get_cognitive_task(&task_id).await
-                            {
-                                if updated.status == "Completed" {
-                                    if let Some(res) = updated.result {
-                                        wisdom_rule_res = Some(res);
-                                        break;
-                                    }
+
+                        if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                            if updated.status == "Completed" {
+                                if let Some(res) = updated.result {
+                                    wisdom_rule_res = Some(res);
                                 }
                             }
                         }
+
+                        if wisdom_rule_res.is_none() {
+                            while start.elapsed() < timeout {
+                                let remaining = timeout.saturating_sub(start.elapsed());
+                                match tokio::time::timeout(remaining, rx.recv()).await {
+                                    Ok(Ok(event)) if event.task_id == task_id && event.status == "Completed" => {
+                                        if let Some(res) = event.result {
+                                            wisdom_rule_res = Some(res);
+                                            break;
+                                        }
+                                    }
+                                    Ok(Ok(_)) => continue,
+                                    _ => break,
+                                }
+                            }
+                        }
+
                         if wisdom_rule_res.is_none() {
                             tracing::warn!(
                                 "WisdomCritique cognitive callback timed out, falling back to LargeLocal"
