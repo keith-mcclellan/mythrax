@@ -62,7 +62,7 @@ pub struct GraduationResponse {
 }
 
 pub fn build_episode_extraction_prompt(transcript: &str) -> (String, String) {
-    let system = r#"You are an Arbor leaf-insight extractor implementing the HTR cognitive memory model. Given an agent conversation transcript (raw turns), extract 0-3 atomic observations following the formal Arbor node structure:
+    let system = r#"You are an Arbor leaf-insight extractor implementing the HTR cognitive memory model. Given an agent conversation transcript (raw turns), extract all salient atomic observations (typically 1-10 per transcript, capturing every user directive, preference, architectural decision, and mechanism tested) following the formal Arbor node structure:
   h_n = hypothesis (verifiable claim, preference, or mechanism tested)
   ι_n = causal_insight (2-3 concise sentences: what was tried, what happened, and WHY)
   item_type = 'direction' (if this is a user instruction, preference, or workflow constraint), 'insight' (if causal mechanism or observation), or 'fact'
