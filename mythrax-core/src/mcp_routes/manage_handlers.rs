@@ -769,7 +769,7 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
                 .unwrap_or("mlx-community/Qwen3.6-35B-A3B-4bit");
 
             let llm = crate::llm::LLMClient::default();
-            let result_text = match llm
+            let result_text = llm
                 .completion_explicit(
                     state.backend.as_ref(),
                     "local",
@@ -780,10 +780,7 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
                     false,
                 )
                 .await
-            {
-                Ok(res) => res,
-                Err(_) => "fn add(a: i32, b: i32) -> i32 { a + b }".to_string(),
-            };
+                .map_err(|e| anyhow::anyhow!("LLM completion failed for complete_code_task: {}", e))?;
 
             Ok(serde_json::json!({
                 "content": [

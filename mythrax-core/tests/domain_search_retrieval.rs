@@ -2164,9 +2164,13 @@ async fn test_bpe_tokenizer_accuracy() -> Result<()> {
         bpe_count, naive_count
     );
 
+    assert_eq!(
+        bpe_count, 58,
+        "BPE tokenizer must produce exact token count of 58 for sample Rust snippet"
+    );
     assert!(
-        bpe_count > 0 && bpe_count != naive_count,
-        "BPE tokenizer must return a valid token count distinct from the naive chars/4 fallback"
+        bpe_count < naive_count,
+        "BPE sub-word tokenization must yield fewer, more precise tokens than naive character division"
     );
 
     Ok(())

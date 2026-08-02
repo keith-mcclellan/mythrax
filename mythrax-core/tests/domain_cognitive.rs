@@ -329,9 +329,9 @@ Insight content
         .db
         .query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';")
         .await?;
-    let _after_nodes: Vec<serde_json::Value> = after_nodes_resp.take(0)?;
-    let count = res.expect("refine_hypotheses should return refined count");
-    assert!(count >= 0, "Refine hypotheses count must be non-negative");
+    let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "scope1").await;
+    let logs = res.expect("refine_hypotheses should return refinement logs");
+    assert_eq!(logs.len(), 0, "No refinement logs expected for scope1 with no active hypotheses");
     Ok(())
 }
 
@@ -678,8 +678,9 @@ Insight Two content."#,
         .await?
         .check()?;
 
-    let count = res.expect("refine_hypotheses in scope2 should succeed");
-    assert!(count >= 0, "Refine hypotheses count must be valid");
+    let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "scope2").await;
+    let logs = res.expect("refine_hypotheses in scope2 should succeed");
+    assert_eq!(logs.len(), 0, "No refinement logs expected for scope2 with no hypotheses");
     Ok(())
 }
 
