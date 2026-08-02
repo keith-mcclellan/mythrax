@@ -10449,3 +10449,9 @@ query: "mythrax project context", profile: 1595us, embed: 570us, terms: 10us, db
 query: "mythrax project context", profile: 1977us, embed: 1817us, terms: 609us, db: 37830us, rerank_start: 1669us, total: 67337us
 query: "mythrax project context", profile: 4890us, embed: 2208us, terms: 2753us, db: 28803us, rerank_start: 1768us, total: 72716us
 query: "Reinitialization & Ingestion Playbook", profile: 31us, embed: 2936us, terms: 627us, db: 38673us, rerank_start: 1161us, total: 43782us
+query: "SurrealDB multi-model database", profile: 6us, embed: 850us, terms: 12us, db: 30463us, rerank_start: 270us, total: 31607us
+query: "Getting started | SurrealDB", profile: 5us, embed: 1011us, terms: 15us, db: 30469us, rerank_start: 268us, total: 31776us
+query: "surrealdb", profile: 6us, embed: 804us, terms: 11us, db: 28732us, rerank_start: 442us, total: 31449us
+query: "Mythrax 3.0 Reinitialization & Ingestion Playbook", profile: 5us, embed: 1013us, terms: 23us, db: 35290us, rerank_start: 168us, total: 36732us
+query: "Architecture & Memory Safety Invariants", profile: 7us, embed: 832us, terms: 21us, db: 33351us, rerank_start: 345us, total: 34563us
+query: "HTTP client socket reuse", profile: 6us, embed: 989us, terms: 15us, db: 30821us, rerank_start: 308us, total: 32146us
