@@ -10442,3 +10442,4 @@ query: "cloud brain scope", profile: 26us, embed: 6845us, terms: 676us, db: 3903
 query: "mythrax project context", profile: 3984us, embed: 2840us, terms: 2340us, db: 39731us, rerank_start: 1393us, total: 89735us
 query: "mythrax project context", profile: 3339us, embed: 1891us, terms: 544us, db: 33335us, rerank_start: 1740us, total: 71827us
 query: "fact", profile: 47us, embed: 9167us, terms: 3162us, db: 48238us, rerank_start: 3801us, total: 67960us
+query: "insight", profile: 73us, embed: 5934us, terms: 3629us, db: 41216us, rerank_start: 875us, total: 62228us

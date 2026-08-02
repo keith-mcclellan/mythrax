@@ -103,43 +103,51 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 }
             }
 
-            let mut count = 0;
-            let mut offset = 0;
-            let limit = 500;
-            let llm_client = crate::llm::LLMClient::default();
-            loop {
-                let page = state.backend.get_episodes_paginated(limit, offset).await?;
-                if page.is_empty() {
-                    break;
-                }
-                for ep in page {
-                    if ep.embedding.is_none() || reset_processed {
-                        let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
-                            .scope(ep.scope.clone())
-                            .vault_path(ep.vault_path.clone())
-                            .source_episode(ep.source_episode.clone())
-                            .node_type(ep.node_type.clone())
-                            .build();
-                        let _ = state.backend.save_episode(&save).await;
-                        let _ = crate::cognitive::pipeline::extract_facts(
-                            state.backend.as_ref(),
-                            Some(&llm_client),
-                            &ep,
-                        )
-                        .await;
-                        count += 1;
+            let backend = state.backend.clone();
+            tokio::spawn(async move {
+                let mut count = 0;
+                let mut offset = 0;
+                let limit = 500;
+                let llm_client = crate::llm::LLMClient::default();
+                loop {
+                    if let Ok(page) = backend.get_episodes_paginated(limit, offset).await {
+                        if page.is_empty() {
+                            break;
+                        }
+                        for ep in page {
+                            if ep.embedding.is_none() || reset_processed {
+                                let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                                    .scope(ep.scope.clone())
+                                    .vault_path(ep.vault_path.clone())
+                                    .source_episode(ep.source_episode.clone())
+                                    .node_type(ep.node_type.clone())
+                                    .build();
+                                let _ = backend.save_episode(&save).await;
+                                let _ = crate::cognitive::pipeline::extract_facts(
+                                    backend.as_ref(),
+                                    Some(&llm_client),
+                                    &ep,
+                                )
+                                .await;
+                                count += 1;
+                            }
+                        }
+                        offset += limit;
+                    } else {
+                        break;
                     }
                 }
-                offset += limit;
-            }
+                tracing::info!("Background episode reprocessing completed (processed {} episodes).", count);
+            });
+
             Ok(json!({
                 "content": [
                     {
                         "type": "text",
                         "text": if reset_processed {
-                            format!("Reset processed_in_dream flag to false and reprocessed all {} raw episodes.", count)
+                            "Reset processed_in_dream flag to false and spawned background episode re-extraction across all raw episodes.".to_string()
                         } else {
-                            format!("Reprocessed {} episodes with missing vector embeddings.", count)
+                            "Spawned background episode maintenance pass for missing vector embeddings.".to_string()
                         }
                     }
                 ]
