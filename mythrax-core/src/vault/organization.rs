@@ -164,6 +164,21 @@ pub fn organize_file(
     }
 }
 
+pub fn has_enough_disk_space(_path: &Path, min_bytes: u64) -> bool {
+    use sysinfo::Disks;
+    let disks = Disks::new_with_refreshed_list();
+    if disks.is_empty() {
+        return true;
+    }
+    for disk in &disks {
+        if disk.available_space() > 0 && disk.available_space() < min_bytes {
+            tracing::warn!("Low disk space warning: {} bytes available", disk.available_space());
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +254,12 @@ mod tests {
 
         let p3 = typed_vault_path(temp.path(), "mythrax", NodeType::Skill, "skill-003.md");
         assert_eq!(p3, temp.path().join("wisdom/skills/skill-003.md"));
+    }
+
+    #[test]
+    fn test_disk_space_guard() {
+        let temp = tempdir().unwrap();
+        assert!(has_enough_disk_space(temp.path(), 1));
+        assert!(!has_enough_disk_space(temp.path(), u64::MAX));
     }
 }

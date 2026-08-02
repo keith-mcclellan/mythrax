@@ -409,11 +409,18 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                 let backend_harvest = backend.clone();
                 let cancel_token_harvest = cancel_token.clone();
                 tokio::spawn(async move {
+                    let mut task_rx = crate::vault::distillation::get_cognitive_task_bus().subscribe();
                     loop {
                         tokio::select! {
                             _ = cancel_token_harvest.cancelled() => {
                                 tracing::info!("Reflection harvester received cancellation signal, stopping loop");
                                 break;
+                            }
+                            _ = task_rx.recv() => {
+                                update_last_activity();
+                                if let Err(e) = crate::hooks::reflect::harvest_completed_reflections(&*backend_harvest).await {
+                                    tracing::error!("Reflection harvester failed: {:?}", e);
+                                }
                             }
                             _ = tokio::time::sleep(tokio::time::Duration::from_secs(60)) => {
                                 update_last_activity();

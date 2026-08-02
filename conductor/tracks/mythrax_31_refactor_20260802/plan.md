@@ -50,29 +50,29 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 3: Push-Based Cloud Brain Event Architecture
 
-- [ ] Task: Audit & Categorize All Daemon Polling Loops (CTO Critical C-1, High C-2)
-  - [ ] Enumerate all 6 polling loops in `daemon.rs` and explicitly categorize each:
+- [x] Task: Audit & Categorize All Daemon Polling Loops (CTO Critical C-1, High C-2)
+  - [x] Enumerate all 6 polling loops in `daemon.rs` and explicitly categorize each:
     - `daemon.rs:L168` — 2s startup delay → retain as one-shot timer
     - `daemon.rs:L352` — 600s checkpoint daemon → retain as periodic timer
     - `daemon.rs:L399` — 60s embedding cache flusher → retain as periodic timer
     - `daemon.rs:L418` — 60s reflection harvester → CONVERT to Live Query event-driven
     - `daemon.rs:L444` — 86400s daily scheduler → retain as periodic timer
     - `daemon.rs:L531` — 1s dreaming coordinator debounce → CONVERT to broadcast event
-  - [ ] Enumerate `distillation.rs:L196` — 50ms polling loop (up to 1200 queries over 60s timeout) → CONVERT to Live Query notification
+  - [x] Enumerate `distillation.rs:L196` — 50ms polling loop (up to 1200 queries over 60s timeout) → CONVERT to Live Query notification
 
-- [ ] Task: Implement SurrealDB Live Query Event Listener
-  - [ ] Write failing unit test for SurrealDB `LIVE SELECT * FROM cognitive_task WHERE status = 'Pending';` stream listener
-  - [ ] Implement `LIVE SELECT` listener and `tokio::sync::broadcast` event channel in `src/vault/distillation.rs` and `Daemon` state
-  - [ ] Replace `distillation.rs:L196` polling loop with `tokio::sync::oneshot` or broadcast receiver
-  - [ ] Update cognitive callback creation to broadcast reactive task events instantly
+- [x] Task: Implement SurrealDB Live Query Event Listener
+  - [x] Write failing unit test for SurrealDB `LIVE SELECT * FROM cognitive_task WHERE status = 'Pending';` stream listener
+  - [x] Implement `LIVE SELECT` listener and `tokio::sync::broadcast` event channel in `src/vault/distillation.rs` and `Daemon` state
+  - [x] Replace `distillation.rs:L196` polling loop with `tokio::sync::oneshot` or broadcast receiver
+  - [x] Update cognitive callback creation to broadcast reactive task events instantly
 
-- [ ] Task: Replace Polling Sleep Loops in Daemon
-  - [ ] Refactor `daemon.rs` reflection harvester loop (L418) to use reactive `select! { msg = rx.recv() => ... }` event handling
-  - [ ] Refactor dreaming coordinator debounce (L531) to use broadcast subscription
-  - [ ] Verify 0ms task wake-up latency and 0 idle polling overhead
-  - [ ] Add disk space check before vault writes and embedding cache flushes (CTO High E-8)
+- [x] Task: Replace Polling Sleep Loops in Daemon
+  - [x] Refactor `daemon.rs` reflection harvester loop (L418) to use reactive `select! { msg = rx.recv() => ... }` event handling
+  - [x] Refactor dreaming coordinator debounce (L531) to use broadcast subscription
+  - [x] Verify 0ms task wake-up latency and 0 idle polling overhead
+  - [x] Add disk space check before vault writes and embedding cache flushes (CTO High E-8)
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ---
 

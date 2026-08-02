@@ -7,7 +7,33 @@ use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use tokio::sync::broadcast;
 use uuid::Uuid;
+
+static COGNITIVE_TASK_BUS: OnceLock<broadcast::Sender<CognitiveTaskEvent>> = OnceLock::new();
+
+pub fn get_cognitive_task_bus() -> &'static broadcast::Sender<CognitiveTaskEvent> {
+    COGNITIVE_TASK_BUS.get_or_init(|| {
+        let (tx, _) = broadcast::channel(100);
+        tx
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct CognitiveTaskEvent {
+    pub task_id: String,
+    pub status: String,
+    pub result: Option<String>,
+}
+
+pub fn broadcast_task_event(task_id: impl Into<String>, status: impl Into<String>, result: Option<String>) {
+    let _ = get_cognitive_task_bus().send(CognitiveTaskEvent {
+        task_id: task_id.into(),
+        status: status.into(),
+        result,
+    });
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DistilledConversation {
@@ -192,16 +218,28 @@ pub async fn run_summarization_task(
             };
 
             if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                let mut rx = get_cognitive_task_bus().subscribe();
                 let start = std::time::Instant::now();
                 let timeout = std::time::Duration::from_secs(60);
+
+                if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                    if updated.status == "Completed" {
+                        if let Some(ref res) = updated.result {
+                            return Ok(enforce_symbol_integrity(content, res));
+                        }
+                    }
+                }
+
                 while start.elapsed() < timeout {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
-                        if updated.status == "Completed" {
-                            if let Some(res) = updated.result {
-                                return Ok(enforce_symbol_integrity(content, &res));
+                    let remaining = timeout.saturating_sub(start.elapsed());
+                    match tokio::time::timeout(remaining, rx.recv()).await {
+                        Ok(Ok(event)) if event.task_id == task_id && event.status == "Completed" => {
+                            if let Some(ref res) = event.result {
+                                return Ok(enforce_symbol_integrity(content, res));
                             }
                         }
+                        Ok(Ok(_)) => continue,
+                        _ => break,
                     }
                 }
                 tracing::warn!("Cognitive callback timed out, falling back to LargeLocal");
@@ -825,4 +863,24 @@ pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) 
     }
 
     Ok(saved_count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_broadcast_task_event_reactive_wakeup() {
+        let mut rx = get_cognitive_task_bus().subscribe();
+        broadcast_task_event("task_123", "Completed", Some("reactive result".to_string()));
+
+        let event = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(event.task_id, "task_123");
+        assert_eq!(event.status, "Completed");
+        assert_eq!(event.result, Some("reactive result".to_string()));
+    }
 }
