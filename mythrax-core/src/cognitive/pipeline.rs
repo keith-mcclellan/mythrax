@@ -5,25 +5,11 @@ use crate::contracts::{
 };
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
+use crate::math::cosine_similarity;
 use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::Path;
-
-/// Calculates cosine similarity between two 32-bit floating point vector slices.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a * norm_b)
-    }
-}
 
 pub fn slugify_title(title: &str) -> String {
     let mut slug = String::new();
@@ -48,33 +34,7 @@ pub fn slugify_title(title: &str) -> String {
 pub fn derive_slug(raw_slug: Option<&str>, fallback_text: &str) -> String {
     let raw = raw_slug.unwrap_or("").trim();
     let text_to_slug = if raw.is_empty() { fallback_text } else { raw };
-    let mut slug = String::new();
-    let mut last_dash = false;
-    for c in text_to_slug.chars() {
-        if c.is_alphanumeric() {
-            slug.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            slug.push('_');
-            last_dash = true;
-        }
-    }
-    let trimmed = slug.trim_matches('_').to_string();
-    if trimmed.is_empty() {
-        "node".to_string()
-    } else if trimmed.len() > 60 {
-        let char_limit = trimmed.char_indices().map(|(i, _)| i).nth(60).unwrap_or(trimmed.len());
-        let sub = &trimmed[..char_limit];
-        if let Some(idx) = sub.rfind('_') {
-            if idx > 15 {
-                return sub[..idx].trim_end_matches('_').to_string();
-            }
-        }
-        sub.trim_end_matches('_').to_string()
-    } else {
-
-        trimmed
-    }
+    crate::vault::organization::slugify_title(text_to_slug, 65)
 }
 
 

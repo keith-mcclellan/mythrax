@@ -8,6 +8,7 @@ use clap::Parser;
 use cli::{Cli, Commands, ConfigAction, HtrAction, MemoryAction, StmAction, VaultAction};
 use db::{StorageBackend, SurrealBackend};
 use mythrax_core::contracts::WikiNode;
+use surrealdb_types::SurrealValue;
 use std::path::{Path, PathBuf};
 
 // Embed Mythrax Documentation
@@ -397,34 +398,28 @@ pub fn spawn_swap_monitor_thread() {
                 continue;
             }
 
-            // 1. Query disable_swap_monitor from database config:settings
-            let config_sql = "SELECT VALUE disable_swap_monitor FROM config:settings LIMIT 1;";
-            let disable_monitor = match backend.db.query(config_sql).await {
-                Ok(mut res) => res.take::<Option<bool>>(0).unwrap_or(None).unwrap_or(false),
-                Err(_) => false,
+            #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Default)]
+            struct SwapConfig {
+                disable_swap_monitor: Option<bool>,
+                swap_threshold_tier1_gb: Option<f64>,
+                swap_threshold_tier2_gb: Option<f64>,
+                swap_threshold_tier3_gb: Option<f64>,
+            }
+
+            let config_sql = "SELECT disable_swap_monitor, swap_threshold_tier1_gb, swap_threshold_tier2_gb, swap_threshold_tier3_gb FROM config:settings LIMIT 1;";
+            let cfg: SwapConfig = match backend.db.query(config_sql).await {
+                Ok(mut res) => res.take::<Option<SwapConfig>>(0).ok().flatten().unwrap_or_default(),
+                Err(_) => SwapConfig::default(),
             };
-            if disable_monitor {
+
+            if cfg.disable_swap_monitor.unwrap_or(false) {
                 continue;
             }
 
-            // 2. Query sysctl vm.swapusage
             if let Some(swap_used) = get_swap_used_bytes() {
-                // 3. Get thresholds
-                let t1_sql = "SELECT VALUE swap_threshold_tier1_gb FROM config:settings LIMIT 1;";
-                let tier1_gb = match backend.db.query(t1_sql).await {
-                    Ok(mut res) => res.take::<Option<f64>>(0).unwrap_or(None).unwrap_or(2.0),
-                    Err(_) => 2.0,
-                };
-                let t2_sql = "SELECT VALUE swap_threshold_tier2_gb FROM config:settings LIMIT 1;";
-                let tier2_gb = match backend.db.query(t2_sql).await {
-                    Ok(mut res) => res.take::<Option<f64>>(0).unwrap_or(None).unwrap_or(3.0),
-                    Err(_) => 3.0,
-                };
-                let t3_sql = "SELECT VALUE swap_threshold_tier3_gb FROM config:settings LIMIT 1;";
-                let tier3_gb = match backend.db.query(t3_sql).await {
-                    Ok(mut res) => res.take::<Option<f64>>(0).unwrap_or(None).unwrap_or(6.0),
-                    Err(_) => 6.0,
-                };
+                let tier1_gb = cfg.swap_threshold_tier1_gb.unwrap_or(2.0);
+                let tier2_gb = cfg.swap_threshold_tier2_gb.unwrap_or(3.0);
+                let tier3_gb = cfg.swap_threshold_tier3_gb.unwrap_or(6.0);
 
                 let swap_used_gb = swap_used as f64 / (1024.0 * 1024.0 * 1024.0);
 

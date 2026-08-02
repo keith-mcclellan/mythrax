@@ -12,13 +12,12 @@
 
 ## Core System Goals & Objectives
 
-To fulfill its role as a persistent, autonomous sidecar intelligence companion, Mythrax commits to five fundamental objectives:
+To fulfill its role as a persistent, autonomous sidecar intelligence companion, Mythrax commits to four fundamental objectives:
 
 1. **Short-Term Context Recall & Compaction Recovery:** Provide immediate short-term retrieval for active agents operating with large context windows. Memory compaction must preserve the granular sequence of raw turns (user inputs, assistant thoughts, tool outputs) so agents can review their immediate past steps and avoid forgetting loops.
 2. **Project-Level Memory (Insights):** Build high-cohesion, project-specific knowledge representations (`wiki_node` / clusters) so that multiple agents or sequential sessions on the same codebase share operational constraints and context.
 3. **Cross-Project Global Memory (Wisdom):** Maintain a durable, global partition (`wisdom`) for general guidelines, coding practices, user preferences, and architectural rules that apply universally across workspaces (e.g. general design principles).
 4. **Forged Knowledge & Skill Integration:** Enable raw reference assets (like PDFs, specs, and papers) and composed agent strategies (e.g. chaining `spec-builder`, `loop-builder`, and reviewers) to be dynamically injected via RAG into active context windows on-demand.
-5. **Resource-Efficient Memory Brokerage:** Optimize token footprint and compute overhead using local models (`mlx-community/Qwen3.6-35B-A3B-4bit`) for text embeddings, token budget management, and code generation.
 
 ## Mythrax 6-Signal Unified Retrieval (v2.5.2)
 - **6 Retrieval Signals**: Combine Vector Similarity, BM25 (FTS) Relevance, Concept Spreading Activation, STM Working Memory Injection, Temporal Neighbor Expansion, and Gaussian Temporal Proximity.
@@ -45,6 +44,14 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
 - **Strict Lock Ordering & Contention Prevention**: Subagents MUST NOT hold a primary lock (e.g., `EMBEDDING_CACHE` or `term_counts_cache`) while acquiring a secondary lock (e.g., `SQLITE_CACHE_CONN` or inner scope locks). Always extract required data into local variables, drop the primary lock completely, and then acquire secondary locks or execute I/O operations.
 - **Algorithmic Complexity & Bulk Operations (No $O(N)$ Hot-Path Scans)**: Subagents MUST NOT perform $O(N)$ linear iteration scans (e.g. `.min_by_key()`) inside hot-path loops or per-element insertions. Use constant-time $O(1)$ data structures (e.g. `lru::LruCache`) or perform bulk pruning (evicting the bottom 10% of items in a single pass when capacity is reached).
 - **Complete Resource Lifecycle & Write-on-Evict Safety**: Any component that loads GPU VRAM weights or allocates heavy in-memory buffers MUST implement a public `evict()` method and register it with the background idle eviction loop (`daemon.rs`). Any cache eviction mechanism (such as `LruCache::push` or `resize`) MUST inspect evicted items and immediately persist dirty entries to disk before dropping them from memory (Write-on-Evict).
+- **Anti-AI Slop & Quality Gate Directives**:
+  - **Strict Assertion Mandate**: All test assertions MUST evaluate explicit struct field values, exact error types, and verified database mutations. Generic `assert!(res.is_ok())` and `assert!(res.is_some())` checks are categorized as AI Slop and will fail review.
+  - **Panic & Stub Elimination**: Production paths must contain zero `.unwrap()`, `.expect()`, `todo!()`, `unimplemented!()`, or `// TODO` stubs.
+  - **Lock Contention Guarantee**: Mutex and RwLock guards must be dropped before any `.await` point or secondary lock acquisition.
+  - **RAII Resource Boundaries**: All state flag mutations and resource handles must use `Drop`-implementing scope guards to guarantee clean state recovery on panics or early `?` error returns.
+  - **Write-on-Evict Cache Durability**: In-memory LRU evictions must synchronously flush dirty records to disk before dropping items from RAM.
 - **Incremental Per-Phase Git Commit & Push Mandate**: Agents MUST execute a git commit and `git push origin <branch_name>` immediately upon completing each phase of a track (after verifying unit tests and build status) before proceeding to subsequent phases or triggering code reviews. This prevents multi-commit push backlogs and keeps remotes continuously up to date.
+- **Mandatory Inter-Phase Formal Review & Unconditional CTO Approval Gate**: Agents MUST execute a formal review (`/conductor-review`) between development phases, spin up the Adversarial CTO Reviewer subagent, and iteratively remediate all findings (including minor items) in a loop until the CTO Reviewer issues an explicit, unconditional `APPROVED` verdict. Once approved, the agent MUST immediately execute a git commit and push to the feature branch (`mythrax-3.1-release`) before starting the next phase.
+- **CTO Reviewer Anti-Work-Avoidance & Decomposed Task Structuring Mandate**: When auditing specs, plans, or implementations, the CTO Reviewer is strictly prohibited from recommending scope reduction, feature removal, or deferring work because a task is perceived as "too complex," "massive," or "tedious." Instead, the CTO Reviewer MUST handle complexity by instructing the agent to decompose large phases and complex features into smaller, bite-sized phases and scoped sub-tasks (< 32k tokens per task), guaranteeing 100% feature completeness without scope erosion.
 
 

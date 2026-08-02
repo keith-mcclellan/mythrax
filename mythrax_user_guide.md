@@ -40,23 +40,31 @@ Users who interact with Mythrax exclusively via the MCP server (e.g. through Cur
 
 ---
 
-## 2. Core Memory Entities
+## 2. Core Memory Entities & Typed Vault Hierarchy
 
-The database and vault manage three main entities:
+The database and filesystem vault manage memory entities organized in a typed domain hierarchy under `wiki/<scope>/` and hidden dot-folders:
 
 ### 2.1 Episode
-- **Description**: Raw historical transcripts, conversation logs, and actions.
-- **Storage Location**: `vault/episodes/antigravity_<session_id>_part<N>_<hash>.md`
-- **Token Optimization**: Long logs are chunked at a maximum of `100,000` characters to prevent prompt bloat and local attention window failures.
+- **Description**: Raw historical turn transcripts, conversation logs, and actions.
+- **Storage Location**: `mythrax-vault/.episodes/<YYYY-MM>/<slug_65>_<crc32>.md` (stored in hidden monthly dot-folders to keep Obsidian Graph View clean).
+- **Slug Format**: Capped at 65 characters + 4-character CRC32 hash (`<slug_65>_<crc32>.md`) to prevent path length overflow.
+- **Token Optimization**: Long logs are chunked at a maximum of `100,000` characters to prevent prompt bloat.
 
-### 2.2 WikiNode (Artifact / Insight)
-- **Description**: Distilled design documents, walkthroughs, chapter text, or synthesized insights.
-- **Storage Location**: `vault/wiki/<scope>/insights/<name>.md` or `vault/wiki/artifacts/<session_id>/<name>.md`
+### 2.2 WikiNode (Artifact / Insight / Reference / Fact / Direction)
+- **Description**: Distilled design documents, walkthroughs, references, atomic facts, process directions, and synthesized insights.
+- **Storage Location**: Organized in typed subdirectories:
+  - `wiki/<scope>/references/ast/` — AST code symbol nodes
+  - `wiki/<scope>/references/docs/` — Workspace documentation & specs
+  - `wiki/<scope>/references/forged/` — Ingested papers & external reference assets
+  - `wiki/<scope>/facts/` — Extracted atomic Fact nodes
+  - `wiki/<scope>/insights/` — Synthesized Insight nodes
+  - `wiki/<scope>/directions/` — User directives & process preference nodes
+  - `wiki/<scope>/hypotheses/` — Arbor hypothesis tree nodes
 - **Splicing**: Associated with episodes via directed `relates_to` graph edges.
 
 ### 2.3 WisdomRule
 - **Description**: Empirical programming guidelines, habits, and anti-patterns extracted from successes and failures.
-- **Storage Location**: `vault/wisdom/<tier>/<name>.md`
+- **Storage Location**: `wisdom/<tier>/<name>.md`
 - **Schema**: Matches a structured format defining:
   - **Target Pattern**: What context triggers this rule.
   - **Action to Avoid**: Anti-patterns observed.

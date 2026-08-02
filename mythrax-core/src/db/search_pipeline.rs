@@ -2988,10 +2988,9 @@ impl SurrealBackend {
         let _guard = _span.enter();
 
         // Stage 9: Bounded Verbatim Hydration and Limit/Offset clipping
-        const MAX_HYDRATION_CHARS: usize = 10000;
         for c in &mut candidates {
-            if c.content.chars().count() > MAX_HYDRATION_CHARS {
-                c.content = c.content.chars().take(MAX_HYDRATION_CHARS).collect();
+            if c.content.chars().count() > crate::config::MAX_HYDRATION_CHARS {
+                c.content = c.content.chars().take(crate::config::MAX_HYDRATION_CHARS).collect();
             }
         }
 

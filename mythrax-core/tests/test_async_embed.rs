@@ -63,12 +63,9 @@ async fn test_async_embed_semaphore_nonblocking() -> Result<()> {
         std::time::Duration::from_millis(500),
         rx,
     )
-    .await;
-    assert!(
-        lightweight_done.is_ok(),
-        "Tokio runtime worker thread was blocked while embed waited on semaphore"
-    );
-    assert_eq!(lightweight_done.unwrap(), Ok(true));
+    .await
+    .expect("Tokio runtime worker thread was blocked while embed waited on semaphore");
+    assert_eq!(lightweight_done, Ok(true));
 
     // Release permit so embed can finish
     drop(permit);
@@ -77,12 +74,11 @@ async fn test_async_embed_semaphore_nonblocking() -> Result<()> {
         std::time::Duration::from_secs(2),
         embed_handle,
     )
-    .await;
-    assert!(
-        embed_result.is_ok(),
-        "embed failed to proceed after semaphore permit was released"
-    );
-    assert!(embed_result.unwrap().unwrap().is_ok());
+    .await
+    .expect("embed failed to proceed after semaphore permit was released");
+    let inner_res = embed_result.expect("join handle must succeed");
+    let vec = inner_res.expect("embedding must succeed");
+    assert_eq!(vec.len(), 768);
 
     Ok(())
 }

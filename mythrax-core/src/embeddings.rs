@@ -32,7 +32,7 @@ pub struct EmbeddingLruCache {
 
 impl EmbeddingLruCache {
     pub fn new(capacity: usize) -> Self {
-        let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
+        let cap = NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
         Self {
             cache: LruCache::new(cap),
         }
@@ -1006,7 +1006,7 @@ impl LocalEmbedder {
             let loaded = crate::llm::nomic_mlx::NomicBertModel::new(&weights)?;
             *model_lock = Some(loaded);
         }
-        let model = model_lock.as_mut().unwrap();
+        let model = model_lock.as_mut().ok_or_else(|| anyhow::anyhow!("Embedder model uninitialized"))?;
         let output = model.forward(input_array, Some(mask_array))?;
 
         // Mean pool on GPU: sum(x * mask) / max(sum(mask), 1.0)
@@ -1172,7 +1172,7 @@ impl LocalEmbedder {
             let loaded = crate::llm::nomic_mlx::NomicBertModel::new(&weights)?;
             *model_lock = Some(loaded);
         }
-        let model = model_lock.as_mut().unwrap();
+        let model = model_lock.as_mut().ok_or_else(|| anyhow::anyhow!("Batch embedder model uninitialized"))?;
         let output = model.forward(input_array, Some(mask_array))?;
 
         let mask_expanded = mask_array

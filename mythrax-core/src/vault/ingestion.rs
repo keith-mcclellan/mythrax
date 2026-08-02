@@ -864,8 +864,8 @@ pub async fn bulk_ingest_vault(
                     let mut generated_parts = Vec::new();
 
                     let slug_title = crate::cognitive::pipeline::slugify_title(&title);
-                    let parent_relative_path =
-                        format!("episodes/{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix);
+                    let parent_filename = format!("{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix);
+                    let parent_relative_path = crate::vault::organization::episode_relative_path(&parent_filename);
                     let parent_title = title.clone();
                     let mut parent_saved_id = String::new();
 
@@ -874,13 +874,14 @@ pub async fn bulk_ingest_vault(
                         let mut parent_parts_list = String::new();
                         parent_parts_list.push_str("\n\n## Parts\n");
                         for chunk_idx in 0..total_chunks {
-                            let part_path = format!(
-                                "episodes/{}_part{}_{}_{}",
+                            let part_file = format!(
+                                "{}_part{}_{}_{}",
                                 slug_title,
                                 chunk_idx + 1,
                                 &dir_name[..dir_name.len().min(8)],
                                 uuid_suffix
                             );
+                            let part_path = crate::vault::organization::episode_relative_path(&part_file);
                             parent_parts_list.push_str(&format!("- [[{}]]\n", part_path));
                         }
                         let parent_content = format!(
@@ -922,15 +923,16 @@ pub async fn bulk_ingest_vault(
                         };
 
                         let relative_path = if total_chunks > 1 {
-                            format!(
-                                "episodes/{}_part{}_{}_{}.md",
+                            let filename = format!(
+                                "{}_part{}_{}_{}.md",
                                 slug_title,
                                 chunk_idx + 1,
                                 &dir_name[..dir_name.len().min(8)],
                                 uuid_suffix
-                            )
+                            );
+                            crate::vault::organization::episode_relative_path(&filename)
                         } else {
-                            format!("episodes/{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix)
+                            parent_relative_path.clone()
                         };
 
                         let mut linked_artifacts_section = String::new();
@@ -1910,8 +1912,8 @@ mod tests {
         assert!(!ref_doc.exists(), "Mirrored file should be pruned when deleted from workspace");
     }
 
-    #[test]
-    fn test_moc_rebuild_nested_wikilinks() {
+    #[tokio::test]
+    async fn test_moc_rebuild_nested_wikilinks() {
         let vault_dir = tempdir().unwrap();
         let store = MarkdownStore::new(vault_dir.path()).unwrap();
 
@@ -1920,11 +1922,8 @@ mod tests {
         std::fs::write(ref_specs.join("bar.md"), "# Bar Spec").unwrap();
         std::fs::write(vault_dir.path().join("reference").join("architecture.md"), "# Architecture").unwrap();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
-            store.rebuild_reference_moc(&backend).unwrap();
-        });
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        store.rebuild_reference_moc(&backend).unwrap();
 
         let moc_content = std::fs::read_to_string(vault_dir.path().join("MOC.md")).unwrap();
         assert!(moc_content.contains("## Reference"));

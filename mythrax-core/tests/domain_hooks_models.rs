@@ -49,8 +49,8 @@ fn test_codex_payload_maps_to_canonical() {
     );
     let err = res.unwrap_err().to_string();
     assert!(
-        err.contains("unsupported in v2.1.0"),
-        "Error must contain unsupported in v2.1.0"
+        err.contains("standard session_id and transcript_path"),
+        "Error must contain standard session_id and transcript_path"
     );
 }
 
@@ -69,8 +69,8 @@ fn test_cursor_payload_maps_to_canonical() {
     );
     let err = res.unwrap_err().to_string();
     assert!(
-        err.contains("unsupported in v2.1.0"),
-        "Error must contain unsupported in v2.1.0"
+        err.contains("standard session_id and transcript_path"),
+        "Error must contain standard session_id and transcript_path"
     );
 }
 
@@ -110,7 +110,7 @@ fn test_handler_returns_result_on_error() {
         emit_hook_result(error_input);
     });
 
-    assert!(result.is_ok(), "emit_hook_result panicked on Err input");
+    assert_eq!(result.is_ok(), true, "emit_hook_result panicked on Err input");
 }
 
 #[test]
@@ -306,6 +306,8 @@ async fn test_soft_thresholding_and_hook_injection() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Prepare payload for pre-invocation hook
@@ -363,6 +365,8 @@ async fn test_post_invocation_hook_success_and_failure() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Success case
@@ -377,9 +381,8 @@ async fn test_post_invocation_hook_success_and_failure() {
 
     // Check STM status saved
     let stm_map = state.backend.get_stm("test_post_session", Some("_last_post_invocation_status")).await.unwrap();
-    let stm_val = stm_map.get("_last_post_invocation_status");
-    assert!(stm_val.is_some());
-    assert!(stm_val.unwrap().contains("success"));
+    let stm_val = stm_map.get("_last_post_invocation_status").expect("stm value must exist");
+    assert!(stm_val.contains("success"));
 
     // 2. Failure case
     let payload_fail = serde_json::json!({
@@ -394,8 +397,8 @@ async fn test_post_invocation_hook_success_and_failure() {
 
     // Check failure episode created
     let eps = state.backend.get_all_episodes().await.unwrap();
-    let fail_ep = eps.iter().find(|e| e.session_id.as_deref() == Some("test_post_fail_session"));
-    assert!(fail_ep.is_some(), "Failure episode must be saved on error post-invocation");
+    let fail_ep = eps.iter().find(|e| e.session_id.as_deref() == Some("test_post_fail_session")).expect("Failure episode must be saved on error post-invocation");
+    assert_eq!(fail_ep.session_id.as_deref(), Some("test_post_fail_session"));
 }
 
 }
@@ -479,12 +482,7 @@ async fn test_external_and_in_process_hybrid_routing() {
             false,
         )
         .await;
-    assert!(
-        response_0_5b.is_ok(),
-        "Direct 0.5B in-process completion failed: {:?}",
-        response_0_5b.err()
-    );
-    let text_0_5b = response_0_5b.unwrap();
+    let text_0_5b = response_0_5b.expect("Direct 0.5B in-process completion must succeed");
     println!(
         "DEBUG ROUTING TEST: 0.5B (in-process) Response: {}",
         text_0_5b
@@ -503,12 +501,7 @@ async fn test_external_and_in_process_hybrid_routing() {
             false,
         )
         .await;
-    assert!(
-        response_35b.is_ok(),
-        "Direct 35B external completion failed: {:?}",
-        response_35b.err()
-    );
-    let text_35b = response_35b.unwrap();
+    let text_35b = response_35b.expect("Direct 35B external completion must succeed");
     println!(
         "DEBUG ROUTING TEST: 35B (external HTTP) Response: {}",
         text_35b
@@ -794,17 +787,7 @@ async fn test_completion_dynamic_server_loading() {
             "Say Hello in one word",
         )
         .await;
-    println!(
-        "DEBUG TEST: Completion response received: {:?}",
-        response.is_ok()
-    );
-
-    assert!(
-        response.is_ok(),
-        "Completion execution must succeed dynamically: {:?}",
-        response.err()
-    );
-    let text = response.unwrap();
+    let text = response.expect("Completion execution must succeed dynamically");
     assert!(!text.is_empty(), "Generated response must not be empty");
 
     // Evict unused models to trigger drop and verify cleanup
@@ -868,6 +851,8 @@ async fn test_complete_code_task_mcp_tool() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Invoke complete_code_task MCP tool via consolidated agent tool
@@ -879,13 +864,7 @@ async fn test_complete_code_task_mcp_tool() {
     });
 
     let res = mythrax_core::mcp_routes::call_mcp_tool(&api_state, "agent", args).await;
-    assert!(
-        res.is_ok(),
-        "MCP tool complete_code_task call must succeed: {:?}",
-        res.err()
-    );
-
-    let val = res.unwrap();
+    let val = res.expect("MCP tool complete_code_task call must succeed");
     let text = val["content"][0]["text"].as_str().unwrap();
     assert!(
         !text.is_empty(),
@@ -941,12 +920,7 @@ async fn test_tier3_completion_and_eviction() {
         )
         .await;
 
-    assert!(
-        response.is_ok(),
-        "Tier 3 completion execution must succeed dynamically: {:?}",
-        response.err()
-    );
-    let text = response.unwrap();
+    let text = response.expect("Tier 3 completion execution must succeed dynamically");
     assert!(!text.is_empty(), "Generated response must not be empty");
 
     // Evict unused models to trigger drop and verify cleanup
@@ -986,6 +960,8 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
         ignore_list: std::sync::Arc::new(Default::default()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Create a BeliefState in SurrealDB
@@ -1271,11 +1247,7 @@ async fn test_model_broker_lifecycle_and_warmup_fallback() {
         .acquire_llm_with_warmup_fallback(ModelTier::Tier2)
         .await;
 
-    assert!(
-        res.is_ok(),
-        "Warmup fallback must catch shader cache panics and succeed"
-    );
-    let fallback_model = res.unwrap();
+    let fallback_model = res.expect("Warmup fallback must catch shader cache panics and succeed");
     assert_eq!(
         fallback_model.execution_mode(),
         "cpu",
@@ -1379,6 +1351,31 @@ fn test_model_aware_swap_eviction_thresholds() {
     assert!(evict_tier3_high, "Tier 3 must evict at 6.1 GB swap");
     let evict_tier3_low = check_swap_pressure(ModelTier::Tier3, 5_500 * 1024 * 1024);
     assert!(!evict_tier3_low, "Tier 3 must not evict at 5.5 GB swap");
+}
+
+#[tokio::test]
+async fn test_programmatic_preflight_memory_gate_tracking() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend: std::sync::Arc<dyn mythrax_core::db::backend::StorageBackend> =
+        std::sync::Arc::new(mythrax_core::db::SurrealBackend::new_in_memory().await.unwrap());
+    backend.init().await.unwrap();
+
+    let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(temp.path()).unwrap());
+    let state = mythrax_core::api::ApiState {
+        backend,
+        auth_token: "secret".to_string(),
+        store,
+        ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
+        dream_tx: None,
+        shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+
+    let session = "test_session_gate_1";
+    assert_eq!(state.has_checked_memory(session).await, false);
+    state.mark_memory_checked(session).await;
+    assert_eq!(state.has_checked_memory(session).await, true);
 }
 
 }

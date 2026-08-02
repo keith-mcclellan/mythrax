@@ -38,31 +38,55 @@ pub fn strip_nulls(value: &mut Value) {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum FenceState {
+    Outside,
+    InNormalFence,
+    InDiffFence,
+}
+
 pub fn strip_diffs(content: &str) -> String {
     let mut cleaned_lines = Vec::new();
-    let mut in_diff_block = false;
+    let mut state = FenceState::Outside;
+
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("```diff") {
-            in_diff_block = true;
-            cleaned_lines.push("[Diff Truncated]");
+        if trimmed.starts_with("```") {
+            match state {
+                FenceState::Outside => {
+                    if trimmed.starts_with("```diff") {
+                        state = FenceState::InDiffFence;
+                        cleaned_lines.push("[Diff Truncated]");
+                    } else {
+                        state = FenceState::InNormalFence;
+                        cleaned_lines.push(line);
+                    }
+                }
+                FenceState::InNormalFence => {
+                    state = FenceState::Outside;
+                    cleaned_lines.push(line);
+                }
+                FenceState::InDiffFence => {
+                    state = FenceState::Outside;
+                }
+            }
             continue;
         }
-        if in_diff_block && trimmed.starts_with("```") {
-            in_diff_block = false;
-            continue;
+
+        match state {
+            FenceState::InDiffFence => continue,
+            FenceState::InNormalFence => cleaned_lines.push(line),
+            FenceState::Outside => {
+                if trimmed.starts_with("diff --git ")
+                    || trimmed.starts_with("--- ")
+                    || trimmed.starts_with("+++ ")
+                    || trimmed.starts_with("@@ ")
+                {
+                    continue;
+                }
+                cleaned_lines.push(line);
+            }
         }
-        if in_diff_block {
-            continue;
-        }
-        if trimmed.starts_with("diff --git ")
-            || trimmed.starts_with("--- ")
-            || trimmed.starts_with("+++ ")
-            || trimmed.starts_with("@@ ")
-        {
-            continue;
-        }
-        cleaned_lines.push(line);
     }
     cleaned_lines.join("\n")
 }
@@ -138,38 +162,41 @@ pub fn get_mcp_tools_schema() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["view", "search", "rules", "nodes", "root", "query_symbolic", "search_index", "timeline", "get_full", "get", "search_by_concept", "diff_sessions"] },
-                        "path": { "type": "string" },
-                        "AbsolutePath": { "type": "string" },
-                        "TargetFile": { "type": "string" },
-                        "start_line": { "type": "integer" },
-                        "StartLine": { "type": "integer" },
-                        "end_line": { "type": "integer" },
-                        "EndLine": { "type": "integer" },
-                        "query": { "type": "string" },
-                        "scope": { "type": "string" },
-                        "limit": { "type": "integer", "default": 15 },
-                        "offset": { "type": "integer", "default": 0 },
-                        "threshold": { "type": "number", "default": 0.55 },
-                        "token_budget": { "type": "integer" },
-                        "allow_downward": { "type": "boolean", "default": false },
-                        "include_episodes": { "type": "boolean", "default": false },
-                        "include_artifacts": { "type": "boolean", "default": false },
-                        "session_id": { "type": "string" },
-                        "tier": { "type": "string" },
-                        "node_ids": { "type": "array", "items": { "type": "string" } },
-                        "ids": { "type": "array", "items": { "type": "string" } },
-                        "depth_before": { "type": "integer", "default": 3 },
-                        "depth_after": { "type": "integer", "default": 3 },
-                        "anchor_id": { "type": "string" },
-                        "node_id": { "type": "string" },
-                        "relation": { "type": "string" },
-                        "max_depth": { "type": "integer", "default": 3 },
-                        "key": { "type": "string" },
-                        "is_skill_file": { "type": "boolean" },
-                        "concept": { "type": "string" },
-                        "session_a": { "type": "string" },
-                        "session_b": { "type": "string" }
+                        "action": { "type": "string", "enum": ["view", "search", "rules", "nodes", "root", "query_symbolic", "search_index", "timeline", "get_full", "get", "search_by_concept", "diff_sessions"], "description": "Action type to execute" },
+                        "path": { "type": "string", "description": "File path to view or inspect" },
+                        "AbsolutePath": { "type": "string", "description": "Absolute file path alias" },
+                        "TargetFile": { "type": "string", "description": "Target file path alias" },
+                        "start_line": { "type": "integer", "description": "Starting line number (1-indexed)" },
+                        "StartLine": { "type": "integer", "description": "Starting line number alias" },
+                        "end_line": { "type": "integer", "description": "Ending line number (1-indexed)" },
+                        "EndLine": { "type": "integer", "description": "Ending line number alias" },
+                        "query": { "type": "string", "description": "Natural language or keyword search query string" },
+                        "scope": { "type": "string", "description": "Project scope partition filter (e.g. 'mythrax', 'general')" },
+                        "limit": { "type": "integer", "default": 15, "description": "Maximum number of candidate results to return" },
+                        "offset": { "type": "integer", "default": 0, "description": "Pagination offset" },
+                        "threshold": { "type": "number", "default": 0.55, "description": "Cosine similarity cutoff threshold (0.0 to 1.0)" },
+                        "token_budget": { "type": "integer", "description": "Max token budget for formatted context rendering" },
+                        "allow_downward": { "type": "boolean", "default": false, "description": "Allow downward link traversal in Arbor graph" },
+                        "include_episodes": { "type": "boolean", "default": false, "description": "Include raw episode transcripts alongside synthesized wiki nodes" },
+                        "include_artifacts": { "type": "boolean", "default": false, "description": "Include forged document artifacts in retrieval candidates" },
+                        "include_archived": { "type": "boolean", "default": false, "description": "Include soft-deleted or archived nodes in search results" },
+                        "temporal_anchor": { "type": "string", "description": "UUID or ISO timestamp anchor for temporal proximity decay" },
+                        "full_content": { "type": "boolean", "default": false, "description": "Return complete untruncated content for matched memory cards" },
+                        "session_id": { "type": "string", "description": "Active session UUID" },
+                        "tier": { "type": "string", "description": "Memory tier filter ('working', 'arbor', 'wisdom')" },
+                        "node_ids": { "type": "array", "items": { "type": "string" }, "description": "List of node UUIDs to fetch directly" },
+                        "ids": { "type": "array", "items": { "type": "string" }, "description": "List of node UUIDs alias" },
+                        "depth_before": { "type": "integer", "default": 3, "description": "Timeline depth before anchor" },
+                        "depth_after": { "type": "integer", "default": 3, "description": "Timeline depth after anchor" },
+                        "anchor_id": { "type": "string", "description": "Timeline anchor node ID" },
+                        "node_id": { "type": "string", "description": "Target graph node ID" },
+                        "relation": { "type": "string", "description": "Graph edge relationship filter" },
+                        "max_depth": { "type": "integer", "default": 3, "description": "Graph traversal maximum depth" },
+                        "key": { "type": "string", "description": "Short term memory KV key" },
+                        "is_skill_file": { "type": "boolean", "description": "Flag indicating file is a skill instruction" },
+                        "concept": { "type": "string", "description": "Target concept string for spreading activation" },
+                        "session_a": { "type": "string", "description": "First session ID for diff_sessions" },
+                        "session_b": { "type": "string", "description": "Second session ID for diff_sessions" }
                     },
                     "required": ["action"]
                 }

@@ -213,8 +213,8 @@ async fn test_mock_ingestions_and_reprocessing() -> Result<()> {
         .unwrap();
 
     if backend.embedder.is_some() {
-        assert!(ep_after.embedding.is_some());
-        assert_eq!(ep_after.embedding.unwrap().len(), 768);
+        let emb = ep_after.embedding.expect("embedding must be present when embedder exists");
+        assert_eq!(emb.len(), 768);
     }
 
     Ok(())
@@ -566,6 +566,8 @@ async fn test_get_full_hydration_cap() -> Result<()> {
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Create an episode with very large content (> 10000 characters)
@@ -661,6 +663,8 @@ pub fn display_val(val: i32) {
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Test "view" (Virtual Paging) via read tool
@@ -830,13 +834,9 @@ pub fn display_result(val: i32) {
         let mut response = backend.db.query("SELECT VALUE content FROM type::record('symbol_archive', 'page_fn_run_calculation');")
             .await?;
         let original_body: Option<String> = response.take(0)?;
-        assert!(
-            original_body.is_some(),
-            "Original body must be stored in symbol_archive"
-        );
-
+        let original_body = original_body.expect("Original body must be stored in symbol_archive");
         let placeholder = "[Paged Symbol: Reference page_fn_run_calculation]";
-        clean_target = clean_target.replace(placeholder, &original_body.unwrap());
+        clean_target = clean_target.replace(placeholder, &original_body);
     }
 
     // Now, find and replace the reconstructed clean target inside the physical disk content
@@ -1151,8 +1151,8 @@ async fn test_okf_watcher_differential_sync_and_loop_prevention() -> Result<()> 
         .query("SELECT VALUE id FROM wiki_node WHERE name = 'Page B' LIMIT 1;")
         .await?;
     let id_b: Option<surrealdb::types::RecordId> = res_b.take(0)?;
-    assert!(id_b.is_some(), "Page B node must be synced to database");
-    let id_b_str = format_record_id(id_b.as_ref().unwrap());
+    let id_b = id_b.expect("Page B node must be synced to database");
+    let id_b_str = format_record_id(&id_b);
 
     // 3. Create source note (Page A) with Obsidian YAML edges and body wikilinks
     let page_a_content = format!(
@@ -1181,15 +1181,15 @@ This is a link to [[Page B]] in the body.
         .query("SELECT VALUE id FROM wiki_node WHERE name = 'Page A' LIMIT 1;")
         .await?;
     let id_a: Option<surrealdb::types::RecordId> = res_a.take(0)?;
-    assert!(id_a.is_some(), "Page A node must be synced to database");
-    let id_a_str = format_record_id(id_a.as_ref().unwrap());
+    let id_a = id_a.expect("Page A node must be synced to database");
+    let id_a_str = format_record_id(&id_a);
 
     // 4. Verify that relations were successfully created
     // There should be a "supersedes" edge (from frontmatter) and a "related" relates_to edge (from body wikilink)
     let mut rel_query = surreal_backend
         .db
         .query("SELECT relation, strength, out FROM relates_to WHERE in = $from;")
-        .bind(("from", id_a.as_ref().unwrap().clone()))
+        .bind(("from", id_a.clone()))
         .await?;
     let relations: Vec<serde_json::Value> = rel_query.take(0)?;
     assert_eq!(
@@ -1225,7 +1225,7 @@ This is a link to [[Page B]] in the body.
     let mut rel_query_2 = surreal_backend
         .db
         .query("SELECT relation, out FROM relates_to WHERE in = $from;")
-        .bind(("from", id_a.as_ref().unwrap().clone()))
+        .bind(("from", id_a.clone()))
         .await?;
     let relations_2: Vec<serde_json::Value> = rel_query_2.take(0)?;
     assert_eq!(
@@ -1250,8 +1250,7 @@ This is a link to [[Page B]] in the body.
         .bind(("id", id_a_str.split(':').nth(1).unwrap()))
         .await?;
     let metadata: Option<serde_json::Value> = select_metadata.take(0)?;
-    assert!(metadata.is_some());
-    let m_val = metadata.unwrap();
+    let m_val = metadata.expect("wiki_node metadata record must exist");
     assert_eq!(
         m_val["utility"].as_f64().unwrap(),
         12.5,
@@ -1432,7 +1431,8 @@ async fn test_phase3_content_hash_backfill() -> Result<()> {
     let check_sql = format!("SELECT VALUE content_hash FROM type::record('episode', '{}');", id);
     let mut res = backend.db.query(&check_sql).await?;
     let hash: Option<String> = res.take(0)?;
-    assert!(hash.is_some(), "Backfill should populate content_hash");
+    let hash = hash.expect("Backfill should populate content_hash");
+    assert_eq!(hash.is_empty(), false);
 
     Ok(())
 }
@@ -1818,6 +1818,8 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Invoke complete_code_task which routes through the mlx-lm HTTP server at
@@ -2005,11 +2007,8 @@ async fn test_ingest_document() -> Result<()> {
     let wiki_node_id = backend
         .get_wiki_node_id_by_vault_path(&relative_wiki)
         .await?;
-    assert!(
-        wiki_node_id.is_some(),
-        "Wiki node at '{}' should be persisted in SurrealDB",
-        relative_wiki
-    );
+    let node_id = wiki_node_id.expect("Wiki node should be persisted in SurrealDB");
+    assert_eq!(node_id.is_empty(), false);
 
     unsafe {
         std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");

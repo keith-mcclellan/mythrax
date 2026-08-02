@@ -41,8 +41,7 @@ async fn test_e2e_frontmatter_preservation_and_no_duplication() -> Result<()> {
     let disk_content = std::fs::read_to_string(&full_path)?;
     let (yaml_opt, body) = parse_frontmatter(&disk_content);
 
-    assert!(yaml_opt.is_some(), "Frontmatter must remain intact after watcher sync");
-    let yaml = yaml_opt.unwrap();
+    let yaml = yaml_opt.expect("Frontmatter must remain intact after watcher sync");
     assert_eq!(yaml["title"].as_str(), Some("Test Episode"));
     assert_eq!(yaml["scope"].as_str(), Some("mythrax"));
 
@@ -77,11 +76,13 @@ async fn test_e2e_artifact_fact_extraction_and_linking() -> Result<()> {
     let fact = &facts[0];
     assert_eq!(fact.source_type, FactSource::Document);
     assert_eq!(fact.scope, scope);
-    assert!(fact.hypothesis.is_some());
+    let hypothesis = fact.hypothesis.as_deref().expect("hypothesis string must exist");
+    assert_eq!(hypothesis.is_empty(), false);
 
     // Assert Fact record is persisted in DB
-    let fetched = backend.get_fact(fact.id.as_ref().unwrap()).await?;
-    assert!(fetched.is_some(), "Fact must be retrievable from database");
+    let fact_id = fact.id.as_ref().expect("fact id must exist");
+    let fetched = backend.get_fact(fact_id).await?.expect("Fact must be retrievable from database");
+    assert_eq!(fetched.scope, scope);
 
     Ok(())
 }
@@ -109,8 +110,8 @@ async fn test_e2e_ast_symbol_fact_linking() -> Result<()> {
 
     // Fetch stored AST symbols for file
     let all_nodes = backend.get_all_wiki_nodes().await?;
-    let ast_node = all_nodes.into_iter().find(|n| n.content.contains("flush_buffer"));
-    assert!(ast_node.is_some(), "AST symbol WikiNode must be persisted");
+    let ast_node = all_nodes.into_iter().find(|n| n.content.contains("flush_buffer")).expect("AST symbol WikiNode must be persisted");
+    assert_eq!(ast_node.scope, scope);
 
 
     Ok(())

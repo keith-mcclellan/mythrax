@@ -329,9 +329,9 @@ Insight content
         .db
         .query("SELECT * FROM wiki_node WHERE name = 'Drifting Insight';")
         .await?;
-    let _after_nodes: Vec<serde_json::Value> = after_nodes_resp.take(0)?;
     let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "scope1").await;
-    assert!(res.is_ok());
+    let logs = res.expect("refine_hypotheses should return refinement logs");
+    assert_eq!(logs.len(), 0, "No refinement logs expected for scope1 with no active hypotheses");
     Ok(())
 }
 
@@ -679,7 +679,8 @@ Insight Two content."#,
         .check()?;
 
     let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "scope2").await;
-    assert!(res.is_ok());
+    let logs = res.expect("refine_hypotheses in scope2 should succeed");
+    assert_eq!(logs.len(), 0, "No refinement logs expected for scope2 with no hypotheses");
     Ok(())
 }
 
@@ -815,7 +816,8 @@ async fn test_hebbian_synaptic_pruning() -> Result<()> {
         .check()?;
 
     let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "scope1").await;
-    assert!(res.is_ok());
+    let refined = res.expect("refine_hypotheses must succeed");
+    let _ = refined;
     Ok(())
 }
 }
@@ -1242,7 +1244,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
         .check()?;
 
     let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "test_scope").await;
-    assert!(res.is_ok());
+    let _refined = res.expect("refine_hypotheses must succeed");
     Ok(())
 }
 
@@ -1485,7 +1487,7 @@ async fn test_backpropagation() -> Result<()> {
     println!("Related edge: {:?}", rel);
 
     let res = backpropagate_directions(&backend, &store).await;
-    assert!(res.is_ok());
+    let _dir = res.expect("backpropagate_directions must succeed");
     Ok(())
 }
 
@@ -1870,6 +1872,8 @@ async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiSt
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }
 
@@ -2188,6 +2192,8 @@ async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiSt
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }
 
@@ -2426,6 +2432,8 @@ async fn setup_state() -> ApiState {
         auth_token: "test".to_string(),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
 
@@ -2491,7 +2499,8 @@ inputs:
     });
 
     let res = handle_manage_stm(&state, args).await;
-    assert!(res.is_ok());
+    let val = res.expect("handle_manage_stm must succeed");
+    assert!(val["content"][0]["text"].as_str().expect("text must exist").contains("Handoff saved successfully"));
 
     // Check DB status remains PENDING
     // Check STM
@@ -2519,7 +2528,8 @@ No YAML here."#;
     });
 
     let res = handle_manage_stm(&state, args).await;
-    assert!(res.is_ok()); // Should bypass validation
+    let val = res.expect("handle_manage_stm legacy must succeed");
+    assert!(val["content"][0]["text"].as_str().expect("text must exist").contains("Handoff saved successfully"));
 }
 
 #[tokio::test]
@@ -2676,7 +2686,8 @@ outputs:
     });
 
     let res = handle_manage(&state, args).await;
-    assert!(res.is_ok());
+    let val = res.expect("handle_manage complete_handoff must succeed");
+    assert_eq!(val["status"].as_str(), Some("success"));
 
     let stm = state
         .backend
@@ -3611,6 +3622,8 @@ async fn setup_test_state() -> Result<(ApiState, std::sync::Arc<SurrealBackend>,
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     Ok((state, backend, tmp))
@@ -4278,7 +4291,8 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
             ),
         ))
         .await?;
-    assert!(h3_in_db.is_some());
+    let h3 = h3_in_db.expect("h3 record must be present in DB");
+    assert_eq!(h3["status"].as_str(), Some("PENDING"));
     let h4_in_db: Option<serde_json::Value> = backend
         .db
         .select((
@@ -4288,7 +4302,8 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
             ),
         ))
         .await?;
-    assert!(h4_in_db.is_some());
+    let h4 = h4_in_db.expect("h4 record must be present in DB");
+    assert_eq!(h4["status"].as_str(), Some("COMPLETED"));
 
     // Stale STM entries in DB should be deleted
     let stm1 = backend.get_stm("sess1", None).await?;
@@ -4656,6 +4671,8 @@ async fn test_api_save_forged_assets() -> Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     let app = create_router(state);
@@ -5156,6 +5173,8 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let session_id = "test-session-123";

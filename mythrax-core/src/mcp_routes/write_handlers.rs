@@ -618,6 +618,8 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
         )
         .await?;
 
+    crate::vault::distillation::broadcast_task_event(callback_id, "Completed", Some(result.to_string()));
+
     // Dynamic Episode Title Resolution & Renaming Pass
     if task.task_type == "Extraction" || task.system_instruction.contains("title generator") || task.prompt.contains("Generate a concise title") {
         let clean_title = result

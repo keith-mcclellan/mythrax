@@ -11,6 +11,31 @@ pub enum Tier {
     Working,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    pub name: String,
+    #[serde(default)]
+    pub args: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct TranscriptStep {
+    #[serde(default)]
+    pub step_index: Option<usize>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseTierError(String);
 
@@ -1199,8 +1224,8 @@ mod tests {
         let config = PipelineConfig::default();
         assert_eq!(config.merge_threshold, 0.90);
         assert_eq!(config.prune_threshold, 0.20);
-        assert_eq!(config.cluster_similarity, 0.75);
-        assert_eq!(config.cluster_min_size, 3);
+        assert_eq!(config.cluster_similarity, 0.55);
+        assert_eq!(config.cluster_min_size, 2);
         assert_eq!(config.version_decay_weight, 0.80);
     }
 }

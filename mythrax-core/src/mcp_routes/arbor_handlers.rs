@@ -394,6 +394,8 @@ mod tests {
             ignore_list: Arc::new(crate::vault::watcher::WatchIgnoreList::new()),
             dream_tx: None,
             shutdown_tx: None,
+            checked_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+            degraded_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         // 1. TreeAddNode

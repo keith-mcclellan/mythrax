@@ -104,18 +104,14 @@ pub fn sanitize_body_title_repetitions(body: &str, title_candidates: &[&str]) ->
 pub fn extract_plain_text(markdown: &str) -> String {
     let parser = Parser::new(markdown);
     let mut plain_text = String::new();
-    let mut in_code_block = false;
-
     for event in parser {
         match event {
             Event::Start(Tag::CodeBlock(_)) => {
-                in_code_block = true;
                 if !plain_text.is_empty() && !plain_text.ends_with(' ') {
                     plain_text.push(' ');
                 }
             }
             Event::End(TagEnd::CodeBlock) => {
-                in_code_block = false;
                 if !plain_text.is_empty() && !plain_text.ends_with(' ') {
                     plain_text.push(' ');
                 }

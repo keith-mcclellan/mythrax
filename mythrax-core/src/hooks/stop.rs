@@ -74,3 +74,51 @@ pub async fn mine_if_due(
         Ok(None)
     }
 }
+
+pub async fn force_flush_on_stop(
+    session: &str,
+    transcript_path: &str,
+    backend: &Arc<dyn StorageBackend>,
+    store: &Arc<MarkdownStore>,
+    ignore: &WatchIgnoreList,
+) -> Result<Option<usize>> {
+    let new_count = count_human_messages(transcript_path);
+    let stm_data = backend
+        .get_stm(session, Some("last_human_message_count"))
+        .await
+        .unwrap_or_default();
+
+    let prev_count = stm_data
+        .get("last_human_message_count")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    if new_count > prev_count {
+        let count = crate::hooks::precompact::mine_transcript(
+            session,
+            transcript_path,
+            backend.as_ref(),
+            store.as_ref(),
+            ignore,
+        )
+        .await
+        .context("Failed to mine remaining turns in stop hook force flush")?;
+
+        let _ = crate::cognitive::db::queue_cognitive_task(
+            backend.as_ref(),
+            "extract_facts",
+            session,
+            "mythrax",
+        )
+        .await;
+
+        backend
+            .save_stm(session, "last_human_message_count", &new_count.to_string())
+            .await
+            .context("Failed to update human message count in STM")?;
+
+        Ok(Some(count))
+    } else {
+        Ok(None)
+    }
+}
