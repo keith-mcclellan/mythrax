@@ -422,7 +422,7 @@ pub async fn mine_transcript(
                                     name: format!("general/{}", slug),
                                     content: extracted.clone(),
                                     scope: "general".to_string(),
-                                    vault_path: Some(format!("directions/{}_direction.md", slug)),
+                                    vault_path: Some(format!("wiki/general/directions/{}_direction.md", slug)),
                                     node_type: Some("direction".to_string()),
                                     item_type: Some("direction".to_string()),
                                     ..Default::default()

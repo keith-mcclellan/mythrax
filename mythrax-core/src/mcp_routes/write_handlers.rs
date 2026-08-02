@@ -69,14 +69,50 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
             super::manage_handlers::handle_manage_file(state, args).await
         }
         "save" => {
-            let _title = args
+            let title = args
                 .get("title")
                 .and_then(|v| v.as_str())
                 .context("Missing title")?;
-            let _content = args
+            let content = args
                 .get("content")
                 .and_then(|v| v.as_str())
                 .context("Missing content")?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let node_type = args
+                .get("node_type")
+                .or_else(|| args.get("type"))
+                .or_else(|| args.get("item_type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("experience");
+
+            if node_type == "direction" || node_type == "insight" {
+                let slug = title
+                    .to_lowercase()
+                    .replace(' ', "_")
+                    .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+                let vault_path = format!("wiki/{}/directions/{}_{}.md", scope, slug, node_type);
+                let wiki_node = crate::contracts::WikiNode {
+                    id: None,
+                    name: format!("{}/{}", scope, slug),
+                    content: content.to_string(),
+                    scope: scope.to_string(),
+                    vault_path: Some(vault_path.clone()),
+                    node_type: Some(node_type.to_string()),
+                    item_type: Some(node_type.to_string()),
+                    ..Default::default()
+                };
+                let id = state.backend.save_wiki_node(&wiki_node).await?;
+                let _ = state.store.write_file(&vault_path, content);
+                return Ok(json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Saved {} node '{}' with ID: {}", node_type, title, id)
+                        }
+                    ]
+                }));
+            }
+
             handle_record_memory(state, args).await
         }
         "feedback" => {
