@@ -60,13 +60,19 @@ Type: Refactor & Architecture Evolution
 
 ---
 
-## Phase 4: MCP Tool Schema & Pre-Flight Memory Gate Enforcement
+## Phase 4: MCP Tool Schema & Universal Hook Lifecycle Enforcement
 
 - [ ] Task: Implement Programmatic Pre-Flight Memory Gate Enforcement
   - [ ] Write failing test in `tests/domain_hooks_models.rs` asserting memory search gate intercepts write operations when memory has not been queried
   - [ ] Implement `has_checked_memory` session state tracking in `ApiState` / `mcp_routes.rs`
   - [ ] Enforce memory gate interceptor: block modifying tools (`write_file`, `replace_file_content`, `run_command`, `write`, `organize`) until `read(action="search")` or `manage(action="pre_invocation")` is called
   - [ ] Automatically inject mandatory Phase 0 Memory Check directive into all subagent prompt templates
+
+- [ ] Task: Implement Universal Hook Lifecycle Enforcement (Stop, Post-Invocation, Precompact)
+  - [ ] Write failing test in `tests/domain_hooks_models.rs` asserting automatic `stop` hook transcript mining on session termination
+  - [ ] Implement automatic `stop` hook fallback pass in `src/hooks/stop.rs` to guarantee zero lost facts on session close
+  - [ ] Implement `post_invocation` synthetic post-turn observation enforcement in `src/hooks/adapters.rs`
+  - [ ] Implement `precompact` context pressure gate enforcement when token budget exceeds 80% capacity
 
 - [ ] Task: Expose Search Parameters in MCP Tool Schemas
   - [ ] Write failing test for MCP `read` tool schema parameter validation in `tests/domain_search_retrieval.rs`
