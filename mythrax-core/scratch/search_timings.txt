@@ -10446,3 +10446,5 @@ query: "insight", profile: 73us, embed: 5934us, terms: 3629us, db: 41216us, rera
 query: "test", profile: 232us, embed: 7932us, terms: 590us, db: 54897us, rerank_start: 1944us, total: 72166us
 query: "test", profile: 29us, embed: 3228us, terms: 11us, db: 56228us, rerank_start: 1843us, total: 68239us
 query: "mythrax project context", profile: 1595us, embed: 570us, terms: 10us, db: 28528us, rerank_start: 1097us, total: 55960us
+query: "mythrax project context", profile: 1977us, embed: 1817us, terms: 609us, db: 37830us, rerank_start: 1669us, total: 67337us
+query: "mythrax project context", profile: 4890us, embed: 2208us, terms: 2753us, db: 28803us, rerank_start: 1768us, total: 72716us

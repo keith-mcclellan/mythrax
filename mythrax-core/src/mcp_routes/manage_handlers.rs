@@ -1885,15 +1885,15 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             let elapsed = now_unix - last_search_time;
             if elapsed > 300 {
                 stale_search_warning = format!(
-                    "\n> [!WARNING]\n> Warning: Memory searches are stale. Last search was {} seconds ago. Consider running a search query to pull relevant context.\n",
+                    "\n> [!IMPORTANT]\n> **MANDATORY MEMORY QUERY DIRECTIVE**\n> Mythrax memory search is stale (last search was {}s ago).\n> You MUST query Mythrax memory via call_mcp_tool read(action=\"search\", query=\"...\") or read(action=\"rules\", query=\"...\") to verify architectural context and guardrails before taking action.\n",
                     elapsed
                 );
             }
         } else {
-            stale_search_warning = "\n> [!WARNING]\n> Warning: Memory searches are stale. No search has been performed in this session yet.\n".to_string();
+            stale_search_warning = "\n> [!IMPORTANT]\n> **MANDATORY MEMORY QUERY DIRECTIVE**\n> No memory search has been performed in this session yet.\n> You MUST query Mythrax memory via call_mcp_tool read(action=\"search\", query=\"...\") or read(action=\"rules\", query=\"...\") to verify architectural context and guardrails before taking action.\n".to_string();
         }
     } else {
-        stale_search_warning = "\n> [!WARNING]\n> Warning: Memory searches are stale. No search has been performed in this session yet.\n".to_string();
+        stale_search_warning = "\n> [!IMPORTANT]\n> **MANDATORY MEMORY QUERY DIRECTIVE**\n> No memory search has been performed in this session yet.\n> You MUST query Mythrax memory via call_mcp_tool read(action=\"search\", query=\"...\") or read(action=\"rules\", query=\"...\") to verify architectural context and guardrails before taking action.\n".to_string();
     }
     let mut parts = Vec::new();
 
