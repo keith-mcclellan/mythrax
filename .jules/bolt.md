@@ -1,0 +1,3 @@
+## 2024-08-02 - O(N^2) Cosine Similarity Bottleneck
+**Learning:** Found a severe performance bottleneck in `mythrax-core/src/db/graduation_pipeline.rs` where `cosine_similarity` was recalculating Euclidean norms inside an O(N^2) inner execution loop (comparing every node against every other node). For 1536-dimensional vectors, this caused massive latency issues during embedding similarity and clustering.
+**Action:** Always precompute `embedding_norm` on wrapper structs (like `GradCandidate`) and hoist heavy vector operations outside of nested loops for high-dimensional arrays.
