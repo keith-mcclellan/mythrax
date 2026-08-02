@@ -62,11 +62,11 @@ pub struct GraduationResponse {
 }
 
 pub fn build_episode_extraction_prompt(transcript: &str) -> (String, String) {
-    let system = r#"You are an Arbor leaf-insight extractor implementing the HTR cognitive memory model. Given an agent conversation transcript (raw turns), extract all salient atomic observations (typically 1-10 per transcript, capturing every user directive, preference, architectural decision, and mechanism tested) following the formal Arbor node structure:
-  h_n = hypothesis (verifiable claim, preference, or mechanism tested)
+    let system = r#"You are an Arbor leaf-insight extractor implementing the HTR cognitive memory model. Given an agent conversation transcript (raw turns), extract all technical facts, syntax rules, API patterns, user directives, preferences, architectural decisions, and mechanisms tested following the formal Arbor node structure. Do NOT cap the output count—extract every distinct technical fact, code syntax rule, and invariant present:
+  h_n = hypothesis (verifiable claim, preference, syntax rule, or mechanism tested)
   ι_n = causal_insight (2-3 concise sentences: what was tried, what happened, and WHY)
   item_type = 'direction' (if this is a user instruction, preference, or workflow constraint), 'insight' (if causal mechanism or observation), or 'fact'
-  r_n = raw_evidence (observable facts, metrics, or log snippets)
+  r_n = raw_evidence (observable facts, metrics, code snippets, or log snippets)
   μ_n = artifact_refs (referenced file paths, code symbols, or commit hashes)
 
 OUTPUT SCHEMA (Strict JSON):
@@ -88,10 +88,10 @@ OUTPUT SCHEMA (Strict JSON):
 }
 
 pub fn build_document_extraction_prompt(content: &str, vault_path: &str) -> (String, String) {
-    let system = r#"You are a vault document analyst. Given an authored vault markdown page (plan, spec, architecture doc), extract atomic insights capturing durable decisions, constraints, and requirements following the formal Arbor node structure:
-  h_n = hypothesis (architectural claim, design decision, or invariant)
-  ι_n = causal_insight (what design was chosen, how it operates, and WHY)
-  r_n = raw_evidence (key requirements or quotes from the document)
+    let system = r#"You are a technical document and syntax analyst. Given a document (plan, spec, architecture doc, or web documentation), extract all atomic technical facts, syntax rules, API signatures, database schema definitions, and design constraints following the formal Arbor node structure. Extract every distinct technical rule, syntax pattern, and invariant present:
+  h_n = hypothesis (technical claim, syntax rule, schema definition, or invariant)
+  ι_n = causal_insight (what rule or design was chosen, how it operates, and WHY)
+  r_n = raw_evidence (exact syntax examples, code blocks, or quotes from the document)
   μ_n = artifact_refs (vault page paths or code symbols referenced)
 
 OUTPUT SCHEMA (Strict JSON):
@@ -112,7 +112,7 @@ OUTPUT SCHEMA (Strict JSON):
 }
 
 pub fn build_code_extraction_prompt(code_content: &str, file_path: &str) -> (String, String) {
-    let system = r#"You are a codebase analyst. Given a source code file (.rs, .py, .ts, .go, etc.), extract structural and behavioral facts about architecture, design patterns, dependencies, conventions, and invariants. Focus on decisions and intent, not line-by-line syntax narration.
+    let system = r#"You are a codebase and syntax analyst. Given a source code file (.rs, .py, .ts, .go, etc.), extract all structural facts, syntax patterns, API signatures, database schema definitions, conventions, and invariants. Capture both high-level design decisions and specific technical syntax rules and mechanisms.
 
 OUTPUT SCHEMA (Strict JSON):
 {
@@ -132,7 +132,7 @@ OUTPUT SCHEMA (Strict JSON):
 }
 
 pub fn build_forge_extraction_prompt(section_content: &str, source_path: &str) -> (String, String) {
-    let system = r#"You are a reference document analyst. Given a section of a technical paper, specification, or reference document, extract core knowledge capturing formal definitions, constraints, algorithms, and rationale.
+    let system = r#"You are a reference document analyst. Given a section of a technical paper, specification, API reference, or syntax documentation, extract all core technical knowledge, syntax rules, formal definitions, constraints, algorithms, and rationale.
 
 OUTPUT SCHEMA (Strict JSON):
 {
