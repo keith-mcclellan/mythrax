@@ -14,7 +14,7 @@ pub mod write_handlers;
 pub use arbor_handlers::handle_manage_arbor;
 pub use htr_handlers::handle_manage_htr;
 pub use manage_handlers::{
-    handle_agent, handle_complete_code_task, handle_manage, handle_manage_config,
+    handle_agent, handle_manage, handle_manage_config,
     handle_manage_file, handle_manage_stm, handle_post_invocation_hook, handle_pre_invocation_hook,
 };
 pub use read_handlers::{handle_query_memory, handle_read};
@@ -263,17 +263,18 @@ pub fn get_mcp_tools_schema() -> Value {
             },
             {
                 "name": "agent",
-                "description": "Consolidated tool for orchestrating local model autonomous task execution.",
+                "description": "Consolidated tool for subagent delegation handoff contract registration and context linking.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "action": { "type": "string", "enum": ["complete_code_task"] },
-                        "prompt": { "type": "string" },
-                        "system_instruction": { "type": "string" },
-                        "model": { "type": "string" },
-                        "enable_thinking": { "type": "boolean" }
+                        "action": { "type": "string", "enum": ["handoff"] },
+                        "parent_conversation_id": { "type": "string" },
+                        "subagent_conversation_id": { "type": "string" },
+                        "summary": { "type": "string" },
+                        "handoff_file_path": { "type": "string" },
+                        "scope": { "type": "string" }
                     },
-                    "required": ["action"]
+                    "required": ["action", "parent_conversation_id", "subagent_conversation_id", "summary", "handoff_file_path"]
                 }
             }
         ]

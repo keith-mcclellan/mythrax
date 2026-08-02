@@ -729,18 +729,10 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .context("Missing action parameter for agent tool")?;
     let mapped_action = match action {
-        "complete_task" => "complete_code_task",
-        "save_handoff" => "handoff",
+        "save_handoff" | "handoff" => "handoff",
         other => other,
     };
     match mapped_action {
-        "complete_code_task" => {
-            let _prompt = args
-                .get("prompt")
-                .and_then(|v| v.as_str())
-                .context("Missing prompt parameter for agent:complete_code_task")?;
-            handle_complete_code_task(state, args).await
-        }
         "handoff" => {
             let _parent = args
                 .get("parent_conversation_id")
@@ -2479,52 +2471,6 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     }
 
     Ok(response_obj)
-}
-
-pub async fn handle_complete_code_task(state: &ApiState, args: Value) -> Result<Value> {
-    let prompt = args
-        .get("prompt")
-        .and_then(|v| v.as_str())
-        .context("Missing prompt")?;
-    let system_instruction = args.get("system_instruction").and_then(|v| v.as_str());
-    let model_override = args.get("model").and_then(|v| v.as_str());
-    let mut enable_thinking = args
-        .get("enable_thinking")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let lower_prompt = prompt.to_lowercase();
-    if prompt.trim_start().starts_with("/think")
-        || lower_prompt.contains("enable thinking")
-        || lower_prompt.contains("with thinking")
-    {
-        enable_thinking = true;
-    }
-
-    let config = state.backend.get_llm_config().await?;
-    let model = model_override.unwrap_or(&config.model);
-
-    let client = crate::llm::LLMClient::default();
-    let response = client
-        .completion_explicit(
-            state.backend.as_ref(),
-            "local",
-            &config.cloud_provider,
-            model,
-            system_instruction,
-            prompt,
-            enable_thinking,
-        )
-        .await?;
-
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": response
-            }
-        ]
-    }))
 }
 
 fn get_extension(path: &Path) -> Option<String> {

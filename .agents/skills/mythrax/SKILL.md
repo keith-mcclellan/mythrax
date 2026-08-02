@@ -120,12 +120,10 @@ Call the `manage` tool with the `action` parameter set to one of the following:
 
 ---
 
-### 4. `agent` (Autonomous Subagent & Handoff Orchestration)
+### 4. `agent` (Subagent Delegation & Context Linking)
 
-Call the `agent` tool with the `action` parameter set to one of the following:
+Call the `agent` tool with the `action` parameter set to:
 
-- **`action="complete_code_task"`** (alias `complete_task`): Spawn an autonomous subagent loop to complete a coding chore.
-  - *Parameters*: `prompt: String`, `system_instruction: Option<String>`, `model: Option<String>`, `enable_thinking: Option<boolean>`
 - **`action="handoff"`** (alias `save_handoff`): Register a subagent delegation handoff contract in SurrealDB and link parent-child conversation context.
   - *Parameters*: `parent_conversation_id: String`, `subagent_conversation_id: String`, `summary: String`, `handoff_file_path: String`, `scope: Option<String>`
 
