@@ -85,6 +85,8 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             let reset_processed = args
                 .get("reset_processed")
                 .or_else(|| args.get("reset"))
+                .or_else(|| args.get("force"))
+                .or_else(|| args.get("reprocess"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
@@ -110,7 +112,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                     break;
                 }
                 for ep in page {
-                    if ep.embedding.is_none() {
+                    if ep.embedding.is_none() || reset_processed {
                         let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
                             .scope(ep.scope.clone())
                             .vault_path(ep.vault_path.clone())
@@ -128,7 +130,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                     {
                         "type": "text",
                         "text": if reset_processed {
-                            format!("Reset processed_in_dream flag to false and reprocessed {} episodes with missing vector embeddings.", count)
+                            format!("Reset processed_in_dream flag to false and reprocessed all {} raw episodes.", count)
                         } else {
                             format!("Reprocessed {} episodes with missing vector embeddings.", count)
                         }
