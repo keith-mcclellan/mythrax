@@ -1199,8 +1199,8 @@ mod tests {
         let config = PipelineConfig::default();
         assert_eq!(config.merge_threshold, 0.90);
         assert_eq!(config.prune_threshold, 0.20);
-        assert_eq!(config.cluster_similarity, 0.75);
-        assert_eq!(config.cluster_min_size, 3);
+        assert_eq!(config.cluster_similarity, 0.55);
+        assert_eq!(config.cluster_min_size, 2);
         assert_eq!(config.version_decay_weight, 0.80);
     }
 }

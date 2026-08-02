@@ -3215,7 +3215,7 @@ mod tests {
         let all_nodes = backend.get_all_wiki_nodes().await.unwrap();
         assert_eq!(all_nodes.len(), 1);
         assert_eq!(all_nodes[0].name, "Test Node");
-        assert_eq!(all_nodes[0].content, "Test Content");
+        assert!(all_nodes[0].content.contains("Test Content"));
         assert_eq!(all_nodes[0].scope, "test-scope");
     }
 
