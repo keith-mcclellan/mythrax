@@ -215,6 +215,25 @@ pub async fn extract_facts(
         };
         let _ = backend.save_wiki_node(&fact_node).await;
         let _ = backend.relate_nodes(&saved_id, &source_id, None, None, None).await;
+
+        if let Some(ref it) = dto.item_type {
+            if it == "direction" {
+                let dir_path = format!("wiki/{}/directions/{}_direction.md", scope, slug);
+                let dir_node = WikiNode {
+                    id: None,
+                    name: format!("{}/{}", scope, slug),
+                    content: dto.causal_insight.clone(),
+                    scope: scope.clone(),
+                    vault_path: Some(dir_path),
+                    embedding: embeddings.get(idx).cloned(),
+                    node_type: Some("direction".to_string()),
+                    item_type: Some("direction".to_string()),
+                    metacognitive_confidence: Some(dto.metacognitive_confidence as f64),
+                    ..Default::default()
+                };
+                let _ = backend.save_wiki_node(&dir_node).await;
+            }
+        }
     }
 
     // CTO Remediation 1: Update Episode::causal_insight as a typed JSON array

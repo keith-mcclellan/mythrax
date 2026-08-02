@@ -5,6 +5,8 @@ pub struct ExtractedFactDto {
     pub hypothesis: String,
     pub causal_insight: String,
     #[serde(default)]
+    pub item_type: Option<String>,
+    #[serde(default)]
     pub raw_evidence: Vec<String>,
     #[serde(default)]
     pub artifact_refs: Vec<String>,
@@ -26,6 +28,8 @@ pub struct ExtractFactsResponse {
 pub struct FormHypothesisDto {
     pub claim: String,
     pub insight: String,
+    #[serde(default)]
+    pub item_type: Option<String>,
     pub fact_indices: Vec<usize>,
     #[serde(default)]
     pub slug: Option<String>,
@@ -61,6 +65,7 @@ pub fn build_episode_extraction_prompt(transcript: &str) -> (String, String) {
     let system = r#"You are an Arbor leaf-insight extractor implementing the HTR cognitive memory model. Given an agent conversation transcript (raw turns), extract 0-3 atomic observations following the formal Arbor node structure:
   h_n = hypothesis (verifiable claim, preference, or mechanism tested)
   ι_n = causal_insight (2-3 concise sentences: what was tried, what happened, and WHY)
+  item_type = 'direction' (if this is a user instruction, preference, or workflow constraint), 'insight' (if causal mechanism or observation), or 'fact'
   r_n = raw_evidence (observable facts, metrics, or log snippets)
   μ_n = artifact_refs (referenced file paths, code symbols, or commit hashes)
 
@@ -70,6 +75,7 @@ OUTPUT SCHEMA (Strict JSON):
     {
       "hypothesis": "string",
       "causal_insight": "string",
+      "item_type": "direction|insight|fact",
       "raw_evidence": ["string"],
       "artifact_refs": ["string"],
       "metacognitive_confidence": 0-100
@@ -173,6 +179,7 @@ pub fn build_hypothesis_formation_prompt(facts_summary: &str, pruned_constraints
     };
 
     let system = format!(r#"You are a cognitive synthesizer. Given a cluster of topically coherent facts, form a generalized, testable hypothesis (claim) and distill a unified insight explaining WHY it holds.
+Classify item_type as 'direction' if the cluster reflects a user directive, preference, or workflow constraint, 'rule' if universal wisdom, or 'insight'.
 
 CRITICAL POLICY MANDATE: You MUST NOT propose hypotheses that violate these known-false negative policy constraints derived from pruned past attempts:
 {}
@@ -183,6 +190,7 @@ OUTPUT SCHEMA (Strict JSON):
     {{
       "claim": "string",
       "insight": "string",
+      "item_type": "direction|insight|rule",
       "fact_indices": [0, 1, 2]
     }}
   ]
