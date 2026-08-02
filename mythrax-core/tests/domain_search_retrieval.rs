@@ -1168,10 +1168,10 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
     let pos_a = results.iter().position(|r| r.id == id_a);
     let pos_b = results.iter().position(|r| r.id == id_b);
 
-    assert!(pos_a.is_some(), "High similarity node must be retrieved");
+    let pa = pos_a.expect("High similarity node must be retrieved");
     if let Some(pb) = pos_b {
         assert!(
-            pos_a.unwrap() < pb,
+            pa < pb,
             "High similarity node must rank higher than gated low similarity node"
         );
         let score_b = results[pb].similarity;
@@ -1232,10 +1232,7 @@ async fn test_sigmoid_gated_retrieval_formula() -> Result<()> {
         .await?;
     let r_results = resp_r.results;
     let match_rule = r_results.iter().find(|r| r.id == id_r);
-    assert!(
-        match_rule.is_some(),
-        "Wisdom rule must be retrieved despite being 30 days old due to decay immunity"
-    );
+    let _rule = match_rule.expect("Wisdom rule must be retrieved despite being 30 days old due to decay immunity");
 
     Ok(())
 }
@@ -1382,11 +1379,7 @@ async fn test_v2_5_2_retrieval_signals_integration() -> Result<()> {
         .results
         .iter()
         .find(|r| r.id == "stm:session_bar:context_guard");
-    assert!(
-        match_stm.is_some(),
-        "STM entry must be injected into search results"
-    );
-    let stm_res = match_stm.unwrap();
+    let stm_res = match_stm.expect("STM entry must be injected into search results");
     assert_eq!(stm_res.tier, mythrax_core::contracts::Tier::Working);
     assert_eq!(stm_res.utility, 100.0);
     assert_eq!(stm_res.title, "context_guard");

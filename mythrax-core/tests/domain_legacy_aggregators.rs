@@ -486,7 +486,8 @@ fn test_embedding_cache_lru_eviction() {
     // Since key_0 was accessed, the next oldest was key_1, so key_1 should be evicted and key_0 should still exist!
     assert_eq!(mythrax_core::embeddings::get_embedding_cache_len(), 10000);
     assert!(mythrax_core::embeddings::get_cached_embedding("key_1").is_none());
-    assert!(mythrax_core::embeddings::get_cached_embedding("key_0").is_some());
+    let cached_0 = mythrax_core::embeddings::get_cached_embedding("key_0").expect("key_0 must remain in cache");
+    assert_eq!(cached_0.len(), 10);
 
     // Insert 10,005 items in total, verifying size stays capped at 10,000
     for i in 10001..10005 {
@@ -902,18 +903,18 @@ fn test_normalized_embedding_invariant() {
 
     // Valid normalized vector (magnitude exactly 1.0)
     let valid_vec = vec![0.6, 0.8]; // 0.6^2 + 0.8^2 = 0.36 + 0.64 = 1.0
-    let norm1 = NormalizedEmbedding::try_new(valid_vec.clone());
-    assert!(norm1.is_ok());
-    let norm1 = norm1.unwrap();
+    let norm1 = NormalizedEmbedding::try_new(valid_vec.clone()).expect("valid magnitude 1.0 must produce NormalizedEmbedding");
     assert_eq!(norm1.as_slice(), &valid_vec);
     assert_eq!(norm1.clone().into_inner(), valid_vec);
 
     // Magnitude within 1% of 1.0
     let valid_vec_high = vec![0.6 * 1.009, 0.8 * 1.009];
-    assert!(NormalizedEmbedding::try_new(valid_vec_high).is_ok());
+    let norm_high = NormalizedEmbedding::try_new(valid_vec_high.clone()).expect("high magnitude within tolerance");
+    assert_eq!(norm_high.as_slice(), &valid_vec_high);
 
     let valid_vec_low = vec![0.6 * 0.991, 0.8 * 0.991];
-    assert!(NormalizedEmbedding::try_new(valid_vec_low).is_ok());
+    let norm_low = NormalizedEmbedding::try_new(valid_vec_low.clone()).expect("low magnitude within tolerance");
+    assert_eq!(norm_low.as_slice(), &valid_vec_low);
 
     // Non-normalized vector (too small, magnitude = 0.5)
     let small_vec = vec![0.3, 0.4];
@@ -1194,12 +1195,9 @@ async fn test_auto_task_persistence() -> anyhow::Result<()> {
     let eps = state.backend.get_all_episodes().await?;
     let checklist_ep = eps
         .iter()
-        .find(|ep| ep.node_type.as_deref() == Some("task_checklist"));
-    assert!(
-        checklist_ep.is_some(),
-        "Checklist episode should be created"
-    );
-    let content = &checklist_ep.unwrap().content;
+        .find(|ep| ep.node_type.as_deref() == Some("task_checklist"))
+        .expect("Checklist episode should be created");
+    let content = &checklist_ep.content;
     assert!(content.contains("- [ ] Fix the memory leak"));
     assert!(content.contains("- [ ] Add unit tests"));
 
@@ -1768,9 +1766,7 @@ async fn test_cognitive_task_crud() -> anyhow::Result<()> {
     assert_eq!(created_id, task_id);
 
     // 2. Read
-    let retrieved_opt = surreal_backend.get_cognitive_task(task_id).await?;
-    assert!(retrieved_opt.is_some());
-    let retrieved = retrieved_opt.unwrap();
+    let retrieved = surreal_backend.get_cognitive_task(task_id).await?.expect("cognitive task must be present");
     assert_eq!(retrieved.prompt, task.prompt);
     assert_eq!(retrieved.status, "Pending");
 
@@ -1784,8 +1780,7 @@ async fn test_cognitive_task_crud() -> anyhow::Result<()> {
         .update_cognitive_task_status(task_id, TaskStatus::Injected, None)
         .await?;
     let retrieved = surreal_backend.get_cognitive_task(task_id).await?.unwrap();
-    assert_eq!(retrieved.status, "Injected");
-    assert!(retrieved.injected_at.is_some());
+    let _injected_at = retrieved.injected_at.expect("injected_at timestamp must be set");
 
     // 5. Update Status to Completed with Result
     surreal_backend
@@ -2072,9 +2067,8 @@ async fn test_pipeline_state_serialization() -> anyhow::Result<()> {
         .await?;
 
     // Assert it exists
-    let saved = surreal_backend.get_pipeline_state(callback_id).await?;
-    assert!(saved.is_some());
-    assert_eq!(saved.unwrap(), state_json);
+    let saved = surreal_backend.get_pipeline_state(callback_id).await?.expect("pipeline state must exist");
+    assert_eq!(saved, state_json);
 
     // Create the task in Injected status
     let task = CognitiveTask {
@@ -2429,8 +2423,7 @@ async fn test_temporal_session_linking_and_deep_insight() -> Result<()> {
         .find(|r| r.id == ep2_id)
         .expect("Should find Step 2 in search results");
     println!("MATCH EP2: {:#?}", match_ep2);
-    assert!(match_ep2.related_nodes.is_some(), "Match EP2 has no related nodes");
-    let related = match_ep2.related_nodes.as_ref().unwrap();
+    let related = match_ep2.related_nodes.as_ref().expect("Match EP2 must have related nodes");
 
     let related_ids: Vec<String> = related.iter().map(|r| r.id.clone()).collect();
     assert!(related_ids.contains(&ep1_id));
@@ -2504,8 +2497,7 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
     ).await?;
     let duration = start_time.elapsed();
 
-    assert!(diagnosis_rust.is_some());
-    let (exp, rem) = diagnosis_rust.unwrap();
+    let (exp, rem) = diagnosis_rust.expect("diagnosis_rust must return diagnostic tuple");
     assert_eq!(
         exp,
         "Rust E0063 error occurs when struct fields are missing"
@@ -2523,8 +2515,7 @@ async fn test_failure_diagnostics_speed_and_fallback() -> Result<()> {
         ""
     ).await?;
 
-    assert!(diagnosis_lock.is_some());
-    let (exp_lock, rem_lock) = diagnosis_lock.unwrap();
+    let (exp_lock, rem_lock) = diagnosis_lock.expect("diagnosis_lock must return diagnostic tuple");
     assert_eq!(
         exp_lock,
         "RocksDB lock acquisition failure indicates concurrent access conflicts"
@@ -3023,8 +3014,7 @@ async fn test_dual_durability_journaling() -> Result<()> {
         .query("SELECT * FROM type::record('session_state', 'test-session');")
         .await?;
     let state_opt: Option<serde_json::Value> = resp.take(0)?;
-    assert!(state_opt.is_some());
-    let state = state_opt.unwrap();
+    let state = state_opt.expect("session_state record must exist");
     assert_eq!(state["task_checklist"].as_str().unwrap(), task_md_content);
     assert_eq!(
         state["active_stm"]["_active_anchors"].as_str().unwrap(),
@@ -3128,8 +3118,7 @@ def my_func():
         .query("SELECT * FROM type::record('symbol_archive', 'page_struct_backendstruct');")
         .await?;
     let sym_opt: Option<serde_json::Value> = resp.take(0)?;
-    assert!(sym_opt.is_some());
-    let sym_val = sym_opt.unwrap();
+    let sym_val = sym_opt.expect("symbol_archive record must exist");
     assert_eq!(sym_val["symbol_name"].as_str().unwrap(), "BackendStruct");
 
     // 3. Test transparent symbol restoration/swapping
@@ -3336,10 +3325,7 @@ pub fn page_fn_test_fn() {}
         .query("SELECT * FROM type::record('symbol_archive', 'page_fn_page_fn_test_fn');")
         .await?;
     let sym_opt: Option<serde_json::Value> = resp.take(0)?;
-    assert!(
-        sym_opt.is_some(),
-        "Symbol archive entry for page_fn_test_fn should exist"
-    );
+    let _sym_val = sym_opt.expect("Symbol archive entry for page_fn_test_fn should exist");
 
     let paged_node = mythrax_core::contracts::WikiNode {
         id: Some("wiki_node:paged1".to_string()),
@@ -4000,8 +3986,7 @@ Old rule body"#;
         .bind(("id", old_rule_id.trim_start_matches("wisdom:")))
         .await?;
     let status_check: Option<serde_json::Value> = resp.take(0)?;
-    assert!(status_check.is_some());
-    let status_val = status_check.unwrap();
+    let status_val = status_check.expect("status_check record must exist");
     assert_eq!(status_val["status"].as_str().unwrap(), "superseded");
     assert!(!status_val["superseded_at"].is_null());
 

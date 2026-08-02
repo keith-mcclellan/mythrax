@@ -176,9 +176,9 @@ async fn test_bootstrap_e2e() -> Result<()> {
         assert!(!ep.title.starts_with("antigravity_"));
     }
 
-    // ✅ Episode Summaries: All 13 episodes have `summary` field populated in DB
     for ep in &eps {
-        assert!(ep.summary.is_some());
+        let sum = ep.summary.as_deref().expect("summary field must be populated in DB");
+        assert_eq!(sum.is_empty(), false);
     }
 
     let mut wiki_nodes = backend.get_all_wiki_nodes().await?;

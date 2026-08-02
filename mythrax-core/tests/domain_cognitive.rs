@@ -819,7 +819,6 @@ async fn test_hebbian_synaptic_pruning() -> Result<()> {
     let refined = res.expect("refine_hypotheses must succeed");
     let _ = refined;
     Ok(())
-    Ok(())
 }
 }
 
@@ -1245,7 +1244,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
         .check()?;
 
     let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "test_scope").await;
-    assert!(res.is_ok());
+    let _refined = res.expect("refine_hypotheses must succeed");
     Ok(())
 }
 
@@ -1488,7 +1487,7 @@ async fn test_backpropagation() -> Result<()> {
     println!("Related edge: {:?}", rel);
 
     let res = backpropagate_directions(&backend, &store).await;
-    assert!(res.is_ok());
+    let _dir = res.expect("backpropagate_directions must succeed");
     Ok(())
 }
 
@@ -2500,7 +2499,8 @@ inputs:
     });
 
     let res = handle_manage_stm(&state, args).await;
-    assert!(res.is_ok());
+    let val = res.expect("handle_manage_stm must succeed");
+    assert!(val["content"][0]["text"].as_str().expect("text must exist").contains("Handoff saved successfully"));
 
     // Check DB status remains PENDING
     // Check STM
@@ -2528,7 +2528,8 @@ No YAML here."#;
     });
 
     let res = handle_manage_stm(&state, args).await;
-    assert!(res.is_ok()); // Should bypass validation
+    let val = res.expect("handle_manage_stm legacy must succeed");
+    assert!(val["content"][0]["text"].as_str().expect("text must exist").contains("Handoff saved successfully"));
 }
 
 #[tokio::test]
@@ -2685,7 +2686,8 @@ outputs:
     });
 
     let res = handle_manage(&state, args).await;
-    assert!(res.is_ok());
+    let val = res.expect("handle_manage complete_handoff must succeed");
+    assert_eq!(val["status"].as_str(), Some("success"));
 
     let stm = state
         .backend
@@ -4289,7 +4291,8 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
             ),
         ))
         .await?;
-    assert!(h3_in_db.is_some());
+    let h3 = h3_in_db.expect("h3 record must be present in DB");
+    assert_eq!(h3["status"].as_str(), Some("PENDING"));
     let h4_in_db: Option<serde_json::Value> = backend
         .db
         .select((
@@ -4299,7 +4302,8 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
             ),
         ))
         .await?;
-    assert!(h4_in_db.is_some());
+    let h4 = h4_in_db.expect("h4 record must be present in DB");
+    assert_eq!(h4["status"].as_str(), Some("COMPLETED"));
 
     // Stale STM entries in DB should be deleted
     let stm1 = backend.get_stm("sess1", None).await?;
