@@ -576,6 +576,8 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     ignore_list: ignore_list.clone(),
                     dream_tx: Some(dream_tx),
                     shutdown_tx: Some(shutdown_tx),
+                    checked_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+                    degraded_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 });
 
                 // Build router and start Axum listener

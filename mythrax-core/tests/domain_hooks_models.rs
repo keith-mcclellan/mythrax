@@ -306,6 +306,8 @@ async fn test_soft_thresholding_and_hook_injection() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Prepare payload for pre-invocation hook
@@ -363,6 +365,8 @@ async fn test_post_invocation_hook_success_and_failure() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Success case
@@ -868,6 +872,8 @@ async fn test_complete_code_task_mcp_tool() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Invoke complete_code_task MCP tool via consolidated agent tool
@@ -986,6 +992,8 @@ async fn test_hybrid_hydration_hook_behavior() -> Result<()> {
         ignore_list: std::sync::Arc::new(Default::default()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Create a BeliefState in SurrealDB
@@ -1379,6 +1387,31 @@ fn test_model_aware_swap_eviction_thresholds() {
     assert!(evict_tier3_high, "Tier 3 must evict at 6.1 GB swap");
     let evict_tier3_low = check_swap_pressure(ModelTier::Tier3, 5_500 * 1024 * 1024);
     assert!(!evict_tier3_low, "Tier 3 must not evict at 5.5 GB swap");
+}
+
+#[tokio::test]
+async fn test_programmatic_preflight_memory_gate_tracking() {
+    let temp = tempfile::tempdir().unwrap();
+    let backend: std::sync::Arc<dyn mythrax_core::db::backend::StorageBackend> =
+        std::sync::Arc::new(mythrax_core::db::SurrealBackend::new_in_memory().await.unwrap());
+    backend.init().await.unwrap();
+
+    let store = std::sync::Arc::new(mythrax_core::store::MarkdownStore::new(temp.path()).unwrap());
+    let state = mythrax_core::api::ApiState {
+        backend,
+        auth_token: "secret".to_string(),
+        store,
+        ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
+        dream_tx: None,
+        shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+
+    let session = "test_session_gate_1";
+    assert_eq!(state.has_checked_memory(session).await, false);
+    state.mark_memory_checked(session).await;
+    assert_eq!(state.has_checked_memory(session).await, true);
 }
 
 }

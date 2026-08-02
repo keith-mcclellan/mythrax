@@ -1871,6 +1871,8 @@ async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiSt
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }
 
@@ -2189,6 +2191,8 @@ async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiSt
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }
 
@@ -2427,6 +2431,8 @@ async fn setup_state() -> ApiState {
         auth_token: "test".to_string(),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     }
 }
 
@@ -3612,6 +3618,8 @@ async fn setup_test_state() -> Result<(ApiState, std::sync::Arc<SurrealBackend>,
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     Ok((state, backend, tmp))
@@ -4657,6 +4665,8 @@ async fn test_api_save_forged_assets() -> Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     let app = create_router(state);
@@ -5157,6 +5167,8 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let session_id = "test-session-123";

@@ -218,6 +218,8 @@ async fn test_completions_proxy_passthrough() -> Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     let app = create_router(state);
@@ -1036,6 +1038,8 @@ async fn test_post_turn_observer_and_guardrails() -> anyhow::Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Insert a wisdom rule that is blocking
@@ -1152,6 +1156,8 @@ async fn test_auto_task_persistence() -> anyhow::Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let session_id = "sess_task_test";
@@ -1235,6 +1241,8 @@ async fn test_memory_query_frequency_tracker() -> anyhow::Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let session_id = "sess_freq_test";
@@ -1310,6 +1318,8 @@ async fn test_citation_tracker_and_reinforcement() -> anyhow::Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let session_id = "sess_reinforce_test";
@@ -1419,6 +1429,8 @@ async fn test_cross_agent_broadcast_channel() -> anyhow::Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Session A saves a broadcast key: broadcast:status:1
@@ -1542,6 +1554,8 @@ async fn test_vault_clean() -> anyhow::Result<()> {
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Create a stale session (>30 days old) and a fresh session (<30 days old)
@@ -1713,6 +1727,8 @@ async fn create_test_state(temp_dir: &tempfile::TempDir) -> anyhow::Result<ApiSt
         ignore_list,
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     })
 }
 

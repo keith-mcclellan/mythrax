@@ -566,6 +566,8 @@ async fn test_get_full_hydration_cap() -> Result<()> {
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Create an episode with very large content (> 10000 characters)
@@ -661,6 +663,8 @@ pub fn display_val(val: i32) {
         ignore_list: std::sync::Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // 1. Test "view" (Virtual Paging) via read tool
@@ -1818,6 +1822,8 @@ async fn test_data_hierarchy_flow_ingest_and_retrieve() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Invoke complete_code_task which routes through the mlx-lm HTTP server at

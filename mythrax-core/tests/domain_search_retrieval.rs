@@ -2499,6 +2499,8 @@ async fn test_token_economics_savings() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let payload = serde_json::json!({
@@ -2580,6 +2582,8 @@ async fn test_zero_discovery_no_divide_by_zero() {
         ignore_list: Arc::new(mythrax_core::vault::watcher::WatchIgnoreList::new()),
         dream_tx: None,
         shutdown_tx: None,
+        checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+        degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let payload = serde_json::json!({

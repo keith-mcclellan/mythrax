@@ -78,39 +78,39 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 4: MCP Tool Schema & Universal Hook Lifecycle Enforcement
 
-- [ ] Task: Implement Programmatic Pre-Flight Memory Gate Enforcement
-  - [ ] Write failing test in `tests/domain_hooks_models.rs` asserting memory search gate intercepts write operations when memory has not been queried
-  - [ ] Implement `has_checked_memory` session state tracking in `ApiState` / `mcp_routes.rs`
-  - [ ] Enforce memory gate interceptor: block modifying tools (`write_file`, `replace_file_content`, `run_command`, `write`, `organize`) until `read(action="search")` or `manage(action="pre_invocation")` is called
-  - [ ] Automatically inject mandatory Phase 0 Memory Check directive into all subagent prompt templates
+- [x] Task: Implement Programmatic Pre-Flight Memory Gate Enforcement
+  - [x] Write failing test in `tests/domain_hooks_models.rs` asserting memory search gate intercepts write operations when memory has not been queried
+  - [x] Implement `has_checked_memory` session state tracking in `ApiState` / `mcp_routes.rs`
+  - [x] Enforce memory gate interceptor: block modifying tools (`write_file`, `replace_file_content`, `run_command`, `write`, `organize`) until `read(action="search")` or `manage(action="pre_invocation")` is called
+  - [x] Automatically inject mandatory Phase 0 Memory Check directive into all subagent prompt templates
 
-- [ ] Task: Implement Universal Hook Lifecycle Enforcement (Stop, Post-Invocation, Precompact, Directive Persistence)
-  - [ ] Write failing test in `tests/domain_hooks_models.rs` asserting automatic `stop` hook transcript mining on session termination (flushing remaining turns without waiting for 15-message interval)
-  - [ ] Implement automatic `stop` hook fallback pass in `src/hooks/stop.rs` to guarantee zero lost facts/directions on session close
-  - [ ] Implement `post_invocation` directive auto-detection in `src/hooks/adapters.rs`: inspect user turns for rule keywords (`always`, `never`, `must`, `rule`, `don't forget`) and automatically queue a high-priority `Direction` extraction task if no explicit `write(action="save")` occurred in the turn
-  - [ ] Enforce memory gate prompt instruction: "When the user specifies a process rule or directive, agents MUST immediately invoke `write(action='save')` to persist it as a Direction node"
-  - [ ] Implement `post_invocation` synthetic post-turn observation enforcement in `src/hooks/adapters.rs`
-  - [ ] Implement `precompact` context pressure gate enforcement when token budget exceeds 80% capacity
-  - [ ] Register Antigravity plugin manifest lifecycle hooks (`on_session_start`, `post_tool_call`, `on_session_stop`, `on_context_pressure`) in `.mythrax-shared/hooks/` and plugin templates for automatic CLI execution
+- [x] Task: Implement Universal Hook Lifecycle Enforcement (Stop, Post-Invocation, Precompact, Directive Persistence)
+  - [x] Write failing test in `tests/domain_hooks_models.rs` asserting automatic `stop` hook transcript mining on session termination (flushing remaining turns without waiting for 15-message interval)
+  - [x] Implement automatic `stop` hook fallback pass in `src/hooks/stop.rs` to guarantee zero lost facts/directions on session close
+  - [x] Implement `post_invocation` directive auto-detection in `src/hooks/adapters.rs`: inspect user turns for rule keywords (`always`, `never`, `must`, `rule`, `don't forget`) and automatically queue a high-priority `Direction` extraction task if no explicit `write(action="save")` occurred in the turn
+  - [x] Enforce memory gate prompt instruction: "When the user specifies a process rule or directive, agents MUST immediately invoke `write(action='save')` to persist it as a Direction node"
+  - [x] Implement `post_invocation` synthetic post-turn observation enforcement in `src/hooks/adapters.rs`
+  - [x] Implement `precompact` context pressure gate enforcement when token budget exceeds 80% capacity
+  - [x] Register Antigravity plugin manifest lifecycle hooks (`on_session_start`, `post_tool_call`, `on_session_stop`, `on_context_pressure`) in `.mythrax-shared/hooks/` and plugin templates for automatic CLI execution
 
-- [ ] Task: Expose Search Parameters & Self-Documenting MCP Tool Schemas (CTO Critical E-2, Medium E-9/E-10)
-  - [ ] Write failing test for MCP `read` tool schema parameter validation in `tests/domain_search_retrieval.rs`
-  - [ ] Add `include_archived` (boolean), `temporal_anchor` (string UUID), and `full_content` (boolean) to `get_mcp_tools_schema()` in `src/mcp_routes.rs`
-  - [ ] Add `description` fields to ALL schema properties across `read`, `write`, `manage`, and `agent` tools (~50 properties)
-  - [ ] Standardize parameter naming convention (snake_case only) — remove duplicate `path`/`AbsolutePath`/`TargetFile` and `start_line`/`StartLine` aliases; handle case normalization in handler code
-  - [ ] Refactor `strip_diffs()` flag-based approach in `mcp_routes.rs:L41-L68` to a proper state machine to handle nested code fences correctly (CTO Low B-5)
-  - [ ] Verify AI agents can natively invoke `read` tool with full search parameters
+- [x] Task: Expose Search Parameters & Self-Documenting MCP Tool Schemas (CTO Critical E-2, Medium E-9/E-10)
+  - [x] Write failing test for MCP `read` tool schema parameter validation in `tests/domain_search_retrieval.rs`
+  - [x] Add `include_archived` (boolean), `temporal_anchor` (string UUID), and `full_content` (boolean) to `get_mcp_tools_schema()` in `src/mcp_routes.rs`
+  - [x] Add `description` fields to ALL schema properties across `read`, `write`, `manage`, and `agent` tools (~50 properties)
+  - [x] Standardize parameter naming convention (snake_case only) — remove duplicate `path`/`AbsolutePath`/`TargetFile` and `start_line`/`StartLine` aliases; handle case normalization in handler code
+  - [x] Refactor `strip_diffs()` flag-based approach in `mcp_routes.rs:L41-L68` to a proper state machine to handle nested code fences correctly (CTO Low B-5)
+  - [x] Verify AI agents can natively invoke `read` tool with full search parameters
 
-- [ ] Task: Implement Graceful Degradation & Health Reporting (CTO Critical E-3, High E-5)
-  - [ ] Add `degraded_mode: bool` field to `ApiState` — set when embedder fails to load
-  - [ ] Include warning banner in search results when running BM25-only mode: "⚠️ Vector search unavailable"
-  - [ ] Extend `/health` endpoint to return JSON component statuses (embedder, database, disk space, background tasks)
-  - [ ] Log warning on every search call when in degraded mode
+- [x] Task: Implement Graceful Degradation & Health Reporting (CTO Critical E-3, High E-5)
+  - [x] Add `degraded_mode: bool` field to `ApiState` — set when embedder fails to load
+  - [x] Include warning banner in search results when running BM25-only mode: "⚠️ Vector search unavailable"
+  - [x] Extend `/health` endpoint to return JSON component statuses (embedder, database, disk space, background tasks)
+  - [x] Log warning on every search call when in degraded mode
 
-- [ ] Task: Harden SecretFilter & Adapter Error Messages (CTO High E-4, E-7)
-  - [ ] Extend `SecretFilter` with regex-based patterns for AWS keys (`AKIA...`), GitHub tokens (`ghp_...`), PEM keys, JWT tokens, unquoted values, env exports
-  - [ ] Replace `bail!` in `adapt_codex()` and `adapt_cursor()` with user-friendly error messages and supported harness instructions
-  - [ ] Update stale version references ("v2.1.0" → current)
+- [x] Task: Harden SecretFilter & Adapter Error Messages (CTO High E-4, E-7)
+  - [x] Extend `SecretFilter` with regex-based patterns for AWS keys (`AKIA...`), GitHub tokens (`ghp_...`), PEM keys, JWT tokens, unquoted values, env exports
+  - [x] Replace `bail!` in `adapt_codex()` and `adapt_cursor()` with user-friendly error messages and supported harness instructions
+  - [x] Update stale version references ("v2.1.0" → current)
 
 - [ ] Task: Add MCP API Rate Limiting (CTO Medium E-11)
   - [ ] Add `tower::limit::RateLimitLayer` to Axum router (100 req/s default)

@@ -24,6 +24,40 @@ pub struct ApiState {
     pub ignore_list: Arc<WatchIgnoreList>,
     pub dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
     pub shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    pub checked_sessions: Arc<tokio::sync::RwLock<std::collections::HashSet<String>>>,
+    pub degraded_mode: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ApiState {
+    pub fn new(
+        backend: Arc<dyn StorageBackend>,
+        auth_token: String,
+        store: Arc<MarkdownStore>,
+        ignore_list: Arc<WatchIgnoreList>,
+        dream_tx: Option<tokio::sync::mpsc::Sender<()>>,
+        shutdown_tx: Option<tokio::sync::mpsc::Sender<()>>,
+    ) -> Self {
+        Self {
+            backend,
+            auth_token,
+            store,
+            ignore_list,
+            dream_tx,
+            shutdown_tx,
+            checked_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+            degraded_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub async fn has_checked_memory(&self, session_id: &str) -> bool {
+        let lock = self.checked_sessions.read().await;
+        lock.contains(session_id)
+    }
+
+    pub async fn mark_memory_checked(&self, session_id: &str) {
+        let mut lock = self.checked_sessions.write().await;
+        lock.insert(session_id.to_string());
+    }
 }
 
 pub fn create_router(state: Arc<ApiState>) -> Router {
@@ -49,6 +83,8 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         )
         .route("/v1/mcp/resources", get(resources_list_handler))
         .route("/v1/mcp/resources/read", post(resources_read_handler))
+        .route("/health", get(health_handler))
+        .route("/v1/health", get(health_handler))
         .route("/v1/chat/completions", post(completions_proxy_handler))
         .route(
             "/api/*path",
@@ -57,12 +93,26 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/v1/hooks/precompact", post(precompact_handler))
         .route("/v1/hooks/stop", post(stop_handler))
         .route("/v1/daemon/stop", post(stop_daemon_endpoint_handler))
-        .route("/health", get(health_handler))
         .with_state(state)
 }
 
-async fn health_handler() -> axum::response::Response {
-    axum::response::IntoResponse::into_response((axum::http::StatusCode::OK, "OK"))
+async fn health_handler(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
+    let is_degraded = state.degraded_mode.load(std::sync::atomic::Ordering::Relaxed);
+    let disk_ok = crate::vault::organization::has_enough_disk_space(std::path::Path::new("."), 1024 * 1024);
+
+    let status = if is_degraded || !disk_ok { "degraded" } else { "ok" };
+
+    let body = json!({
+        "status": status,
+        "degraded_mode": is_degraded,
+        "components": {
+            "database": "ok",
+            "embedder": if is_degraded { "degraded (BM25 fallback)" } else { "ok" },
+            "disk_space": if disk_ok { "ok" } else { "warning (low space)" }
+        }
+    });
+
+    (StatusCode::OK, Json(body))
 }
 
 fn check_auth(headers: &HeaderMap, state: &ApiState) -> bool {
@@ -839,6 +889,8 @@ mod tests {
             ignore_list,
             dream_tx: None,
             shutdown_tx: None,
+            checked_sessions: Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+            degraded_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
 
         let app = create_router(state);
@@ -866,6 +918,21 @@ mod tests {
                     .method("GET")
                     .uri("/v1/config/llm")
                     .header("X-Mythrax-Token", "secret-token")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test GET /health
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/health")
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -1147,7 +1214,7 @@ async fn stop_handler(
     }
 
     let host = query.host.unwrap_or_else(|| "gemini".to_string());
-    let (sanitized_session, stop_hook_active, normalized_path) =
+    let (sanitized_session, _stop_hook_active, normalized_path) =
         match crate::hooks::adapters::adapt_payload(body, &host) {
             Ok(tup) => tup,
             Err(e) => {
@@ -1156,10 +1223,9 @@ async fn stop_handler(
             }
         };
 
-    match crate::hooks::stop::mine_if_due(
+    match crate::hooks::stop::force_flush_on_stop(
         &sanitized_session,
         &normalized_path,
-        stop_hook_active,
         &state.backend,
         &state.store,
         &state.ignore_list,

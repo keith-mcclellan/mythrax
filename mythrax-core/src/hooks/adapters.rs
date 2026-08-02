@@ -77,3 +77,13 @@ pub fn adapt_payload(val: serde_json::Value, host: &str) -> Result<(String, bool
         _ => adapt_gemini(val),
     }
 }
+
+pub fn detect_user_directives(turn_text: &str) -> bool {
+    let lower = turn_text.to_lowercase();
+    lower.contains("always")
+        || lower.contains("never")
+        || lower.contains("must")
+        || lower.contains("rule")
+        || lower.contains("don't forget")
+        || lower.contains("remember to")
+}
