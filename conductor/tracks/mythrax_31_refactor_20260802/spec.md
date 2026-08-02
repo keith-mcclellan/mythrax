@@ -23,6 +23,13 @@ The Mythrax 3.1 Track stabilizes, refactors, and evolves the Mythrax Sidecar Int
 - **Test Isolation:** All parallel test execution runs must use `CARGO_TARGET_DIR=target/mythrax_31_refactor` and isolated temp DB directories (`/tmp/mythrax_31_refactor`).
 - **Parallel Nextest Enforcement:** All test runs must execute via `MYTHRAX_TEST_MOCK=1 cargo nextest run`.
 
+### 2.2 Architectural Guardrails & Anti-Patterns to Avoid (From Mythrax Memory)
+- **Anti-Pattern 1 (Vault & DB Poisoning):** Writing test notes or DB records into `$HOME/mythrax-vault/`. Remedy: Force `tempfile::TempDir` RAII scope guards on all test stores.
+- **Anti-Pattern 2 (Permissive Assertions):** Using truthy `is_ok()`/`is_some()` assertions. Remedy: Assert exact mutation values and edge links.
+- **Anti-Pattern 3 (Sync/Async Bridge Wrappers):** Creating `_async` methods or using `futures::executor::block_on` fallbacks. Remedy: Refactor trait signatures natively with `async fn`.
+- **Anti-Pattern 4 (Lock Contention across I/O):** Holding Mutex locks while doing disk I/O or DB queries. Remedy: Extract local variables, drop lock, then perform I/O.
+- **Anti-Pattern 5 ($O(N)$ Hot-Path Scans):** Linear iteration in hot loops. Remedy: Use $O(1)$ LRU caches and bulk evictions.
+
 ### 2.2 Vault Storage & Directory Organization
 - **Typed Directory Hierarchy:**
   - `wiki/<scope>/references/ast/` — AST code symbol pages
