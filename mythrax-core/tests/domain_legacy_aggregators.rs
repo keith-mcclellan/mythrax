@@ -1247,7 +1247,7 @@ async fn test_memory_query_frequency_tracker() -> anyhow::Result<()> {
     let result = handle_pre_invocation_hook(&state, payload.clone()).await?;
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains("Warning: Memory searches are stale. No search has been performed"),
+        text.contains("No memory search has been performed"),
         "Should warn when no search: {}",
         text
     );
