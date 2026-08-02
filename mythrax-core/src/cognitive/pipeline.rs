@@ -104,11 +104,29 @@ pub fn cluster_facts(
         }
 
         let mut current_cluster = vec![i];
+        let emb_i_valid = embeddings[i].iter().any(|v| *v != 0.0);
+        let s_i = format!("{} {} {}", facts[i].h_n().unwrap_or(""), facts[i].iota_n().unwrap_or(""), facts[i].artifact_refs.join(" ")).to_lowercase();
+        let tokens_i: std::collections::HashSet<&str> = s_i.split_whitespace().filter(|w| w.len() > 3).collect();
+
         for j in (i + 1)..n {
             if assigned[j] {
                 continue;
             }
-            let sim = cosine_similarity(&embeddings[i], &embeddings[j]);
+            let emb_j_valid = embeddings[j].iter().any(|v| *v != 0.0);
+            let sim = if emb_i_valid && emb_j_valid {
+                cosine_similarity(&embeddings[i], &embeddings[j])
+            } else {
+                let s_j = format!("{} {} {}", facts[j].h_n().unwrap_or(""), facts[j].iota_n().unwrap_or(""), facts[j].artifact_refs.join(" ")).to_lowercase();
+                let tokens_j: std::collections::HashSet<&str> = s_j.split_whitespace().filter(|w| w.len() > 3).collect();
+                if tokens_i.is_empty() || tokens_j.is_empty() {
+                    0.0
+                } else {
+                    let intersection = tokens_i.intersection(&tokens_j).count();
+                    let union = tokens_i.union(&tokens_j).count();
+                    if union == 0 { 0.0 } else { (intersection as f32 / union as f32) * 5.0 } // Scale Jaccard overlap so >=15% token overlap passes cluster_similarity (0.75) threshold
+                }
+            };
+
             if sim >= config.cluster_similarity {
                 current_cluster.push(j);
             }
@@ -192,7 +210,7 @@ pub async fn extract_facts(
             embedding: embeddings.get(idx).cloned(),
             node_type: Some("fact".to_string()),
             item_type: Some("fact".to_string()),
-            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as f64),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
@@ -356,7 +374,7 @@ pub async fn extract_from_document(
             embedding: embeddings.get(idx).cloned(),
             node_type: Some("fact".to_string()),
             item_type: Some("fact".to_string()),
-            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as f64),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
@@ -439,7 +457,7 @@ pub async fn extract_from_code(
             embedding: embeddings.get(idx).cloned(),
             node_type: Some("fact".to_string()),
             item_type: Some("fact".to_string()),
-            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as f64),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
@@ -503,7 +521,7 @@ pub async fn forge_document(
             embedding: embeddings.into_iter().next(),
             node_type: Some("forged_reference".to_string()),
             item_type: Some("forged_doc".to_string()),
-            metacognitive_confidence: Some(95),
+            metacognitive_confidence: Some(95.0),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&chunk_node).await;
@@ -572,7 +590,7 @@ pub async fn forge_skill(
         vault_path: Some(wiki_path.clone()),
         node_type: Some("skill_playbook".to_string()),
         item_type: Some("skill".to_string()),
-        metacognitive_confidence: Some(95),
+        metacognitive_confidence: Some(95.0),
         ..Default::default()
     };
     let _ = backend.save_wiki_node(&chunk_node).await;
@@ -888,7 +906,7 @@ pub async fn merge_validated_nodes(
             causal_insight: Some(idea.insight.clone()),
             artifact_refs: Some(mu_n_vec),
             item_type: Some("wiki".to_string()),
-            metacognitive_confidence: Some((idea.confidence * 100.0) as i32),
+            metacognitive_confidence: Some((idea.confidence * 100.0) as f64),
             ..Default::default()
         };
 

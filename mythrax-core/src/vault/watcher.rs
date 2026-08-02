@@ -468,7 +468,7 @@ struct WikiFrontmatter {
     name: Option<String>,
     scope: Option<String>,
     edges: Option<Vec<FrontmatterEdge>>,
-    metacognitive_confidence: Option<i32>,
+    metacognitive_confidence: Option<f64>,
     node_type: Option<String>,
     item_type: Option<String>,
 }

@@ -2231,7 +2231,7 @@ async fn index_reference_doc(
             embedding: None,
             temporal_range_start: None,
             temporal_range_end: None,
-            metacognitive_confidence: Some(100),
+            metacognitive_confidence: Some(100.0),
             node_type: Some("reference".to_string()),
             content_hash: Some(content_hash.to_string()),
             ..Default::default()
