@@ -145,8 +145,8 @@ Type: Refactor & Architecture Evolution
   - [x] Replace unbounded `STEM_CACHE` thread-local HashMap with LRU cache (10K cap) in `bm25.rs:L176`
   - [x] Eliminate redundant `token.clone()` in BM25 scoring hot path (`bm25.rs:L29`); consider `Arc<str>` for doc IDs
 
-- [ ] Task: Dead Code & Unused Module Elimination
-  - [ ] Extract ~120 lines of hardcoded mock LLM responses from `llm/mod.rs:L590-L675` behind `#[cfg(test)]` or a test feature gate (CTO Critical SLOP-6)
+- [x] Task: Dead Code & Unused Module Elimination
+  - [x] Extract ~120 lines of hardcoded mock LLM responses from `llm/mod.rs:L590-L675` behind `#[cfg(test)]` or a test feature gate (CTO Critical SLOP-6)
   - [x] Expand eviction stub cleanup to cover all 4 empty `evict()` stubs: `embeddings.rs:L52`, `embeddings.rs:L528`, `llm/mod.rs:L39`, `llm/mod.rs:L43` (CTO Critical SLOP-5, escalated from A-3)
   - [x] Replace `MYTHRAX_TEST_MOCK` runtime checks with compile-time gates where possible, and add prominent warning log when active (CTO High SLOP-7)
   - [x] Replace `_ => {}` catch-alls in `manage_handlers.rs` action dispatch and `daemon.rs` stop handler with explicit error logging or bails (CTO High SLOP-9)
