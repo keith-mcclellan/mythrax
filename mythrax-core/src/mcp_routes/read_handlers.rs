@@ -81,28 +81,26 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
             handle_query_memory(state, args).await
         }
         "get_full" => {
-            if args.get("ids").and_then(|v| v.as_array()).is_none()
-                && args.get("node_ids").and_then(|v| v.as_array()).is_none()
+            if args.get("path").or_else(|| args.get("AbsolutePath")).or_else(|| args.get("TargetFile")).and_then(|v| v.as_str()).is_some() {
+                super::manage_handlers::handle_manage_file(state, args).await
+            } else if args.get("ids").and_then(|v| v.as_array()).is_some()
+                || args.get("node_ids").and_then(|v| v.as_array()).is_some()
             {
-                anyhow::bail!("Missing ids or node_ids array parameter");
+                handle_query_memory(state, args).await
+            } else {
+                anyhow::bail!("Missing path, ids, or node_ids parameter for get_full");
             }
-            handle_query_memory(state, args).await
         }
         "root" => handle_query_memory(state, args).await,
         "get" => {
             if action == "get_short_term"
                 || (action == "get"
-                    && (args.get("key").and_then(|v| v.as_str()).is_some()
-                        || args.get("session_id").and_then(|v| v.as_str()).is_some()))
+                    && args.get("session_id").and_then(|v| v.as_str()).is_some())
             {
                 let _session_id = args
                     .get("session_id")
                     .and_then(|v| v.as_str())
                     .context("Missing session_id")?;
-                let _key = args
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .context("Missing key")?;
                 super::manage_handlers::handle_manage_stm(state, args).await
             } else {
                 super::manage_handlers::handle_manage_config(state, args).await

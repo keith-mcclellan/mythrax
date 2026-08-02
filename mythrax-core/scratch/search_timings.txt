@@ -10443,3 +10443,6 @@ query: "mythrax project context", profile: 3984us, embed: 2840us, terms: 2340us,
 query: "mythrax project context", profile: 3339us, embed: 1891us, terms: 544us, db: 33335us, rerank_start: 1740us, total: 71827us
 query: "fact", profile: 47us, embed: 9167us, terms: 3162us, db: 48238us, rerank_start: 3801us, total: 67960us
 query: "insight", profile: 73us, embed: 5934us, terms: 3629us, db: 41216us, rerank_start: 875us, total: 62228us
+query: "test", profile: 232us, embed: 7932us, terms: 590us, db: 54897us, rerank_start: 1944us, total: 72166us
+query: "test", profile: 29us, embed: 3228us, terms: 11us, db: 56228us, rerank_start: 1843us, total: 68239us
+query: "mythrax project context", profile: 1595us, embed: 570us, terms: 10us, db: 28528us, rerank_start: 1097us, total: 55960us

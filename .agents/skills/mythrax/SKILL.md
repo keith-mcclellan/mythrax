@@ -34,9 +34,9 @@ Call the `read` tool with the `action` parameter set to one of the following:
 - **`action="search_index"`**: Fast index search for file lists or node IDs.
   - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<integer>`
 - **`action="timeline"`**: Chronological event query.
-  - *Parameters*: `session_id: Option<String>`, `limit: Option<integer>`
-- **`action="get_full"`**: Read raw, unpaged file contents.
-  - *Parameters*: `path: String`
+  - *Parameters*: `query: Option<String>`, `anchor_id: Option<String>`, `session_id: Option<String>`, `limit: Option<integer>`
+- **`action="get_full"`**: Read raw, unpaged file contents or full unpaged memory nodes.
+  - *Parameters*: `path: Option<String>`, `node_ids: Option<Vec<String>>`
 - **`action="search_by_concept"`**: Retrieve memories matching a specific concept.
   - *Parameters*: `concept: String`
 - **`action="diff_sessions"`**: Compare STM state between two sessions.
