@@ -88,7 +88,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 .or_else(|| args.get("force"))
                 .or_else(|| args.get("reprocess"))
                 .and_then(|v| v.as_bool())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             if reset_processed {
                 if let Some(surreal_backend) = state
@@ -106,6 +106,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             let mut count = 0;
             let mut offset = 0;
             let limit = 500;
+            let llm_client = crate::llm::LLMClient::default();
             loop {
                 let page = state.backend.get_episodes_paginated(limit, offset).await?;
                 if page.is_empty() {
@@ -119,7 +120,13 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                             .source_episode(ep.source_episode.clone())
                             .node_type(ep.node_type.clone())
                             .build();
-                        state.backend.save_episode(&save).await?;
+                        let _ = state.backend.save_episode(&save).await;
+                        let _ = crate::cognitive::pipeline::extract_facts(
+                            state.backend.as_ref(),
+                            Some(&llm_client),
+                            &ep,
+                        )
+                        .await;
                         count += 1;
                     }
                 }
