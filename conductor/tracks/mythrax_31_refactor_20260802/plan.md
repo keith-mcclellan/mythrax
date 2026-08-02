@@ -15,10 +15,18 @@ Type: Refactor & Architecture Evolution
   - [ ] Update `domain_vault_storage.rs`, `domain_cognitive.rs`, and `domain_search_retrieval.rs` harness setup
   - [ ] Purge historical test-poisoned files (`test_hypothesis_pattern_fact.md`, `test_scope/`) from production `mythrax-vault/`
 
-- [ ] Task: Enforce Strict Mutation Assertions Across Core Test Suites
+- [ ] Task: Enforce Strict Mutation Assertions Across ALL Test Suites
   - [ ] Audit and replace permissive `is_ok()`/`is_some()` assertions in `tests/domain_vault_storage.rs` with exact record count and field mutation checks
   - [ ] Audit and replace permissive assertions in `tests/domain_cognitive.rs` with strict hypothesis and cluster state mutations
   - [ ] Audit and replace permissive assertions in `tests/domain_search_retrieval.rs` with strict RRF score, BM25 rank, and temporal edge assertions
+  - [ ] Audit and replace permissive assertions in `tests/domain_legacy_aggregators.rs` (168KB — largest test file, high risk of permissive patterns)
+  - [ ] Audit and replace permissive assertions in `tests/domain_e2e_harness.rs` (61KB)
+
+- [ ] Task: Production `unwrap()` Safety Audit (CTO Critical E-1)
+  - [ ] Audit all `unwrap()` calls in non-test `src/` code (40+ files)
+  - [ ] Fix `bm25.rs:L111` — `self.doc_term_freqs.get(doc_id).unwrap()` panics on missing doc_id — replace with `.ok_or_else()`
+  - [ ] Fix `embeddings.rs` — multiple `.unwrap()` in cache init and model loading paths — replace with `?` propagation
+  - [ ] Convert `block_on` anti-pattern in `ingestion.rs:L1924` test to `#[tokio::test]`
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
@@ -28,7 +36,9 @@ Type: Refactor & Architecture Evolution
 
 - [ ] Task: Implement Typed Directory Routing & 65-Char + CRC32 Slug Capping
   - [ ] Write failing unit test for `organize_file` slug capping and typed path routing in `src/vault/organization.rs`
-  - [ ] Implement `<slug_65>-<crc32>.md` slug capping with word-boundary trimming in `src/vault/organization.rs`
+  - [ ] Implement canonical `<slug_65>-<crc32>.md` slug capping with word-boundary trimming in `src/vault/organization.rs` (CTO B-1: current `organize_file` does no slug processing; `derive_slug` in pipeline.rs has 60-char limit but no CRC32)
+  - [ ] Consolidate `slugify_title()` and `derive_slug()` in `cognitive/pipeline.rs` into a single `slug::slugify(text, max_len)` utility (CTO B-3)
+  - [ ] Wire all slug generation callsites to the canonical `organization.rs` implementation
   - [ ] Implement typed directory routing (`wiki/<scope>/{references/{ast,docs,forged},facts,insights,directions,hypotheses}/`) and `wisdom/skills/`
 
 - [ ] Task: Implement Modular Hidden Episode Storage
@@ -36,10 +46,22 @@ Type: Refactor & Architecture Evolution
   - [ ] Update `save_episode_bidirectional` in `src/vault/watcher.rs` and `src/vault/ingestion.rs` to write modular hidden episode markdown files
   - [ ] Update `TargetResolveCache` preloading to inspect typed subdirectories alongside legacy paths
 
+- [ ] Task: Implement Vault Migration Safety & Rollback (CTO Critical E-6)
+  - [ ] Write failing test for pre-migration backup verification using existing `backup_vault_folders()` in `daemon.rs:L847`
+  - [ ] Implement `.mythrax/vault_version = "3.1"` migration marker to prevent re-migration
+  - [ ] Implement post-migration verification: confirm all `vault_path` DB entries match on-disk paths
+  - [ ] Implement `manage(action="rollback_organize")` to restore from `.trash/backup_<timestamp>/`
+  - [ ] Add user notification of migration changes (what moved, count of files affected)
+
 - [ ] Task: Implement Vault Organization Migration & MOC Generation
   - [ ] Write failing test for `manage(action="organize")` migration of legacy flat files into typed directories
   - [ ] Update `manage(action="organize")` and `manage(action="clean")` in `src/vault/operations.rs` to migrate legacy files into `.episodes/` and typed `wiki/` folders
   - [ ] Update `generate_moc` in `src/vault/organization.rs` to render categorized `MOC.md` with subsystem sections and automatic orphan node capturing
+
+- [ ] Task: Early Prompt Consolidation for Token Savings (CTO D-1/D-2 — moved from Phase 5)
+  - [ ] Consolidate verbose distillation system prompt in `distillation.rs:L165` (~310 tokens) and reflect.rs prompt (~160 tokens) into `cognitive/prompts.rs` as `build_distillation_prompt()`
+  - [ ] Strip emoji decorators, redundant preambles, and duplicate formal notation from extraction prompt in `prompts.rs:L65-L88` (CTO D-3: saves ~40 tokens/call)
+  - [ ] Add global token budget cap on transcript summary in `reflect.rs:L73` (CTO D-4: currently 1000 chars/step with no overall cap — add 8000-token total budget)
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
@@ -47,14 +69,27 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 3: Push-Based Cloud Brain Event Architecture
 
+- [ ] Task: Audit & Categorize All Daemon Polling Loops (CTO Critical C-1, High C-2)
+  - [ ] Enumerate all 6 polling loops in `daemon.rs` and explicitly categorize each:
+    - `daemon.rs:L168` — 2s startup delay → retain as one-shot timer
+    - `daemon.rs:L352` — 600s checkpoint daemon → retain as periodic timer
+    - `daemon.rs:L399` — 60s embedding cache flusher → retain as periodic timer
+    - `daemon.rs:L418` — 60s reflection harvester → CONVERT to Live Query event-driven
+    - `daemon.rs:L444` — 86400s daily scheduler → retain as periodic timer
+    - `daemon.rs:L531` — 1s dreaming coordinator debounce → CONVERT to broadcast event
+  - [ ] Enumerate `distillation.rs:L196` — 50ms polling loop (up to 1200 queries over 60s timeout) → CONVERT to Live Query notification
+
 - [ ] Task: Implement SurrealDB Live Query Event Listener
   - [ ] Write failing unit test for SurrealDB `LIVE SELECT * FROM cognitive_task WHERE status = 'Pending';` stream listener
   - [ ] Implement `LIVE SELECT` listener and `tokio::sync::broadcast` event channel in `src/vault/distillation.rs` and `Daemon` state
+  - [ ] Replace `distillation.rs:L196` polling loop with `tokio::sync::oneshot` or broadcast receiver
   - [ ] Update cognitive callback creation to broadcast reactive task events instantly
 
 - [ ] Task: Replace Polling Sleep Loops in Daemon
-  - [ ] Refactor `daemon.rs` reflection harvester loop to use reactive `select! { msg = rx.recv() => ... }` event handling
+  - [ ] Refactor `daemon.rs` reflection harvester loop (L418) to use reactive `select! { msg = rx.recv() => ... }` event handling
+  - [ ] Refactor dreaming coordinator debounce (L531) to use broadcast subscription
   - [ ] Verify 0ms task wake-up latency and 0 idle polling overhead
+  - [ ] Add disk space check before vault writes and embedding cache flushes (CTO High E-8)
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
@@ -75,10 +110,27 @@ Type: Refactor & Architecture Evolution
   - [ ] Implement `precompact` context pressure gate enforcement when token budget exceeds 80% capacity
   - [ ] Register Antigravity plugin manifest lifecycle hooks (`on_session_start`, `post_tool_call`, `on_session_stop`, `on_context_pressure`) in `.mythrax-shared/hooks/` and plugin templates for automatic CLI execution
 
-- [ ] Task: Expose Search Parameters in MCP Tool Schemas
+- [ ] Task: Expose Search Parameters & Self-Documenting MCP Tool Schemas (CTO Critical E-2, Medium E-9/E-10)
   - [ ] Write failing test for MCP `read` tool schema parameter validation in `tests/domain_search_retrieval.rs`
-  - [ ] Update `get_mcp_tools_schema()` in `src/mcp_routes.rs` to add `include_archived`, `temporal_anchor`, and `full_content` properties
+  - [ ] Add `include_archived` (boolean), `temporal_anchor` (string UUID), and `full_content` (boolean) to `get_mcp_tools_schema()` in `src/mcp_routes.rs`
+  - [ ] Add `description` fields to ALL schema properties across `read`, `write`, `manage`, and `agent` tools (~50 properties)
+  - [ ] Standardize parameter naming convention (snake_case only) — remove duplicate `path`/`AbsolutePath`/`TargetFile` and `start_line`/`StartLine` aliases; handle case normalization in handler code
+  - [ ] Refactor `strip_diffs()` flag-based approach in `mcp_routes.rs:L41-L68` to a proper state machine to handle nested code fences correctly (CTO Low B-5)
   - [ ] Verify AI agents can natively invoke `read` tool with full search parameters
+
+- [ ] Task: Implement Graceful Degradation & Health Reporting (CTO Critical E-3, High E-5)
+  - [ ] Add `degraded_mode: bool` field to `ApiState` — set when embedder fails to load
+  - [ ] Include warning banner in search results when running BM25-only mode: "⚠️ Vector search unavailable"
+  - [ ] Extend `/health` endpoint to return JSON component statuses (embedder, database, disk space, background tasks)
+  - [ ] Log warning on every search call when in degraded mode
+
+- [ ] Task: Harden SecretFilter & Adapter Error Messages (CTO High E-4, E-7)
+  - [ ] Extend `SecretFilter` with regex-based patterns for AWS keys (`AKIA...`), GitHub tokens (`ghp_...`), PEM keys, JWT tokens, unquoted values, env exports
+  - [ ] Replace `bail!` in `adapt_codex()` and `adapt_cursor()` with user-friendly error messages and supported harness instructions
+  - [ ] Update stale version references ("v2.1.0" → current)
+
+- [ ] Task: Add MCP API Rate Limiting (CTO Medium E-11)
+  - [ ] Add `tower::limit::RateLimitLayer` to Axum router (100 req/s default)
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
@@ -86,12 +138,39 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 5: Deliberate Dead Code & Code Complexity Refactoring
 
+- [ ] Task: Critical Code Duplication Elimination (CTO Critical A-1, A-2)
+  - [ ] Delete duplicate `cosine_similarity()` in `cognitive/pipeline.rs:L14` and `vault/distillation.rs:L591`; replace all callsites with `crate::math::cosine_similarity`
+  - [ ] Unify duplicate `TranscriptStep` and `ToolCall` structs from `hooks/reflect.rs:L14-L28` and `vault/distillation.rs:L33-L47` into a single canonical definition in `contracts.rs` with `#[serde(default)]`
+  - [ ] Unify `adapt_claude_code()` and `adapt_gemini()` identical adapter functions into a single generic adapter (CTO B-4)
+
 - [ ] Task: Code Complexity Reduction & Shared Helper Consolidation
-  - [ ] Consolidate duplicated distillation system prompts across `src/hooks/reflect.rs` and `src/vault/distillation.rs` into `src/cognitive/prompts.rs`
   - [ ] Refactor duplicate concept spreading activation and STM candidate injection helpers into shared utilities in `src/retrieval/`
+  - [ ] Extract generic `backfill_missing_embeddings<T>()` helper from 3 duplicate loops in `daemon.rs:L172-L318` (CTO A-6)
+  - [ ] Replace N+4 individual config queries in swap monitor (`main.rs:L401-L427`) with a single `SELECT ... FROM config:settings` (CTO A-5)
+  - [ ] Remove hardcoded swap thresholds in `check_swap_pressure()` — read from config (CTO F-4)
+
+- [ ] Task: God Module Decomposition (CTO High B-2, F-1, Low F-7)
+  - [ ] Decompose `main.rs` (1771 lines) into `cli/onboarding.rs`, `cli/swap_monitor.rs`, `cli/log_writer.rs` with thin dispatcher
+  - [ ] Extract `SizeRollingFileWriter` (currently buried in `main.rs`) into `cli/log_writer.rs` as its own module (CTO Low F-7)
+  - [ ] Decompose `ingestion.rs` (2327 lines) into `vault/ingestion/{cursor,claude,antigravity,workspace_sync,forge,mod}.rs`
+
+- [ ] Task: Performance Optimization (CTO High C-3, Medium C-4, C-5)
+  - [ ] Cache BM25 `OkapiBM25` instance (or `doc_term_freqs`/`df` maps) and invalidate only on corpus changes
+  - [ ] Replace unbounded `STEM_CACHE` thread-local HashMap with LRU cache (10K cap) in `bm25.rs:L176`
+  - [ ] Eliminate redundant `token.clone()` in BM25 scoring hot path (`bm25.rs:L29`); consider `Arc<str>` for doc IDs
 
 - [ ] Task: Dead Code & Unused Module Elimination
+  - [ ] Remove `evict_if_needed()` empty stub in `embeddings.rs:L52` (CTO A-3)
+  - [ ] Replace `unsafe { libc::kill(pid, 0) }` in `main.rs:L304-L306` with `nix` crate safe wrapper `nix::sys::signal::kill(Pid, None)` (CTO Low E-12)
+  - [ ] Extract duplicate macOS/Linux `disk::monitor` blocks in `daemon.rs:L901-L954` into a single `#[cfg(unix)]` block (CTO Low E-13)
   - [ ] Remove unused variables, dead helper functions, and legacy migration scripts across `mythrax-core`
+  - [ ] Move `fix_embeddings.py` to `scripts/`, delete `mock_audit_report.md` and `mythrax_search_history.log`, relocate `2606.11926v1.pdf` (CTO F-6)
+  - [ ] Fix `tuned_params.json` triple path fallback to use absolute `$HOME/.mythrax/` path (CTO C-6)
   - [ ] Run compiler hygiene pass (`cargo check --lib`) to verify 0 unused variable warnings
+
+- [ ] Task: Version Bump, Layout Documentation & Release Prep
+  - [ ] Update `Cargo.toml` version from `3.0.0` to `3.1.0-alpha` at track start, bump to `3.1.0` on completion (CTO F-8)
+  - [ ] Document vault root layout decision explicitly: vault and source share the same root directory; production users should use separate `~/mythrax-vault/` (CTO Medium F-3)
+  - [ ] Add vault layout documentation to `conductor/product-guidelines.md` or `README.md` for new user onboarding
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
