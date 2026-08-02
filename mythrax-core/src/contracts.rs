@@ -661,8 +661,8 @@ impl Default for PipelineConfig {
         Self {
             merge_threshold: 0.90,
             prune_threshold: 0.20,
-            cluster_similarity: 0.75,
-            cluster_min_size: 3,
+            cluster_similarity: 0.55,
+            cluster_min_size: 2,
             version_decay_weight: 0.80,
         }
     }
