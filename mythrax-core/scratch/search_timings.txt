@@ -11828,3 +11828,4 @@ query: "Write 4", profile: 2us, embed: 4937us, terms: 2494us, db: 5110us, rerank
 query: "Bulk Content 19", profile: 1us, embed: 3774us, terms: 2244us, db: 4200us, rerank_start: 599us, total: 10849us
 query: "Write 4", profile: 2us, embed: 57247us, terms: 155983us, db: 53368us, rerank_start: 87094us, total: 353842us
 query: "Bulk Content 19", profile: 1us, embed: 89183us, terms: 56801us, db: 40015us, rerank_start: 33396us, total: 219459us
+query: "mythrax refactor architecture spec test harness isolation memory gate", profile: 11us, embed: 817us, terms: 22us, db: 49364us, rerank_start: 215us, total: 50437us

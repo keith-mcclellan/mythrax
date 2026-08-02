@@ -816,7 +816,9 @@ async fn test_hebbian_synaptic_pruning() -> Result<()> {
         .check()?;
 
     let res = mythrax_core::cognitive::pipeline::refine_hypotheses(&backend, None, "scope1").await;
-    assert!(res.is_ok());
+    let refined = res.expect("refine_hypotheses must succeed");
+    let _ = refined;
+    Ok(())
     Ok(())
 }
 }

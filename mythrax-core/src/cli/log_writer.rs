@@ -54,16 +54,24 @@ impl SizeRollingFileWriter {
             let path1 = base_path.with_extension("log.1");
 
             if path3.exists() {
-                let _ = fs::remove_file(&path3);
+                if let Err(e) = fs::remove_file(&path3) {
+                    tracing::debug!("Failed to remove old log file {:?}: {}", path3, e);
+                }
             }
             if path2.exists() {
-                let _ = fs::rename(&path2, &path3);
+                if let Err(e) = fs::rename(&path2, &path3) {
+                    tracing::debug!("Failed to roll log file {:?} to {:?}: {}", path2, path3, e);
+                }
             }
             if path1.exists() {
-                let _ = fs::rename(&path1, &path2);
+                if let Err(e) = fs::rename(&path1, &path2) {
+                    tracing::debug!("Failed to roll log file {:?} to {:?}: {}", path1, path2, e);
+                }
             }
             if base_path.exists() {
-                let _ = fs::rename(base_path, &path1);
+                if let Err(e) = fs::rename(base_path, &path1) {
+                    tracing::debug!("Failed to roll log file {:?} to {:?}: {}", base_path, path1, e);
+                }
             }
 
             let file = OpenOptions::new()
