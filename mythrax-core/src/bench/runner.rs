@@ -384,7 +384,10 @@ async fn main() -> Result<()> {
     if let Err(e) = mythrax_core::embeddings::load_embedding_cache_from_disk(&target_cache_path) {
         println!("Warning: failed to load embedding cache: {}", e);
     } else {
-        println!("Initialized SQLite embedding cache from {:?}", target_cache_path.with_extension("db"));
+        println!(
+            "Initialized SQLite embedding cache from {:?}",
+            target_cache_path.with_extension("db")
+        );
         if args.mode == "tune" {
             // Decoupled coordinate sweep
             let tune_questions = &target_questions;
@@ -1001,41 +1004,42 @@ fn extract_entities(text: &str) -> Vec<String> {
                 if !cleaned.is_empty() {
                     if let Some(first_char) = cleaned.chars().next() {
                         if first_char.is_ascii_uppercase() {
-                        let lower = cleaned.to_lowercase();
-                        if !matches!(
-                            lower.as_str(),
-                            "i" | "the"
-                                | "a"
-                                | "an"
-                                | "we"
-                                | "he"
-                                | "she"
-                                | "they"
-                                | "our"
-                                | "my"
-                                | "it"
-                                | "this"
-                                | "that"
-                                | "you"
-                                | "your"
-                                | "there"
-                                | "here"
-                                | "and"
-                                | "but"
-                                | "or"
-                                | "so"
-                                | "if"
-                                | "then"
-                                | "of"
-                                | "in"
-                                | "on"
-                                | "at"
-                                | "to"
-                                | "for"
-                                | "with"
-                                | "by"
-                        ) {
-                            entities.insert(cleaned);
+                            let lower = cleaned.to_lowercase();
+                            if !matches!(
+                                lower.as_str(),
+                                "i" | "the"
+                                    | "a"
+                                    | "an"
+                                    | "we"
+                                    | "he"
+                                    | "she"
+                                    | "they"
+                                    | "our"
+                                    | "my"
+                                    | "it"
+                                    | "this"
+                                    | "that"
+                                    | "you"
+                                    | "your"
+                                    | "there"
+                                    | "here"
+                                    | "and"
+                                    | "but"
+                                    | "or"
+                                    | "so"
+                                    | "if"
+                                    | "then"
+                                    | "of"
+                                    | "in"
+                                    | "on"
+                                    | "at"
+                                    | "to"
+                                    | "for"
+                                    | "with"
+                                    | "by"
+                            ) {
+                                entities.insert(cleaned);
+                            }
                         }
                     }
                 }
