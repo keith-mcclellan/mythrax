@@ -1468,11 +1468,16 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         if let Some(t) = immediate_task {
             selected_tasks.push(t.clone());
         } else {
-            for t in pending_tasks
-                .iter()
-                .filter(|t| t.priority != "Immediate")
-                .take(3)
-            {
+            let mut prioritized: Vec<_> = pending_tasks.iter().collect();
+            prioritized.sort_by_key(|t| {
+                match t.task_type.as_str() {
+                    "Synthesis" => 0,
+                    "Refinement" => 1,
+                    "GraduateWisdom" => 2,
+                    _ => 3,
+                }
+            });
+            for t in prioritized.into_iter().take(3) {
                 selected_tasks.push(t.clone());
             }
         }
