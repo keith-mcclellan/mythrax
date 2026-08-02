@@ -174,10 +174,11 @@ pub fn start_watching(
     let ignore_list_clone = ignore_list.clone();
     tokio::spawn(async move {
         let mut pending: HashMap<PathBuf, (String, Arc<MarkdownStore>, Instant)> = HashMap::new();
+        let mut timeouts: std::collections::BTreeSet<(Instant, PathBuf)> = std::collections::BTreeSet::new();
         loop {
-            let sleep_dur = if let Some(earliest) = pending.values().map(|(_, _, t)| *t).min() {
+            let sleep_dur = if let Some((earliest, _)) = timeouts.first() {
                 let now = Instant::now();
-                if earliest > now {
+                if earliest > &now {
                     earliest.duration_since(now)
                 } else {
                     Duration::from_millis(0)
@@ -190,6 +191,10 @@ pub fn start_watching(
                 res = write_rx.recv() => {
                     if let Some((path, content, store_ref)) = res {
                         let flush_time = Instant::now() + delay;
+                        if let Some((_, _, old_time)) = pending.get(&path) {
+                            timeouts.remove(&(*old_time, path.clone()));
+                        }
+                        timeouts.insert((flush_time, path.clone()));
                         pending.insert(path, (content, store_ref, flush_time));
                     } else {
                         break;
@@ -200,9 +205,13 @@ pub fn start_watching(
 
             let now = Instant::now();
             let mut expired = Vec::new();
-            for (path, (_, _, flush_time)) in &pending {
-                if now >= *flush_time {
-                    expired.push(path.clone());
+            
+            while let Some((time, path)) = timeouts.first().cloned() {
+                if time <= now {
+                    timeouts.remove(&(time, path.clone()));
+                    expired.push(path);
+                } else {
+                    break;
                 }
             }
 
@@ -407,8 +416,9 @@ pub fn start_watching(
     // 6. Debounce Handler: Collects events, waits for timeout, then sends to Worker Pool
     tokio::spawn(async move {
         let mut pending: HashMap<PathBuf, (bool, Instant)> = HashMap::new();
+        let mut timeouts: std::collections::BTreeSet<(Instant, PathBuf)> = std::collections::BTreeSet::new();
         loop {
-            let sleep_dur = if let Some((_, earliest)) = pending.values().min_by_key(|(_, t)| t) {
+            let sleep_dur = if let Some((earliest, _)) = timeouts.first() {
                 let now = Instant::now();
                 if earliest > &now {
                     earliest.duration_since(now)
@@ -422,6 +432,10 @@ pub fn start_watching(
             tokio::select! {
                 res = debounce_rx.recv() => {
                     if let Some((path, is_remove, flush_time)) = res {
+                        if let Some((_, old_time)) = pending.get(&path) {
+                            timeouts.remove(&(*old_time, path.clone()));
+                        }
+                        timeouts.insert((flush_time, path.clone()));
                         pending.insert(path, (is_remove, flush_time));
                     } else {
                         break;
@@ -432,9 +446,13 @@ pub fn start_watching(
 
             let now = Instant::now();
             let mut expired = Vec::new();
-            for (path, (_, flush_time)) in &pending {
-                if now >= *flush_time {
-                    expired.push(path.clone());
+            
+            while let Some((time, path)) = timeouts.first().cloned() {
+                if time <= now {
+                    timeouts.remove(&(time, path.clone()));
+                    expired.push(path);
+                } else {
+                    break;
                 }
             }
 

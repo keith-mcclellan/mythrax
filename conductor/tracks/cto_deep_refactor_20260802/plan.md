@@ -1,12 +1,12 @@
 # Implementation Plan
 
 ## Phase 1: Anti-Slop Foundation & Performance
-- [~] Task: Fix $O(N)$ scan in `src/vault/watcher.rs`
-  - [~] Write failing tests for watcher event timeout logic
-  - [ ] Implement `BTreeMap<Instant, PathBuf>`
-  - [ ] Refactor and verify coverage
-- [ ] Task: Eradicate panics in `src/api.rs`, `src/auth.rs`, `src/bench/`
-  - [ ] Map custom Error types
+- [x] Task: Fix $O(N)$ scan in `src/vault/watcher.rs`
+  - [x] Write failing tests for watcher event timeout logic
+  - [x] Implement `BTreeMap<Instant, PathBuf>`
+  - [x] Refactor and verify coverage
+- [~] Task: Eradicate panics in `src/api.rs`, `src/auth.rs`, `src/bench/`
+  - [~] Map custom Error types
   - [ ] Replace `.unwrap()`/`.expect()` with safe `Result` propagation
   - [ ] Verify test suite coverage for error branches
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
