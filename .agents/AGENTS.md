@@ -45,6 +45,12 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
 - **Strict Lock Ordering & Contention Prevention**: Subagents MUST NOT hold a primary lock (e.g., `EMBEDDING_CACHE` or `term_counts_cache`) while acquiring a secondary lock (e.g., `SQLITE_CACHE_CONN` or inner scope locks). Always extract required data into local variables, drop the primary lock completely, and then acquire secondary locks or execute I/O operations.
 - **Algorithmic Complexity & Bulk Operations (No $O(N)$ Hot-Path Scans)**: Subagents MUST NOT perform $O(N)$ linear iteration scans (e.g. `.min_by_key()`) inside hot-path loops or per-element insertions. Use constant-time $O(1)$ data structures (e.g. `lru::LruCache`) or perform bulk pruning (evicting the bottom 10% of items in a single pass when capacity is reached).
 - **Complete Resource Lifecycle & Write-on-Evict Safety**: Any component that loads GPU VRAM weights or allocates heavy in-memory buffers MUST implement a public `evict()` method and register it with the background idle eviction loop (`daemon.rs`). Any cache eviction mechanism (such as `LruCache::push` or `resize`) MUST inspect evicted items and immediately persist dirty entries to disk before dropping them from memory (Write-on-Evict).
+- **Anti-AI Slop & Quality Gate Directives**:
+  - **Strict Assertion Mandate**: All test assertions MUST evaluate explicit struct field values, exact error types, and verified database mutations. Generic `assert!(res.is_ok())` and `assert!(res.is_some())` checks are categorized as AI Slop and will fail review.
+  - **Panic & Stub Elimination**: Production paths must contain zero `.unwrap()`, `.expect()`, `todo!()`, `unimplemented!()`, or `// TODO` stubs.
+  - **Lock Contention Guarantee**: Mutex and RwLock guards must be dropped before any `.await` point or secondary lock acquisition.
+  - **RAII Resource Boundaries**: All state flag mutations and resource handles must use `Drop`-implementing scope guards to guarantee clean state recovery on panics or early `?` error returns.
+  - **Write-on-Evict Cache Durability**: In-memory LRU evictions must synchronously flush dirty records to disk before dropping items from RAM.
 - **Incremental Per-Phase Git Commit & Push Mandate**: Agents MUST execute a git commit and `git push origin <branch_name>` immediately upon completing each phase of a track (after verifying unit tests and build status) before proceeding to subsequent phases or triggering code reviews. This prevents multi-commit push backlogs and keeps remotes continuously up to date.
 
 
