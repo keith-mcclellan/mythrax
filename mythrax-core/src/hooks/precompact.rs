@@ -334,7 +334,7 @@ pub async fn mine_transcript(
                     let ep = EpisodeSave::builder(title, extracted.clone())
                         .scope(Some("general".to_string()))
                         .session_id(Some(session.to_string()))
-                        .node_type(Some(type_val))
+                        .node_type(Some(type_val.clone()))
                         .build();
                     let store_arc = Arc::new(crate::store::MarkdownStore {
                         vault_root: store.vault_root.clone(),
@@ -344,6 +344,16 @@ pub async fn mine_transcript(
                         .context(
                             "Failed to save episode bidirectionally during transcript mining",
                         )?;
+
+                    if (type_val == "tool_execution" || type_val == "user_input" || type_val == "user_feedback") && extracted.len() > 50 {
+                        let _ = crate::cognitive::pipeline::extract_from_document(
+                            backend,
+                            None,
+                            &extracted,
+                            &format!("episode:{}", saved_id),
+                            "general",
+                        ).await;
+                    }
 
                     if let Some(ref prev_id) = prev_saved_id {
                         if let Err(e) = backend.relate_followed_by(prev_id, &saved_id).await {
