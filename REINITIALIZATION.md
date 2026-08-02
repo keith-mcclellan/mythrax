@@ -154,7 +154,7 @@ OUTER LOOP (Repeat indefinitely):
   - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "organize"}
 
   INNER SLEEP & RESTART:
-  - Schedule a 10-second timer to pause before repeating cycle from Phase 1.
+  - If active pending tasks or unassociated facts exist, schedule a 15-second timer (DurationSeconds=15). If the system is IDLE (0 pending tasks and 0 new facts), schedule a 300-second (5-minute) timer (DurationSeconds=300) before repeating the cycle to conserve token budget.
 ```
 
 ---
