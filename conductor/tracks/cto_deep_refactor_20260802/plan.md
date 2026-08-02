@@ -1,8 +1,8 @@
 # Implementation Plan
 
 ## Phase 1: Anti-Slop Foundation & Performance
-- [ ] Task: Fix $O(N)$ scan in `src/vault/watcher.rs`
-  - [ ] Write failing tests for watcher event timeout logic
+- [~] Task: Fix $O(N)$ scan in `src/vault/watcher.rs`
+  - [~] Write failing tests for watcher event timeout logic
   - [ ] Implement `BTreeMap<Instant, PathBuf>`
   - [ ] Refactor and verify coverage
 - [ ] Task: Eradicate panics in `src/api.rs`, `src/auth.rs`, `src/bench/`
