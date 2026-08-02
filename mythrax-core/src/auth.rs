@@ -91,36 +91,37 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn test_get_or_create_token_generates_valid_uuid() {
+    fn test_get_or_create_token_generates_valid_uuid() -> anyhow::Result<()> {
         let temp_dir = std::env::temp_dir();
         let token_path = temp_dir.join(format!("test_token_v4_{}.txt", uuid::Uuid::new_v4()));
 
         // Ensure clean state
         let _ = fs::remove_file(&token_path);
 
-        let token = get_or_create_token(&token_path).expect("Failed to get or create token");
+        let token = get_or_create_token(&token_path)?;
 
         // Basic UUID v4 validation: 36 chars, contains hyphens, version 4
         assert_eq!(token.len(), 36);
         assert!(token.contains('-'));
-        assert!(token.chars().nth(14).unwrap() == '4');
+        assert_eq!(token.chars().nth(14).ok_or_else(|| anyhow::anyhow!("Token too short"))?, '4');
 
         // Cleanup
         let _ = fs::remove_file(&token_path);
+        Ok(())
     }
 
     #[test]
-    fn test_token_file_permissions() {
+    fn test_token_file_permissions() -> anyhow::Result<()> {
         let temp_dir = std::env::temp_dir();
         let token_path = temp_dir.join(format!("test_token_perms_{}.txt", uuid::Uuid::new_v4()));
 
         // Ensure clean state
         let _ = fs::remove_file(&token_path);
 
-        let _ = get_or_create_token(&token_path).expect("Failed to get or create token");
+        let _ = get_or_create_token(&token_path)?;
 
         // Check permissions
-        let metadata = fs::metadata(&token_path).expect("Failed to read metadata");
+        let metadata = fs::metadata(&token_path)?;
         let permissions = metadata.permissions();
 
         // On Unix, check that only owner has read/write (0o600)
@@ -138,10 +139,11 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_file(&token_path);
+        Ok(())
     }
 
     #[test]
-    fn test_successive_calls_load_existing_token() {
+    fn test_successive_calls_load_existing_token() -> anyhow::Result<()> {
         let temp_dir = std::env::temp_dir();
         let token_path = temp_dir.join(format!("test_token_persist_{}.txt", uuid::Uuid::new_v4()));
 
@@ -149,10 +151,10 @@ mod tests {
         let _ = fs::remove_file(&token_path);
 
         // First call generates a token
-        let token1 = get_or_create_token(&token_path).expect("Failed to get or create token");
+        let token1 = get_or_create_token(&token_path)?;
 
         // Second call should return the exact same token
-        let token2 = get_or_create_token(&token_path).expect("Failed to get or create token");
+        let token2 = get_or_create_token(&token_path)?;
 
         assert_eq!(
             token1, token2,
@@ -161,5 +163,6 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_file(&token_path);
+        Ok(())
     }
 }
