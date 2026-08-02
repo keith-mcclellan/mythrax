@@ -10455,3 +10455,4 @@ query: "surrealdb", profile: 6us, embed: 804us, terms: 11us, db: 28732us, rerank
 query: "Mythrax 3.0 Reinitialization & Ingestion Playbook", profile: 5us, embed: 1013us, terms: 23us, db: 35290us, rerank_start: 168us, total: 36732us
 query: "Architecture & Memory Safety Invariants", profile: 7us, embed: 832us, terms: 21us, db: 33351us, rerank_start: 345us, total: 34563us
 query: "HTTP client socket reuse", profile: 6us, embed: 989us, terms: 15us, db: 30821us, rerank_start: 308us, total: 32146us
+query: "SurrealDB syntax DEFINE TABLE DEFINE INDEX", profile: 4us, embed: 848us, terms: 17us, db: 34695us, rerank_start: 194us, total: 35764us
