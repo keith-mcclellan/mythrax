@@ -156,6 +156,64 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                     tracing::error!("Failed to run startup memory pruning: {:?}", e);
                 }
 
+                async fn backfill_missing_embeddings<T, F>(
+                    db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
+                    embedder: &std::sync::Arc<dyn crate::embeddings::TextEmbedder>,
+                    cancel_token: &tokio_util::sync::CancellationToken,
+                    query_sql: &str,
+                    table_name: &str,
+                    extract_text_and_id: F,
+                ) where
+                    T: serde::de::DeserializeOwned + surrealdb_types::SurrealValue,
+                    F: Fn(&T) -> Option<(String, String)>,
+                {
+                    loop {
+                        if cancel_token.is_cancelled() {
+                            break;
+                        }
+                        match db.query(query_sql).await {
+                            Ok(mut response) => {
+                                let items: Vec<T> = response.take(0).unwrap_or_default();
+                                if items.is_empty() {
+                                    break;
+                                }
+                                tracing::info!("Found {} {} with missing embeddings batch. Regenerating...", items.len(), table_name);
+                                let mut updated_any = false;
+                                for item in items {
+                                    update_last_activity();
+                                    if cancel_token.is_cancelled() {
+                                        break;
+                                    }
+                                    if let Some((id_str, text_to_embed)) = extract_text_and_id(&item) {
+                                        if let Ok(vec) = embedder.embed(&text_to_embed).await {
+                                            if let Ok(thing) = crate::db::parse_record_id(&id_str) {
+                                                let update_sql = "UPDATE $id SET embedding = $embedding;";
+                                                if let Ok(mut u_res) = db.query(update_sql)
+                                                    .bind(("id", thing))
+                                                    .bind(("embedding", vec))
+                                                    .await {
+                                                    if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                                        if !updated_rows.is_empty() {
+                                                            updated_any = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if !updated_any {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to query missing {} embeddings on startup: {:?}", table_name, e);
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 // Reprocess missing embeddings on startup
                 let backend_startup = backend.clone();
                 let cancel_token_startup = cancel_token.clone();
@@ -167,154 +225,55 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                         }
                         _ = tokio::time::sleep(tokio::time::Duration::from_secs(2)) => {}
                     }
-                    if backend_startup.embedder.is_some() {
+                    if let Some(ref embedder) = backend_startup.embedder {
                         tracing::info!("Checking for episodes and wisdom rules with missing embeddings...");
-                        let sql_ep = "SELECT * FROM episode WHERE embedding IS NONE LIMIT 50;";
-                        loop {
-                            if cancel_token_startup.is_cancelled() {
-                                break;
-                            }
-                            match backend_startup.db.query(sql_ep).await {
-                                Ok(mut response) => {
-                                    let episodes: Vec<Episode> = response.take(0).unwrap_or_default();
-                                    if episodes.is_empty() {
-                                        break;
-                                    }
-                                    tracing::info!("Found {} episodes with missing embeddings batch. Regenerating...", episodes.len());
-                                    let mut updated_any = false;
-                                    for ep in episodes {
-                                        if cancel_token_startup.is_cancelled() {
-                                            break;
-                                        }
-                                        if let (Some(id_str), Some(embedder)) = (&ep.id, &backend_startup.embedder) {
-                                            let insight_str = ep.causal_insight.as_ref().map(|v| v.to_string()).or_else(|| ep.causal_explanation.clone());
-                                            let text_to_embed = if let Some(ref insight) = insight_str {
-                                                format!("{}: {}", ep.title, insight)
-                                            } else if let Some(ref summary) = ep.summary {
-                                                format!("{}: {}", ep.title, summary)
-                                            } else {
-                                                format!("{}: {}", ep.title, ep.content)
-                                            };
-                                            if let Ok(vec) = embedder.embed(&text_to_embed).await
-                                                && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                    let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                    if let Ok(mut u_res) = backend_startup.db.query(update_sql)
-                                                        .bind(("id", thing))
-                                                        .bind(("embedding", vec))
-                                                        .await {
-                                                            if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
-                                                                if !updated_rows.is_empty() {
-                                                                    updated_any = true;
-                                                                }
-                                                            }
-                                                        }
-                                                }
-                                        }
-                                    }
-                                    if !updated_any {
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to query missing episode embeddings on startup: {:?}", e);
-                                    break;
-                                }
-                            }
-                        }
 
-                        let sql_wisdom = "SELECT * FROM wisdom WHERE embedding IS NONE OR embedding = [] LIMIT 50;";
-                        loop {
-                            if cancel_token_startup.is_cancelled() {
-                                break;
-                            }
-                            match backend_startup.db.query(sql_wisdom).await {
-                                Ok(mut response) => {
-                                    let rules: Vec<crate::contracts::WisdomRule> = response.take(0).unwrap_or_default();
-                                    if rules.is_empty() {
-                                        break;
-                                    }
-                                    tracing::info!("Found {} wisdom rules with missing embeddings batch. Regenerating...", rules.len());
-                                    let mut updated_any = false;
-                                     for r in rules {
-                                         update_last_activity();
-                                         if cancel_token_startup.is_cancelled() {
-                                            break;
-                                        }
-                                        if let (Some(id_str), Some(embedder)) = (&r.id, &backend_startup.embedder) {
-                                            let text_to_embed = format!("{}: Avoid {}. Remedy: {}. Reason: {}", r.target_pattern, r.action_to_avoid, r.prescribed_remedy, r.causal_explanation);
-                                            if let Ok(vec) = embedder.embed(&text_to_embed).await
-                                                && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                    let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                    if let Ok(mut u_res) = backend_startup.db.query(update_sql)
-                                                        .bind(("id", thing))
-                                                        .bind(("embedding", vec))
-                                                        .await {
-                                                            if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
-                                                                if !updated_rows.is_empty() {
-                                                                    updated_any = true;
-                                                                }
-                                                            }
-                                                        }
-                                                }
-                                        }
-                                    }
-                                    if !updated_any {
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to query missing wisdom embeddings on startup: {:?}", e);
-                                    break;
-                                }
-                            }
-                        }
+                        backfill_missing_embeddings::<Episode, _>(
+                            &backend_startup.db,
+                            embedder,
+                            &cancel_token_startup,
+                            "SELECT * FROM episode WHERE embedding IS NONE LIMIT 50;",
+                            "episodes",
+                            |ep| {
+                                let id = ep.id.as_ref()?;
+                                let insight_str = ep.causal_insight.as_ref().map(|v| v.to_string()).or_else(|| ep.causal_explanation.clone());
+                                let text = if let Some(ref insight) = insight_str {
+                                    format!("{}: {}", ep.title, insight)
+                                } else if let Some(ref summary) = ep.summary {
+                                    format!("{}: {}", ep.title, summary)
+                                } else {
+                                    format!("{}: {}", ep.title, ep.content)
+                                };
+                                Some((id.clone(), text))
+                            },
+                        ).await;
 
-                        let sql_wiki = "SELECT * FROM wiki_node WHERE embedding IS NONE OR embedding = [] LIMIT 50;";
-                        loop {
-                            if cancel_token_startup.is_cancelled() {
-                                break;
-                            }
-                            match backend_startup.db.query(sql_wiki).await {
-                                Ok(mut response) => {
-                                    let wiki_nodes: Vec<crate::contracts::WikiNode> = response.take(0).unwrap_or_default();
-                                    if wiki_nodes.is_empty() {
-                                        break;
-                                    }
-                                    tracing::info!("Found {} wiki nodes with missing embeddings batch. Regenerating...", wiki_nodes.len());
-                                    let mut updated_any = false;
-                                     for node in wiki_nodes {
-                                         update_last_activity();
-                                         if cancel_token_startup.is_cancelled() {
-                                            break;
-                                        }
-                                        if let (Some(id_str), Some(embedder)) = (&node.id, &backend_startup.embedder) {
-                                            let text_to_embed = format!("{}: {}", node.name, node.content);
-                                            if let Ok(vec) = embedder.embed(&text_to_embed).await
-                                                && let Ok(thing) = crate::db::parse_record_id(id_str) {
-                                                    let update_sql = "UPDATE $id SET embedding = $embedding;";
-                                                    if let Ok(mut u_res) = backend_startup.db.query(update_sql)
-                                                        .bind(("id", thing))
-                                                        .bind(("embedding", vec))
-                                                        .await {
-                                                            if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
-                                                                if !updated_rows.is_empty() {
-                                                                    updated_any = true;
-                                                                }
-                                                            }
-                                                        }
-                                                }
-                                        }
-                                    }
-                                    if !updated_any {
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to query missing wiki node embeddings on startup: {:?}", e);
-                                    break;
-                                }
-                            }
-                        }
+                        backfill_missing_embeddings::<crate::contracts::WisdomRule, _>(
+                            &backend_startup.db,
+                            embedder,
+                            &cancel_token_startup,
+                            "SELECT * FROM wisdom WHERE embedding IS NONE OR embedding = [] LIMIT 50;",
+                            "wisdom rules",
+                            |r| {
+                                let id = r.id.as_ref()?;
+                                let text = format!("{}: Avoid {}. Remedy: {}. Reason: {}", r.target_pattern, r.action_to_avoid, r.prescribed_remedy, r.causal_explanation);
+                                Some((id.clone(), text))
+                            },
+                        ).await;
+
+                        backfill_missing_embeddings::<crate::contracts::WikiNode, _>(
+                            &backend_startup.db,
+                            embedder,
+                            &cancel_token_startup,
+                            "SELECT * FROM wiki_node WHERE embedding IS NONE OR embedding = [] LIMIT 50;",
+                            "wiki nodes",
+                            |node| {
+                                let id = node.id.as_ref()?;
+                                let text = format!("{}: {}", node.name, node.content);
+                                Some((id.clone(), text))
+                            },
+                        ).await;
+
                         tracing::info!("Finished regenerating missing embeddings.");
                     }
                 });

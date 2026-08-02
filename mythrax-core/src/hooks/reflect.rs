@@ -5,27 +5,10 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
-use crate::contracts::{EpisodeSave, Tier, WisdomRule};
+use crate::contracts::{EpisodeSave, Tier, TranscriptStep, WisdomRule};
 use crate::db::CognitiveTask;
 use crate::db::StorageBackend;
 use crate::db::SurrealBackend;
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ToolCall {
-    pub name: String,
-    #[serde(default)]
-    pub args: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct TranscriptStep {
-    pub step_index: Option<usize>,
-    pub source: Option<String>,
-    pub r#type: Option<String>,
-    pub status: Option<String>,
-    pub content: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
-}
 
 pub async fn handle_reflect(
     session_id: &str,

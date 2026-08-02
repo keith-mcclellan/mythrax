@@ -6,6 +6,7 @@ pub mod auth;
 pub mod bench;
 pub mod cli;
 pub mod cognitive;
+pub mod config;
 pub mod contracts;
 pub mod daemon;
 pub mod db;

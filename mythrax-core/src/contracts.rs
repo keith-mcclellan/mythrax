@@ -11,6 +11,31 @@ pub enum Tier {
     Working,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    pub name: String,
+    #[serde(default)]
+    pub args: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct TranscriptStep {
+    #[serde(default)]
+    pub step_index: Option<usize>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseTierError(String);
 

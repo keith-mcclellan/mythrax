@@ -121,29 +121,29 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 5: Deliberate Dead Code & Code Complexity Refactoring
 
-- [ ] Task: Critical Code Duplication Elimination (CTO Critical A-1, A-2)
-  - [ ] Delete duplicate `cosine_similarity()` in `cognitive/pipeline.rs:L14` and `vault/distillation.rs:L591`; replace all callsites with `crate::math::cosine_similarity`
-  - [ ] Unify duplicate `TranscriptStep` and `ToolCall` structs from `hooks/reflect.rs:L14-L28` and `vault/distillation.rs:L33-L47` into a single canonical definition in `contracts.rs` with `#[serde(default)]`
-  - [ ] Unify `adapt_claude_code()` and `adapt_gemini()` identical adapter functions into a single generic adapter (CTO B-4)
+- [x] Task: Critical Code Duplication Elimination (CTO Critical A-1, A-2)
+  - [x] Delete duplicate `cosine_similarity()` in `cognitive/pipeline.rs:L14` and `vault/distillation.rs:L591`; replace all callsites with `crate::math::cosine_similarity`
+  - [x] Unify duplicate `TranscriptStep` and `ToolCall` structs from `hooks/reflect.rs:L14-L28` and `vault/distillation.rs:L33-L47` into a single canonical definition in `contracts.rs` with `#[serde(default)]`
+  - [x] Unify `adapt_claude_code()` and `adapt_gemini()` identical adapter functions into a single generic adapter (CTO B-4)
 
-- [ ] Task: Code Complexity Reduction & Shared Helper Consolidation
-  - [ ] Refactor duplicate concept spreading activation and STM candidate injection helpers into shared utilities in `src/retrieval/`
-  - [ ] Extract generic `backfill_missing_embeddings<T>()` helper from 3 duplicate loops in `daemon.rs:L172-L318` (CTO A-6)
-  - [ ] Replace N+4 individual config queries in swap monitor (`main.rs:L401-L427`) with a single `SELECT ... FROM config:settings` (CTO A-5)
-  - [ ] Remove hardcoded swap thresholds in `check_swap_pressure()` — read from config (CTO F-4)
-  - [ ] Centralize hardcoded port "8090" into `const DEFAULT_DAEMON_PORT: u16 = 8090;` and a `fn daemon_url()` helper in a shared config module (CTO High SLOP-1)
-  - [ ] Add `MYTHRAX_PROXY_URL` env var override for the hardcoded `8080` LLM fallback URL in `api.rs` (CTO High SLOP-2)
-  - [ ] Unify duplicate `MAX_HYDRATION_CHARS = 10000` into a single `const` in `mcp_routes.rs` (CTO Medium SLOP-4, SLOP-12)
+- [x] Task: Code Complexity Reduction & Shared Helper Consolidation
+  - [x] Refactor duplicate concept spreading activation and STM candidate injection helpers into shared utilities in `src/retrieval/`
+  - [x] Extract generic `backfill_missing_embeddings<T>()` helper from 3 duplicate loops in `daemon.rs:L172-L318` (CTO A-6)
+  - [x] Replace N+4 individual config queries in swap monitor (`main.rs:L401-L427`) with a single `SELECT ... FROM config:settings` (CTO A-5)
+  - [x] Remove hardcoded swap thresholds in `check_swap_pressure()` — read from config (CTO F-4)
+  - [x] Centralize hardcoded port "8090" into `const DEFAULT_DAEMON_PORT: u16 = 8090;` and a `fn daemon_url()` helper in a shared config module (CTO High SLOP-1)
+  - [x] Add `MYTHRAX_PROXY_URL` env var override for the hardcoded `8080` LLM fallback URL in `api.rs` (CTO High SLOP-2)
+  - [x] Unify duplicate `MAX_HYDRATION_CHARS = 10000` into a single `const` in `mcp_routes.rs` (CTO Medium SLOP-4, SLOP-12)
 
-- [ ] Task: God Module Decomposition (CTO High B-2, F-1, Low F-7)
-  - [ ] Decompose `main.rs` (1771 lines) into `cli/onboarding.rs`, `cli/swap_monitor.rs`, `cli/log_writer.rs` with thin dispatcher
-  - [ ] Extract `SizeRollingFileWriter` (currently buried in `main.rs`) into `cli/log_writer.rs` as its own module (CTO Low F-7)
-  - [ ] Decompose `ingestion.rs` (2327 lines) into `vault/ingestion/{cursor,claude,antigravity,workspace_sync,forge,mod}.rs`
+- [x] Task: God Module Decomposition (CTO High B-2, F-1, Low F-7)
+  - [x] Decompose `main.rs` (1771 lines) into `cli/onboarding.rs`, `cli/swap_monitor.rs`, `cli/log_writer.rs` with thin dispatcher
+  - [x] Extract `SizeRollingFileWriter` (currently buried in `main.rs`) into `cli/log_writer.rs` as its own module (CTO Low F-7)
+  - [x] Decompose `ingestion.rs` (2327 lines) into `vault/ingestion/{cursor,claude,antigravity,workspace_sync,forge,mod}.rs`
 
-- [ ] Task: Performance Optimization (CTO High C-3, Medium C-4, C-5)
-  - [ ] Cache BM25 `OkapiBM25` instance (or `doc_term_freqs`/`df` maps) and invalidate only on corpus changes
-  - [ ] Replace unbounded `STEM_CACHE` thread-local HashMap with LRU cache (10K cap) in `bm25.rs:L176`
-  - [ ] Eliminate redundant `token.clone()` in BM25 scoring hot path (`bm25.rs:L29`); consider `Arc<str>` for doc IDs
+- [x] Task: Performance Optimization (CTO High C-3, Medium C-4, C-5)
+  - [x] Cache BM25 `OkapiBM25` instance (or `doc_term_freqs`/`df` maps) and invalidate only on corpus changes
+  - [x] Replace unbounded `STEM_CACHE` thread-local HashMap with LRU cache (10K cap) in `bm25.rs:L176`
+  - [x] Eliminate redundant `token.clone()` in BM25 scoring hot path (`bm25.rs:L29`); consider `Arc<str>` for doc IDs
 
 - [ ] Task: Dead Code & Unused Module Elimination
   - [ ] Extract ~120 lines of hardcoded mock LLM responses from `llm/mod.rs:L590-L675` behind `#[cfg(test)]` or a test feature gate (CTO Critical SLOP-6)

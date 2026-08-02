@@ -11677,3 +11677,40 @@ query: "Bulk Content 19", profile: 0us, embed: 13321us, terms: 1794us, db: 10420
 query: "test summary", profile: 2us, embed: 7374us, terms: 2573us, db: 3031us, rerank_start: 1352us, total: 14364us
 query: "EXTERNAL_DREAM_VERIFICATION_TOKEN", profile: 1us, embed: 6771us, terms: 1020us, db: 5768us, rerank_start: 1221us, total: 14859us
 query: "threshold test", profile: 3099us, embed: 8158us, terms: 1169us, db: 5584us, rerank_start: 2527us, total: 20634us
+query: "mythrax refactor architecture spec test harness isolation memory gate", profile: 13us, embed: 1972us, terms: 18us, db: 60567us, rerank_start: 204us, total: 62782us
+query: "test summary", profile: 5us, embed: 6610us, terms: 2485us, db: 2904us, rerank_start: 1206us, total: 13245us
+query: "EXTERNAL_DREAM_VERIFICATION_TOKEN", profile: 1us, embed: 6477us, terms: 997us, db: 5733us, rerank_start: 1372us, total: 14653us
+query: "threshold test", profile: 2234us, embed: 6758us, terms: 1020us, db: 4497us, rerank_start: 2225us, total: 16804us
+query: "test summary", profile: 11us, embed: 7561us, terms: 3007us, db: 3285us, rerank_start: 1496us, total: 15397us
+query: "EXTERNAL_DREAM_VERIFICATION_TOKEN", profile: 2us, embed: 6328us, terms: 914us, db: 5481us, rerank_start: 1185us, total: 14002us
+query: "threshold test", profile: 3031us, embed: 6183us, terms: 957us, db: 4230us, rerank_start: 2059us, total: 16525us
+query: "Rust database locks", profile: 2us, embed: 16390us, terms: 3028us, db: 5148us, rerank_start: 4341us, total: 28985us
+query: "Unique content for test scaling similarity", profile: 2us, embed: 16267us, terms: 2306us, db: 5213us, rerank_start: 3924us, total: 27802us
+query: "Rust database locks", profile: 1us, embed: 3453us, terms: 30us, db: 8493us, rerank_start: 1053us, total: 13065us
+query: "Rust database locks", profile: 1us, embed: 2796us, terms: 34us, db: 5152us, rerank_start: 1584us, total: 9647us
+query: "Unique content for test scaling similarity", profile: 1us, embed: 3223us, terms: 45us, db: 5328us, rerank_start: 956us, total: 9616us
+query: "Rust database locks", profile: 3us, embed: 21376us, terms: 3595us, db: 10673us, rerank_start: 3859us, total: 39634us
+query: "Rust database locks", profile: 1us, embed: 3094us, terms: 76us, db: 10032us, rerank_start: 1644us, total: 14992us
+query: "architecture", profile: 3us, embed: 13117us, terms: 2325us, db: 9206us, rerank_start: 1893us, total: 26843us
+query: "Unique content for test gaussian temporal decay", profile: 2us, embed: 11828us, terms: 1140us, db: 8054us, rerank_start: 2448us, total: 23568us
+query: "Unique content for test gaussian temporal decay", profile: 0us, embed: 4536us, terms: 40us, db: 7384us, rerank_start: 858us, total: 12912us
+query: "architecture", profile: 1us, embed: 4096us, terms: 32us, db: 9812us, rerank_start: 1098us, total: 15138us
+query: "basement pipes", profile: 3us, embed: 12629us, terms: 1789us, db: 9842us, rerank_start: 1438us, total: 25763us
+query: "basement pipes", profile: 1us, embed: 2496us, terms: 44us, db: 4455us, rerank_start: 905us, total: 7966us
+query: "HTR execution trace", profile: 2us, embed: 9797us, terms: 2909us, db: 8048us, rerank_start: 3011us, total: 25903us
+query: "Testing temporal range end", profile: 2us, embed: 7720us, terms: 2647us, db: 4002us, rerank_start: 1559us, total: 16036us
+query: "standard text", profile: 4us, embed: 8483us, terms: 1565us, db: 6432us, rerank_start: 3165us, total: 19710us
+query: "HTR execution trace", profile: 1us, embed: 2931us, terms: 32us, db: 4736us, rerank_start: 673us, total: 10439us
+query: "Rust database locks", profile: 2us, embed: 9393us, terms: 1475us, db: 5771us, rerank_start: 1364us, total: 18067us
+query: "resolving conflict", profile: 0us, embed: 9213us, terms: 38us, db: 5019us, rerank_start: 633us, total: 14946us
+query: "content", profile: 3us, embed: 7974us, terms: 3024us, db: 3081us, rerank_start: 1387us, total: 15526us
+query: "after the event", profile: 2us, embed: 10986us, terms: 1377us, db: 4307us, rerank_start: 4822us, total: 21574us
+query: "avoid_concurrency", profile: 1us, embed: 2657us, terms: 43us, db: 4557us, rerank_start: 665us, total: 8011us
+query: "RustDB", profile: 2302us, embed: 7072us, terms: 603us, db: 3595us, rerank_start: 3579us, total: 17223us
+query: "RustDB", profile: 1789us, embed: 2406us, terms: 18us, db: 3338us, rerank_start: 903us, total: 8468us
+query: "RocksDB process lock client mode", profile: 4392us, embed: 2676us, terms: 43us, db: 4698us, rerank_start: 1163us, total: 13034us
+query: "Agentic Memory", profile: 3us, embed: 6315us, terms: 1001us, db: 4744us, rerank_start: 1256us, total: 13409us
+query: "Memory Leak Diagnostics", profile: 0us, embed: 2511us, terms: 24us, db: 4703us, rerank_start: 90us, total: 7367us
+query: "Memory Leak Diagnostics", profile: 1us, embed: 2534us, terms: 33us, db: 4815us, rerank_start: 121us, total: 7567us
+query: "Database Transaction Isolation", profile: 2526us, embed: 2498us, terms: 30us, db: 5803us, rerank_start: 1204us, total: 12147us
+query: "Database Transaction Isolation", profile: 6936us, embed: 2516us, terms: 34us, db: 5598us, rerank_start: 1404us, total: 16578us

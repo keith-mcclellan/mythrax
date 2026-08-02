@@ -497,7 +497,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
             let hydrated = state.backend.get_memory_nodes(&ids).await?;
 
             let mut results = Vec::new();
-            const MAX_HYDRATION_CHARS: usize = 10000;
+            use crate::config::MAX_HYDRATION_CHARS;
             for ep in hydrated.episodes {
                 let content = if ep.content.chars().count() > MAX_HYDRATION_CHARS {
                     let truncated_len = ep.content.chars().count() - MAX_HYDRATION_CHARS;

@@ -656,16 +656,19 @@ async fn completions_proxy_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    let external_url = std::env::var("MYTHRAX_COMPLETIONS_URL").ok().or_else(|| {
-        #[cfg(not(feature = "mlx"))]
-        {
-            Some("http://127.0.0.1:8080/v1/chat/completions".to_string())
-        }
-        #[cfg(feature = "mlx")]
-        {
-            None
-        }
-    });
+    let external_url = std::env::var("MYTHRAX_COMPLETIONS_URL")
+        .or_else(|_| std::env::var("MYTHRAX_PROXY_URL"))
+        .ok()
+        .or_else(|| {
+            #[cfg(not(feature = "mlx"))]
+            {
+                Some(crate::config::llm_proxy_url())
+            }
+            #[cfg(feature = "mlx")]
+            {
+                None
+            }
+        });
 
     if let Some(url) = external_url {
         let client = get_http_client();

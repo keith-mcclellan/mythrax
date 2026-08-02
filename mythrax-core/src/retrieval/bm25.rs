@@ -176,7 +176,8 @@ use rust_stemmers::{Algorithm, Stemmer};
 use std::sync::OnceLock;
 
 thread_local! {
-    static STEM_CACHE: std::cell::RefCell<std::collections::HashMap<String, String>> = std::cell::RefCell::new(std::collections::HashMap::with_capacity(2048));
+    static STEM_CACHE: std::cell::RefCell<lru::LruCache<String, String>> =
+        std::cell::RefCell::new(lru::LruCache::new(std::num::NonZeroUsize::new(10_000).unwrap()));
 }
 
 pub fn stem(word: &str) -> String {
@@ -184,13 +185,14 @@ pub fn stem(word: &str) -> String {
         return word.to_string();
     }
     STEM_CACHE.with(|cache| {
-        if let Some(s) = cache.borrow().get(word) {
+        let mut cache_ref = cache.borrow_mut();
+        if let Some(s) = cache_ref.get(word) {
             return s.clone();
         }
         static STEMMER: OnceLock<Stemmer> = OnceLock::new();
         let stemmer = STEMMER.get_or_init(|| Stemmer::create(Algorithm::English));
         let stemmed = stemmer.stem(word).to_string();
-        cache.borrow_mut().insert(word.to_string(), stemmed.clone());
+        cache_ref.put(word.to_string(), stemmed.clone());
         stemmed
     })
 }

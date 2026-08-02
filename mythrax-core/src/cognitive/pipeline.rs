@@ -5,25 +5,11 @@ use crate::contracts::{
 };
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
+use crate::math::cosine_similarity;
 use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::Path;
-
-/// Calculates cosine similarity between two 32-bit floating point vector slices.
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a * norm_b)
-    }
-}
 
 pub fn slugify_title(title: &str) -> String {
     let mut slug = String::new();

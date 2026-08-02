@@ -49,8 +49,8 @@ fn test_codex_payload_maps_to_canonical() {
     );
     let err = res.unwrap_err().to_string();
     assert!(
-        err.contains("unsupported in v2.1.0"),
-        "Error must contain unsupported in v2.1.0"
+        err.contains("standard session_id and transcript_path"),
+        "Error must contain standard session_id and transcript_path"
     );
 }
 
@@ -69,8 +69,8 @@ fn test_cursor_payload_maps_to_canonical() {
     );
     let err = res.unwrap_err().to_string();
     assert!(
-        err.contains("unsupported in v2.1.0"),
-        "Error must contain unsupported in v2.1.0"
+        err.contains("standard session_id and transcript_path"),
+        "Error must contain standard session_id and transcript_path"
     );
 }
 

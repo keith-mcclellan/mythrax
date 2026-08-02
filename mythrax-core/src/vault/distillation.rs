@@ -1,8 +1,9 @@
-use crate::contracts::{EpisodeSave, Tier, WikiNode, WisdomRule};
+use crate::contracts::{EpisodeSave, Tier, ToolCall, TranscriptStep, WikiNode, WisdomRule};
 use crate::db::StorageBackend;
 use crate::db::backend::SurrealBackend;
 use crate::db::cognitive_tasks::CognitiveTask;
 use crate::llm::LLMClient;
+use crate::math::cosine_similarity;
 use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -55,23 +56,6 @@ pub struct DistilledConversation {
     pub artifact_refs: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ToolCall {
-    pub name: String,
-    pub args: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct TranscriptStep {
-    pub step_index: usize,
-    pub source: String,
-    pub r#type: String,
-    pub status: String,
-    pub created_at: String,
-    pub content: Option<String>,
-    pub tool_calls: Option<Vec<ToolCall>>,
-}
-
 pub fn is_edit_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -101,7 +85,7 @@ pub fn chunk_transcript(steps: &[TranscriptStep]) -> Vec<Vec<TranscriptStep>> {
     let mut user_input_count = 0;
 
     for step in steps {
-        let is_user_input = step.r#type == "USER_INPUT";
+        let is_user_input = step.r#type.as_deref() == Some("USER_INPUT");
         let step_has_edit = has_edit_calls(step);
         let step_has_tool = has_tool_calls(step);
 
@@ -315,17 +299,17 @@ pub async fn distill_transcript_file(
             if let Some(ref calls) = step.tool_calls {
                 for call in calls {
                     if call.name == "run_command" {
-                        if let Some(cmd) = call.args.get("CommandLine").and_then(|v| v.as_str()) {
+                        if let Some(cmd) = call.args.as_ref().and_then(|a| a.get("CommandLine")).and_then(|v| v.as_str()) {
                             commands_run.push(cmd.to_string());
                         }
                     } else if is_edit_tool(&call.name) {
-                        if let Some(file) = call.args.get("TargetFile").and_then(|v| v.as_str()) {
+                        if let Some(file) = call.args.as_ref().and_then(|a| a.get("TargetFile")).and_then(|v| v.as_str()) {
                             code_changes.push(file.to_string());
                         }
                     }
                 }
             }
-            if step.status == "ERROR" {
+            if step.status.as_deref() == Some("ERROR") {
                 if let Some(ref text) = step.content {
                     errors_resolved.push(text.to_string());
                 }
@@ -452,7 +436,7 @@ pub async fn distill_transcript_file(
             scope: parsed.scope.unwrap_or_else(|| scope.to_string()),
             timestamp: chunk
                 .first()
-                .map(|s| s.created_at.clone())
+                .and_then(|s| s.created_at.clone())
                 .unwrap_or_else(|| Utc::now().to_rfc3339()),
             decisions: parsed.decisions.unwrap_or_default(),
             constraints_discovered: parsed.constraints_discovered.unwrap_or_default(),
@@ -623,25 +607,6 @@ fn find_skill_mds(dir: &Path) -> Vec<PathBuf> {
         }
     }
     paths
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0;
-    let mut norm_a = 0.0;
-    let mut norm_b = 0.0;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        norm_a += a[i] * a[i];
-        norm_b += b[i] * b[i];
-    }
-    if norm_a == 0.0 || norm_b == 0.0 {
-        0.0
-    } else {
-        dot / (norm_a.sqrt() * norm_b.sqrt())
-    }
 }
 
 pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) -> Result<usize> {
