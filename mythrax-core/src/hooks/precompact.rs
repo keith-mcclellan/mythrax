@@ -402,8 +402,10 @@ pub async fn mine_transcript(
                             || lower_text.contains("do not")
                             || lower_text.contains("don't")
                             || lower_text.contains("must")
-                            || lower_text.contains("use launchctl")
+                            || lower_text.contains("use ")
                             || lower_text.contains("preferred")
+                            || lower_text.contains("require")
+                            || lower_text.contains("should ")
                         {
                             let clean_title = extracted
                                 .lines()

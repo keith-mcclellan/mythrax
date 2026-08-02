@@ -676,18 +676,25 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
                     let content = item.get("insight").or_else(|| item.get("content")).or_else(|| item.get("reasoning")).and_then(|v| v.as_str()).unwrap_or("");
                     let title_lower = title.to_lowercase();
                     let content_lower = content.to_lowercase();
-                    let node_type = if task.prompt.contains("direction")
+                    let item_type_from_llm = item.get("item_type").and_then(|v| v.as_str());
+                    let node_type = if let Some(it) = item_type_from_llm {
+                        if it == "direction" { "direction" } else if it == "rule" { "rule" } else { "insight" }
+                    } else if task.prompt.contains("direction")
                         || title_lower.contains("always")
                         || title_lower.contains("never")
                         || title_lower.contains("make sure")
                         || title_lower.contains("do not")
                         || title_lower.contains("don't")
                         || title_lower.contains("must")
-                        || title_lower.contains("use launchctl")
+                        || title_lower.contains("use ")
+                        || title_lower.contains("preferred")
+                        || title_lower.contains("require")
+                        || title_lower.contains("should ")
                         || content_lower.contains("always")
                         || content_lower.contains("never")
                         || content_lower.contains("must be")
                         || content_lower.contains("do not")
+                        || content_lower.contains("use ")
                     {
                         "direction"
                     } else if task.prompt.contains("wisdom") {
