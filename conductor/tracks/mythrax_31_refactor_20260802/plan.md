@@ -185,3 +185,16 @@ Type: Refactor & Architecture Evolution
   - [ ] Add vault layout documentation to `conductor/product-guidelines.md` or `README.md` for new user onboarding
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+
+---
+
+## Phase 6: Independent Adversarial Review & Anti-Slop Validation Gate
+
+- [ ] Task: Independent Code & Test Review (Recursive Criticism)
+  - [ ] Invoke independent Adversarial Reviewer agent (`conductor-review`) to perform recursive criticism on all Phase 1-5 changes
+  - [ ] Verify 0 `// TODO` stubs, 0 placeholder functions, 0 dead code, and 0 silenced `let _ =` errors across the codebase
+  - [ ] Run full 310-test suite via `MYTHRAX_TEST_MOCK=1 cargo nextest run` to verify 100% clean test execution
+  - [ ] Run Dev50 benchmark suite (`scripts/verify_dev50.sh`) to verify zero recall/precision regression
+  - [ ] Run release compilation (`cargo build --release`) and verify 0 warnings and 0 mock LLM responses in production binary
+
+- [ ] Task: Track Final Verification & Checkpoint (Refer to workflow.md)
