@@ -2119,10 +2119,25 @@ pub async fn sync_workspace_docs_to_vault(
             if needs_write {
                 store.write_file(&vault_rel_path, &file.content)?;
                 index_reference_doc(&file.rel_path, &vault_rel_path, &file.content, &file.hash, backend).await?;
+                let llm_client = crate::llm::LLMClient::default();
+                let _ = crate::cognitive::pipeline::extract_from_document(
+                    backend,
+                    Some(&llm_client),
+                    &file.content,
+                    &file.rel_path,
+                    ws_scope,
+                ).await;
             }
         } else {
             // Process code file for AST extraction & project-scoped AST reference markdown file generation
-            let _ = crate::cognitive::pipeline::extract_from_code(backend, None, &file.content, &file.rel_path, ws_scope).await;
+            let llm_client = crate::llm::LLMClient::default();
+            let _ = crate::cognitive::pipeline::extract_from_code(
+                backend,
+                Some(&llm_client),
+                &file.content,
+                &file.rel_path,
+                ws_scope,
+            ).await;
         }
     }
 
