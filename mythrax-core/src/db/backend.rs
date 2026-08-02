@@ -1059,12 +1059,15 @@ impl SurrealBackend {
         // Try paragraph compaction
         let paragraphs: Vec<&str> = item.content.split("\n\n").collect();
         if paragraphs.len() > 1 {
-            let mut compacted_content = paragraphs[0].to_string();
-            compacted_content.push_str("\n\n... [Truncated (Inner-Node Compaction)]");
-            let compacted_tokens = self.count_text_tokens(&compacted_content);
-            if compacted_tokens <= content_budget {
-                item.content = compacted_content;
-                return true;
+            let min_paragraphs = if paragraphs[0].starts_with("---") && paragraphs.len() > 2 { 2 } else { 1 };
+            for end_idx in (min_paragraphs..paragraphs.len()).rev() {
+                let mut compacted_content = paragraphs[..end_idx].join("\n\n");
+                compacted_content.push_str("\n\n... [Truncated (Inner-Node Compaction)]");
+                let compacted_tokens = self.count_text_tokens(&compacted_content);
+                if compacted_tokens <= content_budget {
+                    item.content = compacted_content;
+                    return true;
+                }
             }
         }
 
@@ -3362,7 +3365,7 @@ mod tests {
                 10,
                 0,
                 0.0,
-                Some(tokens_compacted + 5),
+                Some(tokens_compacted + 25),
                 false,
                 true,
                 true,
