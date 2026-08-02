@@ -35,26 +35,6 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 2: Vault Unification & Modular Episode Storage
 
-- [ ] Task: Implement Typed Directory Routing & 65-Char + CRC32 Slug Capping
-  - [ ] Write failing unit test for `organize_file` slug capping and typed path routing in `src/vault/organization.rs`
-  - [ ] Implement canonical `<slug_65>-<crc32>.md` slug capping with word-boundary trimming in `src/vault/organization.rs` (CTO B-1: current `organize_file` does no slug processing; `derive_slug` in pipeline.rs has 60-char limit but no CRC32)
-  - [ ] Consolidate `slugify_title()` and `derive_slug()` in `cognitive/pipeline.rs` into a single `slug::slugify(text, max_len)` utility (CTO B-3)
-  - [ ] Wire all slug generation callsites to the canonical `organization.rs` implementation
-  - [ ] Implement typed directory routing (`wiki/<scope>/{references/{ast,docs,forged},facts,insights,directions,hypotheses}/`) and `wisdom/skills/`
-
-- [ ] Task: Implement Modular Hidden Episode Storage
-  - [ ] Write failing test for modular hidden episode storage under `mythrax-vault/.episodes/<YYYY-MM>/`
-  - [ ] Update `save_episode_bidirectional` in `src/vault/watcher.rs` and `src/vault/ingestion.rs` to write modular hidden episode markdown files
-  - [ ] Update `TargetResolveCache` preloading to inspect typed subdirectories alongside legacy paths
-
-- [ ] Task: Implement Vault Migration Safety & Rollback (CTO Critical E-6)
-  - [ ] Write failing test for pre-migration backup verification using existing `backup_vault_folders()` in `daemon.rs:L847`
-  - [ ] Implement `.mythrax/vault_version = "3.1"` migration marker to prevent re-migration
-  - [ ] Implement post-migration verification: confirm all `vault_path` DB entries match on-disk paths
-  - [ ] Implement `manage(action="rollback_organize")` to restore from `.trash/backup_<timestamp>/`
-  - [ ] Add user notification of migration changes (what moved, count of files affected)
-
-- [ ] Task: Implement Vault Organization Migration & MOC Generation
   - [ ] Write failing test for `manage(action="organize")` migration of legacy flat files into typed directories
   - [ ] Update `manage(action="organize")` and `manage(action="clean")` in `src/vault/operations.rs` to migrate legacy files into `.episodes/` and typed `wiki/` folders
   - [ ] Update `generate_moc` in `src/vault/organization.rs` to render categorized `MOC.md` with subsystem sections and automatic orphan node capturing
