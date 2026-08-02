@@ -247,39 +247,50 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             super::htr_handlers::handle_manage_htr(state, modified_args).await
         }
         "extract" => {
-            let doc_path = args.get("doc_path").and_then(|v| v.as_str()).context("Missing doc_path")?;
+            let doc_path = args.get("doc_path").and_then(|v| v.as_str()).context("Missing doc_path")?.to_string();
             if doc_path.contains("..") {
                 anyhow::bail!("Path traversal disallowed in doc_path");
             }
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
-            let content = std::fs::read_to_string(state.store.vault_root.join(doc_path)).unwrap_or_default();
-            let facts = crate::cognitive::pipeline::extract_from_document(
-                &*state.backend,
-                None,
-                &content,
-                doc_path,
-                scope,
-            ).await?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let backend = state.backend.clone();
+            let full_doc_path = state.store.vault_root.join(&doc_path);
+            let content = std::fs::read_to_string(full_doc_path).unwrap_or_default();
+            let doc_path_task = doc_path.clone();
+            tokio::spawn(async move {
+                let llm_client = crate::llm::LLMClient::default();
+                let _ = crate::cognitive::pipeline::extract_from_document(
+                    backend.as_ref(),
+                    Some(&llm_client),
+                    &content,
+                    &doc_path_task,
+                    &scope,
+                ).await;
+            });
             Ok(json!({
-                "content": [{ "type": "text", "text": format!("Extracted {} facts from document {}", facts.len(), doc_path) }]
+                "content": [{ "type": "text", "text": format!("Started background fact extraction from document {}", doc_path) }]
             }))
         }
         "extract_code" => {
-            let file_path = args.get("file_path").and_then(|v| v.as_str()).context("Missing file_path")?;
+            let file_path = args.get("file_path").and_then(|v| v.as_str()).context("Missing file_path")?.to_string();
             if file_path.contains("..") {
                 anyhow::bail!("Path traversal disallowed in file_path");
             }
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
-            let content = std::fs::read_to_string(file_path).unwrap_or_default();
-            let facts = crate::cognitive::pipeline::extract_from_code(
-                &*state.backend,
-                None,
-                &content,
-                file_path,
-                scope,
-            ).await?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let backend = state.backend.clone();
+            let content = std::fs::read_to_string(&file_path).unwrap_or_default();
+            let file_path_task = file_path.clone();
+            tokio::spawn(async move {
+                let llm_client = crate::llm::LLMClient::default();
+                let _ = crate::cognitive::pipeline::extract_from_code(
+                    backend.as_ref(),
+                    Some(&llm_client),
+                    &content,
+                    &file_path_task,
+                    &scope,
+                ).await;
+            });
             Ok(json!({
-                "content": [{ "type": "text", "text": format!("Extracted {} facts from code {}", facts.len(), file_path) }]
+                "content": [{ "type": "text", "text": format!("Started background fact extraction from code file {}", file_path) }]
             }))
         }
         "hypothesize" => {
