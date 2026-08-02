@@ -52,5 +52,6 @@ To fulfill its role as a persistent, autonomous sidecar intelligence companion, 
   - **RAII Resource Boundaries**: All state flag mutations and resource handles must use `Drop`-implementing scope guards to guarantee clean state recovery on panics or early `?` error returns.
   - **Write-on-Evict Cache Durability**: In-memory LRU evictions must synchronously flush dirty records to disk before dropping items from RAM.
 - **Incremental Per-Phase Git Commit & Push Mandate**: Agents MUST execute a git commit and `git push origin <branch_name>` immediately upon completing each phase of a track (after verifying unit tests and build status) before proceeding to subsequent phases or triggering code reviews. This prevents multi-commit push backlogs and keeps remotes continuously up to date.
+- **Mandatory Inter-Phase Formal Review & Unconditional CTO Approval Gate**: Agents MUST execute a formal review (`/conductor-review`) between development phases, spin up the Adversarial CTO Reviewer subagent, and iteratively remediate all findings (including minor items) in a loop until the CTO Reviewer issues an explicit, unconditional `APPROVED` verdict. Once approved, the agent MUST immediately execute a git commit and push to the feature branch (`mythrax-3.1-release`) before starting the next phase.
 
 
