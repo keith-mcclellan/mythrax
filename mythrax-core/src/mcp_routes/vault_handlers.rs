@@ -123,12 +123,16 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                                     .node_type(ep.node_type.clone())
                                     .build();
                                 let _ = backend.save_episode(&save).await;
-                                let _ = crate::cognitive::pipeline::extract_facts(
-                                    backend.as_ref(),
-                                    Some(&llm_client),
-                                    &ep,
-                                )
-                                .await;
+
+                                // ONLY trigger LLM fact re-extraction when reset_processed is explicitly true!
+                                if reset_processed {
+                                    let _ = crate::cognitive::pipeline::extract_facts(
+                                        backend.as_ref(),
+                                        Some(&llm_client),
+                                        &ep,
+                                    )
+                                    .await;
+                                }
                                 count += 1;
                             }
                         }
