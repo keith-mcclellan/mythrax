@@ -9,3 +9,7 @@
 - **Direct and Actionable:** Error messages must pinpoint the failure and provide the immediate remedy (e.g., "GPU OOM detected: Falling back to cloud broker").
 - **Concise:** Avoid throat-clearing in documentation and API responses. Deliver the payload immediately.
 - **Authoritative but Safe:** Execute background tasks (like compaction and pruning) assertively, but never destructively alter human-verified wisdom without versioning or provenance.
+
+## Vault Root Layout Architecture
+- **Workspace-Embedded Vault:** In development environments, the active vault root defaults to the project workspace root (`.`), storing structured knowledge under `wiki/`, `.episodes/`, and `wisdom/`.
+- **Standalone Production Vault:** For production environments, users should set `MYTHRAX_VAULT_ROOT=~/mythrax-vault/` (or run `mythrax daemon start --vault ~/mythrax-vault/`) to isolate knowledge graphs from workspace code artifacts.

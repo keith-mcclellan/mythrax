@@ -365,7 +365,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 
             let pending_ideas = crate::cognitive::db::get_idea_nodes_by_scope(&*state.backend, &scope).await?;
             let facts = crate::cognitive::db::get_facts_by_scope(&*state.backend, &scope).await?;
-            let config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
+            let _config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
 
             let mut queued = 0usize;
             for idea in &pending_ideas {

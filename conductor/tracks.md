@@ -13,7 +13,7 @@
 - [x] **Track: Arbor-Aligned Cognitive Memory Engine Replacement**
   *Link: [./tracks/arbor_cognitive_engine_20260730/index.md](./tracks/arbor_cognitive_engine_20260730/index.md)*
 
-- [~] **Track: Mythrax 3.1 Refactoring & Architecture Evolution**
+- [x] **Track: Mythrax 3.1 Refactoring & Architecture Evolution**
   *Link: [./tracks/mythrax_31_refactor_20260802/index.md](./tracks/mythrax_31_refactor_20260802/index.md)*
 
 

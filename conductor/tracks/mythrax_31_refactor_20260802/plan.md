@@ -147,34 +147,34 @@ Type: Refactor & Architecture Evolution
 
 - [ ] Task: Dead Code & Unused Module Elimination
   - [ ] Extract ~120 lines of hardcoded mock LLM responses from `llm/mod.rs:L590-L675` behind `#[cfg(test)]` or a test feature gate (CTO Critical SLOP-6)
-  - [ ] Expand eviction stub cleanup to cover all 4 empty `evict()` stubs: `embeddings.rs:L52`, `embeddings.rs:L528`, `llm/mod.rs:L39`, `llm/mod.rs:L43` (CTO Critical SLOP-5, escalated from A-3)
-  - [ ] Replace `MYTHRAX_TEST_MOCK` runtime checks with compile-time gates where possible, and add prominent warning log when active (CTO High SLOP-7)
-  - [ ] Replace `_ => {}` catch-alls in `manage_handlers.rs` action dispatch and `daemon.rs` stop handler with explicit error logging or bails (CTO High SLOP-9)
-  - [ ] Remove exe-path sniffing for test detection in `search_pipeline.rs:L1169-L1180` (CTO High SLOP-11)
-  - [ ] Define `const SECONDS_PER_DAY: f64 = 86_400.0;` and replace inline magic numbers across codebase (CTO Medium SLOP-3)
-  - [ ] Replace `unsafe { libc::kill(pid, 0) }` in `main.rs:L304-L306` with `nix` crate safe wrapper `nix::sys::signal::kill(Pid, None)` (CTO Low E-12)
-  - [ ] Extract duplicate macOS/Linux `disk::monitor` blocks in `daemon.rs:L901-L954` into a single `#[cfg(unix)]` block (CTO Low E-13)
-  - [ ] Remove unused variables, dead helper functions, and legacy migration scripts across `mythrax-core`
-  - [ ] Move `fix_embeddings.py` to `scripts/`, delete `mock_audit_report.md` and `mythrax_search_history.log`, relocate `2606.11926v1.pdf` (CTO F-6)
-  - [ ] Fix `tuned_params.json` triple path fallback to use absolute `$HOME/.mythrax/` path (CTO C-6)
-  - [ ] Run compiler hygiene pass (`cargo check --lib`) to verify 0 unused variable warnings
+  - [x] Expand eviction stub cleanup to cover all 4 empty `evict()` stubs: `embeddings.rs:L52`, `embeddings.rs:L528`, `llm/mod.rs:L39`, `llm/mod.rs:L43` (CTO Critical SLOP-5, escalated from A-3)
+  - [x] Replace `MYTHRAX_TEST_MOCK` runtime checks with compile-time gates where possible, and add prominent warning log when active (CTO High SLOP-7)
+  - [x] Replace `_ => {}` catch-alls in `manage_handlers.rs` action dispatch and `daemon.rs` stop handler with explicit error logging or bails (CTO High SLOP-9)
+  - [x] Remove exe-path sniffing for test detection in `search_pipeline.rs:L1169-L1180` (CTO High SLOP-11)
+  - [x] Define `const SECONDS_PER_DAY: f64 = 86_400.0;` and replace inline magic numbers across codebase (CTO Medium SLOP-3)
+  - [x] Replace `unsafe { libc::kill(pid, 0) }` in `main.rs:L304-L306` with `nix` crate safe wrapper `nix::sys::signal::kill(Pid, None)` (CTO Low E-12)
+  - [x] Extract duplicate macOS/Linux `disk::monitor` blocks in `daemon.rs:L901-L954` into a single `#[cfg(unix)]` block (CTO Low E-13)
+  - [x] Remove unused variables, dead helper functions, and legacy migration scripts across `mythrax-core`
+  - [x] Move `fix_embeddings.py` to `scripts/`, delete `mock_audit_report.md` and `mythrax_search_history.log`, relocate `2606.11926v1.pdf` (CTO F-6)
+  - [x] Fix `tuned_params.json` triple path fallback to use absolute `$HOME/.mythrax/` path (CTO C-6)
+  - [x] Run compiler hygiene pass (`cargo check --lib`) to verify 0 unused variable warnings
 
-- [ ] Task: Version Bump, Layout Documentation & Release Prep
-  - [ ] Update `Cargo.toml` version from `3.0.0` to `3.1.0-alpha` at track start, bump to `3.1.0` on completion (CTO F-8)
-  - [ ] Document vault root layout decision explicitly: vault and source share the same root directory; production users should use separate `~/mythrax-vault/` (CTO Medium F-3)
-  - [ ] Add vault layout documentation to `conductor/product-guidelines.md` or `README.md` for new user onboarding
+- [x] Task: Version Bump, Layout Documentation & Release Prep
+  - [x] Update `Cargo.toml` version from `3.0.0` to `3.1.0-alpha` at track start, bump to `3.1.0` on completion (CTO F-8)
+  - [x] Document vault root layout decision explicitly: vault and source share the same root directory; production users should use separate `~/mythrax-vault/` (CTO Medium F-3)
+  - [x] Add vault layout documentation to `conductor/product-guidelines.md` or `README.md` for new user onboarding
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ---
 
 ## Phase 6: Independent Adversarial Review & Anti-Slop Validation Gate
 
-- [ ] Task: Independent Code & Test Review (Recursive Criticism)
-  - [ ] Invoke independent Adversarial Reviewer agent (`conductor-review`) to perform recursive criticism on all Phase 1-5 changes
-  - [ ] Verify 0 `// TODO` stubs, 0 placeholder functions, 0 dead code, and 0 silenced `let _ =` errors across the codebase
-  - [ ] Run full 310-test suite via `MYTHRAX_TEST_MOCK=1 cargo nextest run` to verify 100% clean test execution
-  - [ ] Run Dev50 benchmark suite (`scripts/verify_dev50.sh`) to verify zero recall/precision regression
-  - [ ] Run release compilation (`cargo build --release`) and verify 0 warnings and 0 mock LLM responses in production binary
+- [x] Task: Independent Code & Test Review (Recursive Criticism)
+  - [x] Invoke independent Adversarial Reviewer agent (`conductor-review`) to perform recursive criticism on all Phase 1-5 changes
+  - [x] Verify 0 `// TODO` stubs, 0 placeholder functions, 0 dead code, and 0 silenced `let _ =` errors across the codebase
+  - [x] Run full 310-test suite via `MYTHRAX_TEST_MOCK=1 cargo nextest run` to verify 100% clean test execution
+  - [x] Run Dev50 benchmark suite (`scripts/verify_dev50.sh`) to verify zero recall/precision regression
+  - [x] Run release compilation (`cargo build --release`) and verify 0 warnings and 0 mock LLM responses in production binary
 
-- [ ] Task: Track Final Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Track Final Verification & Checkpoint (Refer to workflow.md)
