@@ -1098,7 +1098,7 @@ pub async fn handle_manage_file(state: &ApiState, args: Value) -> Result<Value> 
         .context("Missing path/AbsolutePath/TargetFile")?;
 
     match action {
-        "view" => {
+        "view" | "read" | "get_full" => {
             let start_line = args
                 .get("start_line")
                 .or_else(|| args.get("StartLine"))
