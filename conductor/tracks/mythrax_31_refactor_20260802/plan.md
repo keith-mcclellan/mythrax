@@ -7,10 +7,13 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 1: Test Harness Refactoring & Mutation Hardening
 
-- [ ] Task: Refactor Test Fixtures & Isolation Infrastructure
+- [ ] Task: Refactor Test Fixtures & Isolation Infrastructure (Temp Vault & DB Isolation)
+  - [ ] Implement isolated temp vault root directory helper (`/tmp/mythrax_vault_<track_id>_<test_id>`) using `tempfile::TempDir`
+  - [ ] Prohibit unit and integration tests from writing or mutating files inside production `mythrax-vault/`
   - [ ] Implement isolated temp DB directory helper (`/tmp/mythrax_31_refactor_<test_id>`)
   - [ ] Configure `CARGO_TARGET_DIR=target/mythrax_31_refactor` for parallel Nextest execution
   - [ ] Update `domain_vault_storage.rs`, `domain_cognitive.rs`, and `domain_search_retrieval.rs` harness setup
+  - [ ] Purge historical test-poisoned files (`test_hypothesis_pattern_fact.md`, `test_scope/`) from production `mythrax-vault/`
 
 - [ ] Task: Enforce Strict Mutation Assertions Across Core Test Suites
   - [ ] Audit and replace permissive `is_ok()`/`is_some()` assertions in `tests/domain_vault_storage.rs` with exact record count and field mutation checks

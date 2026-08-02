@@ -18,6 +18,7 @@ The Mythrax 3.1 Track stabilizes, refactors, and evolves the Mythrax Sidecar Int
 ## 2. Functional Requirements
 
 ### 2.1 Test Harness & Mutation Hardening
+- **Isolated Temporary Vault Roots:** Unit and integration tests must initialize temporary vault root directories (`tempfile::TempDir`) for all file operations. Tests are strictly forbidden from writing or mutating files inside production `mythrax-vault/` or `$HOME/mythrax-vault/`. Historical test files in the production vault must be purged.
 - **Exact Mutation Assertions:** Unit and integration tests must assert exact record counts, exact field values, and graph edge mutations. Prohibit `assert!(result.is_ok())` or `assert!(item.is_some())` without inspecting payload content.
 - **Test Isolation:** All parallel test execution runs must use `CARGO_TARGET_DIR=target/mythrax_31_refactor` and isolated temp DB directories (`/tmp/mythrax_31_refactor`).
 - **Parallel Nextest Enforcement:** All test runs must execute via `MYTHRAX_TEST_MOCK=1 cargo nextest run`.
