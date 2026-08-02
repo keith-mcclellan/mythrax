@@ -110,19 +110,21 @@ pub fn extract_plain_text(markdown: &str) -> String {
         match event {
             Event::Start(Tag::CodeBlock(_)) => {
                 in_code_block = true;
+                if !plain_text.is_empty() && !plain_text.ends_with(' ') {
+                    plain_text.push(' ');
+                }
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
+                if !plain_text.is_empty() && !plain_text.ends_with(' ') {
+                    plain_text.push(' ');
+                }
             }
             Event::Text(text) => {
-                if !in_code_block {
-                    append_text(&mut plain_text, &text);
-                }
+                append_text(&mut plain_text, &text);
             }
             Event::Code(code) => {
-                if !in_code_block {
-                    append_text(&mut plain_text, &code);
-                }
+                append_text(&mut plain_text, &code);
             }
             Event::SoftBreak | Event::HardBreak
                 if !plain_text.is_empty() && !plain_text.ends_with(' ') =>
@@ -239,8 +241,8 @@ mod tests {
         assert!(plain.contains("This is bold and italic text."));
         assert!(plain.contains("Here is a link to a site."));
         assert!(plain.contains("And some inline code here."));
-        assert!(!plain.contains("fn main"));
-        assert!(!plain.contains("println"));
+        assert!(plain.contains("fn main"));
+        assert!(plain.contains("println"));
         assert!(!plain.contains("<div>"));
     }
 

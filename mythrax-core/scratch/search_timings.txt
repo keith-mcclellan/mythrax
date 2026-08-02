@@ -10456,3 +10456,4 @@ query: "Mythrax 3.0 Reinitialization & Ingestion Playbook", profile: 5us, embed:
 query: "Architecture & Memory Safety Invariants", profile: 7us, embed: 832us, terms: 21us, db: 33351us, rerank_start: 345us, total: 34563us
 query: "HTTP client socket reuse", profile: 6us, embed: 989us, terms: 15us, db: 30821us, rerank_start: 308us, total: 32146us
 query: "SurrealDB syntax DEFINE TABLE DEFINE INDEX", profile: 4us, embed: 848us, terms: 17us, db: 34695us, rerank_start: 194us, total: 35764us
+query: "syntax rules DEFINE INDEX FULLTEXT HNSW", profile: 14us, embed: 1039us, terms: 35us, db: 33618us, rerank_start: 205us, total: 34923us
