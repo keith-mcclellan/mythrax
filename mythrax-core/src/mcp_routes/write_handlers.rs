@@ -674,7 +674,21 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
                 for item in arr {
                     let title = item.get("title").or_else(|| item.get("claim")).and_then(|v| v.as_str()).unwrap_or("Untitled");
                     let content = item.get("insight").or_else(|| item.get("content")).or_else(|| item.get("reasoning")).and_then(|v| v.as_str()).unwrap_or("");
-                    let node_type = if task.prompt.contains("direction") {
+                    let title_lower = title.to_lowercase();
+                    let content_lower = content.to_lowercase();
+                    let node_type = if task.prompt.contains("direction")
+                        || title_lower.contains("always")
+                        || title_lower.contains("never")
+                        || title_lower.contains("make sure")
+                        || title_lower.contains("do not")
+                        || title_lower.contains("don't")
+                        || title_lower.contains("must")
+                        || title_lower.contains("use launchctl")
+                        || content_lower.contains("always")
+                        || content_lower.contains("never")
+                        || content_lower.contains("must be")
+                        || content_lower.contains("do not")
+                    {
                         "direction"
                     } else if task.prompt.contains("wisdom") {
                         "rule"
@@ -684,6 +698,8 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
                     let slug = title.to_lowercase().replace(' ', "_").replace(|c: char| !c.is_alphanumeric() && c != '_', "");
                     let vault_path = if node_type == "rule" {
                         format!("wisdom/general/{}_rule.md", slug)
+                    } else if node_type == "direction" {
+                        format!("wiki/{}/directions/{}_direction.md", scope_name, slug)
                     } else {
                         format!("wiki/{}/{}_{}.md", scope_name, slug, node_type)
                     };
