@@ -26,7 +26,7 @@ Type: Refactor & Architecture Evolution
   - [ ] Audit all `unwrap()` calls in non-test `src/` code (40+ files)
   - [ ] Audit all `let _ = <critical_operation>.await;` calls (e.g. `save_wiki_node`, `save_episode`) and replace with proper error propagation or `tracing::error!` logging (CTO High SLOP-8)
   - [x] Fix `bm25.rs:L111` — `self.doc_term_freqs.get(doc_id).unwrap()` panics on missing doc_id — replace with `.ok_or_else()` / match
-  - [ ] Fix `embeddings.rs` — multiple `.unwrap()` in cache init and model loading paths — replace with `?` propagation
+  - [x] Fix `embeddings.rs` — multiple `.unwrap()` in cache init and model loading paths — replace with `?` propagation / `ok_or_else`
   - [x] Convert `block_on` anti-pattern in `ingestion.rs:L1924` test to `#[tokio::test]`
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
