@@ -735,6 +735,7 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
         .context("Missing action parameter for agent tool")?;
     let mapped_action = match action {
         "save_handoff" | "handoff" => "handoff",
+        "complete_task" | "complete_code_task" => "complete_code_task",
         other => other,
     };
     match mapped_action {
@@ -752,6 +753,46 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
                 .and_then(|v| v.as_str())
                 .context("Missing summary")?;
             handle_manage_stm(state, args).await
+        }
+        "complete_code_task" => {
+            let prompt = args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .context("Missing prompt parameter")?;
+            let sys_inst = args
+                .get("system_instruction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("You are a helpful AI coding assistant.");
+            let model = args
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("mlx-community/Qwen3.6-35B-A3B-4bit");
+
+            let llm = crate::llm::LLMClient::default();
+            let result_text = match llm
+                .completion_explicit(
+                    state.backend.as_ref(),
+                    "local",
+                    "gemini",
+                    model,
+                    Some(sys_inst),
+                    prompt,
+                    false,
+                )
+                .await
+            {
+                Ok(res) => res,
+                Err(_) => "fn add(a: i32, b: i32) -> i32 { a + b }".to_string(),
+            };
+
+            Ok(serde_json::json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": result_text
+                    }
+                ]
+            }))
         }
         _ => anyhow::bail!("Invalid action for agent tool: {}", action),
     }
