@@ -73,6 +73,7 @@ Type: Refactor & Architecture Evolution
   - [ ] Implement automatic `stop` hook fallback pass in `src/hooks/stop.rs` to guarantee zero lost facts on session close
   - [ ] Implement `post_invocation` synthetic post-turn observation enforcement in `src/hooks/adapters.rs`
   - [ ] Implement `precompact` context pressure gate enforcement when token budget exceeds 80% capacity
+  - [ ] Register Antigravity plugin manifest lifecycle hooks (`on_session_start`, `post_tool_call`, `on_session_stop`, `on_context_pressure`) in `.mythrax-shared/hooks/` and plugin templates for automatic CLI execution
 
 - [ ] Task: Expose Search Parameters in MCP Tool Schemas
   - [ ] Write failing test for MCP `read` tool schema parameter validation in `tests/domain_search_retrieval.rs`

@@ -54,6 +54,7 @@ The Mythrax 3.1 Track stabilizes, refactors, and evolves the Mythrax Sidecar Int
 - **Stop Hook Transcript Mining Enforcement:** Implement automatic `stop` hook fallback in `src/hooks/stop.rs` to guarantee raw transcript turns are mined for facts before session termination.
 - **Post-Invocation Observation Enforcement:** Automatically append synthetic post-turn observation logging in `src/hooks/adapters.rs` after tool executions.
 - **Precompact Context Pressure Gate:** Trigger automatic context compaction and virtual skeleton paging when token window usage exceeds 80% capacity.
+- **Antigravity Plugin Lifecycle Hook Bindings:** Register plugin lifecycle hooks (`on_session_start` → `pre_invocation`, `post_tool_call` → `post_invocation`, `on_session_stop` → `stop`, `on_context_pressure` → `precompact`) in `.mythrax-shared/hooks/` so the IDE/CLI executes the daemon binary automatically without relying on LLM memory.
 - **MCP Schema Parameters:** Update `get_mcp_tools_schema()` in `src/mcp_routes.rs` to include `include_archived`, `temporal_anchor`, and `full_content`.
 
 ### 2.5 Deliberate Dead Code & Complexity Reduction
