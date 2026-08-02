@@ -10438,3 +10438,5 @@ query: "mythrax-core project context", profile: 1836us, embed: 6440us, terms: 13
 query: "*", profile: 28us, embed: 2017us, terms: 555us, db: 4501us, rerank_start: 520us, total: 7707us
 query: "mythrax project context", profile: 2210us, embed: 3058us, terms: 1525us, db: 2535us, rerank_start: 1078us, total: 10546us
 query: "test", profile: 67us, embed: 5727us, terms: 2389us, db: 13069us, rerank_start: 1068us, total: 22460us
+query: "cloud brain scope", profile: 26us, embed: 6845us, terms: 676us, db: 39031us, rerank_start: 561us, total: 47196us
+query: "mythrax project context", profile: 3984us, embed: 2840us, terms: 2340us, db: 39731us, rerank_start: 1393us, total: 89735us

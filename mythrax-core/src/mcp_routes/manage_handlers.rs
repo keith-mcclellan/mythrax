@@ -2189,9 +2189,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     );
     let mut p2_stm = stm_str.clone();
 
-    let base_playbook = "### 💡 Mythrax Skill Playbook Reminder
+    let base_playbook = "### 💡 Mythrax Skill Playbook & Memory Search Reminder
 > [!IMPORTANT]
-> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.
+> **MEMORY SEARCH FIRST MANDATE**: Before executing code changes, shell commands, or plan steps, you MUST query Mythrax memory using `read(action=\"search\", query=\"...\")` or `read(action=\"rules\", query=\"...\")` to recall active project context, architectural guidelines, and negative constraints.
+> **Skill Reference**: Refer to the `/mythrax` skill (`/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or `.agents/skills/mythrax/SKILL.md`) for MCP tool signatures (`read`, `write`, `manage`, `agent`).
 
 ";
 
@@ -2254,11 +2255,42 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     }
 
+    let user_directions_section = {
+        let sql = "SELECT name, content FROM wiki_node WHERE node_type = 'direction' OR item_type = 'direction' LIMIT 5;";
+        if let Ok(mut resp) = surreal_backend.db.query(sql).await {
+            #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+            struct DirRow {
+                name: String,
+                content: String,
+            }
+            if let Ok(rows) = resp.take::<Vec<DirRow>>(0) {
+                if !rows.is_empty() {
+                    let mut text = String::from("### 🎯 Active User Directions\n");
+                    for row in rows {
+                        let snippet = row.content.lines().next().unwrap_or(&row.content);
+                        text.push_str(&format!("- **{}**: {}\n", row.name, snippet));
+                    }
+                    text.push_str("\n");
+                    text
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    };
+
     let initial_context = {
         let mut base = String::new();
         base.push_str(base_playbook);
         base.push_str(&preamble);
         base.push_str(&p0_policy);
+        if !user_directions_section.is_empty() {
+            base.push_str(&user_directions_section);
+        }
         if !p1_advisory.is_empty() {
             base.push_str(&p1_advisory);
         }
