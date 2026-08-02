@@ -44,9 +44,10 @@ The Mythrax 3.1 Track stabilizes, refactors, and evolves the Mythrax Sidecar Int
 - **Daemon Loop Categorization:** Audit all background loops — convert reflection harvester (L418), dreaming coordinator (L531), and distillation task wait (L196) to event-driven listeners; retain periodic timers with justification.
 - **Pre-Write Disk Checks:** Enforce `check_disk_space()` before vault writes and embedding cache flushes.
 
-### 2.4 MCP Tool Schema, Health Observability & Universal Hook Lifecycle Enforcement
+### 2.4 MCP Tool Schema & Universal Hook Lifecycle Enforcement
 - **Pre-Invocation Memory Gate:** Track session memory status (`has_checked_memory`). Intercept write/modifying tool calls until `read(action="search")` or `manage(action="pre_invocation")` is executed.
-- **Stop Hook Transcript Mining Enforcement:** Implement automatic `stop` hook fallback in `src/hooks/stop.rs` to guarantee raw transcript turns are mined for facts before session termination.
+- **Automatic Directive Persistence:** In `post_invocation` (`adapters.rs`), automatically analyze user turns for process directives (`always`, `never`, `must`, `rule`, `don't forget`). If a directive is present and the agent did not execute `write(action="save")`, automatically queue a high-priority `Direction` cognitive task. Prompt instructions will also mandate calling `write(action="save")` immediately upon receiving a directive.
+- **Stop Hook Session Termination Flush:** Implement automatic un-debounced `stop` hook fallback in `src/hooks/stop.rs` to guarantee raw transcript turns are mined for facts and directives upon session close, regardless of whether a 15-message boundary was reached.
 - **Post-Invocation Observation Enforcement:** Automatically append synthetic post-turn observation logging in `src/hooks/adapters.rs` after tool executions.
 - **Precompact Context Pressure Gate:** Trigger automatic context compaction and virtual skeleton paging when token window usage exceeds 80% capacity.
 - **Antigravity Plugin Lifecycle Hook Bindings:** Register plugin lifecycle hooks (`on_session_start` → `pre_invocation`, `post_tool_call` → `post_invocation`, `on_session_stop` → `stop`, `on_context_pressure` → `precompact`) in `.mythrax-shared/hooks/`.

@@ -104,9 +104,11 @@ Type: Refactor & Architecture Evolution
   - [ ] Enforce memory gate interceptor: block modifying tools (`write_file`, `replace_file_content`, `run_command`, `write`, `organize`) until `read(action="search")` or `manage(action="pre_invocation")` is called
   - [ ] Automatically inject mandatory Phase 0 Memory Check directive into all subagent prompt templates
 
-- [ ] Task: Implement Universal Hook Lifecycle Enforcement (Stop, Post-Invocation, Precompact)
-  - [ ] Write failing test in `tests/domain_hooks_models.rs` asserting automatic `stop` hook transcript mining on session termination
-  - [ ] Implement automatic `stop` hook fallback pass in `src/hooks/stop.rs` to guarantee zero lost facts on session close
+- [ ] Task: Implement Universal Hook Lifecycle Enforcement (Stop, Post-Invocation, Precompact, Directive Persistence)
+  - [ ] Write failing test in `tests/domain_hooks_models.rs` asserting automatic `stop` hook transcript mining on session termination (flushing remaining turns without waiting for 15-message interval)
+  - [ ] Implement automatic `stop` hook fallback pass in `src/hooks/stop.rs` to guarantee zero lost facts/directions on session close
+  - [ ] Implement `post_invocation` directive auto-detection in `src/hooks/adapters.rs`: inspect user turns for rule keywords (`always`, `never`, `must`, `rule`, `don't forget`) and automatically queue a high-priority `Direction` extraction task if no explicit `write(action="save")` occurred in the turn
+  - [ ] Enforce memory gate prompt instruction: "When the user specifies a process rule or directive, agents MUST immediately invoke `write(action='save')` to persist it as a Direction node"
   - [ ] Implement `post_invocation` synthetic post-turn observation enforcement in `src/hooks/adapters.rs`
   - [ ] Implement `precompact` context pressure gate enforcement when token budget exceeds 80% capacity
   - [ ] Register Antigravity plugin manifest lifecycle hooks (`on_session_start`, `post_tool_call`, `on_session_stop`, `on_context_pressure`) in `.mythrax-shared/hooks/` and plugin templates for automatic CLI execution
