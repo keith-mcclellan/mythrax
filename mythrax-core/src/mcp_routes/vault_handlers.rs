@@ -88,7 +88,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 .or_else(|| args.get("force"))
                 .or_else(|| args.get("reprocess"))
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+                .unwrap_or(true);
 
             if reset_processed {
                 if let Some(surreal_backend) = state
