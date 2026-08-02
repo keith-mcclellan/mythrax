@@ -962,16 +962,22 @@ pub async fn graduate(
             let (sys, user) = prompts::build_graduation_prompt(&node.name, &node.content);
             if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
                 serde_json::from_str::<prompts::GraduationResponse>(&raw_json)
-                    .map(|r| r.scope == "universal")
+                    .map(|r| r.scope.to_lowercase().contains("universal"))
                     .unwrap_or(false)
             } else {
                 false
             }
         } else {
-            node.content.contains("universal") || node.content.contains("ALWAYS")
-        };
+            false
+        } || node.item_type.as_deref() == Some("rule")
+          || node.node_type.as_deref() == Some("rule")
+          || node.content.to_lowercase().contains("universal")
+          || node.content.contains("ALWAYS")
+          || node.content.contains("NEVER");
 
         if is_universal {
+            let rule_slug = node.name.to_lowercase().replace(' ', "_").replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+            let rule_vault_path = format!("wisdom/general/{}_rule.md", rule_slug);
             let rule = WisdomRule {
                 id: None,
                 target_pattern: node.name.clone(),
@@ -980,7 +986,7 @@ pub async fn graduate(
                 prescribed_remedy: format!("Follow pattern defined in {}", node.name),
                 tier: crate::contracts::Tier::Wisdom,
                 scope: "general".to_string(),
-                vault_path: node.vault_path.clone(),
+                vault_path: Some(rule_vault_path),
                 embedding: node.embedding.clone(),
                 source_episodes: vec![node.id.clone().unwrap_or_default()],
                 generator_name: "arbor_graduation".to_string(),
