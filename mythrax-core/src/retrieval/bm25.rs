@@ -108,7 +108,10 @@ impl OkapiBM25 {
         }
 
         for (doc_id, doc_len) in &self.doc_lengths {
-            let term_freqs = self.doc_term_freqs.get(doc_id).unwrap();
+            let term_freqs = match self.doc_term_freqs.get(doc_id) {
+                Some(tf) => tf,
+                None => continue,
+            };
             let mut score = 0.0;
 
             for term in &query_tokens {

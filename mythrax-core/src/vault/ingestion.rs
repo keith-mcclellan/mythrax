@@ -1910,8 +1910,8 @@ mod tests {
         assert!(!ref_doc.exists(), "Mirrored file should be pruned when deleted from workspace");
     }
 
-    #[test]
-    fn test_moc_rebuild_nested_wikilinks() {
+    #[tokio::test]
+    async fn test_moc_rebuild_nested_wikilinks() {
         let vault_dir = tempdir().unwrap();
         let store = MarkdownStore::new(vault_dir.path()).unwrap();
 
@@ -1920,11 +1920,8 @@ mod tests {
         std::fs::write(ref_specs.join("bar.md"), "# Bar Spec").unwrap();
         std::fs::write(vault_dir.path().join("reference").join("architecture.md"), "# Architecture").unwrap();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
-            store.rebuild_reference_moc(&backend).unwrap();
-        });
+        let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
+        store.rebuild_reference_moc(&backend).unwrap();
 
         let moc_content = std::fs::read_to_string(vault_dir.path().join("MOC.md")).unwrap();
         assert!(moc_content.contains("## Reference"));
