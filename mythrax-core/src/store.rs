@@ -75,10 +75,22 @@ impl MarkdownStore {
 
 Welcome to the Mythrax Vault.
 
-## Vault Folders
-- [[wiki/|Wiki (Synthesized Arbor Nodes & Scope Maps)]]
-- [[wisdom/|Wisdom (Graduated Rules & Skills)]]
-- [[reference/|Reference (Workspace Docs & AST Metadata)]]
+## Wiki Scopes
+- [[wiki/general/|General Scope]]
+- [[wiki/mythrax/|Mythrax Scope]]
+
+## Typed Categories
+- References: `wiki/<scope>/references/{ast,docs,forged}/`
+- Facts: `wiki/<scope>/facts/`
+- Insights: `wiki/<scope>/insights/`
+- Directions: `wiki/<scope>/directions/`
+- Hypotheses: `wiki/<scope>/hypotheses/`
+
+## Wisdom & Skills
+- [[wisdom/skills/|Skills]]
+
+## Workspace Reference Assets
+- [[reference/|Workspace Reference Assets]]
 "#;
         fs::write(&moc_path, moc_content)?;
         set_file_permissions_644(&moc_path)?;
@@ -179,12 +191,12 @@ Welcome to the Mythrax Vault.
 
 Welcome to the Mythrax Vault.
 
-## Vault Folders
-- [[directions/|Directions]]
-- [[insights/|Insights]]
-- [[pruned/|Pruned]]
-- [[wisdom/|Wisdom]]
-- [[reference/|Reference]]
+## Wiki Scopes
+- [[wiki/general/|General Scope]]
+- [[wiki/mythrax/|Mythrax Scope]]
+
+## Wisdom & Skills
+- [[wisdom/skills/|Skills]]
 "#.to_string()
         };
 

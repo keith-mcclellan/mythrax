@@ -48,33 +48,7 @@ pub fn slugify_title(title: &str) -> String {
 pub fn derive_slug(raw_slug: Option<&str>, fallback_text: &str) -> String {
     let raw = raw_slug.unwrap_or("").trim();
     let text_to_slug = if raw.is_empty() { fallback_text } else { raw };
-    let mut slug = String::new();
-    let mut last_dash = false;
-    for c in text_to_slug.chars() {
-        if c.is_alphanumeric() {
-            slug.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            slug.push('_');
-            last_dash = true;
-        }
-    }
-    let trimmed = slug.trim_matches('_').to_string();
-    if trimmed.is_empty() {
-        "node".to_string()
-    } else if trimmed.len() > 60 {
-        let char_limit = trimmed.char_indices().map(|(i, _)| i).nth(60).unwrap_or(trimmed.len());
-        let sub = &trimmed[..char_limit];
-        if let Some(idx) = sub.rfind('_') {
-            if idx > 15 {
-                return sub[..idx].trim_end_matches('_').to_string();
-            }
-        }
-        sub.trim_end_matches('_').to_string()
-    } else {
-
-        trimmed
-    }
+    crate::vault::organization::slugify_title(text_to_slug, 65)
 }
 
 

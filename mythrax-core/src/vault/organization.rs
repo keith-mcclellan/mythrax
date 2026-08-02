@@ -2,6 +2,107 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeType {
+    ReferenceAst,
+    ReferenceDocs,
+    ReferenceForged,
+    Fact,
+    Insight,
+    Direction,
+    Hypothesis,
+    Episode,
+    Skill,
+}
+
+impl NodeType {
+    pub fn from_category_str(cat: &str) -> Self {
+        match cat.to_lowercase().as_str() {
+            "ast" | "reference_ast" => NodeType::ReferenceAst,
+            "docs" | "reference_docs" => NodeType::ReferenceDocs,
+            "forged" | "reference_forged" => NodeType::ReferenceForged,
+            "fact" | "facts" => NodeType::Fact,
+            "direction" | "directions" => NodeType::Direction,
+            "hypothesis" | "hypotheses" => NodeType::Hypothesis,
+            "episode" | "episodes" => NodeType::Episode,
+            "skill" | "skills" => NodeType::Skill,
+            _ => NodeType::Insight,
+        }
+    }
+}
+
+/// Slugifies a title string, capping it at `max_len` characters on a word boundary.
+pub fn slugify_title(title: &str, max_len: usize) -> String {
+    let sanitized: String = title
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+
+    let trimmed: String = sanitized
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<&str>>()
+        .join("-");
+
+    if trimmed.is_empty() {
+        return "untitled".to_string();
+    }
+
+    if trimmed.len() <= max_len {
+        return trimmed;
+    }
+
+    let candidate = &trimmed[..max_len];
+    if let Some(last_dash) = candidate.rfind('-') {
+        if last_dash > 0 {
+            return candidate[..last_dash].to_string();
+        }
+    }
+    candidate.to_string()
+}
+
+/// Generates a canonical `<slug_65>-<hash_8>.md` filename for a title and content pair.
+pub fn canonical_slug(title: &str, content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let base_slug = slugify_title(title, 65);
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let result = hasher.finalize();
+    let hash_hex = hex::encode(&result[..4]);
+    format!("{}-{}.md", base_slug, hash_hex)
+}
+
+/// Generates a relative path for storing an episode note under `.episodes/<YYYY-MM>/<filename>`.
+pub fn episode_relative_path(filename: &str) -> String {
+    let month = chrono::Utc::now().format("%Y-%m").to_string();
+    format!(".episodes/{}/{}", month, filename)
+}
+
+/// Routes a filename to its canonical typed directory relative to `vault_root`.
+pub fn typed_vault_path(
+    vault_root: &Path,
+    scope: &str,
+    node_type: NodeType,
+    filename: &str,
+) -> PathBuf {
+    let relative = match node_type {
+        NodeType::ReferenceAst => format!("wiki/{}/references/ast", scope),
+        NodeType::ReferenceDocs => format!("wiki/{}/references/docs", scope),
+        NodeType::ReferenceForged => format!("wiki/{}/references/forged", scope),
+        NodeType::Fact => format!("wiki/{}/facts", scope),
+        NodeType::Insight => format!("wiki/{}/insights", scope),
+        NodeType::Direction => format!("wiki/{}/directions", scope),
+        NodeType::Hypothesis => format!("wiki/{}/hypotheses", scope),
+        NodeType::Episode => {
+            let month = chrono::Utc::now().format("%Y-%m").to_string();
+            format!(".episodes/{}", month)
+        }
+        NodeType::Skill => "wisdom/skills".to_string(),
+    };
+    vault_root.join(relative).join(filename)
+}
+
 /// Resolves a path for writing a file to the vault, handling collisions.
 /// If a collision occurs (the file exists):
 /// - If the existing file has identical content, we can return the same path (or a flag to skip).
@@ -99,5 +200,44 @@ mod tests {
         let path =
             organize_file(temp.path(), "episodes", "test_note.md", "different content").unwrap();
         assert_eq!(path, category_dir.join("test_note_1.md"));
+    }
+
+    #[test]
+    fn test_canonical_slug_capping_and_crc32() {
+        let title = "This is an extremely long title that exceeds sixty five characters and should be safely trimmed at a word boundary";
+        let content = "Sample note content for CRC32 calculation";
+        let slug = canonical_slug(title, content);
+        assert!(slug.ends_with(".md"));
+        let stem = &slug[..slug.len() - 3];
+        let parts: Vec<&str> = stem.split('-').collect();
+        let crc = parts.last().unwrap();
+        assert_eq!(crc.len(), 8, "CRC32 hex hash must be 8 hex characters");
+        assert!(
+            stem.len() <= 74, // 65 char base + 1 dash + 8 crc = 74
+            "Stem length must not exceed 74 characters, got: {}",
+            stem.len()
+        );
+    }
+
+    #[test]
+    fn test_episode_relative_path() {
+        let path = episode_relative_path("claude_log_123.md");
+        assert!(path.starts_with(".episodes/"));
+        assert!(path.ends_with("/claude_log_123.md"));
+        let month = chrono::Utc::now().format("%Y-%m").to_string();
+        assert_eq!(path, format!(".episodes/{}/claude_log_123.md", month));
+    }
+
+    #[test]
+    fn test_typed_vault_path_routing() {
+        let temp = tempdir().unwrap();
+        let p1 = typed_vault_path(temp.path(), "mythrax", NodeType::Fact, "fact-001.md");
+        assert_eq!(p1, temp.path().join("wiki/mythrax/facts/fact-001.md"));
+
+        let p2 = typed_vault_path(temp.path(), "general", NodeType::ReferenceAst, "ast-002.md");
+        assert_eq!(p2, temp.path().join("wiki/general/references/ast/ast-002.md"));
+
+        let p3 = typed_vault_path(temp.path(), "mythrax", NodeType::Skill, "skill-003.md");
+        assert_eq!(p3, temp.path().join("wisdom/skills/skill-003.md"));
     }
 }
