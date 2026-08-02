@@ -716,7 +716,7 @@ async fn test_garbage_collect_low_confidence_nodes() -> Result<()> {
         content: "Some old content".to_string(),
         scope: "scope1".to_string(),
         vault_path: Some("wiki/scope1/low_confidence_node.md".to_string()),
-        metacognitive_confidence: Some(2),
+        metacognitive_confidence: Some(2.0),
         ..Default::default()
     };
     let node_id = backend.save_wiki_node(&node).await?;
@@ -5632,7 +5632,7 @@ async fn test_item_type_routing_promote_insight_to_direction() -> Result<()> {
         content: "Holding mutexes across async boundary causes deadlock.".to_string(),
         scope: "test_scope".to_string(),
         item_type: Some("failure_mode".to_string()),
-        metacognitive_confidence: Some(90),
+        metacognitive_confidence: Some(90.0),
         ..Default::default()
     };
     backend.save_wiki_node(&failure_node).await?;
@@ -5656,7 +5656,7 @@ async fn test_item_type_routing_promote_insight_to_direction() -> Result<()> {
         content: "Use atomic crossbeam queue for low contention.".to_string(),
         scope: "test_scope".to_string(),
         item_type: Some("pattern".to_string()),
-        metacognitive_confidence: Some(90),
+        metacognitive_confidence: Some(90.0),
         ..Default::default()
     };
     backend.save_wiki_node(&pattern_node).await?;
