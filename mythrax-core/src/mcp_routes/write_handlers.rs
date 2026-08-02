@@ -719,7 +719,11 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
                         node_type: Some(node_type.to_string()),
                         ..Default::default()
                     };
-                    let _ = surreal_backend.save_wiki_node(&wiki_node).await;
+                    if let Ok(_id) = surreal_backend.save_wiki_node(&wiki_node).await {
+                        if let Some(ref vp) = wiki_node.vault_path {
+                            let _ = state.store.write_file(vp, content);
+                        }
+                    }
                 }
             }
         }
