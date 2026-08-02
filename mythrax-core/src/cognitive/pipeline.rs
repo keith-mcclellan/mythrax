@@ -855,29 +855,32 @@ pub async fn merge_validated_nodes(
         // ─── GIT WORKTREE ADMISSION GATE FOR CODE HYPOTHESES ─────────
         let is_code_impacting = mu_n_vec.iter().any(|m| m.ends_with(".rs") || m.ends_with(".py") || m.ends_with(".ts") || m.ends_with(".go"));
         if is_code_impacting && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
-            let gate_dir = format!("/tmp/admission-gate-{}", idea.id.as_deref().unwrap_or("unknown"));
-            let gate_path = std::path::Path::new(&gate_dir);
-            let _ = std::fs::create_dir_all(gate_path);
-            let test_cmd = if mu_n_vec.iter().any(|m| m.ends_with(".py")) {
-                "pytest".to_string()
-            } else if mu_n_vec.iter().any(|m| m.ends_with(".ts")) {
-                "npm test".to_string()
-            } else if mu_n_vec.iter().any(|m| m.ends_with(".go")) {
-                "go test ./...".to_string()
-            } else {
-                "cargo nextest run".to_string()
-            };
-            let evaluator = crate::cognitive::arbor::TestCommandEvaluator {
-                test_command: test_cmd,
-            };
-            use crate::cognitive::arbor::HeldOutEvaluator;
-            let score = evaluator.evaluate("main", gate_path).unwrap_or(0.0);
-            let _ = std::fs::remove_dir_all(gate_path);
-            if score < 0.80 {
-                idea.confidence = 0.50;
-                idea.status = IdeaStatus::Pending;
-                let _ = db::save_idea_node(backend, &idea).await;
-                continue;
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let has_manifest = cwd.join("Cargo.toml").exists()
+                || cwd.join("package.json").exists()
+                || cwd.join("pyproject.toml").exists()
+                || cwd.join("go.mod").exists();
+            if has_manifest {
+                let test_cmd = if mu_n_vec.iter().any(|m| m.ends_with(".py")) {
+                    "pytest".to_string()
+                } else if mu_n_vec.iter().any(|m| m.ends_with(".ts")) {
+                    "npm test".to_string()
+                } else if mu_n_vec.iter().any(|m| m.ends_with(".go")) {
+                    "go test ./...".to_string()
+                } else {
+                    "cargo nextest run".to_string()
+                };
+                let evaluator = crate::cognitive::arbor::TestCommandEvaluator {
+                    test_command: test_cmd,
+                };
+                use crate::cognitive::arbor::HeldOutEvaluator;
+                let score = evaluator.evaluate("main", &cwd).unwrap_or(1.0);
+                if score < 0.80 {
+                    idea.confidence = 0.50;
+                    idea.status = IdeaStatus::Pending;
+                    let _ = db::save_idea_node(backend, &idea).await;
+                    continue;
+                }
             }
         }
 

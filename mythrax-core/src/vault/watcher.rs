@@ -654,10 +654,14 @@ async fn resolve_target_to_id(
 
 #[derive(serde::Deserialize)]
 struct WisdomFrontmatter {
-    target_pattern: String,
-    action_to_avoid: String,
-    causal_explanation: String,
-    prescribed_remedy: String,
+    #[serde(default)]
+    target_pattern: Option<String>,
+    #[serde(default)]
+    action_to_avoid: Option<String>,
+    #[serde(default)]
+    causal_explanation: Option<String>,
+    #[serde(default)]
+    prescribed_remedy: Option<String>,
     tier: Option<String>,
     scope: Option<String>,
     source_episodes: Option<Vec<String>>,
@@ -913,12 +917,28 @@ pub async fn sync_file_to_db_with_cache(
                 frontmatter.scope.unwrap_or_else(|| "general".to_string())
             };
 
+            let target_pat = frontmatter.target_pattern.unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("untitled_rule")
+                    .to_string()
+            });
+            let action_avoid = frontmatter
+                .action_to_avoid
+                .unwrap_or_else(|| "Violating universal design invariant".to_string());
+            let causal_exp = frontmatter
+                .causal_explanation
+                .unwrap_or_else(|| content.clone());
+            let prescribed_rem = frontmatter
+                .prescribed_remedy
+                .unwrap_or_else(|| format!("Follow pattern defined in {}", target_pat));
+
             let rule = WisdomRule {
                 id: None,
-                target_pattern: frontmatter.target_pattern,
-                action_to_avoid: frontmatter.action_to_avoid,
-                causal_explanation: frontmatter.causal_explanation,
-                prescribed_remedy: frontmatter.prescribed_remedy,
+                target_pattern: target_pat,
+                action_to_avoid: action_avoid,
+                causal_explanation: causal_exp,
+                prescribed_remedy: prescribed_rem,
                 tier: final_tier_enum,
                 scope: final_scope,
                 vault_path: Some(rel_path),
