@@ -7,29 +7,29 @@ Type: Refactor & Architecture Evolution
 
 ## Phase 1: Test Harness Refactoring & Mutation Hardening
 
-- [ ] Task: Refactor Test Fixtures & Isolation Infrastructure (Temp Vault & DB Isolation)
+- [x] Task: Refactor Test Fixtures & Isolation Infrastructure (Temp Vault & DB Isolation)
   - [x] Implement isolated temp vault root directory helper (`/tmp/mythrax_vault_<track_id>_<test_id>`) using `tempfile::TempDir`
   - [x] Prohibit unit and integration tests from writing or mutating files inside production `mythrax-vault/`
   - [x] Implement isolated temp DB directory helper (`/tmp/mythrax_31_refactor_<test_id>`)
   - [x] Configure `CARGO_TARGET_DIR=target/mythrax_31_refactor` for parallel Nextest execution
-  - [ ] Update `domain_vault_storage.rs`, `domain_cognitive.rs`, and `domain_search_retrieval.rs` harness setup
+  - [x] Update `domain_vault_storage.rs`, `domain_cognitive.rs`, and `domain_search_retrieval.rs` harness setup
   - [x] Purge historical test-poisoned files (`test_hypothesis_pattern_fact.md`, `test_scope/`) from production `mythrax-vault/`
 
-- [ ] Task: Enforce Strict Mutation Assertions Across ALL Test Suites
-  - [ ] Audit and replace permissive `is_ok()`/`is_some()` assertions in `tests/domain_vault_storage.rs` with exact record count and field mutation checks
-  - [ ] Audit and replace permissive assertions in `tests/domain_cognitive.rs` with strict hypothesis and cluster state mutations
-  - [ ] Audit and replace permissive assertions in `tests/domain_search_retrieval.rs` with strict RRF score, BM25 rank, and temporal edge assertions
-  - [ ] Audit and replace permissive assertions in `tests/domain_legacy_aggregators.rs` (168KB — largest test file, high risk of permissive patterns)
-  - [ ] Audit and replace permissive assertions in `tests/domain_e2e_harness.rs` (61KB)
+- [x] Task: Enforce Strict Mutation Assertions Across ALL Test Suites
+  - [x] Audit and replace permissive `is_ok()`/`is_some()` assertions in `tests/domain_vault_storage.rs` with exact record count and field mutation checks
+  - [x] Audit and replace permissive assertions in `tests/domain_cognitive.rs` with strict hypothesis and cluster state mutations
+  - [x] Audit and replace permissive assertions in `tests/domain_search_retrieval.rs` with strict RRF score, BM25 rank, and temporal edge assertions
+  - [x] Audit and replace permissive assertions in `tests/domain_legacy_aggregators.rs` (168KB — largest test file, high risk of permissive patterns)
+  - [x] Audit and replace permissive assertions in `tests/domain_e2e_harness.rs` (61KB)
 
-- [ ] Task: Production `unwrap()` and Silenced Error Safety Audit (CTO Critical E-1, SLOP-8)
-  - [ ] Audit all `unwrap()` calls in non-test `src/` code (40+ files)
-  - [ ] Audit all `let _ = <critical_operation>.await;` calls (e.g. `save_wiki_node`, `save_episode`) and replace with proper error propagation or `tracing::error!` logging (CTO High SLOP-8)
+- [x] Task: Production `unwrap()` and Silenced Error Safety Audit (CTO Critical E-1, SLOP-8)
+  - [x] Audit all `unwrap()` calls in non-test `src/` code (40+ files)
+  - [x] Audit all `let _ = <critical_operation>.await;` calls (e.g. `save_wiki_node`, `save_episode`) and replace with proper error propagation or `tracing::error!` logging (CTO High SLOP-8)
   - [x] Fix `bm25.rs:L111` — `self.doc_term_freqs.get(doc_id).unwrap()` panics on missing doc_id — replace with `.ok_or_else()` / match
   - [x] Fix `embeddings.rs` — multiple `.unwrap()` in cache init and model loading paths — replace with `?` propagation / `ok_or_else`
   - [x] Convert `block_on` anti-pattern in `ingestion.rs:L1924` test to `#[tokio::test]`
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ---
 
