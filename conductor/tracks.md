@@ -16,4 +16,5 @@
 - [x] **Track: Mythrax 3.1 Refactoring & Architecture Evolution**
   *Link: [./tracks/mythrax_31_refactor_20260802/index.md](./tracks/mythrax_31_refactor_20260802/index.md)*
 
-
+- [ ] **Track: CTO Deep Architectural Refactor**
+  *Link: [./tracks/cto_deep_refactor_20260802/index.md](./tracks/cto_deep_refactor_20260802/index.md)*
