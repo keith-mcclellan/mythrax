@@ -3,7 +3,7 @@ name: mythrax
 description: Query memory via the MCP server before starting tasks, verify vault integrity, and run HTR loops.
 ---
 
-# Mythrax Unified Memory, Integrity & Cognitive Guidance (v3.0.0)
+# Mythrax Unified Memory, Integrity & Cognitive Guidance (v3.1.0)
 
 The **Mythrax** MCP server provides semantic memory storage, retrieval, reinforcement, compliance verification, self-healing, cognitive hypothesis execution, short-term memory (STM), document ingestion via Forge, and workspace documentation vault mirroring.
 
@@ -20,7 +20,7 @@ Call the `read` tool with the `action` parameter set to one of the following:
 - **`action="view"`**: Reads a text or source file (paging large blocks into virtual placeholders to save tokens).
   - *Parameters*: `path: String`, `start_line: Option<integer>`, `end_line: Option<integer>`, `is_skill_file: Option<boolean>`, `token_budget: Option<integer>`
 - **`action="search"`**: Search episodic memories using 6-Signal Unified Retrieval (bounded by 50-item paginated windows).
-  - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<integer>`, `threshold: Option<number>`, `include_artifacts: Option<boolean>`, `include_episodes: Option<boolean>`
+  - *Parameters*: `query: String`, `scope: Option<String>`, `limit: Option<integer>`, `threshold: Option<number>`, `include_artifacts: Option<boolean>`, `include_episodes: Option<boolean>`, `include_archived: Option<boolean>`, `temporal_anchor: Option<String>`, `full_content: Option<boolean>`
 - **`action="rules"`**: Query active wisdom rules.
   - *Parameters*: `query: String`, `scope: Option<String>`
 - **`action="nodes"`**: Hydrate specific node IDs.
