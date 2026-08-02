@@ -62,57 +62,72 @@ Call the `write` tool with the `action` parameter set to one of the following:
   - *Parameters*: `session_id: String`
 - **`action="handoff"`**: Register subagent delegation handoff contract.
   - *Parameters*: `parent_conversation_id: String`, `subagent_conversation_id: String`, `summary: String`, `handoff_file_path: String`, `scope: Option<String>`
-- **`action="set"`**: Set daemon configuration.
-  - *Parameters*: `provider: String`, `model: String`, `cloud_provider: String`, `api_key: Option<String>`
+- **`action="save_wisdom"`**: Save or update a WisdomRule node.
+  - *Parameters*: `target_pattern: String`, `action_to_avoid: String`, `causal_explanation: String`, `prescribed_remedy: String`, `scope: Option<String>`, `tier: Option<String>`
+- **`action="cognitive_callback"`**: Return LLM task results from background synthesis pipelines to SurrealDB.
+  - *Parameters*: `callback_id: String`, `result: String`
 
 ---
 
-### 3. `manage` (Workspace & Verification Tasks)
+### 3. `manage` (Workspace, Synthesis & Verification Tasks)
 
 Call the `manage` tool with the `action` parameter set to one of the following:
 
-- **`action="verify"`**: Verify link integrity and sync schemas.
+- **`action="verify"`**: Verify link integrity and sync schemas across 700+ vault markdown files.
   - *Parameters*: `fix: Option<boolean>`
-- **`action="organize"`**: Re-align directory structures.
+- **`action="organize"`**: Re-align directory structures and sync physical vault files with database index.
   - *Parameters*: None
-- **`action="reprocess"`**: Re-index all vault nodes (regenerates embeddings & re-chunks).
-  - *Parameters*: None
-- **`action="summarize"`**: Trigger manual compactions.
-  - *Parameters*: `scope: String`
-  - *Note*: On macOS, to prevent Metal GPU timeout crashes, always run synchronously and sequentially rather than concurrently.
-- **`action="ingest_bulk"`**: Bulk ingest vault directories.
-  - *Parameters*: `source: String` (logs directory path), `harness: String` (harness path name), `scope: Option<String>`
-- **`action="ingest_forge"`**: Ingest candidate wisdom rules.
-  - *Parameters*: `source: String` or `source_path: String` (source vault path to parse/ingest), `scope: Option<String>`
+- **`action="reprocess"`**: Re-index vault nodes and regenerate vector embeddings asynchronously in background.
+  - *Parameters*: `reset_processed: Option<boolean>` (set `true` only for explicit full LLM fact re-extraction)
+- **`action="sync_workspace"`**: Synchronize workspace documentation (`ARCHITECTURE.md`, `specs/`, `conductor/`) into human-readable reference nodes.
+  - *Parameters*: `workspace_path: Option<String>`
+- **`action="summarize"`**: Trigger manual compactions across memory scopes.
+  - *Parameters*: `scope: String`, `async_mode: Option<boolean>`
+- **`action="hypothesize"`**: Cluster unassociated facts and queue cognitive hypothesis formation tasks.
+  - *Parameters*: `scope: Option<String>`
+- **`action="refine"`**: Queue refinement tasks for pending idea nodes against supporting evidence.
+  - *Parameters*: `scope: Option<String>`
+- **`action="graduate"`**: Execute cross-scope wisdom graduation pipeline to promote universal claims into `WisdomRule` nodes.
+  - *Parameters*: `scope: Option<String>`
+- **`action="extract"`, `action="extract_code"`**: Extract atomic facts from documents or source code files.
+  - *Parameters*: `doc_path: String` or `file_path: String`, `scope: Option<String>`
+- **`action="complete_handoff"`**: Validate subagent handoff contract outputs, enforce enum and required field constraints, truncate STM values $> 32k$ chars, and mark handoff status as COMPLETED/FAILED.
+  - *Parameters*: `task_id: String`, `status: Option<String>`, `outputs: Option<Object>`, `fail_reason: Option<String>`
+- **`action="ingest_bulk"`**: Bulk ingest external agent log directories.
+  - *Parameters*: `source: String`, `harness: String`, `scope: Option<String>`
+- **`action="ingest_forge"`**: Ingest candidate documents (PDF/Markdown) via Forge pipeline.
+  - *Parameters*: `source: String` or `source_path: String`, `scope: Option<String>`
 - **`action="save_forged_assets"`**: Save rule documents and compactions.
   - *Parameters*: `doc_title: String`, `scope: String`, `chunk_index: integer`, `chunk_text: String`, `concepts: Vec<ForgedConcept>`, `rules: Vec<ForgedRule>`
-  - *Data Types*:
-    - `ForgedConcept`: `{ name: String, content: String }`
-    - `ForgedRule`: `{ target_pattern: String, action_to_avoid: String, causal_explanation: String, prescribed_remedy: String }`
-- **`action="pre_invocation"`**: Load belief states and hydrate context.
+- **`action="pre_invocation"`**: Load POMDP belief states and hydrate context before turn execution.
   - *Parameters*: `session_id: String`, `workspace_path: Option<String>`
-- **`action="precompact"`**: Compact active transcripts (tool sequence capped at 1,000-item sliding window).
-  - *Parameters*: `session_id: String`, `transcript_path: String`
-- **`action="audit_compliance"`**: Scan files against rules.
-  - *Parameters*: `files: Vec<String>`
-- **`action="clean"`**: Clean temporary build files.
-  - *Parameters*: `scope: Option<String>`
+- **`action="precompact"`**: Compact active transcripts into raw turn episodes.
+  - *Parameters*: `session_id: String`, `transcript_path: Option<String>`
+- **`action="audit_compliance"`**: Scan files against compliance rules and verify daemon health.
+  - *Parameters*: `files: Option<Vec<String>>`, `workspace_path: Option<String>`
+- **`action="clean"`**: Clean temporary build files and stale branches.
+  - *Parameters*: `scope: Option<String>`, `confirm: Option<boolean>`
 - **`action="bootstrap"`**: Run system bootstrapping.
   - *Parameters*: `scope: Option<String>`
-- **`action="prune"`**: Prune stale memories using atomic single-transaction blocks cascading across all 4 relation tables (`relates_to`, `followed_by`, `mentions`, `superseded_by`) and `metrics` table (`DELETE metrics WHERE target_id = $id;`).
+- **`action="prune"`**: Prune stale memories across all 4 relation tables (`relates_to`, `followed_by`, `mentions`, `superseded_by`).
   - *Parameters*: `scope: Option<String>`
+- **`action="tree_add_node"`, `action="tree_update_node"`, `action="tree_prune"`, `action="tree_view"`, `action="git_merge_branch"`**:
+  - *Usage*: Manage Arbor hypothesis exploration tree state and worktree branches.
+  - *Parameters*: `node_id: Option<String>`, `claim: Option<String>`, `confidence: Option<number>`
 - **`action="init"`, `action="ideate"`, `action="execute"`, `action="backprop"`, `action="merge"`, `action="run"`**:
-  - *Usage*: Execute HTR (Hypothesize-Test-Refine) loop stages.
-  - *Parameters*: `hypothesis: Option<String>`, `test_command: Option<String>`, `max_steps: Option<integer>`, `node_id: Option<String>`
+  - *Usage*: Execute HTR (Hypothesize-Test-Refine) loop stages across isolated git worktrees.
+  - *Parameters*: `hypothesis: Option<String>`, `test_command: Option<String>`, `max_steps: Option<integer>`, `node_id: Option<String>`, `scope: String`
 
 ---
 
-### 4. `agent` (Autonomous Agent Orchestration)
+### 4. `agent` (Autonomous Subagent & Handoff Orchestration)
 
-Call the `agent` tool with the `action` parameter set to:
+Call the `agent` tool with the `action` parameter set to one of the following:
 
-- **`action="complete_code_task"`**: Spawn an autonomous subagent loop to complete a coding chore.
+- **`action="complete_code_task"`** (alias `complete_task`): Spawn an autonomous subagent loop to complete a coding chore.
   - *Parameters*: `prompt: String`, `system_instruction: Option<String>`, `model: Option<String>`, `enable_thinking: Option<boolean>`
+- **`action="handoff"`** (alias `save_handoff`): Register a subagent delegation handoff contract in SurrealDB and link parent-child conversation context.
+  - *Parameters*: `parent_conversation_id: String`, `subagent_conversation_id: String`, `summary: String`, `handoff_file_path: String`, `scope: Option<String>`
 
 ---
 
