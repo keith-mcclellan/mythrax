@@ -22,8 +22,9 @@ Type: Refactor & Architecture Evolution
   - [ ] Audit and replace permissive assertions in `tests/domain_legacy_aggregators.rs` (168KB — largest test file, high risk of permissive patterns)
   - [ ] Audit and replace permissive assertions in `tests/domain_e2e_harness.rs` (61KB)
 
-- [ ] Task: Production `unwrap()` Safety Audit (CTO Critical E-1)
+- [ ] Task: Production `unwrap()` and Silenced Error Safety Audit (CTO Critical E-1, SLOP-8)
   - [ ] Audit all `unwrap()` calls in non-test `src/` code (40+ files)
+  - [ ] Audit all `let _ = <critical_operation>.await;` calls (e.g. `save_wiki_node`, `save_episode`) and replace with proper error propagation or `tracing::error!` logging (CTO High SLOP-8)
   - [ ] Fix `bm25.rs:L111` — `self.doc_term_freqs.get(doc_id).unwrap()` panics on missing doc_id — replace with `.ok_or_else()`
   - [ ] Fix `embeddings.rs` — multiple `.unwrap()` in cache init and model loading paths — replace with `?` propagation
   - [ ] Convert `block_on` anti-pattern in `ingestion.rs:L1924` test to `#[tokio::test]`
@@ -148,6 +149,9 @@ Type: Refactor & Architecture Evolution
   - [ ] Extract generic `backfill_missing_embeddings<T>()` helper from 3 duplicate loops in `daemon.rs:L172-L318` (CTO A-6)
   - [ ] Replace N+4 individual config queries in swap monitor (`main.rs:L401-L427`) with a single `SELECT ... FROM config:settings` (CTO A-5)
   - [ ] Remove hardcoded swap thresholds in `check_swap_pressure()` — read from config (CTO F-4)
+  - [ ] Centralize hardcoded port "8090" into `const DEFAULT_DAEMON_PORT: u16 = 8090;` and a `fn daemon_url()` helper in a shared config module (CTO High SLOP-1)
+  - [ ] Add `MYTHRAX_PROXY_URL` env var override for the hardcoded `8080` LLM fallback URL in `api.rs` (CTO High SLOP-2)
+  - [ ] Unify duplicate `MAX_HYDRATION_CHARS = 10000` into a single `const` in `mcp_routes.rs` (CTO Medium SLOP-4, SLOP-12)
 
 - [ ] Task: God Module Decomposition (CTO High B-2, F-1, Low F-7)
   - [ ] Decompose `main.rs` (1771 lines) into `cli/onboarding.rs`, `cli/swap_monitor.rs`, `cli/log_writer.rs` with thin dispatcher
@@ -160,7 +164,12 @@ Type: Refactor & Architecture Evolution
   - [ ] Eliminate redundant `token.clone()` in BM25 scoring hot path (`bm25.rs:L29`); consider `Arc<str>` for doc IDs
 
 - [ ] Task: Dead Code & Unused Module Elimination
-  - [ ] Remove `evict_if_needed()` empty stub in `embeddings.rs:L52` (CTO A-3)
+  - [ ] Extract ~120 lines of hardcoded mock LLM responses from `llm/mod.rs:L590-L675` behind `#[cfg(test)]` or a test feature gate (CTO Critical SLOP-6)
+  - [ ] Expand eviction stub cleanup to cover all 4 empty `evict()` stubs: `embeddings.rs:L52`, `embeddings.rs:L528`, `llm/mod.rs:L39`, `llm/mod.rs:L43` (CTO Critical SLOP-5, escalated from A-3)
+  - [ ] Replace `MYTHRAX_TEST_MOCK` runtime checks with compile-time gates where possible, and add prominent warning log when active (CTO High SLOP-7)
+  - [ ] Replace `_ => {}` catch-alls in `manage_handlers.rs` action dispatch and `daemon.rs` stop handler with explicit error logging or bails (CTO High SLOP-9)
+  - [ ] Remove exe-path sniffing for test detection in `search_pipeline.rs:L1169-L1180` (CTO High SLOP-11)
+  - [ ] Define `const SECONDS_PER_DAY: f64 = 86_400.0;` and replace inline magic numbers across codebase (CTO Medium SLOP-3)
   - [ ] Replace `unsafe { libc::kill(pid, 0) }` in `main.rs:L304-L306` with `nix` crate safe wrapper `nix::sys::signal::kill(Pid, None)` (CTO Low E-12)
   - [ ] Extract duplicate macOS/Linux `disk::monitor` blocks in `daemon.rs:L901-L954` into a single `#[cfg(unix)]` block (CTO Low E-13)
   - [ ] Remove unused variables, dead helper functions, and legacy migration scripts across `mythrax-core`
