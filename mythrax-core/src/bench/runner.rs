@@ -977,12 +977,14 @@ fn extract_entities(text: &str) -> Vec<String> {
     let mut entities = std::collections::HashSet::new();
 
     // 1. Extract multi-word capitalized phrases (highly reliable proper nouns)
-    static MULTI_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let multi_re = MULTI_RE.get_or_init(|| {
-        regex::Regex::new(r"\b[A-Z][a-zA-Z0-9_-]+(?:\s+[A-Z][a-zA-Z0-9_-]+)+\b").unwrap()
+    static MULTI_RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    let multi_re_opt = MULTI_RE.get_or_init(|| {
+        regex::Regex::new(r"\b[A-Z][a-zA-Z0-9_-]+(?:\s+[A-Z][a-zA-Z0-9_-]+)+\b").ok()
     });
-    for m in multi_re.find_iter(text) {
-        entities.insert(m.as_str().trim().to_string());
+    if let Some(multi_re) = multi_re_opt {
+        for m in multi_re.find_iter(text) {
+            entities.insert(m.as_str().trim().to_string());
+        }
     }
 
     // 2. Extract single-word capitalized proper nouns (excluding first word of each sentence/clause)
@@ -997,8 +999,8 @@ fn extract_entities(text: &str) -> Vec<String> {
                     .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
                     .collect();
                 if !cleaned.is_empty() {
-                    let first_char = cleaned.chars().next().unwrap();
-                    if first_char.is_ascii_uppercase() {
+                    if let Some(first_char) = cleaned.chars().next() {
+                        if first_char.is_ascii_uppercase() {
                         let lower = cleaned.to_lowercase();
                         if !matches!(
                             lower.as_str(),
@@ -1285,7 +1287,8 @@ async fn run_evaluation(
             backend.save_episodes_batch(&episodes_to_ingest).await
                 .context("Failed to batch ingest haystack turns")?;
 
-            let surreal_backend = backend.as_any().downcast_ref::<SurrealBackend>().unwrap();
+            let surreal_backend = backend.as_any().downcast_ref::<SurrealBackend>()
+                .ok_or_else(|| anyhow::anyhow!("Backend is not a SurrealBackend"))?;
             let db = &surreal_backend.db;
 
             let mut corpus_to_ep_id = std::collections::HashMap::new();

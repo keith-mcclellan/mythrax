@@ -5,10 +5,10 @@
   - [x] Write failing tests for watcher event timeout logic
   - [x] Implement `BTreeMap<Instant, PathBuf>`
   - [x] Refactor and verify coverage
-- [~] Task: Eradicate panics in `src/api.rs`, `src/auth.rs`, `src/bench/`
-  - [~] Map custom Error types
-  - [ ] Replace `.unwrap()`/`.expect()` with safe `Result` propagation
-  - [ ] Verify test suite coverage for error branches
+- [x] Task: Eradicate panics in `src/api.rs`, `src/auth.rs`, `src/bench/`
+  - [x] Map custom Error types
+  - [x] Replace `.unwrap()`/`.expect()` with safe `Result` propagation
+  - [x] Verify test suite coverage for error branches
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Database Monolith Decomposition
