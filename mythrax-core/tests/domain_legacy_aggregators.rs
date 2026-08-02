@@ -1262,7 +1262,7 @@ async fn test_memory_query_frequency_tracker() -> anyhow::Result<()> {
     let result2 = handle_pre_invocation_hook(&state, payload.clone()).await?;
     let text2 = result2["content"][0]["text"].as_str().unwrap();
     assert!(
-        !text2.contains("Warning: Memory searches are stale"),
+        !text2.contains("Mythrax memory search is stale"),
         "Should NOT warn when search is fresh: {}",
         text2
     );
@@ -1277,7 +1277,7 @@ async fn test_memory_query_frequency_tracker() -> anyhow::Result<()> {
     let result3 = handle_pre_invocation_hook(&state, payload.clone()).await?;
     let text3 = result3["content"][0]["text"].as_str().unwrap();
     assert!(
-        text3.contains("Warning: Memory searches are stale"),
+        text3.contains("Mythrax memory search is stale"),
         "Should warn when search is stale: {}",
         text3
     );
