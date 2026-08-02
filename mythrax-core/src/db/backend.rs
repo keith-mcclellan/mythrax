@@ -3350,7 +3350,7 @@ mod tests {
         // Dynamically compute the budget needed for compacted content
         let compacted_content =
             format!("First paragraph here.\n\n... [Truncated (Inner-Node Compaction)]");
-        let text_compacted = format!("{}\n{}", node1.name, compacted_content);
+        let text_compacted = format!("---\ntitle: {}\nscope: compaction-test\n---\n\n{}", node1.name, compacted_content);
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with small budget -> first paragraph + suffix

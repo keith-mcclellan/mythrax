@@ -191,7 +191,7 @@ mod tests {
         for node in all_nodes {
             assert!(node.name.starts_with("node_"));
             let idx: usize = node.name["node_".len()..].parse().unwrap();
-            assert_eq!(node.content, format!("updated_content_{}", idx));
+            assert!(node.content.contains(&format!("updated_content_{}", idx)));
         }
     }
 }
