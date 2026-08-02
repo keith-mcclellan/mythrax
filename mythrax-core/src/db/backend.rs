@@ -1973,34 +1973,42 @@ impl StorageBackend for SurrealBackend {
     async fn save_wiki_node(&self, node: &WikiNode) -> Result<String> {
         if let Some(tx) = self.blackboard_tx.get() {
             let (respond_to, rx) = tokio::sync::oneshot::channel();
-            tx.send(crate::db::blackboard::EventMessage {
-                event: crate::db::blackboard::WikiNodeEvent::Insert(node.clone()),
-                respond_to,
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
-            rx.await?
-        } else {
-            self.save_wiki_node_db(node).await
+            if tx
+                .send(crate::db::blackboard::EventMessage {
+                    event: crate::db::blackboard::WikiNodeEvent::Insert(node.clone()),
+                    respond_to,
+                })
+                .await
+                .is_ok()
+            {
+                if let Ok(res) = rx.await {
+                    return res;
+                }
+            }
         }
+        self.save_wiki_node_db(node).await
     }
 
     async fn delete_wiki_node(&self, name: &str, scope: &str) -> Result<()> {
         if let Some(tx) = self.blackboard_tx.get() {
             let (respond_to, rx) = tokio::sync::oneshot::channel();
-            tx.send(crate::db::blackboard::EventMessage {
-                event: crate::db::blackboard::WikiNodeEvent::Delete {
-                    name: name.to_string(),
-                    scope: scope.to_string(),
-                },
-                respond_to,
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to send event to blackboard actor"))?;
-            rx.await?.map(|_| ())
-        } else {
-            self.delete_wiki_node_db(name, scope).await
+            if tx
+                .send(crate::db::blackboard::EventMessage {
+                    event: crate::db::blackboard::WikiNodeEvent::Delete {
+                        name: name.to_string(),
+                        scope: scope.to_string(),
+                    },
+                    respond_to,
+                })
+                .await
+                .is_ok()
+            {
+                if let Ok(res) = rx.await {
+                    return res.map(|_| ());
+                }
+            }
         }
+        self.delete_wiki_node_db(name, scope).await
     }
 
     async fn find_wiki_node_by_hash(&self, hash: &str, scope: &str) -> Result<Option<WikiNode>> {
