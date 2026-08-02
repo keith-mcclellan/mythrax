@@ -1481,7 +1481,13 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn save_fact(&self, fact: &crate::contracts::Fact) -> Result<String> {
-        let fact_id = fact.id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let raw_id = fact.id.as_deref().unwrap_or("");
+        let id_clean = raw_id.trim_start_matches("fact:");
+        let fact_id = if id_clean.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            id_clean.to_string()
+        };
         let record_id = parse_record_id(&format!("fact:{}", fact_id))?;
         let mut save = fact.clone();
         save.id = None;

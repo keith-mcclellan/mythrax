@@ -329,7 +329,7 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 let (sys, user) = crate::cognitive::prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
                 let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
                 let task = crate::db::CognitiveTask {
-                    id: task_id,
+                    id: task_id.clone(),
                     task_type: "Synthesis".to_string(),
                     prompt: format!("[scope:{}] Form hypotheses from facts:\n{}", scope, user),
                     system_instruction: sys,
@@ -344,6 +344,11 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 };
                 if surreal_backend.create_cognitive_task(&task).await.is_ok() {
                     queued += 1;
+                    for fact in &cluster_facts {
+                        let mut updated_fact = (*fact).clone();
+                        updated_fact.idea_node_id = Some(format!("pending_{}", task_id));
+                        let _ = crate::cognitive::db::save_fact(&*state.backend, &updated_fact).await;
+                    }
                 }
             }
             Ok(json!({
