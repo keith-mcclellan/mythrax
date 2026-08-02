@@ -506,6 +506,11 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                         if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
                                             && unprocessed.len() >= 50 {
                                                 tracing::info!("Threshold dreaming triggered ({} unprocessed episodes).", unprocessed.len());
+                                                for ep in &unprocessed {
+                                                    if let Some(ref id) = ep.id {
+                                                        let _ = backend_dream.mark_episode_processed(id).await;
+                                                    }
+                                                }
                                                 let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
                                                 if scopes.is_empty() {
                                                     scopes.push("general".to_string());
@@ -530,6 +535,11 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
                                     if let Ok(unprocessed) = backend_dream.get_unprocessed_episodes_paginated(51, 0).await
                                         && !unprocessed.is_empty() {
                                             tracing::info!("Idle debounced synthesis starting...");
+                                            for ep in &unprocessed {
+                                                if let Some(ref id) = ep.id {
+                                                    let _ = backend_dream.mark_episode_processed(id).await;
+                                                }
+                                            }
                                             let mut scopes = backend_dream.get_active_scopes().await.unwrap_or_default();
                                             if scopes.is_empty() {
                                                 scopes.push("general".to_string());
