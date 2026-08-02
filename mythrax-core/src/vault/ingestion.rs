@@ -2086,40 +2086,49 @@ pub async fn sync_workspace_docs_to_vault(
     let mut active_vault_paths = std::collections::HashSet::new();
 
     for file in &workspace_files {
-        let vault_rel_path = format!("reference/{}", file.rel_path);
-        active_vault_paths.insert(vault_rel_path.clone());
-        let dest_disk_path = store.vault_root.join(&vault_rel_path);
-
-        let mut needs_write = true;
-        if dest_disk_path.exists() {
-            if let Ok(disk_content) = std::fs::read_to_string(&dest_disk_path) {
-                use sha2::Digest;
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(disk_content.as_bytes());
-                let disk_hash = format!("{:x}", hasher.finalize());
-                if disk_hash == file.hash {
-                    if let Ok(Some(_)) = backend.find_wiki_node_by_hash(&file.hash, "workspace_ref").await {
-                        needs_write = false;
-                    }
-                }
-            }
-        }
-
         let ws_scope = workspace_root
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("workspace_ref");
-        if needs_write {
-            store.write_file(&vault_rel_path, &file.content)?;
-            index_reference_doc(&file.rel_path, &vault_rel_path, &file.content, &file.hash, backend).await?;
-            if file.rel_path.ends_with(".rs") || file.rel_path.ends_with(".py") || file.rel_path.ends_with(".ts") || file.rel_path.ends_with(".go") {
-                let _ = crate::cognitive::pipeline::extract_from_code(backend, None, &file.content, &file.rel_path, ws_scope).await;
+
+        let is_code_file = file.rel_path.ends_with(".rs")
+            || file.rel_path.ends_with(".py")
+            || file.rel_path.ends_with(".ts")
+            || file.rel_path.ends_with(".go");
+
+        if !is_code_file {
+            let vault_rel_path = format!("reference/{}", file.rel_path);
+            active_vault_paths.insert(vault_rel_path.clone());
+            let dest_disk_path = store.vault_root.join(&vault_rel_path);
+
+            let mut needs_write = true;
+            if dest_disk_path.exists() {
+                if let Ok(disk_content) = std::fs::read_to_string(&dest_disk_path) {
+                    use sha2::Digest;
+                    let mut hasher = sha2::Sha256::new();
+                    hasher.update(disk_content.as_bytes());
+                    let disk_hash = format!("{:x}", hasher.finalize());
+                    if disk_hash == file.hash {
+                        if let Ok(Some(_)) = backend.find_wiki_node_by_hash(&file.hash, "workspace_ref").await {
+                            needs_write = false;
+                        }
+                    }
+                }
             }
+
+            if needs_write {
+                store.write_file(&vault_rel_path, &file.content)?;
+                index_reference_doc(&file.rel_path, &vault_rel_path, &file.content, &file.hash, backend).await?;
+            }
+        } else {
+            // Process code file for AST extraction & project-scoped AST reference markdown file generation
+            let _ = crate::cognitive::pipeline::extract_from_code(backend, None, &file.content, &file.rel_path, ws_scope).await;
         }
     }
 
+
     if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-        #[derive(serde::Deserialize, SurrealValue)]
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
         struct WikiNodePathRef {
             id: surrealdb::types::RecordId,
             vault_path: Option<String>,
@@ -2222,7 +2231,7 @@ async fn index_reference_doc(
             embedding: None,
             temporal_range_start: None,
             temporal_range_end: None,
-            metacognitive_confidence: Some(100),
+            metacognitive_confidence: Some(100.0),
             node_type: Some("reference".to_string()),
             content_hash: Some(content_hash.to_string()),
             ..Default::default()

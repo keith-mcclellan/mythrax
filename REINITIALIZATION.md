@@ -139,23 +139,19 @@ OUTER LOOP (Repeat indefinitely):
   PHASE 2: Ingestion & Embedding Maintenance
   - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "reprocess"}
 
-  PHASE 3 (CONDITIONAL): Dynamic Scope Dreaming, Pre-Compaction & Direction Backprop
-  - FIRST check if uncompacted work exists by inspecting active scopes/turns via call_mcp_tool: ServerName='mythrax', ToolName='read', Arguments={action: "nodes"}.
-  - ONLY if new episodes/turns have been ingested or updated since last pass, run:
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "precompact"}
-    - For EACH discovered scope sequentially (with async_mode: false):
-      - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "summarize", scope: "<scope>", async_mode: false}
-      - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "ideate", scope: "<scope>", hypothesis: "Auto-synthesize research directions for scope"}
-      - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "backprop", scope: "<scope>"}
-  - Otherwise, SKIP Phase 3.
+  PHASE 3: Dynamic Scope Dreaming, Hypothesis Formation, Refinement & Insight Synthesis
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "precompact"}
+  - For EACH scope in ['general', 'mythrax'] sequentially (use the bare scope name, NOT the CorpusName like 'keith-mcclellan/mythrax'):
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "summarize", scope: "<scope>", async_mode: false}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "hypothesize", scope: "<scope>"}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "refine", scope: "<scope>"}
+    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "graduate", scope: "<scope>"}
 
-  PHASE 4 (CONDITIONAL): Wisdom Graduation, Cleaning & Vault Repair
-  - ONLY if Phase 3 ran or vault modifications occurred, run:
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "audit_compliance"}
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "clean"}
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "verify", fix: true}
-    - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "organize"}
-  - Otherwise, SKIP Phase 4.
+  PHASE 4: Wisdom Graduation, Cleaning & Vault Repair
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "audit_compliance"}
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "clean"}
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "verify", fix: true}
+  - Call call_mcp_tool: ServerName='mythrax', ToolName='manage', Arguments={action: "organize"}
 
   INNER SLEEP & RESTART:
   - Schedule a 10-second timer to pause before repeating cycle from Phase 1.

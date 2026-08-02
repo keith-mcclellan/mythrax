@@ -40,6 +40,23 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
     };
 
     match mapped_action {
+        "sync_workspace" => {
+            let ws_path_str = args
+                .get("workspace_path")
+                .or_else(|| args.get("source"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("/Users/keith/Documents/mythrax");
+            let ws_path = std::path::PathBuf::from(ws_path_str);
+            crate::vault::ingestion::sync_workspace_docs_to_vault(&ws_path, &state.store, &*state.backend).await?;
+            Ok(json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!("Synchronized workspace documentation and extracted AST code symbols for workspace at {:?}", ws_path)
+                    }
+                ]
+            }))
+        }
         "complete_handoff" => {
             let task_id = args
                 .get("task_id")
@@ -266,17 +283,121 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "hypothesize" => {
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
-            let ideas = crate::cognitive::pipeline::form_hypotheses(&*state.backend, None, scope).await?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<crate::db::backend::SurrealBackend>()
+                .context("SurrealBackend required for hypothesize")?;
+
+            let config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
+            let unassociated = crate::cognitive::db::get_unassociated_facts(&*state.backend, &scope).await?;
+            if unassociated.len() < config.cluster_min_size {
+                return Ok(json!({
+                    "content": [{ "type": "text", "text": format!("Not enough unassociated facts for scope {} ({}/{})", scope, unassociated.len(), config.cluster_min_size) }]
+                }));
+            }
+
+            let embeddings: Vec<Vec<f32>> = unassociated
+                .iter()
+                .map(|f| f.embedding.clone().unwrap_or_else(|| vec![0.0; 768]))
+                .collect();
+            let clusters = crate::cognitive::pipeline::cluster_facts(&unassociated, &embeddings, &config);
+            let pruned_nodes = crate::cognitive::db::get_pruned_idea_nodes(&*state.backend, &scope, config.prune_threshold).await?;
+            let pruned_constraints: Vec<String> = pruned_nodes.iter().map(|n| n.claim.clone()).collect();
+
+            let mut queued = 0usize;
+            for cluster in &clusters {
+                let cluster_facts: Vec<&crate::contracts::Fact> = cluster.iter().map(|&idx| &unassociated[idx]).collect();
+                let facts_summary = cluster_facts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| format!("[{}] H: {} | Insight: {}", i, f.h_n().unwrap_or(""), f.iota_n().unwrap_or("")))
+                    .collect::<Vec<String>>()
+                    .join("\n");
+                let (sys, user) = crate::cognitive::prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
+                let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                let task = crate::db::CognitiveTask {
+                    id: task_id,
+                    task_type: "Synthesis".to_string(),
+                    prompt: format!("[scope:{}] Form hypotheses from facts:\n{}", scope, user),
+                    system_instruction: sys,
+                    expected_format: "Json".to_string(),
+                    priority: "Normal".to_string(),
+                    created_at: chrono::Utc::now(),
+                    status: "Pending".to_string(),
+                    result: None,
+                    ttl_minutes: 60,
+                    injected_at: None,
+                    session_id: Some(scope.clone()),
+                };
+                if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                    queued += 1;
+                }
+            }
             Ok(json!({
-                "content": [{ "type": "text", "text": format!("Formed {} hypotheses for scope {}", ideas.len(), scope) }]
+                "content": [{ "type": "text", "text": format!("Queued {} hypothesis formation tasks for scope {} ({} clusters from {} facts)", queued, scope, clusters.len(), unassociated.len()) }]
             }))
         }
         "refine" => {
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
-            let logs = crate::cognitive::pipeline::refine_hypotheses(&*state.backend, None, scope).await?;
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let surreal_backend = state
+                .backend
+                .as_any()
+                .downcast_ref::<crate::db::backend::SurrealBackend>()
+                .context("SurrealBackend required for refine")?;
+
+            let pending_ideas = crate::cognitive::db::get_idea_nodes_by_scope(&*state.backend, &scope).await?;
+            let facts = crate::cognitive::db::get_facts_by_scope(&*state.backend, &scope).await?;
+            let config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
+
+            let mut queued = 0usize;
+            for idea in &pending_ideas {
+                if idea.status == crate::contracts::IdeaStatus::Merged
+                    || idea.status == crate::contracts::IdeaStatus::Pruned
+                {
+                    continue;
+                }
+                for fact in &facts {
+                    if fact.idea_node_id.as_deref() != idea.id.as_deref() {
+                        continue;
+                    }
+                    let fact_summary = format!("H: {} | Insight: {}", fact.h_n().unwrap_or(""), fact.iota_n().unwrap_or(""));
+                    let (sys, user) = crate::cognitive::prompts::build_refinement_prompt(
+                        &idea.claim,
+                        &idea.insight,
+                        idea.confidence,
+                        &fact_summary,
+                    );
+                    let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
+                    let task = crate::db::CognitiveTask {
+                        id: task_id,
+                        task_type: "Refinement".to_string(),
+                        prompt: format!("[scope:{}] [idea:{}] Refine hypothesis:\n{}", scope, idea.id.as_deref().unwrap_or(""), user),
+                        system_instruction: sys,
+                        expected_format: "Json".to_string(),
+                        priority: "Normal".to_string(),
+                        created_at: chrono::Utc::now(),
+                        status: "Pending".to_string(),
+                        result: None,
+                        ttl_minutes: 60,
+                        injected_at: None,
+                        session_id: Some(scope.clone()),
+                    };
+                    if surreal_backend.create_cognitive_task(&task).await.is_ok() {
+                        queued += 1;
+                    }
+                }
+            }
             Ok(json!({
-                "content": [{ "type": "text", "text": format!("Refined hypotheses with {} log entries for scope {}", logs.len(), scope) }]
+                "content": [{ "type": "text", "text": format!("Queued {} refinement tasks for scope {} ({} pending ideas)", queued, scope, pending_ideas.len()) }]
+            }))
+        }
+        "graduate" => {
+            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            crate::db::graduation_pipeline::run_graduation_pipeline(&*state.backend, scope).await?;
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("Graduation pipeline complete for scope {}", scope) }]
             }))
         }
         "config" => {
@@ -2068,9 +2189,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     );
     let mut p2_stm = stm_str.clone();
 
-    let base_playbook = "### 💡 Mythrax Skill Playbook Reminder
+    let base_playbook = "### 💡 Mythrax Skill Playbook & Memory Search Reminder
 > [!IMPORTANT]
-> **Always load and refer to the `/mythrax` skill** (defined globally at `/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or locally in the workspace at `.agents/skills/mythrax/SKILL.md`) to understand the consolidated MCP tools reference (`read`, `write`, `manage`, `agent`), agent handoff protocols, and virtual paging rules.
+> **MEMORY SEARCH FIRST MANDATE**: Before executing code changes, shell commands, or plan steps, you MUST query Mythrax memory using `read(action=\"search\", query=\"...\")` or `read(action=\"rules\", query=\"...\")` to recall active project context, architectural guidelines, and negative constraints.
+> **Skill Reference**: Refer to the `/mythrax` skill (`/Users/keith/.gemini/config/skills/mythrax/SKILL.md` or `.agents/skills/mythrax/SKILL.md`) for MCP tool signatures (`read`, `write`, `manage`, `agent`).
 
 ";
 
@@ -2133,11 +2255,42 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     }
 
+    let user_directions_section = {
+        let sql = "SELECT name, content FROM wiki_node WHERE node_type = 'direction' OR item_type = 'direction' LIMIT 5;";
+        if let Ok(mut resp) = surreal_backend.db.query(sql).await {
+            #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+            struct DirRow {
+                name: String,
+                content: String,
+            }
+            if let Ok(rows) = resp.take::<Vec<DirRow>>(0) {
+                if !rows.is_empty() {
+                    let mut text = String::from("### 🎯 Active User Directions\n");
+                    for row in rows {
+                        let snippet = row.content.lines().next().unwrap_or(&row.content);
+                        text.push_str(&format!("- **{}**: {}\n", row.name, snippet));
+                    }
+                    text.push_str("\n");
+                    text
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    };
+
     let initial_context = {
         let mut base = String::new();
         base.push_str(base_playbook);
         base.push_str(&preamble);
         base.push_str(&p0_policy);
+        if !user_directions_section.is_empty() {
+            base.push_str(&user_directions_section);
+        }
         if !p1_advisory.is_empty() {
             base.push_str(&p1_advisory);
         }
@@ -2256,7 +2409,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                          > There are pending cloud cognitive task callbacks in SurrealDB, but the background Mythrax Cloud Brain is not active (no heartbeat in the last 60 seconds).\n\
                          > You MUST immediately spin up the Mythrax Cloud Brain subagent to execute dreaming and callback resolution using your cloud brain!\n\
                          > Run this tool call to boot it:\n\
-                         > `invoke_subagent(TypeName=\"self\", Role=\"Mythrax Cloud Brain\", Prompt=\"You are the Mythrax Cloud Brain. Your job is to continuously orchestrate Mythrax operations using MCP endpoints in an infinite loop. RULES: 1. In call_mcp_tool calls, ServerName MUST be exact unquoted 'mythrax', and ToolName MUST be manage, write, or read. 2. ONLY use call_mcp_tool endpoints. 3. Execute in a CONTINUOUS INFINITE LOOP. PHASE 1 (HIGHEST PRIORITY): Cognitive Callback Resolution Loop - call_mcp_tool: manage(action=\\\"pre_invocation\\\", caller=\\\"distiller\\\"); resolve each pending task via write(action=\\\"cognitive_callback\\\", callback_id=\\\"<ID>\\\", result=\\\"<OUTPUT>\\\"). PHASE 2: Ingestion & Embedding Maintenance - call_mcp_tool: manage(action=\\\"reprocess\\\"). PHASE 3 (CONDITIONAL): Dynamic Scope Dreaming & Direction Backprop - FIRST check if uncompacted work exists by inspecting active scopes/turns via read(action=\\\"nodes\\\"). ONLY if new episodes/turns have been ingested or updated since last pass, run: manage(action=\\\"precompact\\\"); then for EACH scope sequentially: manage(action=\\\"summarize\\\", scope=\\\"<scope>\\\", async_mode=false), manage(action=\\\"ideate\\\", scope=\\\"<scope>\\\", hypothesis=\\\"Auto-synthesize research directions for scope\\\"), manage(action=\\\"backprop\\\", scope=\\\"<scope>\\\"). Otherwise, SKIP Phase 3. PHASE 4 (CONDITIONAL): Wisdom Graduation, Cleaning & Vault Repair - ONLY if Phase 3 ran or vault modifications occurred, run: manage(action=\\\"audit_compliance\\\"), manage(action=\\\"clean\\\"), manage(action=\\\"verify\\\", fix=true), manage(action=\\\"organize\\\"). Otherwise, SKIP Phase 4. INNER SLEEP: Schedule 10s timer before repeating cycle from Phase 1.\")`\n"
+                         > `invoke_subagent(TypeName=\"self\", Role=\"Mythrax Cloud Brain\", Prompt=\"You are the Mythrax Cloud Brain. Your job is to continuously orchestrate Mythrax operations using MCP endpoints in an infinite loop. RULES: 1. In call_mcp_tool calls, ServerName MUST be exact unquoted 'mythrax', and ToolName MUST be manage, write, or read. 2. ONLY use call_mcp_tool endpoints. 3. Execute in a CONTINUOUS INFINITE LOOP. PHASE 1 (HIGHEST PRIORITY): Cognitive Callback Resolution Loop - call_mcp_tool: manage(session_id=\\\"<active_session_id>\\\", action=\\\"pre_invocation\\\", caller=\\\"distiller\\\"); resolve each pending task via write(action=\\\"cognitive_callback\\\", callback_id=\\\"<ID>\\\", result=\\\"<OUTPUT>\\\"). PHASE 2: Ingestion & Embedding Maintenance - call_mcp_tool: manage(action=\\\"reprocess\\\"). PHASE 3: Dynamic Scope Dreaming, Hypothesis Formation, Refinement & Insight Synthesis - call_mcp_tool: manage(action=\\\"precompact\\\"); for EACH scope in ['general', 'mythrax'] sequentially: manage(action=\\\"summarize\\\", scope=\\\"<scope>\\\", async_mode=false), manage(action=\\\"hypothesize\\\", scope=\\\"<scope>\\\"), manage(action=\\\"refine\\\", scope=\\\"<scope>\\\"), manage(action=\\\"graduate\\\", scope=\\\"<scope>\\\"). PHASE 4: Wisdom Graduation, Cleaning & Vault Repair - call_mcp_tool: manage(action=\\\"audit_compliance\\\"), manage(action=\\\"clean\\\"), manage(action=\\\"verify\\\", fix=true), manage(action=\\\"organize\\\"). INNER SLEEP: Schedule 10s timer before repeating cycle from Phase 1.\")`\n"
+
                     );
                 }
             }

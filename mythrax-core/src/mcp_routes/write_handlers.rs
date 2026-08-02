@@ -621,8 +621,15 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
     }
 
     // Downstream WikiNode Synthesis Persistence
-    let scope_name = task.session_id.as_deref().unwrap_or("general");
-    if task.prompt.contains("Form hypotheses") || task.prompt.contains("insight") || task.prompt.contains("direction") || task.prompt.contains("wisdom") {
+    // Extract scope from [scope:...] prompt prefix if present, fall back to session_id.
+    let scope_from_prompt: Option<String> = task.prompt.strip_prefix("[scope:").and_then(|rest| {
+        rest.split_once(']').map(|(s, _)| s.trim().to_string())
+    });
+    let scope_name = scope_from_prompt.as_deref()
+        .or(task.session_id.as_deref())
+        .unwrap_or("general");
+    if task.prompt.contains("Form hypotheses") || task.task_type == "Synthesis" || task.task_type == "Refinement"
+        || task.prompt.contains("insight") || task.prompt.contains("direction") || task.prompt.contains("wisdom") {
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(result).or_else(|_| {
             let cleaned = crate::llm::strip_code_fences(result);
             serde_json::from_str::<serde_json::Value>(&cleaned)

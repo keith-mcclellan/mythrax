@@ -62,12 +62,21 @@ pub fn derive_slug(raw_slug: Option<&str>, fallback_text: &str) -> String {
     let trimmed = slug.trim_matches('_').to_string();
     if trimmed.is_empty() {
         "node".to_string()
-    } else if trimmed.len() > 50 {
-        trimmed.chars().take(50).collect::<String>().trim_end_matches('_').to_string()
+    } else if trimmed.len() > 60 {
+        let char_limit = trimmed.char_indices().map(|(i, _)| i).nth(60).unwrap_or(trimmed.len());
+        let sub = &trimmed[..char_limit];
+        if let Some(idx) = sub.rfind('_') {
+            if idx > 15 {
+                return sub[..idx].trim_end_matches('_').to_string();
+            }
+        }
+        sub.trim_end_matches('_').to_string()
     } else {
+
         trimmed
     }
 }
+
 
 pub fn resolve_rule_path(scope: &str, target_pattern: &str) -> String {
     let slug = slugify_title(target_pattern);
@@ -95,11 +104,29 @@ pub fn cluster_facts(
         }
 
         let mut current_cluster = vec![i];
+        let emb_i_valid = embeddings[i].iter().any(|v| *v != 0.0);
+        let s_i = format!("{} {} {}", facts[i].h_n().unwrap_or(""), facts[i].iota_n().unwrap_or(""), facts[i].artifact_refs.join(" ")).to_lowercase();
+        let tokens_i: std::collections::HashSet<&str> = s_i.split_whitespace().filter(|w| w.len() > 3).collect();
+
         for j in (i + 1)..n {
             if assigned[j] {
                 continue;
             }
-            let sim = cosine_similarity(&embeddings[i], &embeddings[j]);
+            let emb_j_valid = embeddings[j].iter().any(|v| *v != 0.0);
+            let sim = if emb_i_valid && emb_j_valid {
+                cosine_similarity(&embeddings[i], &embeddings[j])
+            } else {
+                let s_j = format!("{} {} {}", facts[j].h_n().unwrap_or(""), facts[j].iota_n().unwrap_or(""), facts[j].artifact_refs.join(" ")).to_lowercase();
+                let tokens_j: std::collections::HashSet<&str> = s_j.split_whitespace().filter(|w| w.len() > 3).collect();
+                if tokens_i.is_empty() || tokens_j.is_empty() {
+                    0.0
+                } else {
+                    let intersection = tokens_i.intersection(&tokens_j).count();
+                    let union = tokens_i.union(&tokens_j).count();
+                    if union == 0 { 0.0 } else { (intersection as f32 / union as f32) * 5.0 } // Scale Jaccard overlap so >=15% token overlap passes cluster_similarity (0.75) threshold
+                }
+            };
+
             if sim >= config.cluster_similarity {
                 current_cluster.push(j);
             }
@@ -125,30 +152,14 @@ pub async fn extract_facts(
     let scope = episode.scope.clone().unwrap_or_else(|| "general".to_string());
     let source_id = episode.id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let facts_dtos = if let Some(client) = llm {
-        let (sys, user) = prompts::build_episode_extraction_prompt(&episode.content);
-        if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
-            serde_json::from_str::<prompts::ExtractFactsResponse>(&raw_json)
-                .map(|r| r.facts)
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        }
-    } else {
-        // Fallback / mock extraction
-        vec![prompts::ExtractedFactDto {
-            hypothesis: format!("Extracted observation from {}", episode.title),
-            causal_insight: episode.content.chars().take(100).collect(),
-            raw_evidence: vec![episode.content.clone()],
-            artifact_refs: vec![],
-            metacognitive_confidence: 90,
-            slug: None,
-        }]
-    };
+    let (sys, user) = prompts::build_episode_extraction_prompt(&episode.content);
+    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, &episode.title, 10).await?;
+    let facts_dtos = facts_resp.facts;
 
     if facts_dtos.is_empty() {
         return Ok(Vec::new());
     }
+
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
@@ -199,7 +210,7 @@ pub async fn extract_facts(
             embedding: embeddings.get(idx).cloned(),
             node_type: Some("fact".to_string()),
             item_type: Some("fact".to_string()),
-            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as f64),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
@@ -228,6 +239,50 @@ pub async fn extract_facts(
     Ok(created_facts)
 }
 
+/// Executes LLM JSON synthesis with retries and exponential backoff.
+/// Retries until valid non-empty JSON response of type `T` is returned.
+pub async fn retry_llm_json<T: serde::de::DeserializeOwned>(
+    backend: &dyn StorageBackend,
+    llm: Option<&LLMClient>,
+    sys: &str,
+    user: &str,
+    target_name: &str,
+    max_retries: usize,
+) -> Result<T> {
+    let fallback_client = LLMClient::default();
+    let client = llm.unwrap_or(&fallback_client);
+
+    let mut attempt = 0;
+    let mut delay_ms = 500;
+
+    loop {
+        attempt += 1;
+        match client.complete_json(backend, sys, user).await {
+            Ok(raw_json) => {
+                let cleaned = prompts::clean_json_payload(&raw_json);
+                match serde_json::from_str::<T>(&cleaned) {
+                    Ok(val) => return Ok(val),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse LLM JSON synthesis for {} (attempt {}/{}): {:?}. Raw: {}", target_name, attempt, max_retries, e, cleaned);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("LLM complete_json error for {} (attempt {}/{}): {:?}", target_name, attempt, max_retries, e);
+            }
+        }
+
+        if attempt >= max_retries {
+            anyhow::bail!("LLM synthesis failed to return valid JSON for {} after {} attempts", target_name, max_retries);
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+        delay_ms = (delay_ms * 2).min(10000);
+    }
+}
+
+
+
 /// Extracts atomic facts from an authored vault document.
 pub async fn extract_from_document(
     backend: &dyn StorageBackend,
@@ -236,25 +291,39 @@ pub async fn extract_from_document(
     vault_path: &str,
     scope: &str,
 ) -> Result<Vec<Fact>> {
-    let facts_dtos = if let Some(client) = llm {
-        let (sys, user) = prompts::build_document_extraction_prompt(content, vault_path);
-        if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
-            serde_json::from_str::<prompts::ExtractFactsResponse>(&raw_json)
-                .map(|r| r.facts)
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        }
-    } else {
-        vec![prompts::ExtractedFactDto {
-            hypothesis: format!("Document decision from {}", vault_path),
-            causal_insight: content.chars().take(120).collect(),
-            raw_evidence: vec![vault_path.to_string()],
-            artifact_refs: vec![vault_path.to_string()],
-            metacognitive_confidence: 85,
-            slug: None,
-        }]
-    };
+    let (fm_opt, _) = crate::vault::markdown::parse_frontmatter(content);
+    let node_type = fm_opt
+        .as_ref()
+        .and_then(|yaml| yaml.get("node_type").or_else(|| yaml.get("type")))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_lowercase();
+
+    let lower_path = vault_path.to_lowercase();
+    if node_type == "fact"
+        || node_type == "rule"
+        || node_type == "direction"
+        || node_type == "ast_symbol"
+        || lower_path.ends_with("_fact.md")
+        || lower_path.ends_with("_rule.md")
+        || lower_path.ends_with("_direction.md")
+        || lower_path.ends_with("_ast.md")
+        || lower_path.contains("/facts/")
+        || lower_path.contains("/rules/")
+    {
+        tracing::debug!("Skipping recursive fact extraction on generated vault file: {}", vault_path);
+        return Ok(Vec::new());
+    }
+
+    let (sys, user) = prompts::build_document_extraction_prompt(content, vault_path);
+    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, vault_path, 10).await?;
+    let facts_dtos = facts_resp.facts;
+    if facts_dtos.is_empty() {
+        tracing::info!("LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}", vault_path, facts_resp.no_facts_reason);
+        return Ok(Vec::new());
+    }
+
+
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
@@ -305,7 +374,7 @@ pub async fn extract_from_document(
             embedding: embeddings.get(idx).cloned(),
             node_type: Some("fact".to_string()),
             item_type: Some("fact".to_string()),
-            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as f64),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
@@ -323,29 +392,21 @@ pub async fn extract_from_code(
     scope: &str,
 ) -> Result<Vec<Fact>> {
     let symbols = crate::cognitive::ast::extract_code_ast(file_path, code_content, scope);
-    for sym in &symbols {
-        let _ = db::save_code_symbol(backend, sym).await;
+    let _ = db::save_code_symbols_for_file(backend, &symbols, file_path, scope).await;
+
+
+    let (sys, user) = prompts::build_code_extraction_prompt(code_content, file_path);
+    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, file_path, 10).await?;
+    let facts_dtos = facts_resp.facts;
+    if facts_dtos.is_empty() {
+        tracing::info!("LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}", file_path, facts_resp.no_facts_reason);
+        return Ok(Vec::new());
     }
 
-    let facts_dtos = if let Some(client) = llm {
-        let (sys, user) = prompts::build_code_extraction_prompt(code_content, file_path);
-        if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
-            serde_json::from_str::<prompts::ExtractFactsResponse>(&raw_json)
-                .map(|r| r.facts)
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        }
-    } else {
-        vec![prompts::ExtractedFactDto {
-            hypothesis: format!("Structural pattern in {}", file_path),
-            causal_insight: format!("Code invariant in {}", file_path),
-            raw_evidence: vec![file_path.to_string()],
-            artifact_refs: vec![file_path.to_string()],
-            metacognitive_confidence: 90,
-            slug: None,
-        }]
-    };
+
+
+
+
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
@@ -396,14 +457,22 @@ pub async fn extract_from_code(
             embedding: embeddings.get(idx).cloned(),
             node_type: Some("fact".to_string()),
             item_type: Some("fact".to_string()),
-            metacognitive_confidence: Some(dto.metacognitive_confidence as i32),
+            metacognitive_confidence: Some(dto.metacognitive_confidence as f64),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
+        for sym in &symbols {
+            let sym_name = format!("{}_{}", sym.file_slug, sym.name);
+            let _ = backend.relate_nodes(&saved_id, &format!("code_symbol:{}", sym_name), None, None, None).await;
+        }
         let _ = backend.relate_nodes(&saved_id, file_path, None, None, None).await;
     }
     Ok(created_facts)
 }
+
+
+
+
 
 /// Dual-Path Document Forging:
 /// Path A: Write raw section chunks to `/wiki/{scope}/forge_...` as human-readable `WikiNode` pages for immediate vector + BM25 search.
@@ -452,31 +521,17 @@ pub async fn forge_document(
             embedding: embeddings.into_iter().next(),
             node_type: Some("forged_reference".to_string()),
             item_type: Some("forged_doc".to_string()),
-            metacognitive_confidence: Some(95),
+            metacognitive_confidence: Some(95.0),
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&chunk_node).await;
 
         // ─── PATH B: EXTRACT ARBOR FACTS FOR HTR SYNTHESIS ──────────
-        let facts_dtos = if let Some(client) = llm {
-            let (sys, user) = prompts::build_forge_extraction_prompt(&section.content, source_path);
-            if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
-                serde_json::from_str::<prompts::ExtractFactsResponse>(&raw_json)
-                    .map(|r| r.facts)
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            }
-        } else {
-            vec![prompts::ExtractedFactDto {
-                hypothesis: format!("Reference insight from {} section {}", source_path, idx),
-                causal_insight: section.content.chars().take(150).collect(),
-                raw_evidence: vec![chunk_path.clone()],
-                artifact_refs: vec![source_path.to_string()],
-                metacognitive_confidence: 90,
-                slug: None,
-            }]
-        };
+        let (sys, user) = prompts::build_forge_extraction_prompt(&section.content, source_path);
+        let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, &format!("{}_section_{}", source_path, idx), 10).await?;
+        let facts_dtos = facts_resp.facts;
+
+
 
         let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
         let fact_embeds = backend
@@ -535,31 +590,16 @@ pub async fn forge_skill(
         vault_path: Some(wiki_path.clone()),
         node_type: Some("skill_playbook".to_string()),
         item_type: Some("skill".to_string()),
-        metacognitive_confidence: Some(95),
+        metacognitive_confidence: Some(95.0),
         ..Default::default()
     };
     let _ = backend.save_wiki_node(&chunk_node).await;
 
     // Path B: Extract FactSource::Skill facts
-    let facts_dtos = if let Some(client) = llm {
-        let (sys, user) = prompts::build_skill_extraction_prompt(skill_content, skill_path);
-        if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
-            serde_json::from_str::<prompts::ExtractFactsResponse>(&raw_json)
-                .map(|r| r.facts)
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        }
-    } else {
-        vec![prompts::ExtractedFactDto {
-            hypothesis: format!("Skill playbook rule for {}", skill_name),
-            causal_insight: skill_content.chars().take(150).collect(),
-            raw_evidence: vec![skill_path.to_string()],
-            artifact_refs: vec![skill_path.to_string()],
-            metacognitive_confidence: 95,
-            slug: None,
-        }]
-    };
+    let (sys, user) = prompts::build_skill_extraction_prompt(skill_content, skill_path);
+    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, skill_name, 10).await?;
+    let facts_dtos = facts_resp.facts;
+
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend
@@ -631,25 +671,10 @@ pub async fn form_hypotheses(
             .collect::<Vec<String>>()
             .join("\n");
 
-        let response = if let Some(client) = llm {
-            let (sys, user) = prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
-            if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
-                serde_json::from_str::<prompts::FormHypothesesResponse>(&raw_json).ok()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let (sys, user) = prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
+        let form_resp = retry_llm_json::<prompts::FormHypothesesResponse>(backend, llm, &sys, &user, "form_hypotheses", 10).await?;
+        let hypotheses_dto = form_resp.hypotheses;
 
-        let hypotheses_dto = response.map(|r| r.hypotheses).unwrap_or_else(|| {
-            vec![prompts::FormHypothesisDto {
-                claim: format!("Synthesized hypothesis from {} facts", cluster_facts.len()),
-                insight: format!("Unified pattern across cluster facts"),
-                fact_indices: (0..cluster_facts.len()).collect(),
-                slug: None,
-            }]
-        });
 
         for hdto in hypotheses_dto {
             let mut evidence_ids = Vec::new();
@@ -723,33 +748,17 @@ pub async fn refine_hypotheses(
             }
 
             let fact_summary = format!("H: {} | Insight: {}", fact.h_n().unwrap_or(""), fact.iota_n().unwrap_or(""));
-            let response = if let Some(client) = llm {
-                let (sys, user) = prompts::build_refinement_prompt(
-                    &idea.claim,
-                    &idea.insight,
-                    idea.confidence,
-                    &fact_summary,
-                );
-                if let Ok(raw_json) = client.complete_json(backend, &sys, &user).await {
-                    serde_json::from_str::<prompts::RefineHypothesisResponse>(&raw_json).ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let (sys, user) = prompts::build_refinement_prompt(
+                &idea.claim,
+                &idea.insight,
+                idea.confidence,
+                &fact_summary,
+            );
+            let r = retry_llm_json::<prompts::RefineHypothesisResponse>(backend, llm, &sys, &user, "refine_hypotheses", 10).await?;
 
             let prev_conf = idea.confidence;
-            let (action, new_conf, refined_insight, reasoning) = if let Some(r) = response {
-                (r.action, r.new_confidence, r.refined_insight, r.reasoning)
-            } else {
-                // Default heuristic refinement
-                let is_support = fact.metacognitive_confidence >= 70;
-                let action = if is_support { "support" } else { "contradict" };
-                let delta = if is_support { 0.15 } else { -0.25 };
-                let new_conf = (prev_conf + delta).clamp(0.0, 1.0);
-                (action.to_string(), new_conf, idea.insight.clone(), "Heuristic pass".to_string())
-            };
+            let (action, new_conf, refined_insight, reasoning) = (r.action, r.new_confidence, r.refined_insight, r.reasoning);
+
 
             idea.confidence = new_conf;
             idea.insight = refined_insight;
@@ -897,7 +906,7 @@ pub async fn merge_validated_nodes(
             causal_insight: Some(idea.insight.clone()),
             artifact_refs: Some(mu_n_vec),
             item_type: Some("wiki".to_string()),
-            metacognitive_confidence: Some((idea.confidence * 100.0) as i32),
+            metacognitive_confidence: Some((idea.confidence * 100.0) as f64),
             ..Default::default()
         };
 

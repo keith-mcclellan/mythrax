@@ -11,7 +11,7 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         .ok_or_else(|| anyhow::anyhow!("SurrealBackend required"))?;
 
     // Select local wiki nodes
-    let sql_local = "SELECT * FROM wiki_node WHERE scope = $scope AND embedding IS NOT NULL;";
+    let sql_local = "SELECT *, type::string(id) AS id FROM wiki_node WHERE scope = $scope AND embedding IS NOT NULL;";
     let mut resp_local = surreal_backend
         .db
         .query(sql_local)
@@ -21,7 +21,7 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
     let local_nodes: Vec<WikiNode> = resp_local.take(0)?;
 
     // Select other projects' wiki nodes
-    let sql_other = "SELECT * FROM wiki_node WHERE scope != $scope AND embedding IS NOT NULL;";
+    let sql_other = "SELECT *, type::string(id) AS id FROM wiki_node WHERE scope != $scope AND embedding IS NOT NULL;";
     let mut resp_other = surreal_backend
         .db
         .query(sql_other)
@@ -146,13 +146,11 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         let decayed_util = util * (-age_days * ln2 / half_life_days).exp();
         rule.utility = Some(decayed_util as f32);
 
-        let id_raw = rule
-            .id
-            .as_ref()
-            .unwrap()
+        let Some(ref full_id) = rule.id else { continue; };
+        let id_raw = full_id
             .split(':')
             .nth(1)
-            .unwrap_or(rule.id.as_ref().unwrap())
+            .unwrap_or(full_id)
             .to_string();
         let _ = surreal_backend.db.query("UPDATE metrics SET utility_score = $utility WHERE target_id = type::record('wisdom', $id);")
             .bind(("id", id_raw))

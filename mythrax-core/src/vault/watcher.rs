@@ -468,7 +468,7 @@ struct WikiFrontmatter {
     name: Option<String>,
     scope: Option<String>,
     edges: Option<Vec<FrontmatterEdge>>,
-    metacognitive_confidence: Option<i32>,
+    metacognitive_confidence: Option<f64>,
     node_type: Option<String>,
     item_type: Option<String>,
 }
@@ -880,7 +880,7 @@ pub async fn sync_file_to_db_with_cache(
                 .to_string()
         });
 
-        let episode = EpisodeSave::builder(title, plain_body)
+        let episode = EpisodeSave::builder(title, content.clone())
             .entities(frontmatter.entities.unwrap_or_default())
             .scope(frontmatter.scope)
             .vault_path(Some(rel_path))

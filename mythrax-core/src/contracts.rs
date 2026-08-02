@@ -731,7 +731,7 @@ pub struct WikiNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporal_range_end: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metacognitive_confidence: Option<i32>,
+    pub metacognitive_confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

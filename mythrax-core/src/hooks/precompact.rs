@@ -394,6 +394,44 @@ pub async fn mine_transcript(
                         }
                     }
 
+                    if normalized_role == "user" {
+                        let lower_text = extracted.to_lowercase();
+                        if lower_text.contains("always")
+                            || lower_text.contains("never")
+                            || lower_text.contains("make sure")
+                            || lower_text.contains("do not")
+                            || lower_text.contains("don't")
+                            || lower_text.contains("must")
+                            || lower_text.contains("use launchctl")
+                            || lower_text.contains("preferred")
+                        {
+                            let clean_title = extracted
+                                .lines()
+                                .next()
+                                .unwrap_or(&extracted)
+                                .chars()
+                                .take(60)
+                                .collect::<String>();
+                            let slug = clean_title
+                                .to_lowercase()
+                                .replace(' ', "_")
+                                .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+                            if !slug.is_empty() {
+                                let dir_node = crate::contracts::WikiNode {
+                                    id: None,
+                                    name: format!("general/{}", slug),
+                                    content: extracted.clone(),
+                                    scope: "general".to_string(),
+                                    vault_path: Some(format!("directions/{}_direction.md", slug)),
+                                    node_type: Some("direction".to_string()),
+                                    item_type: Some("direction".to_string()),
+                                    ..Default::default()
+                                };
+                                let _ = backend.save_wiki_node(&dir_node).await;
+                            }
+                        }
+                    }
+
                     let ep_obj = crate::contracts::Episode {
                         id: Some(saved_id.clone()),
                         title: ep.title.clone(),

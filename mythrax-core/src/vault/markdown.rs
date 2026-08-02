@@ -26,6 +26,79 @@ pub fn parse_frontmatter(content: &str) -> (Option<Value>, String) {
     (yaml_val, body)
 }
 
+/// Sanitizes a markdown body by removing any leading duplicate title lines, H1-H4 headers matching the node title,
+/// or lines consisting strictly of repeated exact title tokens (e.g., "title title title...").
+pub fn sanitize_body_title_repetitions(body: &str, title_candidates: &[&str]) -> String {
+    let mut lines = body.lines();
+    let mut clean_lines = Vec::new();
+    let mut in_leading_header_zone = true;
+
+    // Build exact normalized candidate strings
+    let mut norm_candidates = Vec::new();
+    for cand in title_candidates {
+        let trimmed_cand = cand.trim().trim_start_matches('#').trim();
+        if !trimmed_cand.is_empty() {
+            norm_candidates.push(trimmed_cand.to_lowercase());
+            let short_cand = trimmed_cand.rsplit('/').next().unwrap_or(trimmed_cand);
+            if !short_cand.is_empty() {
+                norm_candidates.push(short_cand.to_lowercase());
+            }
+        }
+    }
+
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+
+        if in_leading_header_zone {
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Strip any #, ##, ###, #### header prefixes
+            let stripped_header = trimmed.trim_start_matches('#').trim();
+            let stripped_lower = stripped_header.to_lowercase();
+
+            let mut is_title_rep = false;
+
+            for cand in &norm_candidates {
+                // Exact line match to full candidate or short candidate
+                if stripped_lower == *cand {
+                    is_title_rep = true;
+                    break;
+                }
+
+                // Exact repetition match: line consists purely of 2+ repetitions of exact candidate
+                let cand_words: Vec<&str> = cand.split_whitespace().collect();
+                let line_words: Vec<&str> = stripped_lower.split_whitespace().collect();
+
+                if !cand_words.is_empty() && line_words.len() >= cand_words.len() * 2 {
+                    let is_exact_repetition = line_words
+                        .chunks(cand_words.len())
+                        .all(|chunk| chunk == cand_words);
+                    if is_exact_repetition {
+                        is_title_rep = true;
+                        break;
+                    }
+                }
+            }
+
+            if is_title_rep {
+                continue;
+            }
+
+            // The moment we hit the first non-title-repetition line, we exit the leading zone permanently!
+            in_leading_header_zone = false;
+        }
+
+        clean_lines.push(line);
+    }
+
+    clean_lines.join("\n")
+}
+
+
+
+
 /// Strips markdown styling, headers, formatting, raw HTML, links, and code blocks
 /// to produce clean, plain text for indexing/embeddings.
 pub fn extract_plain_text(markdown: &str) -> String {
@@ -170,4 +243,18 @@ mod tests {
         assert!(!plain.contains("println"));
         assert!(!plain.contains("<div>"));
     }
+
+    #[test]
+    fn test_sanitize_body_title_repetitions() {
+        let title = "general/cto_review_critique_part1";
+        let short_title = "cto_review_critique_part1";
+        let body = "cto_review_critique_part1 cto_review_critique_part1 cto_review_critique_part1 cto_review_critique_part1\n\n# cto_review_critique_part1\n\n# general/cto_review_critique_part1\n\nCTO Adversarial Critique: Mythrax v2.6.0 Code Review\nReviewer : Adversarial CTO Reviewer";
+        
+        let cleaned = sanitize_body_title_repetitions(body, &[title, short_title]);
+        assert_eq!(
+            cleaned,
+            "CTO Adversarial Critique: Mythrax v2.6.0 Code Review\nReviewer : Adversarial CTO Reviewer"
+        );
+    }
 }
+
