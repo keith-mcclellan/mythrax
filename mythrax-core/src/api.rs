@@ -417,6 +417,7 @@ async fn call_mcp_tool_handler(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
+    tracing::error!("call_mcp_tool_handler payload: {}", payload);
     let name = match payload.get("name").and_then(|v| v.as_str()) {
         Some(n) if !n.is_empty() => n,
         _ => return Err(StatusCode::BAD_REQUEST),
@@ -424,9 +425,11 @@ async fn call_mcp_tool_handler(
 
     let args = payload
         .get("arguments")
+        .or_else(|| payload.get("Arguments"))
         .or_else(|| payload.get("args"))
+        .or_else(|| payload.get("params"))
         .cloned()
-        .unwrap_or_else(|| json!({}));
+        .unwrap_or_else(|| payload.clone());
 
     match crate::mcp_routes::call_mcp_tool(&state, name, args).await {
         Ok(result) => Ok(Json(result)),
