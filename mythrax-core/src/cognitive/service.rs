@@ -4,6 +4,7 @@ use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::sync::Arc;
 
+/// Service layer orchestrating cognitive pipeline passes (hypotheses, refinement, graduation).
 pub struct CognitiveService {
     pub backend: Arc<dyn StorageBackend>,
     pub store: Arc<MarkdownStore>,
@@ -11,6 +12,7 @@ pub struct CognitiveService {
 }
 
 impl CognitiveService {
+    /// Creates a new CognitiveService instance.
     pub fn new(
         backend: Arc<dyn StorageBackend>,
         store: Arc<MarkdownStore>,
@@ -23,6 +25,7 @@ impl CognitiveService {
         }
     }
 
+    /// Evaluates facts against pending hypotheses and updates confidence scores.
     pub async fn refine(&self, scope: &str) -> Result<usize> {
         let logs = crate::cognitive::pipeline::refine_hypotheses(
             &*self.backend,

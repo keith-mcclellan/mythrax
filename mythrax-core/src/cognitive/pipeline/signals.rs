@@ -2,6 +2,7 @@ use crate::contracts::{ArborNode, Fact, PipelineConfig};
 use crate::math::cosine_similarity;
 use std::path::Path;
 
+/// Formats arbitrary text into a lowercase, alphanumeric slug joined by single underscores.
 pub fn slugify_title(title: &str) -> String {
     let mut slug = String::new();
     let mut last_dash = false;
@@ -22,12 +23,14 @@ pub fn slugify_title(title: &str) -> String {
     }
 }
 
+/// Derives a 65-character word-boundary capped slug from a raw slug option or fallback text.
 pub fn derive_slug(raw_slug: Option<&str>, fallback_text: &str) -> String {
     let raw = raw_slug.unwrap_or("").trim();
     let text_to_slug = if raw.is_empty() { fallback_text } else { raw };
     crate::vault::organization::slugify_title(text_to_slug, 65)
 }
 
+/// Computes the relative vault path for a wisdom rule based on its target pattern.
 pub fn resolve_rule_path(scope: &str, target_pattern: &str) -> String {
     let slug = slugify_title(target_pattern);
     format!("wisdom/{}/rule_{}.md", scope, slug)
@@ -111,6 +114,7 @@ pub fn cluster_facts(
     clusters
 }
 
+/// Reads active short-term memory handoff files to extract anchor skill identifiers.
 pub fn get_active_stm_anchors(vault_root: &Path) -> Vec<String> {
     let handoffs_dir = vault_root.join(".handoffs");
     if !handoffs_dir.exists() {

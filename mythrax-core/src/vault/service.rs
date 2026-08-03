@@ -3,20 +3,24 @@ use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::sync::Arc;
 
+/// High-level service layer encapsulating vault storage, synchronization, and repair operations.
 pub struct VaultService {
     pub backend: Arc<dyn StorageBackend>,
     pub store: Arc<MarkdownStore>,
 }
 
 impl VaultService {
+    /// Creates a new VaultService wrapping the provided database backend and markdown store.
     pub fn new(backend: Arc<dyn StorageBackend>, store: Arc<MarkdownStore>) -> Self {
         Self { backend, store }
     }
 
+    /// Synchronizes on-disk vault files with database records.
     pub async fn sync(&self) -> Result<usize> {
         crate::vault::operations::sync_vault_to_db(&self.backend, &self.store).await
     }
 
+    /// Verifies database episodes against disk files and repairs missing records when fix is true.
     pub async fn verify_and_repair(&self, fix: bool) -> Result<(usize, usize)> {
         let synced = self.sync().await?;
         let mut missing = 0;
