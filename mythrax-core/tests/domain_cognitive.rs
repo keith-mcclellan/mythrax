@@ -3974,7 +3974,9 @@ async fn test_stm_db_operations() -> Result<()> {
         Err(p) => p.into_inner(),
     };
     let tmp = tempdir()?;
+    let vault_root = tmp.path().join("vault");
     let workspace_root = tmp.path().join("workspace");
+    fs::create_dir_all(&vault_root)?;
     fs::create_dir_all(&workspace_root)?;
     unsafe {
         std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());

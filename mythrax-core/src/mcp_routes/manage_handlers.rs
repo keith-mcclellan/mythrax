@@ -1530,7 +1530,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
         let mut callback_injection = String::new();
         if !selected_tasks.is_empty() {
-            callback_injection.push_str("### 🧠 Pending Cognitive Callbacks\n");
+            let total_pending = surreal_backend.count_pending_cognitive_tasks().await.unwrap_or(pending_tasks.len());
+            callback_injection.push_str(&format!("### 🧠 Pending Cognitive Callbacks (Total Remaining: {})\n", total_pending));
             for task in &selected_tasks {
                 callback_injection.push_str(&format!(
                     "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
