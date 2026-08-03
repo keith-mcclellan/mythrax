@@ -9,10 +9,10 @@
   - [x] Map custom Error types
   - [x] Replace `.unwrap()`/`.expect()` with safe `Result` propagation
   - [x] Verify test suite coverage for error branches
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Database Monolith Decomposition
-- [ ] Task: Create `backend` module hierarchy
+- [~] Task: Create `backend` module hierarchy
   - [ ] Create `src/db/backend/mod.rs`, `connection.rs`, and `migrations.rs`
   - [ ] Migrate SurrealDB lifecycle and connection pooling
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
