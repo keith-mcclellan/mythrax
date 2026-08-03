@@ -280,7 +280,13 @@ pub async fn mine_transcript(
                     || normalized_role == "computer"
                     || normalized_role == "system"
                 {
-                    let extracted = extract_text(&c);
+                    let mut extracted = extract_text(&c);
+                    // SECURITY FIX: Sanitize cross-session prompt injections
+                    if normalized_role == "user" || normalized_role == "tool" || normalized_role == "tool_result" {
+                        extracted = extracted.replace("<|", "&lt;|")
+                            .replace("|>", "|&gt;")
+                            .replace("```", "'''");
+                    }
                     if extracted.trim().is_empty() {
                         current_offset = next_offset;
                         continue;

@@ -1,0 +1,4 @@
+## 2024-08-03 - [Cross-Session Prompt Injection via Verbatim Tool/User Input Extraction]
+**Vulnerability:** The pre-compaction hook in `mythrax-core/src/hooks/precompact.rs` extracts tool results and user inputs verbatim into episodic memory and wisdom rules without sanitization, creating a cross-session prompt injection architectural vulnerability.
+**Learning:** Extracting unchecked external content (like user inputs or API tool results) and storing it in memory blocks loaded back into the context window is a primary vector for prompt injection.
+**Prevention:** Always sanitize or escape external inputs before committing them to prompt-visible episodic memory or logic rules, especially stripping control tokens (like `<|`, `|>`, or code block backticks ` ``` `) that LLMs use to delimit instructions.
