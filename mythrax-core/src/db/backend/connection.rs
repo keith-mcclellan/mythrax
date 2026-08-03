@@ -98,7 +98,7 @@ impl SurrealBackend {
                 let path = url
                     .strip_prefix("surrealkv://")
                     .or_else(|| url.strip_prefix("rocksdb://"))
-                    .unwrap();
+                    .context("Invalid database URL format; expected surrealkv:// or rocksdb://")?;
                 db_path = Some(std::path::PathBuf::from(path));
                 if let Some(parent) = std::path::Path::new(path).parent() {
                     std::fs::create_dir_all(parent)?;
