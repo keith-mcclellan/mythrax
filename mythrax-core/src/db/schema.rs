@@ -1,5 +1,5 @@
 pub const INIT_SCHEMA: &str = "
-    DEFINE TABLE OVERWRITE entity SCHEMAFULL;
+    DEFINE TABLE IF NOT EXISTS entity SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS name ON entity TYPE string;
     DEFINE FIELD IF NOT EXISTS entity_type ON entity TYPE string;
     DEFINE FIELD IF NOT EXISTS summary ON entity TYPE string;
@@ -9,10 +9,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS embedding ON entity TYPE option<array<float>>;
     DEFINE INDEX IF NOT EXISTS entity_name ON entity FIELDS name UNIQUE;
     DEFINE INDEX IF NOT EXISTS entity_scope ON entity FIELDS scope;
-    DEFINE INDEX OVERWRITE entity_hnsw ON TABLE entity FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
+    DEFINE INDEX IF NOT EXISTS entity_hnsw ON TABLE entity FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
-    DEFINE TABLE OVERWRITE episode SCHEMAFULL;
+    DEFINE TABLE IF NOT EXISTS episode SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS title ON episode TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON episode TYPE string;
     DEFINE FIELD IF NOT EXISTS source ON episode TYPE string DEFAULT '';
@@ -54,7 +54,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS artifact_refs ON episode TYPE option<array<string>>;
     DEFINE INDEX IF NOT EXISTS episode_scope ON episode FIELDS scope;
     DEFINE INDEX IF NOT EXISTS episode_concepts ON episode FIELDS concepts;
-    DEFINE INDEX OVERWRITE episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
+    DEFINE INDEX IF NOT EXISTS episode_hnsw ON TABLE episode FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
     DEFINE INDEX IF NOT EXISTS episode_session ON episode FIELDS session_id;
     DEFINE INDEX IF NOT EXISTS episode_vault_path ON episode FIELDS vault_path;
     DEFINE INDEX IF NOT EXISTS episode_scope_created ON episode FIELDS scope, created_at;
@@ -67,7 +67,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX OVERWRITE episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER snowball_en BM25(1.2, 0.60);
 
 
-    DEFINE TABLE OVERWRITE wiki_node SCHEMAFULL;
+    DEFINE TABLE IF NOT EXISTS wiki_node SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS name ON wiki_node TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON wiki_node TYPE string;
     DEFINE FIELD IF NOT EXISTS scope ON wiki_node TYPE string DEFAULT 'general';

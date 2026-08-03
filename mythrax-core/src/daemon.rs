@@ -283,6 +283,9 @@ pub async fn handle_daemon(action: DaemonAction) -> Result<()> {
 
                 // Initialize Watch Ignore List
                 let ignore_list = Arc::new(WatchIgnoreList::new());
+                if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
+                    *surreal_backend.watch_ignore_list.write().await = Some(ignore_list.clone());
+                }
 
                 // Setup dreaming channel
                 let (dream_tx, mut dream_rx) = tokio::sync::mpsc::channel::<()>(100);

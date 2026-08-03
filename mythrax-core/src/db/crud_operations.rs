@@ -1325,14 +1325,72 @@ impl SurrealBackend {
             yaml_val.insert(serde_yaml::Value::String("metacognitive_confidence".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(mc)));
         }
 
+        let mut relates_to_links: Vec<String> = Vec::new();
+
+        // Check if node exists in DB to query existing relates_to edges
+        let check_query =
+            "SELECT VALUE id FROM wiki_node WHERE name = $name AND scope = $scope LIMIT 1;";
+        let mut response = self
+            .db
+            .query(check_query)
+            .bind(("name", node.name.as_str()))
+            .bind(("scope", node.scope.as_str()))
+            .await?;
+        let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
+
+        let (node_uuid, is_update) = if let Some(thing) = ids {
+            let uuid_str = match &thing.key {
+                surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
+                other => unescape_id_part(&record_key_to_string(other)),
+            };
+            (uuid_str, true)
+        } else {
+            (Uuid::new_v4().to_string(), false)
+        };
+
+        if is_update {
+            let edge_query = "SELECT out.name AS name, out.vault_path AS vault_path FROM relates_to WHERE in = type::record('wiki_node', $node_uuid) LIMIT 50;";
+            if let Ok(mut edge_res) = self.db.query(edge_query).bind(("node_uuid", node_uuid.as_str())).await {
+                #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+                struct EdgeTarget {
+                    name: Option<String>,
+                    vault_path: Option<String>,
+                }
+                if let Ok(targets) = edge_res.take::<Vec<EdgeTarget>>(0) {
+                    for target in targets {
+                        let link_target = target.vault_path.or(target.name);
+                        if let Some(target_str) = link_target {
+                            if !target_str.trim().is_empty() {
+                                relates_to_links.push(format!("[[{}]]", target_str.trim()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !relates_to_links.is_empty() {
+            yaml_val.insert(
+                serde_yaml::Value::String("relates_to".to_string()),
+                serde_yaml::to_value(&relates_to_links).unwrap_or_default(),
+            );
+        }
+
         let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-        let body_content = if raw_body.trim().is_empty() {
+        let mut body_content = if raw_body.trim().is_empty() {
             format!("# {}\n", display_title)
         } else {
             raw_body.trim().to_string()
         };
-        let final_content = format!("---\n{}\n---\n\n{}\n", yaml_str.trim(), body_content);
 
+        if !relates_to_links.is_empty() && !body_content.contains("## Related Nodes") {
+            body_content.push_str("\n\n## Related Nodes\n");
+            for link in &relates_to_links {
+                body_content.push_str(&format!("- {}\n", link));
+            }
+        }
+
+        let final_content = format!("---\n{}\n---\n\n{}\n", yaml_str.trim(), body_content);
 
         if let Some(ref vp) = node.vault_path {
             self.record_indexing_write(vp).await;
@@ -1355,27 +1413,6 @@ impl SurrealBackend {
             if should_write {
                 let _ = std::fs::write(&full_path, &final_content);
             }
-        }
-
-
-        let mut node_uuid = Uuid::new_v4().to_string();
-        let mut is_update = false;
-
-        let check_query =
-            "SELECT VALUE id FROM wiki_node WHERE name = $name AND scope = $scope LIMIT 1;";
-        let mut response = self
-            .db
-            .query(check_query)
-            .bind(("name", node.name.as_str()))
-            .bind(("scope", node.scope.as_str()))
-            .await?;
-        let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
-        if let Some(thing) = ids {
-            node_uuid = match &thing.key {
-                surrealdb::types::RecordIdKey::String(s) => unescape_id_part(s),
-                other => unescape_id_part(&record_key_to_string(other)),
-            };
-            is_update = true;
         }
 
 

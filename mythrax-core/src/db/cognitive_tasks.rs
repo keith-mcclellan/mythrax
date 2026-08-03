@@ -301,6 +301,18 @@ impl SurrealBackend {
         Ok(tasks.into_iter().map(CognitiveTask::from).collect())
     }
 
+    pub async fn count_pending_cognitive_tasks(&self) -> Result<usize> {
+        let query_str = "SELECT count() FROM cognitive_task WHERE status = 'Pending' GROUP ALL;";
+        let mut response = self.db.query(query_str).await?;
+        let res: Vec<serde_json::Value> = response.take(0)?;
+        let count = res
+            .first()
+            .and_then(|v| v.get("count"))
+            .and_then(|c| c.as_u64())
+            .unwrap_or(0) as usize;
+        Ok(count)
+    }
+
     pub async fn get_injected_tasks_older_than_ttl(&self) -> Result<Vec<CognitiveTask>> {
         let query_str = "SELECT * FROM cognitive_task WHERE status = 'Injected' LIMIT 50;";
         let mut response = self.db.query(query_str).await?;

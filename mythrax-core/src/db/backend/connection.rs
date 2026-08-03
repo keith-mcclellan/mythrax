@@ -35,6 +35,7 @@ pub struct SurrealBackend {
     pub search_mode: Arc<tokio::sync::Mutex<String>>,
     pub reranker: Arc<tokio::sync::Mutex<Option<MxbaiReranker>>>,
     pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
+    pub watch_ignore_list: Arc<tokio::sync::RwLock<Option<Arc<crate::vault::watcher::WatchIgnoreList>>>>,
     pub(crate) blackboard_tx:
         std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
 }
@@ -161,6 +162,7 @@ impl SurrealBackend {
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
             reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            watch_ignore_list: Arc::new(tokio::sync::RwLock::new(None)),
             blackboard_tx: std::sync::OnceLock::new(),
         };
         let _ = GLOBAL_BACKEND.set(Arc::new(backend.clone()));
@@ -181,6 +183,7 @@ impl SurrealBackend {
             search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
             reranker: Arc::new(tokio::sync::Mutex::new(None)),
             reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
+            watch_ignore_list: Arc::new(tokio::sync::RwLock::new(None)),
             blackboard_tx: std::sync::OnceLock::new(),
         }
     }

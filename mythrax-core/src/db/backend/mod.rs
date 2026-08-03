@@ -627,6 +627,15 @@ impl SurrealBackend {
 
     pub async fn record_indexing_write(&self, vault_path: &str) {
         if !vault_path.is_empty() {
+            let root = crate::store::find_vault_root();
+            let full_path = if std::path::Path::new(vault_path).is_absolute() {
+                std::path::PathBuf::from(vault_path)
+            } else {
+                root.join(vault_path)
+            };
+            if let Some(ref list) = *self.watch_ignore_list.read().await {
+                list.ignore(full_path);
+            }
             let mut writes = self.indexing_writes.lock().await;
             *writes.entry(vault_path.to_string()).or_insert(0) += 1;
             if let Some(filename) = std::path::Path::new(vault_path)
