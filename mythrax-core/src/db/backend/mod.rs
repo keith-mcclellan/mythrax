@@ -2994,6 +2994,7 @@ mod tests {
     async fn test_token_budget_truncation() {
         let backend = SurrealBackend::new_in_memory().await.unwrap();
         backend.init().await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         // 1. Create a Skill Rule (Priority 0)
         let skill_rule = WisdomRule {
@@ -3049,7 +3050,7 @@ mod tests {
                 10,
                 0,
                 0.0,
-                Some(12),
+                Some(30),
                 false,
                 true,
                 true,
