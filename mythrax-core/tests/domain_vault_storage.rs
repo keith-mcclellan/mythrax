@@ -2204,7 +2204,7 @@ async fn test_get_episodes_by_node_type_filtering() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }

@@ -531,7 +531,7 @@ async fn test_dreaming_routing_to_external_model() -> anyhow::Result<()> {
     std::fs::create_dir_all(&workspace_path)?;
 
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", trans_dir.path().to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_path.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "false");
     }

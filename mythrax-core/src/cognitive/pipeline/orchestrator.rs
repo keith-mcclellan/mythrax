@@ -34,7 +34,7 @@ pub async fn extract_facts(
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
         let slug = derive_slug(dto.slug.as_deref(), &dto.hypothesis);
-        let fact_path = format!("wiki/{}/{}_fact.md", scope, slug);
+        let fact_path = format!("wiki/{}/facts/{}_fact.md", scope, slug);
         let fact_node_name = format!("{}/{}_fact", scope, slug);
 
         let fact = Fact {
@@ -211,7 +211,7 @@ pub async fn extract_from_document(
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
         let slug = derive_slug(dto.slug.as_deref(), &dto.hypothesis);
-        let fact_path = format!("wiki/{}/{}_fact.md", scope, slug);
+        let fact_path = format!("wiki/{}/facts/{}_fact.md", scope, slug);
         let fact_node_name = format!("{}/{}_fact", scope, slug);
 
         let fact = Fact {
@@ -288,7 +288,7 @@ pub async fn extract_from_code(
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
         let slug = derive_slug(dto.slug.as_deref(), &dto.hypothesis);
-        let fact_path = format!("wiki/{}/{}_fact.md", scope, slug);
+        let fact_path = format!("wiki/{}/facts/{}_fact.md", scope, slug);
         let fact_node_name = format!("{}/{}_fact", scope, slug);
 
         let fact = Fact {
@@ -729,7 +729,7 @@ pub async fn merge_validated_nodes(
         let (path, title, markdown) = if let Some(r) = merge_resp {
             (r.suggested_path, r.title, r.markdown_content)
         } else {
-            let default_path = format!("wiki/{}/{}.md", scope, idea.claim.replace(' ', "_").to_lowercase());
+            let default_path = format!("wiki/{}/insights/{}.md", scope, idea.claim.replace(' ', "_").to_lowercase());
             let default_title = idea.claim.clone();
             let default_md = format!("# {}\n\n## Insight\n{}\n\n## Evidence\n- {}", default_title, idea.insight, r_n_vec.join("\n- "));
             (default_path, default_title, default_md)
