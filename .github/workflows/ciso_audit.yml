@@ -1,0 +1,44 @@
+name: CISO Nightly Security Audit
+
+on:
+  push:
+    branches:
+      - '**'
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-binstall
+        run: |
+          curl -o binstall.sh -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh
+          chmod +x binstall.sh
+          ./binstall.sh
+
+      - name: Install cargo-audit
+        run: cargo binstall -y cargo-audit
+
+      - name: Run CISO Audit Script
+        run: python3 scripts/ciso_audit.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Security Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-advisory-report
+          path: security_advisory_report.md
