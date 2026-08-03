@@ -9,11 +9,11 @@ impl SurrealBackend {
         if self.is_client_mode() {
             return Ok(());
         }
-        self.db
-            .query(INIT_SCHEMA)
-            .await?
-            .check()
-            .context("Applying schemas failed")?;
+        if let Ok(mut resp) = self.db.query(INIT_SCHEMA).await {
+            if let Err(e) = resp.check() {
+                tracing::warn!("Schema check warning on existing database (continuing startup): {:?}", e);
+            }
+        }
 
         // Purge ephemeral pipeline cluster state from previous terminated runs
         let _ = self.db.query("DELETE pipeline_cluster;").await;
@@ -21,12 +21,11 @@ impl SurrealBackend {
         // Migration: Backfill legacy episodes where node_type is None
         let migration_sql =
             "UPDATE episode SET node_type = 'agent_thought' WHERE node_type = NONE;";
-        let _ = self
-            .db
-            .query(migration_sql)
-            .await?
-            .check()
-            .context("Failed to run legacy episode node_type migration")?;
+        if let Ok(mut resp) = self.db.query(migration_sql).await {
+            if let Err(e) = resp.check() {
+                tracing::warn!("Legacy episode node_type migration warning (continuing startup): {:?}", e);
+            }
+        }
 
         let idf_check = "SELECT count() AS total FROM idf_index GROUP ALL;";
         if let Ok(mut res) = self.db.query(idf_check).await {

@@ -1,5 +1,5 @@
 pub const INIT_SCHEMA: &str = "
-    DEFINE TABLE IF NOT EXISTS entity SCHEMAFULL;
+    DEFINE TABLE OVERWRITE entity SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS name ON entity TYPE string;
     DEFINE FIELD IF NOT EXISTS entity_type ON entity TYPE string;
     DEFINE FIELD IF NOT EXISTS summary ON entity TYPE string;
@@ -12,7 +12,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX OVERWRITE entity_hnsw ON TABLE entity FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
-    DEFINE TABLE IF NOT EXISTS episode SCHEMAFULL;
+    DEFINE TABLE OVERWRITE episode SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS title ON episode TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON episode TYPE string;
     DEFINE FIELD IF NOT EXISTS source ON episode TYPE string DEFAULT '';
@@ -67,7 +67,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX OVERWRITE episode_content_search ON TABLE episode FIELDS content FULLTEXT ANALYZER snowball_en BM25(1.2, 0.60);
 
 
-    DEFINE TABLE IF NOT EXISTS wiki_node SCHEMAFULL;
+    DEFINE TABLE OVERWRITE wiki_node SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS name ON wiki_node TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON wiki_node TYPE string;
     DEFINE FIELD IF NOT EXISTS scope ON wiki_node TYPE string DEFAULT 'general';
@@ -95,7 +95,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX OVERWRITE wiki_node_hnsw ON TABLE wiki_node FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
-    DEFINE TABLE IF NOT EXISTS wisdom SCHEMAFULL;
+    DEFINE TABLE OVERWRITE wisdom SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS target_pattern ON wisdom TYPE string;
     DEFINE FIELD IF NOT EXISTS action_to_avoid ON wisdom TYPE string;
     DEFINE FIELD IF NOT EXISTS causal_explanation ON wisdom TYPE string;
@@ -123,11 +123,11 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX OVERWRITE wisdom_hnsw ON TABLE wisdom FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
 
-    DEFINE TABLE IF NOT EXISTS hypothesis_node SCHEMALESS;
+    DEFINE TABLE OVERWRITE hypothesis_node SCHEMALESS;
     DEFINE INDEX IF NOT EXISTS node_id_idx ON hypothesis_node FIELDS node_id UNIQUE;
     DEFINE INDEX IF NOT EXISTS hypothesis_scope ON hypothesis_node FIELDS scope;
 
-    DEFINE TABLE IF NOT EXISTS handoff SCHEMAFULL;
+    DEFINE TABLE OVERWRITE handoff SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS parent_conversation_id ON handoff TYPE string;
     DEFINE FIELD IF NOT EXISTS subagent_conversation_id ON handoff TYPE string;
     DEFINE FIELD IF NOT EXISTS summary ON handoff TYPE string;
@@ -141,12 +141,12 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS handoff_parent ON handoff FIELDS parent_conversation_id;
     DEFINE INDEX IF NOT EXISTS handoff_subagent ON handoff FIELDS subagent_conversation_id;
     DEFINE INDEX OVERWRITE handoff_hnsw ON TABLE handoff FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
-    DEFINE TABLE IF NOT EXISTS profile SCHEMAFULL;
+    DEFINE TABLE OVERWRITE profile SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS key ON profile TYPE string;
     DEFINE FIELD IF NOT EXISTS value ON profile TYPE string;
     DEFINE INDEX IF NOT EXISTS profile_key ON profile FIELDS key UNIQUE;
 
-    DEFINE TABLE IF NOT EXISTS config SCHEMAFULL;
+    DEFINE TABLE OVERWRITE config SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS active_provider ON config TYPE string;
     DEFINE FIELD IF NOT EXISTS model ON config TYPE string;
     DEFINE FIELD IF NOT EXISTS cloud_provider ON config TYPE string;
@@ -156,7 +156,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS model_tier_mappings ON config TYPE option<object>;
 
 
-    DEFINE TABLE IF NOT EXISTS pipeline_cluster SCHEMAFULL;
+    DEFINE TABLE OVERWRITE pipeline_cluster SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS run_id ON pipeline_cluster TYPE string;
     DEFINE FIELD IF NOT EXISTS cluster_id ON pipeline_cluster TYPE int;
     DEFINE FIELD IF NOT EXISTS episode_id ON pipeline_cluster TYPE record;
@@ -164,20 +164,20 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS created_at ON pipeline_cluster TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS pipeline_cluster_run ON pipeline_cluster FIELDS run_id, cluster_id;
 
-    DEFINE TABLE IF NOT EXISTS metrics SCHEMAFULL;
+    DEFINE TABLE OVERWRITE metrics SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS target_id ON metrics TYPE record;
     DEFINE FIELD IF NOT EXISTS utility_score ON metrics TYPE float DEFAULT 1.0;
     DEFINE FIELD IF NOT EXISTS access_count ON metrics TYPE int DEFAULT 0;
     DEFINE FIELD IF NOT EXISTS last_accessed ON metrics TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS metrics_target ON metrics FIELDS target_id UNIQUE;
 
-    DEFINE TABLE IF NOT EXISTS episode_metrics SCHEMAFULL;
+    DEFINE TABLE OVERWRITE episode_metrics SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS episode ON episode_metrics TYPE record<episode>;
     DEFINE FIELD IF NOT EXISTS utility ON episode_metrics TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS last_retrieved_at ON episode_metrics TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS word_count ON episode_metrics TYPE option<int>;
 
-    DEFINE TABLE IF NOT EXISTS relates_to SCHEMAFULL TYPE RELATION IN episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node OUT episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node;
+    DEFINE TABLE OVERWRITE relates_to SCHEMAFULL TYPE RELATION IN episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node OUT episode | wiki_node | wisdom | handoff | entity | thought_node | belief_state | hypothesis_node;
     DEFINE FIELD IF NOT EXISTS relation ON relates_to TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS strength ON relates_to TYPE option<float>;
     DEFINE FIELD IF NOT EXISTS weight ON relates_to TYPE float DEFAULT 1.0;
@@ -187,10 +187,10 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS confidence ON relates_to TYPE float DEFAULT 1.0;
     DEFINE INDEX IF NOT EXISTS idx_relates_valid ON relates_to FIELDS valid_from, valid_to;
 
-    DEFINE TABLE IF NOT EXISTS mentions SCHEMAFULL TYPE RELATION IN episode OUT entity;
+    DEFINE TABLE OVERWRITE mentions SCHEMAFULL TYPE RELATION IN episode OUT entity;
     DEFINE FIELD IF NOT EXISTS created_at ON mentions TYPE datetime DEFAULT time::now();
 
-    DEFINE TABLE IF NOT EXISTS short_term_memory SCHEMAFULL;
+    DEFINE TABLE OVERWRITE short_term_memory SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS session_id ON short_term_memory TYPE string;
     DEFINE FIELD IF NOT EXISTS key ON short_term_memory TYPE string;
     DEFINE FIELD IF NOT EXISTS value ON short_term_memory TYPE string;
@@ -198,7 +198,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS expires_at ON short_term_memory TYPE option<datetime>;
     DEFINE INDEX IF NOT EXISTS stm_session_key ON short_term_memory FIELDS session_id, key UNIQUE;
 
-    DEFINE TABLE IF NOT EXISTS followed_by SCHEMAFULL TYPE RELATION IN episode | wiki_node OUT episode | wiki_node;
+    DEFINE TABLE OVERWRITE followed_by SCHEMAFULL TYPE RELATION IN episode | wiki_node OUT episode | wiki_node;
     DEFINE FIELD IF NOT EXISTS duration ON followed_by TYPE option<duration>;
     DEFINE FIELD IF NOT EXISTS created_at ON followed_by TYPE datetime DEFAULT time::now();
 
@@ -206,11 +206,11 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS reason ON superseded_by TYPE option<string>;
     DEFINE FIELD IF NOT EXISTS created_at ON superseded_by TYPE datetime DEFAULT time::now();
 
-    DEFINE TABLE IF NOT EXISTS session_state SCHEMALESS;
-    DEFINE TABLE IF NOT EXISTS checkpoint_node SCHEMALESS;
-    DEFINE TABLE IF NOT EXISTS symbol_archive SCHEMALESS;
+    DEFINE TABLE OVERWRITE session_state SCHEMALESS;
+    DEFINE TABLE OVERWRITE checkpoint_node SCHEMALESS;
+    DEFINE TABLE OVERWRITE symbol_archive SCHEMALESS;
 
-    DEFINE TABLE IF NOT EXISTS belief_state SCHEMAFULL;
+    DEFINE TABLE OVERWRITE belief_state SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS session_id ON belief_state TYPE string;
     DEFINE FIELD IF NOT EXISTS tasks_todo ON belief_state TYPE array<string>;
     DEFINE FIELD IF NOT EXISTS hypotheses_tested ON belief_state TYPE array<string>;
@@ -219,7 +219,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS updated_at ON belief_state TYPE string;
     DEFINE INDEX IF NOT EXISTS belief_state_session ON belief_state FIELDS session_id;
 
-    DEFINE TABLE IF NOT EXISTS thought_node SCHEMAFULL;
+    DEFINE TABLE OVERWRITE thought_node SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS title ON thought_node TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON thought_node TYPE string;
     DEFINE FIELD IF NOT EXISTS scope ON thought_node TYPE string DEFAULT 'general';
@@ -227,14 +227,14 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS created_at ON thought_node TYPE string;
     DEFINE INDEX IF NOT EXISTS thought_node_scope ON thought_node FIELDS scope;
 
-    DEFINE TABLE IF NOT EXISTS chat_history SCHEMAFULL;
+    DEFINE TABLE OVERWRITE chat_history SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS session_id ON chat_history TYPE string;
     DEFINE FIELD IF NOT EXISTS role ON chat_history TYPE string; -- 'user' or 'assistant'
     DEFINE FIELD IF NOT EXISTS content ON chat_history TYPE string;
     DEFINE FIELD IF NOT EXISTS created_at ON chat_history TYPE datetime DEFAULT time::now();
     DEFINE INDEX IF NOT EXISTS ch_session ON chat_history FIELDS session_id;
 
-    DEFINE TABLE IF NOT EXISTS wiki_node_history SCHEMAFULL;
+    DEFINE TABLE OVERWRITE wiki_node_history SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS node_id ON wiki_node_history TYPE record<wiki_node>;
     DEFINE FIELD IF NOT EXISTS name ON wiki_node_history TYPE string;
     DEFINE FIELD IF NOT EXISTS content ON wiki_node_history TYPE string;
@@ -289,7 +289,7 @@ pub const INIT_SCHEMA: &str = "
     UPSERT type::record('profile', 'routing:archetype:summarization') CONTENT { key: 'routing:archetype:summarization', value: 'cloud' };
     UPSERT type::record('profile', 'routing:archetype:reasoning') CONTENT { key: 'routing:archetype:reasoning', value: 'cloud' };
 
-    DEFINE TABLE IF NOT EXISTS search_keyword SCHEMAFULL;
+    DEFINE TABLE OVERWRITE search_keyword SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS word ON search_keyword TYPE string;
     DEFINE FIELD IF NOT EXISTS category ON search_keyword TYPE string;
     DEFINE INDEX IF NOT EXISTS keyword_word ON search_keyword FIELDS word UNIQUE;
@@ -442,7 +442,7 @@ pub const INIT_SCHEMA: &str = "
     UPSERT search_keyword:friday CONTENT { word: 'friday', category: 'Temporal' };
     UPSERT search_keyword:saturday CONTENT { word: 'saturday', category: 'Temporal' };
 
-    DEFINE TABLE IF NOT EXISTS cognitive_task SCHEMAFULL;
+    DEFINE TABLE OVERWRITE cognitive_task SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS task_type ON cognitive_task TYPE string;
     DEFINE FIELD IF NOT EXISTS prompt ON cognitive_task TYPE string;
     DEFINE FIELD IF NOT EXISTS system_instruction ON cognitive_task TYPE string;
@@ -455,18 +455,18 @@ pub const INIT_SCHEMA: &str = "
     DEFINE FIELD IF NOT EXISTS injected_at ON cognitive_task TYPE option<datetime>;
     DEFINE FIELD IF NOT EXISTS session_id ON cognitive_task TYPE option<string>;
 
-    DEFINE TABLE IF NOT EXISTS pipeline_state SCHEMALESS;
-    DEFINE TABLE IF NOT EXISTS forged_section_hash SCHEMALESS;
-    DEFINE TABLE IF NOT EXISTS bootstrap_state SCHEMALESS;
-    DEFINE TABLE IF NOT EXISTS distilled_conversation SCHEMALESS;
+    DEFINE TABLE OVERWRITE pipeline_state SCHEMALESS;
+    DEFINE TABLE OVERWRITE forged_section_hash SCHEMALESS;
+    DEFINE TABLE OVERWRITE bootstrap_state SCHEMALESS;
+    DEFINE TABLE OVERWRITE distilled_conversation SCHEMALESS;
 
-    DEFINE TABLE IF NOT EXISTS idf_index SCHEMAFULL;
+    DEFINE TABLE OVERWRITE idf_index SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS term ON idf_index TYPE string;
     DEFINE FIELD IF NOT EXISTS document_frequency ON idf_index TYPE int;
     DEFINE FIELD IF NOT EXISTS scope ON idf_index TYPE string DEFAULT 'general';
     DEFINE INDEX IF NOT EXISTS idx_idf_term ON idf_index FIELDS term, scope UNIQUE;
 
-    DEFINE TABLE IF NOT EXISTS code_symbol SCHEMAFULL;
+    DEFINE TABLE OVERWRITE code_symbol SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS name ON code_symbol TYPE string;
     DEFINE FIELD IF NOT EXISTS symbol_type ON code_symbol TYPE string;
     DEFINE FIELD IF NOT EXISTS file_path ON code_symbol TYPE string;
@@ -482,7 +482,7 @@ pub const INIT_SCHEMA: &str = "
     DEFINE INDEX IF NOT EXISTS idx_code_symbol_file ON code_symbol FIELDS file_path, name UNIQUE;
     DEFINE INDEX OVERWRITE code_symbol_hnsw ON TABLE code_symbol FIELDS embedding HNSW DIMENSION 768 DIST COSINE TYPE F32 EFC 200 M 16;
 
-    DEFINE TABLE IF NOT EXISTS subagent_worktree SCHEMAFULL;
+    DEFINE TABLE OVERWRITE subagent_worktree SCHEMAFULL;
     DEFINE FIELD IF NOT EXISTS subagent_id ON subagent_worktree TYPE string;
     DEFINE FIELD IF NOT EXISTS worktree_path ON subagent_worktree TYPE string;
     DEFINE FIELD IF NOT EXISTS base_branch ON subagent_worktree TYPE string;
