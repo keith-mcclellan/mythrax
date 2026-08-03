@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 pub mod arbor_handlers;
+pub mod dtos;
 pub mod htr_handlers;
 pub mod manage_handlers;
 pub mod read_handlers;
