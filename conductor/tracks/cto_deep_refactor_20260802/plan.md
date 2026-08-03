@@ -12,10 +12,10 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Database Monolith Decomposition
-- [~] Task: Create `backend` module hierarchy
-  - [ ] Create `src/db/backend/mod.rs`, `connection.rs`, and `migrations.rs`
-  - [ ] Migrate SurrealDB lifecycle and connection pooling
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Create `backend` module hierarchy
+  - [x] Create `src/db/backend/mod.rs`, `connection.rs`, and `migrations.rs`
+  - [x] Migrate SurrealDB lifecycle and connection pooling
+- [~] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Domain Queries Extraction
 - [ ] Task: Extract Domain Queries
