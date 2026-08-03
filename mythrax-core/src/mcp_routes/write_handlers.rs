@@ -90,7 +90,8 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
                     .to_lowercase()
                     .replace(' ', "_")
                     .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
-                let vault_path = format!("wiki/{}/directions/{}_{}.md", scope, slug, node_type);
+                let subfolder = if node_type == "direction" { "directions" } else { "insights" };
+                let vault_path = format!("wiki/{}/{}/{}_{}.md", scope, subfolder, slug, node_type);
                 let wiki_node = crate::contracts::WikiNode {
                     id: None,
                     name: format!("{}/{}", scope, slug),
@@ -709,8 +710,12 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
                         format!("wisdom/general/{}_rule.md", slug)
                     } else if node_type == "direction" {
                         format!("wiki/{}/directions/{}_direction.md", scope_name, slug)
+                    } else if node_type == "fact" {
+                        format!("wiki/{}/facts/{}_fact.md", scope_name, slug)
+                    } else if node_type == "insight" {
+                        format!("wiki/{}/insights/{}_insight.md", scope_name, slug)
                     } else {
-                        format!("wiki/{}/{}_{}.md", scope_name, slug, node_type)
+                        format!("wiki/{}/insights/{}_{}.md", scope_name, slug, node_type)
                     };
                     let wiki_node = crate::contracts::WikiNode {
                         id: None,

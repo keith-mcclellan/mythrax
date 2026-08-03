@@ -31,7 +31,7 @@ async fn test_dbscan_insight_compaction() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -165,7 +165,7 @@ async fn test_insight_centroid_drift_split() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -528,7 +528,7 @@ async fn test_compactor_range_merging_and_derived_from_edges() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -697,7 +697,7 @@ async fn test_garbage_collect_low_confidence_nodes() -> Result<()> {
     fs::create_dir_all(vault_root.join("wiki/scope1"))?;
 
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
 
@@ -752,7 +752,7 @@ async fn test_hebbian_synaptic_pruning() -> Result<()> {
     fs::create_dir_all(vault_root.join("wiki/scope1"))?;
 
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
 
@@ -859,7 +859,7 @@ async fn test_compactor_decay_referenced_safety() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -1005,7 +1005,7 @@ async fn test_insight_graduation_lifecycle() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -1072,7 +1072,7 @@ async fn test_near_duplicate_merging_behavior() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -1193,7 +1193,7 @@ async fn test_procedural_memory_decay_and_cap() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -3600,7 +3600,7 @@ async fn setup_test_state() -> Result<(ApiState, std::sync::Arc<SurrealBackend>,
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }
@@ -3977,7 +3977,7 @@ async fn test_stm_db_operations() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
     }
     let backend = SurrealBackend::new_in_memory().await?;
@@ -4143,7 +4143,7 @@ async fn test_stale_handoff_background_cleanup() -> Result<()> {
     let handoffs_dir = workspace_root.join(".handoffs");
     fs::create_dir_all(&handoffs_dir)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
     }
 
@@ -4842,7 +4842,7 @@ async fn test_pre_invocation_hook_flow() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
     }
 
@@ -5150,7 +5150,7 @@ async fn test_chat_history_dynamic_sliding_window() -> Result<()> {
     let workspace_root = tmp.path().join("workspace");
     fs::create_dir_all(&workspace_root)?;
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", vault_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_root.to_str().unwrap());
         std::env::set_var("MYTHRAX_MOCK_LLM", "true");
     }

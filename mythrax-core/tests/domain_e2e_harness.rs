@@ -349,7 +349,6 @@ async fn test_bootstrap_e2e() -> Result<()> {
     // Clean up env
     unsafe {
         std::env::remove_var("MYTHRAX_TEST_MOCK");
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
         std::env::remove_var("MYTHRAX_WORKSPACE_ROOT");
         std::env::remove_var("MYTHRAX_MOCK_LLM");
     }
@@ -754,7 +753,7 @@ async fn test_abandoned_session_sweep_lifecycle() -> anyhow::Result<()> {
     std::fs::create_dir_all(&workspace_path)?;
 
     unsafe {
-        std::env::remove_var("MYTHRAX_VAULT_ROOT");
+        std::env::set_var("MYTHRAX_VAULT_ROOT", trans_dir.path().to_str().unwrap());
         std::env::set_var("MYTHRAX_WORKSPACE_ROOT", workspace_path.to_str().unwrap());
         std::env::set_var("MYTHRAX_PHASE_COOLDOWN_SECS", "0");
         if std::env::var("MYTHRAX_TEST_MOCK").is_ok() {
