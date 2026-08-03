@@ -10,10 +10,7 @@ pub use crate::db::query_classification::{
 use anyhow::{Context, Result};
 use axum::async_trait;
 use std::sync::Arc;
-use surrealdb::Surreal;
-use surrealdb::engine::local::{Db, Mem, SurrealKv};
 use surrealdb_types::SurrealValue;
-use uuid::Uuid;
 
 pub static GLOBAL_BACKEND: std::sync::OnceLock<Arc<SurrealBackend>> = std::sync::OnceLock::new();
 pub static GLOBAL_RERANKER: tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>> =
@@ -133,8 +130,20 @@ pub trait StorageBackend: Send + Sync {
     async fn update_idf_index(&self, episode_id: &str, is_delete: bool) -> Result<()>;
     async fn find_duplicate_by_content_hash(&self, content_hash: &str) -> Result<Option<String>>;
     async fn get_wisdom_tier(&self, id: &str) -> Result<Option<crate::contracts::Tier>>;
-    async fn save_cluster_assignment(&self, run_id: &str, cluster_id: i32, episode_id: &str, scope: Option<&str>) -> Result<()>;
-    async fn get_cluster_members_paginated(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>>;
+    async fn save_cluster_assignment(
+        &self,
+        run_id: &str,
+        cluster_id: i32,
+        episode_id: &str,
+        scope: Option<&str>,
+    ) -> Result<()>;
+    async fn get_cluster_members_paginated(
+        &self,
+        run_id: &str,
+        cluster_id: i32,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>>;
     async fn delete_pipeline_run(&self, run_id: &str) -> Result<()>;
     async fn relate_nodes(
         &self,
@@ -224,7 +233,11 @@ pub trait StorageBackend: Send + Sync {
         files: &[String],
     ) -> Result<SearchResponse>;
     async fn get_all_registered_transcripts(&self) -> Result<Vec<(String, String)>>;
-    async fn get_registered_transcripts_paginated(&self, limit: u32, offset: u32) -> Result<Vec<(String, String)>>;
+    async fn get_registered_transcripts_paginated(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<(String, String)>>;
     async fn get_session_last_activity(
         &self,
         session_id: &str,
@@ -252,7 +265,10 @@ pub trait StorageBackend: Send + Sync {
     async fn get_idea_node(&self, _id: &str) -> Result<Option<crate::contracts::IdeaNode>> {
         Ok(None)
     }
-    async fn get_idea_nodes_by_scope(&self, _scope: &str) -> Result<Vec<crate::contracts::IdeaNode>> {
+    async fn get_idea_nodes_by_scope(
+        &self,
+        _scope: &str,
+    ) -> Result<Vec<crate::contracts::IdeaNode>> {
         Ok(Vec::new())
     }
     async fn delete_idea_node(&self, _id: &str) -> Result<()> {
@@ -268,53 +284,10 @@ pub trait StorageBackend: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
-#[derive(Debug, Clone)]
-pub struct CacheEntry {
-    pub count: usize,
-    pub expires_at: std::time::Instant,
-}
+pub mod connection;
+pub mod migrations;
 
-#[derive(Clone)]
-pub struct SurrealBackend {
-    pub db: Surreal<Db>,
-    pub embedder: Option<Arc<dyn crate::embeddings::TextEmbedder>>,
-    pub client_port: Option<u16>,
-    pub write_lock: Arc<tokio::sync::Mutex<()>>,
-    pub db_path: Option<std::path::PathBuf>,
-    pub indexing_writes: Arc<tokio::sync::Mutex<std::collections::HashMap<String, usize>>>,
-    pub term_counts_cache: Arc<
-        tokio::sync::RwLock<
-            std::collections::HashMap<
-                String,
-                Arc<tokio::sync::RwLock<std::collections::HashMap<String, CacheEntry>>>,
-            >,
-        >,
-    >,
-    pub global_cache_size: Arc<std::sync::atomic::AtomicUsize>,
-    pub avg_dl_cache:
-        Arc<tokio::sync::RwLock<std::collections::HashMap<String, (f32, std::time::Instant)>>>,
-    pub search_mode: Arc<tokio::sync::Mutex<String>>,
-    pub reranker: Arc<tokio::sync::Mutex<Option<crate::llm::MxbaiReranker>>>,
-    pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
-    pub(crate) blackboard_tx:
-        std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
-}
-
-pub struct BackendConfig {
-    pub check_daemon: bool,
-    pub embedder: Option<Arc<dyn crate::embeddings::TextEmbedder>>,
-    pub llm: Option<crate::llm::LLMClient>,
-}
-
-impl Default for BackendConfig {
-    fn default() -> Self {
-        Self {
-            check_daemon: true,
-            embedder: None,
-            llm: None,
-        }
-    }
-}
+pub use connection::*;
 
 impl SurrealBackend {
     pub async fn get_category_profile_key(
@@ -629,138 +602,8 @@ impl SurrealBackend {
         }
     }
 
-    pub async fn new(url: &str, config: BackendConfig) -> Result<Self> {
-        // 1. Determine daemon port from env or default
-        let env_port = std::env::var("MYTHRAX_DAEMON_PORT").ok();
-        let daemon_port = env_port
-            .as_ref()
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or(8090);
 
-        // 2. Only check the daemon port if check_daemon is true
-        let is_daemon_available = if config.check_daemon {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                tokio::net::TcpStream::connect(format!("127.0.0.1:{}", daemon_port)),
-            )
-            .await
-            {
-                Ok(Ok(_)) => true,
-                _ => false,
-            }
-        } else {
-            false
-        };
 
-        let mut db_path = None;
-        let (db, client_port) = if is_daemon_available {
-            // Client Mode: Connect to running daemon
-            // We use an in-memory DB struct as a placeholder because the actual
-            // operations will be routed via HTTP to the daemon.
-            let db = Surreal::new::<Mem>(())
-                .await
-                .context("Failed to initialize in-memory store for client mode")?;
-
-            // Initialize namespace/database context as required by the SDK structure
-            db.use_ns("mythrax").use_db("memory").await?;
-
-            (db, Some(daemon_port))
-        } else {
-            // Server Mode: Open local database
-            let db = if url.starts_with("surrealkv://") || url.starts_with("rocksdb://") {
-                let path = url
-                    .strip_prefix("surrealkv://")
-                    .or_else(|| url.strip_prefix("rocksdb://"))
-                    .unwrap();
-                db_path = Some(std::path::PathBuf::from(path));
-                if let Some(parent) = std::path::Path::new(path).parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-
-                let mut attempt = 0;
-                loop {
-                    match Surreal::new::<SurrealKv>(path).await {
-                        Ok(conn) => break conn,
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            if (err_str.contains("locked") || err_str.contains("LOCK"))
-                                && attempt < 10
-                            {
-                                attempt += 1;
-                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            } else {
-                                return Err(e).context(format!(
-                                    "Failed to initialize SurrealDB with SurrealKV at: {}",
-                                    path
-                                ));
-                            }
-                        }
-                    }
-                }
-            } else {
-                Surreal::new::<Mem>(())
-                    .await
-                    .context("Failed to initialize SurrealDB with in-memory store")?
-            };
-            db.use_ns("mythrax").use_db("memory").await?;
-            (db, None)
-        };
-
-        let embedder = config.embedder.or_else(|| {
-            match crate::embeddings::LocalEmbedder::get_global() {
-                Ok(emb) => Some(emb as Arc<dyn crate::embeddings::TextEmbedder>),
-                Err(e) => {
-                    tracing::warn!("Failed to initialize LocalEmbedder: {}. Falling back to non-embedded mode.", e);
-                    None
-                }
-            }
-        });
-
-        // 4. Initialize write lock
-        let write_lock = Arc::new(tokio::sync::Mutex::new(()));
-
-        let indexing_writes = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-
-        let backend = Self {
-            db,
-            embedder,
-            client_port,
-            write_lock,
-            db_path,
-            indexing_writes,
-            term_counts_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            global_cache_size: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
-            reranker: Arc::new(tokio::sync::Mutex::new(None)),
-            reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
-            blackboard_tx: std::sync::OnceLock::new(),
-        };
-        let _ = GLOBAL_BACKEND.set(Arc::new(backend.clone()));
-        Ok(backend)
-    }
-
-    pub fn new_with_db(db: Surreal<Db>) -> Self {
-        Self {
-            db,
-            embedder: None,
-            client_port: None,
-            write_lock: Arc::new(tokio::sync::Mutex::new(())),
-            db_path: None,
-            indexing_writes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
-            term_counts_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            global_cache_size: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            avg_dl_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            search_mode: Arc::new(tokio::sync::Mutex::new("hybrid".to_string())),
-            reranker: Arc::new(tokio::sync::Mutex::new(None)),
-            reinforcement_semaphore: Arc::new(tokio::sync::Semaphore::new(10)),
-            blackboard_tx: std::sync::OnceLock::new(),
-        }
-    }
-
-    pub fn is_client_mode(&self) -> bool {
-        self.client_port.is_some()
-    }
 
     pub fn set_blackboard_sender(
         &self,
@@ -781,9 +624,6 @@ impl SurrealBackend {
         m.clone()
     }
 
-    pub async fn new_client_connection() -> Result<Self> {
-        Self::new("mem://", BackendConfig::default()).await
-    }
 
     pub async fn record_indexing_write(&self, vault_path: &str) {
         if !vault_path.is_empty() {
@@ -1014,18 +854,6 @@ impl SurrealBackend {
     }
 
     #[allow(dead_code)]
-    pub async fn new_in_memory() -> Result<Self> {
-        let config = BackendConfig {
-            check_daemon: false,
-            embedder: Some(Arc::new(crate::embeddings::MockEmbedder)),
-            llm: Some(crate::llm::LLMClient::new_mock()),
-        };
-        let backend = Self::new("mem://", config).await?;
-        let random_ns = format!("ns_{}", Uuid::new_v4().to_string().replace("-", "_"));
-        let random_db = format!("db_{}", Uuid::new_v4().to_string().replace("-", "_"));
-        backend.db.use_ns(&random_ns).use_db(&random_db).await?;
-        Ok(backend)
-    }
 
     pub(crate) fn compact_search_result(
         &self,
@@ -1059,7 +887,11 @@ impl SurrealBackend {
         // Try paragraph compaction
         let paragraphs: Vec<&str> = item.content.split("\n\n").collect();
         if paragraphs.len() > 1 {
-            let min_paragraphs = if paragraphs[0].starts_with("---") && paragraphs.len() > 2 { 2 } else { 1 };
+            let min_paragraphs = if paragraphs[0].starts_with("---") && paragraphs.len() > 2 {
+                2
+            } else {
+                1
+            };
             for end_idx in (min_paragraphs..paragraphs.len()).rev() {
                 let mut compacted_content = paragraphs[..end_idx].join("\n\n");
                 compacted_content.push_str("\n\n... [Truncated (Inner-Node Compaction)]");
@@ -1510,14 +1342,22 @@ impl StorageBackend for SurrealBackend {
 
     async fn get_facts_by_scope(&self, scope: &str) -> Result<Vec<crate::contracts::Fact>> {
         let sql = "SELECT * FROM fact WHERE scope = $scope;";
-        let mut res = self.db.query(sql).bind(("scope", scope.to_string())).await?;
+        let mut res = self
+            .db
+            .query(sql)
+            .bind(("scope", scope.to_string()))
+            .await?;
         let raw_facts: Vec<FactRaw> = res.take(0).unwrap_or_default();
         Ok(raw_facts.into_iter().map(Into::into).collect())
     }
 
     async fn get_unassociated_facts(&self, scope: &str) -> Result<Vec<crate::contracts::Fact>> {
         let sql = "SELECT * FROM fact WHERE scope = $scope AND (idea_node_id IS NONE OR idea_node_id = '');";
-        let mut res = self.db.query(sql).bind(("scope", scope.to_string())).await?;
+        let mut res = self
+            .db
+            .query(sql)
+            .bind(("scope", scope.to_string()))
+            .await?;
         let raw_facts: Vec<FactRaw> = res.take(0).unwrap_or_default();
         Ok(raw_facts.into_iter().map(Into::into).collect())
     }
@@ -1531,7 +1371,10 @@ impl StorageBackend for SurrealBackend {
     }
 
     async fn save_idea_node(&self, idea: &crate::contracts::IdeaNode) -> Result<String> {
-        let node_id = idea.id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let node_id = idea
+            .id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let record_id = parse_record_id(&format!("idea_node:{}", node_id))?;
         let mut save = idea.clone();
         save.id = None;
@@ -1549,9 +1392,16 @@ impl StorageBackend for SurrealBackend {
         }
     }
 
-    async fn get_idea_nodes_by_scope(&self, scope: &str) -> Result<Vec<crate::contracts::IdeaNode>> {
+    async fn get_idea_nodes_by_scope(
+        &self,
+        scope: &str,
+    ) -> Result<Vec<crate::contracts::IdeaNode>> {
         let sql = "SELECT * FROM idea_node WHERE scope = $scope;";
-        let mut res = self.db.query(sql).bind(("scope", scope.to_string())).await?;
+        let mut res = self
+            .db
+            .query(sql)
+            .bind(("scope", scope.to_string()))
+            .await?;
         let raw_ideas: Vec<IdeaNodeRaw> = res.take(0).unwrap_or_default();
         Ok(raw_ideas.into_iter().map(Into::into).collect())
     }
@@ -1580,9 +1430,19 @@ impl StorageBackend for SurrealBackend {
         Ok(res)
     }
 
-    async fn get_registered_transcripts_paginated(&self, limit: u32, offset: u32) -> Result<Vec<(String, String)>> {
+    async fn get_registered_transcripts_paginated(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<(String, String)>> {
         let sql = "SELECT session_id, value FROM short_term_memory WHERE key = '_transcript_path' LIMIT $limit START $offset;";
-        let mut response = self.db.query(sql).bind(("limit", limit)).bind(("offset", offset)).await?.check()?;
+        let mut response = self
+            .db
+            .query(sql)
+            .bind(("limit", limit))
+            .bind(("offset", offset))
+            .await?
+            .check()?;
         #[derive(serde::Deserialize, surrealdb_types::SurrealValue, Debug)]
         struct StmRecord {
             session_id: String,
@@ -1740,12 +1600,26 @@ impl StorageBackend for SurrealBackend {
         self.get_wisdom_tier_db(id).await
     }
 
-    async fn save_cluster_assignment(&self, run_id: &str, cluster_id: i32, episode_id: &str, scope: Option<&str>) -> Result<()> {
-        self.save_cluster_assignment_db(run_id, cluster_id, episode_id, scope).await
+    async fn save_cluster_assignment(
+        &self,
+        run_id: &str,
+        cluster_id: i32,
+        episode_id: &str,
+        scope: Option<&str>,
+    ) -> Result<()> {
+        self.save_cluster_assignment_db(run_id, cluster_id, episode_id, scope)
+            .await
     }
 
-    async fn get_cluster_members_paginated(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>> {
-        self.get_cluster_members_paginated_db(run_id, cluster_id, limit, offset).await
+    async fn get_cluster_members_paginated(
+        &self,
+        run_id: &str,
+        cluster_id: i32,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>> {
+        self.get_cluster_members_paginated_db(run_id, cluster_id, limit, offset)
+            .await
     }
 
     async fn delete_pipeline_run(&self, run_id: &str) -> Result<()> {
@@ -3120,6 +2994,7 @@ mod tests {
     async fn test_token_budget_truncation() {
         let backend = SurrealBackend::new_in_memory().await.unwrap();
         backend.init().await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
         // 1. Create a Skill Rule (Priority 0)
         let skill_rule = WisdomRule {
@@ -3175,7 +3050,7 @@ mod tests {
                 10,
                 0,
                 0.0,
-                Some(12),
+                Some(30),
                 false,
                 true,
                 true,
@@ -3353,7 +3228,10 @@ mod tests {
         // Dynamically compute the budget needed for compacted content
         let compacted_content =
             format!("First paragraph here.\n\n... [Truncated (Inner-Node Compaction)]");
-        let text_compacted = format!("---\ntitle: {}\nscope: compaction-test\n---\n\n{}", node1.name, compacted_content);
+        let text_compacted = format!(
+            "---\ntitle: {}\nscope: compaction-test\n---\n\n{}",
+            node1.name, compacted_content
+        );
         let tokens_compacted = backend.count_text_tokens(&text_compacted);
 
         // Search with small budget -> first paragraph + suffix

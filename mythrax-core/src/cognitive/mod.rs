@@ -10,6 +10,7 @@ pub mod paging;
 pub mod db;
 pub mod pipeline;
 pub mod prompts;
+pub mod service;
 
 pub use arbor::*;
 pub use governor::*;

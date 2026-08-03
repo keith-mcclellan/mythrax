@@ -1,107 +1,15 @@
 use crate::cognitive::db;
+use crate::cognitive::pipeline::signals::{cluster_facts, derive_slug};
 use crate::cognitive::prompts;
 use crate::contracts::{
-    ArborNode, Episode, Fact, FactSource, IdeaNode, IdeaStatus, PipelineConfig, WikiNode, WisdomRule,
+    ArborNode, Episode, Fact, FactSource, IdeaNode, IdeaStatus, WikiNode, WisdomRule,
 };
 use crate::db::StorageBackend;
 use crate::llm::LLMClient;
-use crate::math::cosine_similarity;
 use crate::store::MarkdownStore;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::Path;
-
-pub fn slugify_title(title: &str) -> String {
-    let mut slug = String::new();
-    let mut last_dash = false;
-    for c in title.chars() {
-        if c.is_alphanumeric() {
-            slug.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            slug.push('_');
-            last_dash = true;
-        }
-    }
-    let trimmed = slug.trim_matches('_').to_string();
-    if trimmed.is_empty() {
-        "rule".to_string()
-    } else {
-        trimmed
-    }
-}
-
-pub fn derive_slug(raw_slug: Option<&str>, fallback_text: &str) -> String {
-    let raw = raw_slug.unwrap_or("").trim();
-    let text_to_slug = if raw.is_empty() { fallback_text } else { raw };
-    crate::vault::organization::slugify_title(text_to_slug, 65)
-}
-
-
-pub fn resolve_rule_path(scope: &str, target_pattern: &str) -> String {
-    let slug = slugify_title(target_pattern);
-    format!("wisdom/{}/rule_{}.md", scope, slug)
-}
-
-/// Greedy Cosine Clustering (CTO Mandate: Zero Centroid Vector Math)
-/// Groups unassociated facts into topically coherent clusters when pairwise cosine similarity >= threshold.
-pub fn cluster_facts(
-    facts: &[Fact],
-    embeddings: &[Vec<f32>],
-    config: &PipelineConfig,
-) -> Vec<Vec<usize>> {
-    let n = facts.len();
-    if n < config.cluster_min_size || embeddings.len() != n {
-        return Vec::new();
-    }
-
-    let mut assigned = vec![false; n];
-    let mut clusters = Vec::new();
-
-    for i in 0..n {
-        if assigned[i] {
-            continue;
-        }
-
-        let mut current_cluster = vec![i];
-        let emb_i_valid = embeddings[i].iter().any(|v| *v != 0.0);
-        let s_i = format!("{} {} {}", facts[i].h_n().unwrap_or(""), facts[i].iota_n().unwrap_or(""), facts[i].artifact_refs.join(" ")).to_lowercase();
-        let tokens_i: std::collections::HashSet<&str> = s_i.split_whitespace().filter(|w| w.len() > 3).collect();
-
-        for j in (i + 1)..n {
-            if assigned[j] {
-                continue;
-            }
-            let emb_j_valid = embeddings[j].iter().any(|v| *v != 0.0);
-            let sim = if emb_i_valid && emb_j_valid {
-                cosine_similarity(&embeddings[i], &embeddings[j])
-            } else {
-                let s_j = format!("{} {} {}", facts[j].h_n().unwrap_or(""), facts[j].iota_n().unwrap_or(""), facts[j].artifact_refs.join(" ")).to_lowercase();
-                let tokens_j: std::collections::HashSet<&str> = s_j.split_whitespace().filter(|w| w.len() > 3).collect();
-                if tokens_i.is_empty() || tokens_j.is_empty() {
-                    0.0
-                } else {
-                    let intersection = tokens_i.intersection(&tokens_j).count();
-                    let union = tokens_i.union(&tokens_j).count();
-                    if union == 0 { 0.0 } else { (intersection as f32 / union as f32) * 5.0 } // Scale Jaccard overlap so >=15% token overlap passes cluster_similarity (0.75) threshold
-                }
-            };
-
-            if sim >= config.cluster_similarity {
-                current_cluster.push(j);
-            }
-        }
-
-        if current_cluster.len() >= config.cluster_min_size {
-            for &idx in &current_cluster {
-                assigned[idx] = true;
-            }
-            clusters.push(current_cluster);
-        }
-    }
-
-    clusters
-}
 
 /// Extracts atomic facts from an Episode transcript turn.
 pub async fn extract_facts(
@@ -119,7 +27,6 @@ pub async fn extract_facts(
     if facts_dtos.is_empty() {
         return Ok(Vec::new());
     }
-
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
@@ -196,7 +103,6 @@ pub async fn extract_facts(
         }
     }
 
-    // CTO Remediation 1: Update Episode::causal_insight as a typed JSON array
     let facts_json = serde_json::to_value(&created_facts)?;
     let mut updated_ep = episode.clone();
     updated_ep.causal_insight = Some(facts_json);
@@ -219,7 +125,6 @@ pub async fn extract_facts(
 }
 
 /// Executes LLM JSON synthesis with retries and exponential backoff.
-/// Retries until valid non-empty JSON response of type `T` is returned.
 pub async fn retry_llm_json<T: serde::de::DeserializeOwned>(
     backend: &dyn StorageBackend,
     llm: Option<&LLMClient>,
@@ -260,8 +165,6 @@ pub async fn retry_llm_json<T: serde::de::DeserializeOwned>(
     }
 }
 
-
-
 /// Extracts atomic facts from an authored vault document.
 pub async fn extract_from_document(
     backend: &dyn StorageBackend,
@@ -301,8 +204,6 @@ pub async fn extract_from_document(
         tracing::info!("LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}", vault_path, facts_resp.no_facts_reason);
         return Ok(Vec::new());
     }
-
-
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
@@ -373,7 +274,6 @@ pub async fn extract_from_code(
     let symbols = crate::cognitive::ast::extract_code_ast(file_path, code_content, scope);
     let _ = db::save_code_symbols_for_file(backend, &symbols, file_path, scope).await;
 
-
     let (sys, user) = prompts::build_code_extraction_prompt(code_content, file_path);
     let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, file_path, 10).await?;
     let facts_dtos = facts_resp.facts;
@@ -381,11 +281,6 @@ pub async fn extract_from_code(
         tracing::info!("LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}", file_path, facts_resp.no_facts_reason);
         return Ok(Vec::new());
     }
-
-
-
-
-
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
@@ -449,13 +344,7 @@ pub async fn extract_from_code(
     Ok(created_facts)
 }
 
-
-
-
-
 /// Dual-Path Document Forging:
-/// Path A: Write raw section chunks to `/wiki/{scope}/forge_...` as human-readable `WikiNode` pages for immediate vector + BM25 search.
-/// Path B: Extract Arbor facts ($h_n, \iota_n, r_n, \mu_n$) to feed downstream HTR clustering and synthesis.
 pub async fn forge_document(
     backend: &dyn StorageBackend,
     store: &MarkdownStore,
@@ -479,7 +368,6 @@ pub async fn forge_document(
     let mut all_facts = Vec::new();
 
     for (idx, section) in sections.iter().enumerate() {
-        // ─── PATH A: WRITE RAW REFERENCE PAGE TO VAULT WIKI ─────────
         let chunk_path = format!("wiki/{}/forge_{}_{}.md", scope, sanitize_name, idx);
         let chunk_md = format!(
             "---\ntitle: \"Forged: {} (Section {})\";\nscope: \"forge_{}\"\n---\n\n{}",
@@ -505,12 +393,9 @@ pub async fn forge_document(
         };
         let _ = backend.save_wiki_node(&chunk_node).await;
 
-        // ─── PATH B: EXTRACT ARBOR FACTS FOR HTR SYNTHESIS ──────────
         let (sys, user) = prompts::build_forge_extraction_prompt(&section.content, source_path);
         let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, &format!("{}_section_{}", source_path, idx), 10).await?;
         let facts_dtos = facts_resp.facts;
-
-
 
         let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
         let fact_embeds = backend
@@ -545,8 +430,6 @@ pub async fn forge_document(
 }
 
 /// Dual-Path Skill Forging:
-/// Path A: Write raw skill playbooks to `/wiki/skills/` as human-readable `WikiNode` pages.
-/// Path B: Extract `FactSource::Skill` facts for HTR synthesis.
 pub async fn forge_skill(
     backend: &dyn StorageBackend,
     skill_content: &str,
@@ -559,7 +442,6 @@ pub async fn forge_skill(
         .and_then(|s| s.to_str())
         .unwrap_or("unnamed_skill");
 
-    // Path A: Write raw skill page to vault wiki
     let wiki_path = format!("wiki/skills/{}.md", skill_name);
     let chunk_node = WikiNode {
         id: Some(uuid::Uuid::new_v4().to_string()),
@@ -574,11 +456,9 @@ pub async fn forge_skill(
     };
     let _ = backend.save_wiki_node(&chunk_node).await;
 
-    // Path B: Extract FactSource::Skill facts
     let (sys, user) = prompts::build_skill_extraction_prompt(skill_content, skill_path);
     let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, skill_name, 10).await?;
     let facts_dtos = facts_resp.facts;
-
 
     let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
     let embeddings = backend
@@ -612,8 +492,7 @@ pub async fn forge_skill(
     Ok(created_facts)
 }
 
-/// Form generalized testable hypotheses (`IdeaNode`) from clusters of unassociated facts,
-/// injecting pruned past attempts as negative policy constraints ("Actions to Avoid").
+/// Form generalized testable hypotheses (`IdeaNode`) from clusters of unassociated facts.
 pub async fn form_hypotheses(
     backend: &dyn StorageBackend,
     llm: Option<&LLMClient>,
@@ -635,7 +514,6 @@ pub async fn form_hypotheses(
         return Ok(Vec::new());
     }
 
-    // Fetch pruned past attempts to inject as negative constraints
     let pruned_nodes = db::get_pruned_idea_nodes(backend, scope, config.prune_threshold).await?;
     let pruned_constraints: Vec<String> = pruned_nodes.iter().map(|n| n.claim.clone()).collect();
 
@@ -653,7 +531,6 @@ pub async fn form_hypotheses(
         let (sys, user) = prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
         let form_resp = retry_llm_json::<prompts::FormHypothesesResponse>(backend, llm, &sys, &user, "form_hypotheses", 10).await?;
         let hypotheses_dto = form_resp.hypotheses;
-
 
         for hdto in hypotheses_dto {
             let mut evidence_ids = Vec::new();
@@ -686,7 +563,6 @@ pub async fn form_hypotheses(
             let mut saved_idea = idea;
             saved_idea.id = Some(saved_id.clone());
 
-            // Link member facts to the formed hypothesis
             for &idx in &hdto.fact_indices {
                 if let Some(fact) = cluster_facts.get(idx) {
                     let mut updated_fact = (*fact).clone();
@@ -702,9 +578,7 @@ pub async fn form_hypotheses(
     Ok(formed_ideas)
 }
 
-/// HTR Backpropagation Refinement Pass:
-/// Evaluates facts against hypotheses, updating confidence scores.
-/// CTO Remediation 6 (Garbage Collection): Prunes 0-degree orphaned Fact records when confidence <= 0.20 while retaining IdeaStatus::Pruned for negative constraints.
+/// HTR Backpropagation Refinement Pass.
 pub async fn refine_hypotheses(
     backend: &dyn StorageBackend,
     llm: Option<&LLMClient>,
@@ -738,7 +612,6 @@ pub async fn refine_hypotheses(
             let prev_conf = idea.confidence;
             let (action, new_conf, refined_insight, reasoning) = (r.action, r.new_confidence, r.refined_insight, r.reasoning);
 
-
             idea.confidence = new_conf;
             idea.insight = refined_insight;
             idea.updated_at = Some(chrono::Utc::now());
@@ -763,7 +636,6 @@ pub async fn refine_hypotheses(
             };
             logs.push(log);
 
-            // CTO Remediation 6: Garbage Collection for Pruned Orphaned Child Fact Nodes
             if idea.status == IdeaStatus::Pruned {
                 if let Some(ref fid) = fact.id {
                     let _ = db::delete_fact(backend, fid).await;
@@ -775,10 +647,7 @@ pub async fn refine_hypotheses(
     Ok(logs)
 }
 
-/// Ancestor Merge Synthesis (LLM Wiki Synthesis - CTO Mandate):
-/// Synthesizes validated hypotheses into clean Markdown wiki pages.
-/// CTO Remediation 4 ($r_n$/$\mu_n$ Evidence Flattening): Member facts' raw evidence ($r_n$) and artifact references ($\mu_n$)
-/// are flattened, deduplicated, and stored on the merged WikiNode.
+/// Ancestor Merge Synthesis (LLM Wiki Synthesis).
 pub async fn merge_validated_nodes(
     backend: &dyn StorageBackend,
     llm: Option<&LLMClient>,
@@ -794,7 +663,6 @@ pub async fn merge_validated_nodes(
     let mut merged_nodes = Vec::new();
 
     for mut idea in validated {
-        // Collect & flatten child evidence (r_n) and artifact refs (mu_n) via direct ID lookup
         let mut flattened_r_n = HashSet::new();
         let mut flattened_mu_n = HashSet::new();
 
@@ -812,7 +680,6 @@ pub async fn merge_validated_nodes(
         let r_n_vec: Vec<String> = flattened_r_n.into_iter().collect();
         let mu_n_vec: Vec<String> = flattened_mu_n.into_iter().collect();
 
-        // ─── GIT WORKTREE ADMISSION GATE FOR CODE HYPOTHESES ─────────
         let is_code_impacting = mu_n_vec.iter().any(|m| m.ends_with(".rs") || m.ends_with(".py") || m.ends_with(".ts") || m.ends_with(".go"));
         if is_code_impacting && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -904,7 +771,7 @@ pub async fn merge_validated_nodes(
     Ok(merged_nodes)
 }
 
-/// Cross-Scope Graduation: Promotes universal claims to scope: "general" / wisdom rules.
+/// Cross-Scope Graduation.
 pub async fn graduate(
     backend: &dyn StorageBackend,
     llm: Option<&LLMClient>,
@@ -968,33 +835,6 @@ pub async fn graduate(
     }
 
     Ok(graduated_rules)
-}
-
-pub fn get_active_stm_anchors(vault_root: &std::path::Path) -> Vec<String> {
-    let handoffs_dir = vault_root.join(".handoffs");
-    if !handoffs_dir.exists() {
-        return Vec::new();
-    }
-    let mut anchors = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(handoffs_dir) {
-        for entry in entries.flatten() {
-            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let anchor_arr = val.get("anchor_skills")
-                        .or_else(|| val.get("_active_anchors"))
-                        .and_then(|s| s.as_array());
-                    if let Some(a) = anchor_arr {
-                        for item in a {
-                            if let Some(str_val) = item.as_str() {
-                                anchors.push(str_val.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    anchors
 }
 
 pub async fn save_wisdom_rule_with_deduplication(
@@ -1061,40 +901,4 @@ pub async fn prune_chat_history(backend: &dyn StorageBackend, max_turns: usize) 
         return Ok(deleted);
     }
     Ok(0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cosine_similarity_and_greedy_clustering() {
-        let v1 = vec![1.0, 0.0, 0.0];
-        let v2 = vec![0.9, 0.1, 0.0];
-        let v3 = vec![0.95, 0.05, 0.0];
-        let v4 = vec![0.0, 1.0, 0.0];
-
-        let sim_high = cosine_similarity(&v1, &v2);
-        assert!(sim_high >= 0.90);
-
-        let sim_zero = cosine_similarity(&v1, &v4);
-        assert_eq!(sim_zero, 0.0);
-
-        let facts = vec![
-            Fact { hypothesis: Some("H1".to_string()), ..Default::default() },
-            Fact { hypothesis: Some("H2".to_string()), ..Default::default() },
-            Fact { hypothesis: Some("H3".to_string()), ..Default::default() },
-            Fact { hypothesis: Some("H4".to_string()), ..Default::default() },
-        ];
-        let embeds = vec![v1, v2, v3, v4];
-        let config = PipelineConfig {
-            cluster_similarity: 0.75,
-            cluster_min_size: 3,
-            ..Default::default()
-        };
-
-        let clusters = cluster_facts(&facts, &embeds, &config);
-        assert_eq!(clusters.len(), 1);
-        assert_eq!(clusters[0], vec![0, 1, 2]);
-    }
 }

@@ -357,9 +357,9 @@ async fn test_meta_skill_malformed_llm_json() -> Result<()> {
 
 #[test]
 fn test_no_hardcoded_user_paths() {
-    let mut backend_path = std::path::PathBuf::from("src/db/backend.rs");
-    if !backend_path.exists() {
-        backend_path = std::path::PathBuf::from("mythrax-core/src/db/backend.rs");
+    let mut backend_dir = std::path::PathBuf::from("src/db/backend");
+    if !backend_dir.exists() {
+        backend_dir = std::path::PathBuf::from("mythrax-core/src/db/backend");
     }
 
     let mut watcher_path = std::path::PathBuf::from("src/vault/watcher.rs");
@@ -368,9 +368,9 @@ fn test_no_hardcoded_user_paths() {
     }
 
     assert!(
-        backend_path.exists(),
-        "backend.rs does not exist at {:?}",
-        backend_path
+        backend_dir.exists(),
+        "backend dir does not exist at {:?}",
+        backend_dir
     );
     assert!(
         watcher_path.exists(),
@@ -378,13 +378,20 @@ fn test_no_hardcoded_user_paths() {
         watcher_path
     );
 
-    let backend_content = std::fs::read_to_string(&backend_path).unwrap();
-    let watcher_content = std::fs::read_to_string(&watcher_path).unwrap();
+    for entry in std::fs::read_dir(backend_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            let content = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                !content.contains("/Users/keith/"),
+                "{} contains hardcoded /Users/keith/ path!",
+                path.display()
+            );
+        }
+    }
 
-    assert!(
-        !backend_content.contains("/Users/keith/"),
-        "backend.rs contains hardcoded /Users/keith/ path!"
-    );
+    let watcher_content = std::fs::read_to_string(&watcher_path).unwrap();
     assert!(
         !watcher_content.contains("/Users/keith/"),
         "watcher.rs contains hardcoded /Users/keith/ path!"

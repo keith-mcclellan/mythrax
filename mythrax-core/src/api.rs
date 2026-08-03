@@ -790,7 +790,7 @@ async fn completions_proxy_handler(
                         });
                         let sse_data = format!(
                             "data: {}\n\ndata: [DONE]\n\n",
-                            serde_json::to_string(&chunk).unwrap()
+                            serde_json::to_string(&chunk).unwrap_or_else(|_| "{}".to_string())
                         );
                         let mut header_map = HeaderMap::new();
                         header_map.insert(

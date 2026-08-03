@@ -219,15 +219,27 @@ fn test_summarize_diff_math() {
 
 #[test]
 fn test_unconditional_println_hygiene_in_backend() {
-    let backend_path = Path::new("src/db/backend.rs");
-    assert!(backend_path.exists(), "src/db/backend.rs not found");
-    let content = fs::read_to_string(backend_path).unwrap();
-
-    // Assert the Auto-Promoted println! message is not present
-    assert!(
-        !content.contains("println!(\"[Mythrax Synapse:"),
-        "Offending unconditional println! found in src/db/backend.rs"
-    );
+    let backend_dir = if Path::new("src/db/backend").exists() {
+        Path::new("src/db/backend").to_path_buf()
+    } else {
+        Path::new("mythrax-core/src/db/backend").to_path_buf()
+    };
+    assert!(backend_dir.exists(), "src/db/backend directory not found at {}", backend_dir.display());
+    
+    if let Ok(entries) = fs::read_dir(&backend_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    assert!(
+                        !content.contains("println!(\"[Mythrax Synapse:"),
+                        "Offending unconditional println! found in {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
 }
 
 }
