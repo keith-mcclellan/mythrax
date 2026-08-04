@@ -1,8 +1,26 @@
 use crate::contracts::{Tier, WikiNode, WisdomRule};
 use crate::db::StorageBackend;
-use crate::math::cosine_similarity;
 use anyhow::Result;
 use surrealdb_types::SurrealValue;
+
+struct GradCandidate<'a> {
+    node: &'a WikiNode,
+    embedding: &'a [f32],
+    embedding_norm: f32,
+}
+
+impl<'a> GradCandidate<'a> {
+    fn new(node: &'a WikiNode) -> Option<Self> {
+        let emb = node.embedding.as_ref()?;
+        let norm = emb.iter().map(|&x| x * x).sum::<f32>().sqrt();
+        Some(Self {
+            node,
+            embedding: emb.as_slice(),
+            embedding_norm: norm,
+        })
+    }
+}
+
 
 pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &str) -> Result<()> {
     let surreal_backend = db
@@ -30,19 +48,27 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         .check()?;
     let other_nodes: Vec<WikiNode> = resp_other.take(0)?;
 
-    for local in &local_nodes {
-        let local_emb = match &local.embedding {
-            Some(e) => e,
-            None => continue,
-        };
+    let local_cands: Vec<GradCandidate> = local_nodes.iter().filter_map(GradCandidate::new).collect();
+    let other_cands: Vec<GradCandidate> = other_nodes.iter().filter_map(GradCandidate::new).collect();
 
-        for other in &other_nodes {
-            let other_emb = match &other.embedding {
-                Some(e) => e,
-                None => continue,
+    for local_cand in &local_cands {
+        let local = local_cand.node;
+
+        for other_cand in &other_cands {
+            let other = other_cand.node;
+
+            let sim = if local_cand.embedding.len() != other_cand.embedding.len() || local_cand.embedding.is_empty() || local_cand.embedding_norm == 0.0 || other_cand.embedding_norm == 0.0 {
+                0.0
+            } else {
+                // Optimization: Calculate dot product and divide by pre-calculated
+                // norms to avoid O(N*M) redundant embedding norm calculations
+                let dot: f32 = local_cand.embedding.iter()
+                    .zip(other_cand.embedding.iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
+                dot / (local_cand.embedding_norm * other_cand.embedding_norm)
             };
 
-            let sim = cosine_similarity(local_emb, other_emb);
             if sim >= 0.85 {
                 // Block graduation if either source node is flagged as contradicted
                 if local.node_type.as_deref() == Some("conflict")
