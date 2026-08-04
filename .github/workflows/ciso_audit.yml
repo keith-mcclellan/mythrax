@@ -39,3 +39,4 @@ jobs:
         with:
           name: security-advisory-report
           path: security_advisory_report.md
+          if-no-files-found: warn

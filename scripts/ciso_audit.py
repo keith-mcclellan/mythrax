@@ -137,12 +137,14 @@ def scan_cargo_audit():
             for warning in audit_data.get('warnings', {}).values():
                  for warn in warning:
                     if warn.get('kind') in ('yanked', 'unmaintained'):
+                        advisory = warn.get('advisory')
+                        title = advisory.get('title', 'No details') if advisory else 'No details'
                         findings.append({
                             "severity": "Medium",
                             "type": "Dependency Warning",
                             "file": "Cargo.lock",
                             "line": 0,
-                            "desc": f"Crate {warn.get('package', {}).get('name')} {warn.get('package', {}).get('version')}: {warn.get('kind')} - {warn.get('advisory', {}).get('title', 'No details')}",
+                            "desc": f"Crate {warn.get('package', {}).get('name')} {warn.get('package', {}).get('version')}: {warn.get('kind')} - {title}",
                             "remediation": "Review the dependency and consider migrating to an alternative crate.",
                             "estimated_effort": "Medium"
                         })
