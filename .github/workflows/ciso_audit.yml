@@ -1,0 +1,42 @@
+name: CISO Security Audit
+
+on:
+  push:
+    branches: ['**']
+  schedule:
+    - cron: '0 0 * * *' # Nightly
+
+permissions:
+  pull-requests: write
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history for git log scanning
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-audit
+        run: cargo binstall -y cargo-audit
+
+      - name: Run CISO Audit Script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/ciso_audit.py
+
+      - name: Archive Security Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-advisory-report
+          path: security_advisory_report.md
+          if-no-files-found: warn
