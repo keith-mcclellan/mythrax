@@ -11829,3 +11829,22 @@ query: "Bulk Content 19", profile: 1us, embed: 3774us, terms: 2244us, db: 4200us
 query: "Write 4", profile: 2us, embed: 57247us, terms: 155983us, db: 53368us, rerank_start: 87094us, total: 353842us
 query: "Bulk Content 19", profile: 1us, embed: 89183us, terms: 56801us, db: 40015us, rerank_start: 33396us, total: 219459us
 query: "mythrax refactor architecture spec test harness isolation memory gate", profile: 11us, embed: 817us, terms: 22us, db: 49364us, rerank_start: 215us, total: 50437us
+query: "Parent Insight", profile: 4us, embed: 22456us, terms: 6309us, db: 15908us, rerank_start: 9182us, total: 60925us
+query: "Redis", profile: 12us, embed: 35117us, terms: 6176us, db: 15889us, rerank_start: 12681us, total: 81805us
+query: "failure", profile: 1us, embed: 9919us, terms: 89us, db: 16313us, rerank_start: 2464us, total: 28930us
+query: "Parent Insight", profile: 3us, embed: 10918us, terms: 140us, db: 17970us, rerank_start: 2368us, total: 43801us
+query: "second step before", profile: 12767us, embed: 26118us, terms: 1802us, db: 18698us, rerank_start: 23012us, total: 82576us
+query: "Parent Insight", profile: 4us, embed: 10671us, terms: 172us, db: 16537us, rerank_start: 2531us, total: 40367us
+query: "Parent Insight", profile: 2us, embed: 10269us, terms: 88us, db: 10032us, rerank_start: 2648us, total: 31058us
+query: "Concurrency", profile: 4us, embed: 10047us, terms: 84us, db: 15504us, rerank_start: 2492us, total: 28628us
+query: "secret", profile: 4us, embed: 10203us, terms: 6702us, db: 15167us, rerank_start: 2409us, total: 34871us
+query: "secret", profile: 2us, embed: 11093us, terms: 6837us, db: 18225us, rerank_start: 2670us, total: 39041us
+query: "Secret", profile: 4us, embed: 10197us, terms: 90us, db: 8650us, rerank_start: 2709us, total: 21710us
+query: "Secret", profile: 2us, embed: 10862us, terms: 95us, db: 17523us, rerank_start: 3791us, total: 32404us
+query: "Multi-Paragraph", profile: 4us, embed: 10480us, terms: 6648us, db: 14095us, rerank_start: 2429us, total: 34416us
+query: "Multi-Paragraph", profile: 1us, embed: 10149us, terms: 6718us, db: 13847us, rerank_start: 2431us, total: 33622us
+query: "Single-Paragraph", profile: 3us, embed: 10374us, terms: 6575us, db: 15021us, rerank_start: 2457us, total: 34984us
+query: "Avoid", profile: 5us, embed: 10103us, terms: 7634us, db: 17745us, rerank_start: 2390us, total: 38212us
+query: "Avoid", profile: 2us, embed: 10006us, terms: 6466us, db: 14440us, rerank_start: 2446us, total: 33598us
+query: "redis", profile: 4us, embed: 10852us, terms: 84us, db: 15885us, rerank_start: 2820us, total: 29777us
+query: "Pattern", profile: 5us, embed: 10462us, terms: 107us, db: 18036us, rerank_start: 2785us, total: 42200us
