@@ -514,23 +514,25 @@ impl SurrealBackend {
 
         // 6. Relate temporal followed_by connections
         for rel in relations {
-            let from_uuid = rel.get("from_str").unwrap().as_str().unwrap();
-            let to_uuid = rel.get("to_str").unwrap().as_str().unwrap();
+            let from_uuid_opt = rel.get("from_str").and_then(|v| v.as_str());
+            let to_uuid_opt = rel.get("to_str").and_then(|v| v.as_str());
 
-            let from_thing = parse_record_id(&format!("episode:{}", from_uuid));
-            let to_thing = parse_record_id(&format!("episode:{}", to_uuid));
+            if let (Some(from_uuid), Some(to_uuid)) = (from_uuid_opt, to_uuid_opt) {
+                let from_thing = parse_record_id(&format!("episode:{}", from_uuid));
+                let to_thing = parse_record_id(&format!("episode:{}", to_uuid));
 
-            if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
-                let relate_query =
-                    "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
-                if let Err(e) = self
-                    .db
-                    .query(relate_query)
-                    .bind(("from", from))
-                    .bind(("to", to))
-                    .await
-                {
-                    tracing::warn!("Failed to relate temporal followed_by in batch: {:?}", e);
+                if let (Ok(from), Ok(to)) = (from_thing, to_thing) {
+                    let relate_query =
+                        "RELATE $from -> followed_by -> $to CONTENT { created_at: time::now() };";
+                    if let Err(e) = self
+                        .db
+                        .query(relate_query)
+                        .bind(("from", from))
+                        .bind(("to", to))
+                        .await
+                    {
+                        tracing::warn!("Failed to relate temporal followed_by in batch: {:?}", e);
+                    }
                 }
             }
         }
