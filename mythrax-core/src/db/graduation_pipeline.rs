@@ -1,6 +1,5 @@
 use crate::contracts::{Tier, WikiNode, WisdomRule};
 use crate::db::StorageBackend;
-use crate::math::cosine_similarity;
 use anyhow::Result;
 use surrealdb_types::SurrealValue;
 
@@ -30,27 +29,47 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         .check()?;
     let other_nodes: Vec<WikiNode> = resp_other.take(0)?;
 
-    for local in &local_nodes {
-        let local_emb = match &local.embedding {
-            Some(e) => e,
-            None => continue,
-        };
+    // ⚡ Bolt: Precalculate embedding norms to avoid O(N^2) Euclidean norm recalculations
+    struct GradCandidate<'a> {
+        node: &'a WikiNode,
+        emb: &'a Vec<f32>,
+        norm: f32,
+    }
 
-        for other in &other_nodes {
-            let other_emb = match &other.embedding {
-                Some(e) => e,
-                None => continue,
+    let local_cands: Vec<GradCandidate> = local_nodes.iter().filter_map(|node| {
+        let emb = node.embedding.as_ref()?;
+        let norm = emb.iter().map(|&x| x * x).sum::<f32>().sqrt();
+        Some(GradCandidate { node, emb, norm })
+    }).collect();
+
+    let other_cands: Vec<GradCandidate> = other_nodes.iter().filter_map(|node| {
+        let emb = node.embedding.as_ref()?;
+        let norm = emb.iter().map(|&x| x * x).sum::<f32>().sqrt();
+        Some(GradCandidate { node, emb, norm })
+    }).collect();
+
+    for local in &local_cands {
+        for other in &other_cands {
+            // Inline cosine similarity to bypass redundant norm recalculations
+            let mut dot = 0.0;
+            let len = local.emb.len().min(other.emb.len());
+            for i in 0..len {
+                dot += local.emb[i] * other.emb[i];
+            }
+            let sim = if local.norm == 0.0 || other.norm == 0.0 {
+                0.0
+            } else {
+                dot / (local.norm * other.norm)
             };
 
-            let sim = cosine_similarity(local_emb, other_emb);
             if sim >= 0.85 {
                 // Block graduation if either source node is flagged as contradicted
-                if local.node_type.as_deref() == Some("conflict")
-                    || other.node_type.as_deref() == Some("conflict")
+                if local.node.node_type.as_deref() == Some("conflict")
+                    || other.node.node_type.as_deref() == Some("conflict")
                 {
                     tracing::info!(
                         "Graduation blocked: source node flagged as conflict (local='{}', other='{}')",
-                        local.name, other.name
+                        local.node.name, other.node.name
                     );
                     continue;
                 }
@@ -58,26 +77,26 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
                 let uuid = uuid::Uuid::new_v4().to_string();
                 let global_rule = WisdomRule {
                     id: Some(format!("wisdom:{}", uuid)),
-                    target_pattern: format!("Standardized: {}", local.name),
+                    target_pattern: format!("Standardized: {}", local.node.name),
                     action_to_avoid: format!(
                         "Avoid project-specific deviations for {}",
-                        local.name
+                        local.node.name
                     ),
                     causal_explanation: format!(
                         "Graduated due to cross-project convergence between scope '{}' and '{}' (Similarity: {:.2}).",
-                        current_scope, other.scope, sim
+                        current_scope, other.node.scope, sim
                     ),
                     prescribed_remedy: format!(
                         "Adopt the converged architectural pattern: {}",
-                        local.content
+                        local.node.content
                     ),
                     tier: Tier::Wisdom,
                     scope: "global".to_string(),
                     vault_path: None,
-                    embedding: local.embedding.clone(),
+                    embedding: local.node.embedding.clone(),
                     source_episodes: vec![
-                        local.id.clone().unwrap_or_default(),
-                        other.id.clone().unwrap_or_default(),
+                        local.node.id.clone().unwrap_or_default(),
+                        other.node.id.clone().unwrap_or_default(),
                     ],
                     generator_name: "GraduationPipeline".to_string(),
                     similarity: Some(sim),
@@ -94,24 +113,24 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
 
                 let wisdom_id = db.save_wisdom_rule(&global_rule).await?;
 
-                if let Some(ref local_id) = local.id {
+                if let Some(ref local_id) = local.node.id {
                     let _ = db
                         .relate_nodes(
                             local_id,
                             &wisdom_id,
-                            local.temporal_range_start,
-                            local.temporal_range_end,
+                            local.node.temporal_range_start,
+                            local.node.temporal_range_end,
                             Some(sim as f32),
                         )
                         .await;
                 }
-                if let Some(ref other_id) = other.id {
+                if let Some(ref other_id) = other.node.id {
                     let _ = db
                         .relate_nodes(
                             other_id,
                             &wisdom_id,
-                            other.temporal_range_start,
-                            other.temporal_range_end,
+                            other.node.temporal_range_start,
+                            other.node.temporal_range_end,
                             Some(sim as f32),
                         )
                         .await;
