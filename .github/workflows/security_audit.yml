@@ -1,0 +1,29 @@
+name: Security Audit
+
+on:
+  push:
+    branches: ['**']
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  audit:
+    permissions:
+      issues: write
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required to scan history
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run Python Security Scanner
+        run: python3 scripts/security_scanner.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
