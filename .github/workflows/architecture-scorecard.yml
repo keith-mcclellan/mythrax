@@ -1,0 +1,44 @@
+name: Architecture Sanitation Scorecard
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/*'
+      - 'fix/*'
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  analyze_debt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        # Fetch depth 6 to analyze the current and last 5 commits
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Run Analyze Debt Script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use GITHUB_REF_NAME to identify the PR for push events
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          python scripts/analyze_debt.py
+          cat scorecard.md
