@@ -1,0 +1,329 @@
+name: Security Audit
+
+on:
+  push:
+    paths:
+      - 'mythrax-core/**'
+  schedule:
+    - cron: '0 0 * * *' # Nightly
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install cargo-audit
+        run: curl -LsSf https://github.com/rustsec/rustsec/releases/latest/download/cargo-audit-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /tmp && mv /tmp/cargo-audit-x86_64-unknown-linux-gnu/cargo-audit ~/.cargo/bin/ || cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: |
+          cd mythrax-core
+          cargo audit --json > audit_results.json || true
+
+      - name: Run security audit script
+        run: |
+          cat << 'PYEOF' > security_audit.py
+          import json
+          import os
+          import re
+          import subprocess
+          import urllib.request
+          import time
+
+          def analyze_audit():
+              try:
+                  with open('mythrax-core/audit_results.json', 'r') as f:
+                      data = json.load(f)
+              except Exception as e:
+                  return []
+
+              findings = []
+
+              if 'vulnerabilities' in data and 'list' in data['vulnerabilities']:
+                  for vuln in data['vulnerabilities']['list']:
+                      package = vuln.get('package', {}).get('name', 'unknown')
+                      version = vuln.get('package', {}).get('version', 'unknown')
+                      advisory = vuln.get('advisory') or {}
+                      title = advisory.get('title', 'Unknown vulnerability')
+                      cvss = advisory.get('cvss')
+                      severity = cvss.get('severity', 'High') if isinstance(cvss, dict) else 'High'
+
+                      findings.append({
+                          'type': 'dependency_vuln',
+                          'severity': severity,
+                          'file': 'Cargo.lock',
+                          'line': 0,
+                          'title': f"Vulnerable dependency: {package} {version}",
+                          'description': f"Vulnerable dependency: {package} {version} - {title}",
+                          'recommendation': f"Update {package} to a patched version.",
+                          'effort': 'Low'
+                      })
+
+              if 'warnings' in data:
+                  for warning_type, warning_list in data.get('warnings', {}).items():
+                      for warn_item in warning_list:
+                          package = warn_item.get('package', {}).get('name', 'unknown')
+                          version = warn_item.get('package', {}).get('version', 'unknown')
+                          kind = warn_item.get('kind', warning_type)
+                          advisory = warn_item.get('advisory') or {}
+                          title = advisory.get('title', kind)
+
+                          findings.append({
+                              'type': 'dependency_warn',
+                              'severity': 'Medium',
+                              'file': 'Cargo.lock',
+                              'line': 0,
+                              'title': f"Dependency warning ({kind}): {package}",
+                              'description': f"Dependency warning ({kind}): {package} {version} - {title}",
+                              'recommendation': f"Replace or update {package}.",
+                              'effort': 'Medium'
+                          })
+              return findings
+
+          def check_crates_activity():
+              findings = []
+              try:
+                  with open('mythrax-core/Cargo.toml', 'r') as f:
+                      content = f.read()
+
+                  deps = re.findall(r'^([a-zA-Z0-9_\-]+)\s*=\s*(?:\{.*version\s*=\s*["\']([^"\']+)["\'].*\}|["\']([^"\']+)["\'])', content, re.MULTILINE)
+
+                  for match in deps:
+                      crate_name = match[0]
+                      try:
+                          url = f"https://crates.io/api/v1/crates/{crate_name}"
+                          req = urllib.request.Request(url, headers={'User-Agent': 'MythraxSecurityAudit (security@mythrax.io)'})
+                          with urllib.request.urlopen(req) as response:
+                              data = json.loads(response.read().decode())
+                              updated_at = data.get('crate', {}).get('updated_at', '')
+                              if updated_at:
+                                  year = int(updated_at[:4])
+                                  if year < 2023:
+                                       findings.append({
+                                          'type': 'dependency_inactive',
+                                          'severity': 'Medium',
+                                          'file': 'Cargo.toml',
+                                          'line': 0,
+                                          'title': f"Inactive dependency: {crate_name}",
+                                          'description': f"Dependency {crate_name} has no recent commits/updates (last update: {year}).",
+                                          'recommendation': f"Consider migrating away from {crate_name} as it may be unmaintained.",
+                                          'effort': 'High'
+                                      })
+                      except Exception as e:
+                          pass
+                      time.sleep(0.1)
+              except Exception as e:
+                  pass
+              return findings
+
+          def extract_unsafe(filepath):
+              findings = []
+              with open(filepath, 'r') as f:
+                  lines = f.readlines()
+                  for i, line in enumerate(lines):
+                      if 'unsafe ' in line or 'unsafe {' in line:
+                          has_justification = False
+                          if i > 0 and lines[i-1].strip().startswith('//'):
+                              has_justification = True
+
+                          title = f"Unsafe Rust block in {os.path.basename(filepath)}:{i+1}"
+                          description = f"Unsafe Rust block: `{line.strip()}`"
+                          if not has_justification:
+                              description += "\n\n**Missing justification comment.**"
+
+                          description += "\n\n**Memory Safety Risk:** Code inside `unsafe` blocks bypasses Rust's standard borrowing and ownership checks. Without proper manual validation, this can lead to memory corruption (e.g., use-after-free, double free, data races, out-of-bounds access) or undefined behavior, compromising the entire application's integrity."
+                          if has_justification:
+                               description += " Ensure the justification adequately explains how invariants are upheld."
+
+                          findings.append({
+                              'type': 'unsafe',
+                              'severity': 'Medium' if has_justification else 'High',
+                              'file': filepath,
+                              'line': i + 1,
+                              'title': title,
+                              'description': description,
+                              'recommendation': "Add `// SAFETY:` comment explaining why this is safe and how invariants are upheld, or refactor to safe Rust.",
+                              'effort': 'Medium'
+                          })
+              return findings
+
+          def check_hardcoded_secrets(filepath):
+              findings = []
+              secret_patterns = [
+                  re.compile(r'(?i)api[_-]?key\s*=\s*["\'][a-zA-Z0-9_\-]+["\']'),
+                  re.compile(r'(?i)secret\s*=\s*["\'][a-zA-Z0-9_\-]+["\']'),
+                  re.compile(r'(?i)password\s*=\s*["\'][a-zA-Z0-9_\-]+["\']'),
+                  re.compile(r'(?i)token\s*=\s*["\'][a-zA-Z0-9_\-]+["\']'),
+                  re.compile(r'sk-[a-zA-Z0-9]{20,}'),
+                  re.compile(r'xox[baprs]-[a-zA-Z0-9]{10,}'),
+              ]
+              with open(filepath, 'r') as f:
+                  lines = f.readlines()
+                  for i, line in enumerate(lines):
+                      for pattern in secret_patterns:
+                          if pattern.search(line):
+                              findings.append({
+                                  'type': 'secret',
+                                  'severity': 'Critical',
+                                  'file': filepath,
+                                  'line': i + 1,
+                                  'title': f"Hardcoded secret in {os.path.basename(filepath)}",
+                                  'description': f"Potential hardcoded secret or credential found in {filepath}:{i+1}.",
+                                  'recommendation': "Remove hardcoded secret, load via environment variable or secure vault.",
+                                  'effort': 'Low'
+                              })
+              return findings
+
+          def check_execution_paths(filepath):
+              findings = []
+              cmd_pattern = re.compile(r'Command::new\([^)]+\)')
+              sh_pattern = re.compile(r'sh\s+-c')
+
+              with open(filepath, 'r') as f:
+                  lines = f.readlines()
+                  for i, line in enumerate(lines):
+                      if cmd_pattern.search(line) or sh_pattern.search(line):
+                           findings.append({
+                                  'type': 'execution',
+                                  'severity': 'High',
+                                  'file': filepath,
+                                  'line': i + 1,
+                                  'title': f"Unsafe execution path in {os.path.basename(filepath)}",
+                                  'description': f"Potentially unsafe execution path (Command execution) at {filepath}:{i+1}.\n\n`{line.strip()}`",
+                                  'recommendation': "Ensure all external inputs are strictly sanitized and boundaries are enforced, or avoid shell execution.",
+                                  'effort': 'Medium'
+                              })
+              return findings
+
+          def check_git_history():
+              findings = []
+              try:
+                  cmd = "cd mythrax-core && git log -G'api_key|secret|password|token' --oneline -p | grep -E '^\\+.*(api_key|secret|password|token).*=' | head -n 5"
+                  result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                  if result.stdout.strip():
+                      findings.append({
+                          'type': 'git_history_secret',
+                          'severity': 'Critical',
+                          'file': 'git history',
+                          'line': 0,
+                          'title': "Secrets in git history",
+                          'description': f"Potential secrets found in git history.",
+                          'recommendation': "Use BFG Repo-Cleaner or git filter-repo to rewrite history and remove secrets. Rotate any exposed credentials immediately.",
+                          'effort': 'High'
+                      })
+              except Exception as e:
+                  pass
+              return findings
+
+          def main():
+              findings = analyze_audit()
+              findings.extend(check_crates_activity())
+
+              for root, dirs, files in os.walk('.'):
+                  if 'target' in dirs: dirs.remove('target')
+                  if '.git' in dirs: dirs.remove('.git')
+                  if 'node_modules' in dirs: dirs.remove('node_modules')
+                  if 'issues' in dirs: dirs.remove('issues')
+                  if '.venv' in dirs: dirs.remove('.venv')
+
+                  for file in files:
+                      filepath = os.path.join(root, file)
+                      if file.endswith('.rs'):
+                          findings.extend(extract_unsafe(filepath))
+                          findings.extend(check_execution_paths(filepath))
+
+                      valid_ext = ('.rs', '.toml', '.json', '.yaml', '.yml', '.env', '.md', '.ts', '.js', '.py')
+                      if file.endswith(valid_ext) or file in ['Cargo.toml', 'Cargo.lock', '.env']:
+                          findings.extend(check_hardcoded_secrets(filepath))
+
+              findings.extend(check_git_history())
+
+              severity_order = {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3}
+              findings.sort(key=lambda x: severity_order.get(x['severity'], 4))
+
+              os.makedirs('issues', exist_ok=True)
+              with open('issues/security_advisory_report.md', 'w') as f:
+                  f.write("# Security Advisory Report\n\n")
+
+                  current_severity = None
+                  for finding in findings:
+                      if finding['severity'] != current_severity:
+                          current_severity = finding['severity']
+                          f.write(f"\n## {current_severity} Findings\n\n")
+
+                      f.write(f"### {finding['title']}\n")
+                      f.write(f"- **File:** `{finding['file']}`\n")
+                      if finding['line'] > 0:
+                          f.write(f"- **Line:** {finding['line']}\n")
+                      f.write(f"{finding['description']}\n")
+                      f.write(f"- **Recommendation:** {finding['recommendation']}\n")
+                      f.write(f"- **Effort:** {finding['effort']}\n\n")
+
+              issue_count = 1
+              for finding in findings:
+                  if finding['severity'] in ['Critical', 'High']:
+                      issue_filename = f"issues/issue_{issue_count:03d}_{finding['type']}.md"
+                      # Ensure title is not too long
+                      title = finding['title']
+                      if len(title) > 200:
+                          title = title[:197] + "..."
+
+                      with open(issue_filename, 'w') as f:
+                          f.write(f"## [{finding['severity']}] {title}\n\n")
+                          f.write(f"**File:** `{finding['file']}`\n")
+                          if finding['line'] > 0:
+                              f.write(f"**Line:** {finding['line']}\n")
+                          f.write(f"\n{finding['description']}\n")
+                          f.write(f"\n**Recommendation:** {finding['recommendation']}\n")
+                          f.write(f"\n**Estimated Effort:** {finding['effort']}\n")
+                      issue_count += 1
+
+          if __name__ == "__main__":
+              main()
+          PYEOF
+          python3 security_audit.py
+          cat issues/security_advisory_report.md
+
+      - name: Create GitHub Issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if which gh > /dev/null; then
+            for file in issues/issue_*.md; do
+              if [ -f "$file" ]; then
+                title=$(head -n 1 "$file" | sed 's/^## //')
+
+                # Check if issue already exists
+                existing=$(gh issue list --state all --search "$title" --json number -q '.[0].number')
+
+                # if existing is empty or literally 'null' from jq
+                if [ -z "$existing" ] || [ "$existing" = "null" ]; then
+                  gh issue create --title "$title" --body-file "$file" --label "bug,agent-found,security"
+                else
+                  echo "Issue '$title' already exists (#$existing), skipping."
+                fi
+              fi
+            done
+          else
+            echo "GitHub CLI not found, skipping issue creation."
+          fi
+
+      - name: Cleanup generated files
+        run: |
+          rm -rf issues
+          rm -f security_audit.py
+          rm -f mythrax-core/audit_results.json
