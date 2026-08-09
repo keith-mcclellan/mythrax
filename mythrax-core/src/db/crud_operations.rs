@@ -514,8 +514,8 @@ impl SurrealBackend {
 
         // 6. Relate temporal followed_by connections
         for rel in relations {
-            let from_uuid = rel.get("from_str").unwrap().as_str().unwrap();
-            let to_uuid = rel.get("to_str").unwrap().as_str().unwrap();
+            let from_uuid = if let Some(id) = rel.get("from_str").and_then(|v| v.as_str()) { id } else { continue; };
+            let to_uuid = if let Some(id) = rel.get("to_str").and_then(|v| v.as_str()) { id } else { continue; };
 
             let from_thing = parse_record_id(&format!("episode:{}", from_uuid));
             let to_thing = parse_record_id(&format!("episode:{}", to_uuid));
@@ -916,8 +916,8 @@ impl SurrealBackend {
             }
         }
 
-        let model = current_model.unwrap();
-        let cloud_provider = current_cloud_provider.unwrap();
+        let model = current_model.unwrap_or_else(|| "default_model".to_string());
+        let cloud_provider = current_cloud_provider.unwrap_or_else(|| "default_provider".to_string());
 
         let expires_at: Option<String> = None;
         let delay = req
@@ -2916,7 +2916,7 @@ impl SurrealBackend {
                     .check()?;
             } else {
                 let row = rows.pop().unwrap();
-                let new_count = row.access_count + 1;
+                let new_count = row.access_count.saturating_add(1);
                 let decay = (-0.05f32 * delta_t_days).exp() as f64;
                 new_utility = 50.0 + (new_count as f64).log2() * decay;
 

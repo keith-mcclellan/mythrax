@@ -179,7 +179,7 @@ impl ConvergenceDetector {
         }
 
         if self.history.len() < self.window_size {
-            return ConvergenceSignal::Converging;
+            return ConvergenceSignal::Stagnant;
         }
 
         let first = self.history.first().copied().unwrap_or(0.0);
@@ -188,7 +188,7 @@ impl ConvergenceDetector {
         let delta_visits = (self.history.len() - 1) as f32;
 
         if delta_visits <= 0.0 {
-            return ConvergenceSignal::Converging;
+            return ConvergenceSignal::Stagnant;
         }
 
         let score_velocity = delta_score / delta_visits;
@@ -898,10 +898,10 @@ mod tests {
     #[test]
     fn test_convergence_detector_signals() {
         let mut detector = ConvergenceDetector::new(5);
-        assert_eq!(detector.record_score(50.0), ConvergenceSignal::Converging);
-        assert_eq!(detector.record_score(52.0), ConvergenceSignal::Converging);
-        assert_eq!(detector.record_score(54.0), ConvergenceSignal::Converging);
-        assert_eq!(detector.record_score(56.0), ConvergenceSignal::Converging);
+        assert_eq!(detector.record_score(50.0), ConvergenceSignal::Stagnant);
+        assert_eq!(detector.record_score(52.0), ConvergenceSignal::Stagnant);
+        assert_eq!(detector.record_score(54.0), ConvergenceSignal::Stagnant);
+        assert_eq!(detector.record_score(56.0), ConvergenceSignal::Stagnant);
         assert_eq!(detector.record_score(58.0), ConvergenceSignal::Converging);
 
         // Stagnant flat trajectory
