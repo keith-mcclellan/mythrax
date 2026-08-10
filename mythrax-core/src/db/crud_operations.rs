@@ -1686,6 +1686,29 @@ impl SurrealBackend {
     }
 
     /// Increments or decrements term document frequencies in the `idf_index` SurrealDB table using a given episode.
+    pub async fn get_episodes_batch_db(&self, ids: &[String]) -> Result<Vec<Episode>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let formatted_ids: Vec<surrealdb::types::RecordId> = ids.iter().filter_map(|id| {
+            let clean_id = id.strip_prefix("episode:").unwrap_or(id);
+            crate::db::parse_record_id(&format!("episode:{}", clean_id)).ok()
+        }).collect();
+
+        let sql = "SELECT *, type::string(id) AS id, type::string(created_at) AS created_at, type::string(last_retrieved_at) AS last_retrieved_at FROM episode WHERE id IN $ids;";
+        let mut response = self.db.query(sql).bind(("ids", formatted_ids)).await?;
+
+        let mut valid_episodes = Vec::new();
+        let raw_results: Vec<serde_json::Value> = response.take(0)?;
+        for raw_val in raw_results {
+            if let Ok(ep) = serde_json::from_value::<Episode>(raw_val) {
+                valid_episodes.push(ep);
+            }
+        }
+        Ok(valid_episodes)
+    }
+
     pub async fn update_idf_index_for_episode(&self, ep: &Episode, is_delete: bool) -> Result<()> {
         let tokens = crate::retrieval::bm25::tokenize(&ep.content);
         let mut unique_terms = std::collections::HashSet::new();
@@ -1729,16 +1752,17 @@ impl SurrealBackend {
             return Ok(());
         }
         let mut term_counts: std::collections::HashMap<(String, String), i64> = std::collections::HashMap::new();
-        for id_str in episode_ids {
-            if let Ok(Some(ep)) = self.get_episode_db(id_str).await {
-                let tokens = crate::retrieval::bm25::tokenize(&ep.content);
-                let unique_terms: std::collections::HashSet<_> = tokens.into_iter().collect();
-                let scope = ep.scope.as_deref().unwrap_or("general").to_string();
-                for term in unique_terms {
-                    *term_counts.entry((term, scope.clone())).or_insert(0) += 1;
-                }
+
+        let episodes = self.get_episodes_batch_db(episode_ids).await?;
+        for ep in episodes {
+            let tokens = crate::retrieval::bm25::tokenize(&ep.content);
+            let unique_terms: std::collections::HashSet<_> = tokens.into_iter().collect();
+            let scope = ep.scope.as_deref().unwrap_or("general").to_string();
+            for term in unique_terms {
+                *term_counts.entry((term, scope.clone())).or_insert(0) += 1;
             }
         }
+
         for ((term, scope), delta) in term_counts {
             let sql = "UPDATE idf_index SET document_frequency = document_frequency + $delta WHERE term = $term AND scope = $scope; IF count() == 0 THEN INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $delta }; END;";
             let _ = self.db.query(sql).bind(("term", term)).bind(("scope", scope)).bind(("delta", delta)).await;
