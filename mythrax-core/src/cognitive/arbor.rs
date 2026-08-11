@@ -82,6 +82,9 @@ pub struct TestCommandEvaluator {
 
 impl HeldOutEvaluator for TestCommandEvaluator {
     fn evaluate(&self, _branch_name: &str, temp_worktree_path: &Path) -> Result<f32> {
+        if self.test_command.contains("$(") || self.test_command.contains('`') {
+            return Err(anyhow::anyhow!("Command substitution is blocked to prevent injection"));
+        }
         let has_shell_operators = self.test_command.contains('&')
             || self.test_command.contains('|')
             || self.test_command.contains('>')
