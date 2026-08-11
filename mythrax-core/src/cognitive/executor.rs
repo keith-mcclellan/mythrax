@@ -156,6 +156,10 @@ impl ArborExecutor {
             }
         }
 
+        if test_command.contains("$(") || test_command.contains('`') {
+            return Err(anyhow::anyhow!("Command substitution is blocked to prevent injection"));
+        }
+
         let has_shell_operators = test_command.contains('&')
             || test_command.contains('|')
             || test_command.contains('>')
