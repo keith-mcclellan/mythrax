@@ -1983,7 +1983,7 @@ impl SurrealBackend {
                     _ => 200,
                 }
             };
-            let mut keyword_candidates = parse_results(keyword_resp_res.unwrap(), false)?;
+            let mut keyword_candidates = if let Some(k_resp) = keyword_resp_res { parse_results(k_resp, false)? } else { Vec::new() };
             keyword_candidates.truncate(fts_cap);
 
             // Stage 3: Parallel Vector / FTS (BM25) Retrieval & Fusion (Reciprocal Rank Fusion or Score Blending)
