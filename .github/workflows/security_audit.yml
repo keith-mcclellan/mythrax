@@ -1,0 +1,35 @@
+name: Nightly Security Audit
+
+on:
+  push:
+    branches:
+      - '**'
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          curl -LsSf https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv0.20.1/cargo-audit-x86_64-unknown-linux-musl.tgz | tar zxvf - && sudo mv cargo-audit-*/cargo-audit /usr/local/bin/
+
+      - name: Run security audit script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/ciso_audit.py
+
+      - name: Output Security Report
+        run: |
+          if [ -f issues/security-report.md ]; then
+            cat issues/security-report.md
+          fi
