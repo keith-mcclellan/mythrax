@@ -1,0 +1,27 @@
+name: Continuous Code Sanitation
+
+on:
+  push:
+    paths:
+      - 'mythrax-core/**'
+      - 'scripts/**'
+  pull_request:
+    paths:
+      - 'mythrax-core/**'
+      - 'scripts/**'
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 6
+
+      - name: Run Sanitation Scorecard
+        run: |
+          python3 scripts/sanitation_scorecard.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
