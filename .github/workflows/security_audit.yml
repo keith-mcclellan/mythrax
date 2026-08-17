@@ -1,0 +1,36 @@
+name: Security Audit
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Run Security Audit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTIONS: "true"
+        run: |
+          python scripts/security_audit.py
+      - name: Output Report
+        run: |
+          cat security_advisory_report.md
+      - name: Upload Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-advisory-report
+          path: security_advisory_report.md
