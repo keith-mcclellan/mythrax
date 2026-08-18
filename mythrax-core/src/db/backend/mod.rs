@@ -1532,9 +1532,12 @@ impl StorageBackend for SurrealBackend {
             .filter_map(|ep| ep.id.clone().map(|id| (id, ep)))
             .collect();
 
+        // ⚡ Bolt: Removed unfiltered.results.clone() and used into_iter() to avoid O(N) heap allocation
         let mut filtered_results = Vec::new();
-        for res in unfiltered.results.clone() {
-            if res.id.starts_with("episode:") {
+        let had_filters = !concepts.is_empty() || !files.is_empty();
+
+        for res in unfiltered.results.into_iter() {
+            if had_filters && res.id.starts_with("episode:") {
                 if let Some(ep) = ep_map.get(&res.id) {
                     let mut matches_concept = concepts.is_empty();
                     if !concepts.is_empty() {
@@ -1547,26 +1550,24 @@ impl StorageBackend for SurrealBackend {
                     if !files.is_empty() {
                         let mut ep_files = Vec::new();
                         if let Some(ref fr) = ep.files_read {
-                            ep_files.extend(fr.iter().cloned());
+                            ep_files.extend(fr.iter().map(|s| s.as_str()));
                         }
                         if let Some(ref fm) = ep.files_modified {
-                            ep_files.extend(fm.iter().cloned());
+                            ep_files.extend(fm.iter().map(|s| s.as_str()));
                         }
-                        matches_file = files.iter().any(|f| ep_files.contains(f));
+                        matches_file = files.iter().any(|f| ep_files.contains(&f.as_str()));
                     }
 
                     if matches_concept && matches_file {
                         filtered_results.push(res);
                     }
                 }
+            } else if !had_filters {
+                filtered_results.push(res);
             }
         }
 
-        let final_results = if filtered_results.is_empty() {
-            unfiltered.results
-        } else {
-            filtered_results
-        };
+        let final_results = filtered_results;
 
         // Truncate to the requested limit
         let truncated = final_results.into_iter().take(limit).collect::<Vec<_>>();
