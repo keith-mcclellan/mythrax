@@ -1,0 +1,5 @@
+perf(math): optimize cosine similarity with loop unrolling
+
+- Unrolled main loop into chunks of 8 elements
+- Elided bounds checks using slice hinting
+- Achieves ~33% speedup on large embeddings (768-dim)
