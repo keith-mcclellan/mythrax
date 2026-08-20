@@ -1,0 +1,12 @@
+---
+labels: bug, agent-found, security-audit
+title: Undocumented Unsafe Block in inspect_failed_query.rs line 41
+---
+
+**File**: mythrax-core/src/bin/inspect_failed_query.rs:41
+**Snippet**:
+```rust
+unsafe {
+```
+**Severity**: High
+**Remediation**: Analyze the memory safety risk of this block and document the justification with a `// SAFETY:` comment, or refactor to safe Rust.
