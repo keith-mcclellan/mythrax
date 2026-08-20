@@ -92,16 +92,17 @@ impl<S: FsmState> ContextGovernor<S> {
     }
 
     // Localized Personalized PageRank (PPR) implementation
+    // Optimized: Uses flat vectors instead of string allocations and HashMaps in the inner loop
     pub fn calculate_ppr_weights(
         &self,
         edges: &[(String, String)],
         damping_factor: f32,
         max_iterations: usize,
     ) -> HashMap<String, f32> {
-        let mut nodes = HashSet::new();
+        let mut nodes: HashSet<&str> = HashSet::new();
         for (u, v) in edges {
-            nodes.insert(u.clone());
-            nodes.insert(v.clone());
+            nodes.insert(u.as_str());
+            nodes.insert(v.as_str());
         }
 
         let n = nodes.len();
@@ -109,32 +110,52 @@ impl<S: FsmState> ContextGovernor<S> {
             return HashMap::new();
         }
 
-        let mut out_degree = HashMap::new();
-        for (u, _) in edges {
-            *out_degree.entry(u.clone()).or_insert(0) += 1;
+        // Map string IDs to integer IDs for faster indexing
+        let mut node_to_id: HashMap<&str, usize> = HashMap::with_capacity(n);
+        let mut id_to_node: Vec<&str> = Vec::with_capacity(n);
+        for node in nodes {
+            node_to_id.insert(node, id_to_node.len());
+            id_to_node.push(node);
         }
 
-        let mut ranks: HashMap<String, f32> = nodes
-            .iter()
-            .map(|node_id| (node_id.clone(), 1.0 / n as f32))
-            .collect();
+        let mut out_degree = vec![0.0f32; n];
+        let mut int_edges = Vec::with_capacity(edges.len());
+        for (u, v) in edges {
+            let u_id = *node_to_id.get(u.as_str()).unwrap();
+            let v_id = *node_to_id.get(v.as_str()).unwrap();
+            out_degree[u_id] += 1.0;
+            int_edges.push((u_id, v_id));
+        }
+
+        // Avoid division by zero by setting out_degree of 0 to 1.0
+        for deg in &mut out_degree {
+            if *deg == 0.0 {
+                *deg = 1.0;
+            }
+        }
+
+        let base_rank = 1.0 / n as f32;
+        let new_base_rank = (1.0 - damping_factor) / n as f32;
+
+        let mut ranks = vec![base_rank; n];
+        let mut new_ranks = vec![0.0f32; n];
 
         for _ in 0..max_iterations {
-            let mut new_ranks: HashMap<String, f32> = nodes
-                .iter()
-                .map(|node_id| (node_id.clone(), (1.0 - damping_factor) / n as f32))
-                .collect();
+            new_ranks.fill(new_base_rank);
 
-            for (u, v) in edges {
-                let deg = *out_degree.get(u).unwrap_or(&1) as f32;
-                if let Some(r) = new_ranks.get_mut(v) {
-                    *r += damping_factor * (ranks.get(u).unwrap_or(&0.0) / deg);
-                }
+            for &(u_id, v_id) in &int_edges {
+                new_ranks[v_id] += damping_factor * (ranks[u_id] / out_degree[u_id]);
             }
-            ranks = new_ranks;
+
+            ranks.copy_from_slice(&new_ranks);
         }
 
-        ranks
+        let mut final_ranks = HashMap::with_capacity(n);
+        for (i, rank) in ranks.into_iter().enumerate() {
+            final_ranks.insert(id_to_node[i].to_string(), rank);
+        }
+
+        final_ranks
     }
 }
 
