@@ -98,10 +98,18 @@ impl<S: FsmState> ContextGovernor<S> {
         damping_factor: f32,
         max_iterations: usize,
     ) -> HashMap<String, f32> {
-        let mut nodes = HashSet::new();
+        let mut nodes = Vec::new();
+        let mut node_to_idx = HashMap::new();
+
         for (u, v) in edges {
-            nodes.insert(u.clone());
-            nodes.insert(v.clone());
+            if !node_to_idx.contains_key(u) {
+                node_to_idx.insert(u.clone(), nodes.len());
+                nodes.push(u.clone());
+            }
+            if !node_to_idx.contains_key(v) {
+                node_to_idx.insert(v.clone(), nodes.len());
+                nodes.push(v.clone());
+            }
         }
 
         let n = nodes.len();
@@ -109,32 +117,41 @@ impl<S: FsmState> ContextGovernor<S> {
             return HashMap::new();
         }
 
-        let mut out_degree = HashMap::new();
-        for (u, _) in edges {
-            *out_degree.entry(u.clone()).or_insert(0) += 1;
+        let mut out_degree = vec![0.0; n];
+        let mut int_edges = Vec::with_capacity(edges.len());
+        for (u, v) in edges {
+            let u_idx = *node_to_idx.get(u).unwrap();
+            let v_idx = *node_to_idx.get(v).unwrap();
+            out_degree[u_idx] += 1.0;
+            int_edges.push((u_idx, v_idx));
         }
 
-        let mut ranks: HashMap<String, f32> = nodes
-            .iter()
-            .map(|node_id| (node_id.clone(), 1.0 / n as f32))
-            .collect();
+        for d in out_degree.iter_mut() {
+            if *d == 0.0 {
+                *d = 1.0;
+            }
+        }
+
+        let mut ranks = vec![1.0 / n as f32; n];
+        let mut new_ranks = vec![0.0; n];
+        let base_rank = (1.0 - damping_factor) / n as f32;
 
         for _ in 0..max_iterations {
-            let mut new_ranks: HashMap<String, f32> = nodes
-                .iter()
-                .map(|node_id| (node_id.clone(), (1.0 - damping_factor) / n as f32))
-                .collect();
+            new_ranks.fill(base_rank);
 
-            for (u, v) in edges {
-                let deg = *out_degree.get(u).unwrap_or(&1) as f32;
-                if let Some(r) = new_ranks.get_mut(v) {
-                    *r += damping_factor * (ranks.get(u).unwrap_or(&0.0) / deg);
-                }
+            for &(u_idx, v_idx) in &int_edges {
+                new_ranks[v_idx] += damping_factor * (ranks[u_idx] / out_degree[u_idx]);
             }
-            ranks = new_ranks;
+
+            std::mem::swap(&mut ranks, &mut new_ranks);
         }
 
-        ranks
+        let mut result = HashMap::with_capacity(n);
+        for (i, node) in nodes.into_iter().enumerate() {
+            result.insert(node, ranks[i]);
+        }
+
+        result
     }
 }
 
