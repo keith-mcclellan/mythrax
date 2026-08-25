@@ -238,12 +238,14 @@ pub async fn mine_transcript(
                         let checklist_str = checklist_lines.join("\n");
                         let _ = backend.save_stm(session, "checklist", &checklist_str).await;
 
-                        let ep =
-                            EpisodeSave::builder("Active Task Checklist".to_string(), checklist_str)
-                                .scope(Some("general".to_string()))
-                                .session_id(Some(session.to_string()))
-                                .node_type(Some("task_checklist".to_string()))
-                                .build();
+                        let ep = EpisodeSave::builder(
+                            "Active Task Checklist".to_string(),
+                            checklist_str,
+                        )
+                        .scope(Some("general".to_string()))
+                        .session_id(Some(session.to_string()))
+                        .node_type(Some("task_checklist".to_string()))
+                        .build();
                         let store_arc = Arc::new(crate::store::MarkdownStore {
                             vault_root: store.vault_root.clone(),
                         });
@@ -312,14 +314,18 @@ pub async fn mine_transcript(
                                     || lower.contains("error occurred");
 
                                 // Semantic similarity check for correction intent
-                                let is_semantic = if let Ok(embedder) = crate::embeddings::LocalEmbedder::get_global() {
+                                let is_semantic = if let Ok(embedder) =
+                                    crate::embeddings::LocalEmbedder::get_global()
+                                {
                                     if let (Ok(emb), Ok(ref_emb)) = (
                                         embedder.embed(&extracted).await,
                                         embedder.embed("that is incorrect, please fix the mistake and revert").await,
                                     ) {
                                         crate::math::cosine_similarity(&emb, &ref_emb) > 0.70
                                     } else { false }
-                                } else { false };
+                                } else {
+                                    false
+                                };
 
                                 is_correction = is_keyword || is_semantic;
                                 "user_feedback".to_string()
@@ -345,14 +351,19 @@ pub async fn mine_transcript(
                             "Failed to save episode bidirectionally during transcript mining",
                         )?;
 
-                    if (type_val == "tool_execution" || type_val == "user_input" || type_val == "user_feedback") && extracted.len() > 50 {
+                    if (type_val == "tool_execution"
+                        || type_val == "user_input"
+                        || type_val == "user_feedback")
+                        && extracted.len() > 50
+                    {
                         let _ = crate::cognitive::pipeline::extract_from_document(
                             backend,
                             None,
                             &extracted,
                             &format!("episode:{}", saved_id),
                             "general",
-                        ).await;
+                        )
+                        .await;
                     }
 
                     if let Some(ref prev_id) = prev_saved_id {
@@ -434,7 +445,10 @@ pub async fn mine_transcript(
                                     name: format!("general/{}", slug),
                                     content: extracted.clone(),
                                     scope: "general".to_string(),
-                                    vault_path: Some(format!("wiki/general/directions/{}_direction.md", slug)),
+                                    vault_path: Some(format!(
+                                        "wiki/general/directions/{}_direction.md",
+                                        slug
+                                    )),
                                     node_type: Some("direction".to_string()),
                                     item_type: Some("direction".to_string()),
                                     ..Default::default()
@@ -516,10 +530,8 @@ async fn analyze_tool_calls_ngrams(
         if count >= 2 {
             let chain_str = ngram.join(" -> ");
             let target_pattern = format!("Tool sequence: {}", chain_str);
-            let action_to_avoid = format!(
-                "Avoid manually repeating this tool sequence: {}",
-                chain_str
-            );
+            let action_to_avoid =
+                format!("Avoid manually repeating this tool sequence: {}", chain_str);
             let causal_explanation = format!(
                 "This tool chain was used {} times in the session transcript.",
                 count
@@ -577,8 +589,8 @@ async fn analyze_tool_calls_ngrams(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::io::Write;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_tool_sequence_sliding_window_bound() {
@@ -590,7 +602,9 @@ mod tests {
             writeln!(f, "{}", line).unwrap();
         }
 
-        let backend = crate::db::backend::SurrealBackend::new_in_memory().await.unwrap();
+        let backend = crate::db::backend::SurrealBackend::new_in_memory()
+            .await
+            .unwrap();
         backend.init().await.unwrap();
 
         let store = crate::store::MarkdownStore {
@@ -598,7 +612,14 @@ mod tests {
         };
         let ignore = WatchIgnoreList::default();
 
-        let res = mine_transcript("test_session", transcript_path.to_str().unwrap(), &backend, &store, &ignore).await;
+        let res = mine_transcript(
+            "test_session",
+            transcript_path.to_str().unwrap(),
+            &backend,
+            &store,
+            &ignore,
+        )
+        .await;
         assert!(res.is_ok());
     }
 
@@ -627,7 +648,9 @@ mod tests {
         )
         .unwrap();
 
-        let backend = crate::db::backend::SurrealBackend::new_in_memory().await.unwrap();
+        let backend = crate::db::backend::SurrealBackend::new_in_memory()
+            .await
+            .unwrap();
         backend.init().await.unwrap();
 
         let store = crate::store::MarkdownStore {
@@ -635,7 +658,14 @@ mod tests {
         };
         let ignore = WatchIgnoreList::default();
 
-        let res = mine_transcript("test_session_1", transcript_path1.to_str().unwrap(), &backend, &store, &ignore).await;
+        let res = mine_transcript(
+            "test_session_1",
+            transcript_path1.to_str().unwrap(),
+            &backend,
+            &store,
+            &ignore,
+        )
+        .await;
         assert!(res.is_ok());
 
         let rules1 = backend.get_all_wisdom_rules().await.unwrap();
@@ -643,9 +673,19 @@ mod tests {
             .iter()
             .filter(|r| r.target_pattern == "Tool sequence: read_file -> replace_file_content")
             .count();
-        assert_eq!(target_rule_count1, 1, "Should save 1 rule for read_file -> replace_file_content");
+        assert_eq!(
+            target_rule_count1, 1,
+            "Should save 1 rule for read_file -> replace_file_content"
+        );
 
-        let res2 = mine_transcript("test_session_2", transcript_path2.to_str().unwrap(), &backend, &store, &ignore).await;
+        let res2 = mine_transcript(
+            "test_session_2",
+            transcript_path2.to_str().unwrap(),
+            &backend,
+            &store,
+            &ignore,
+        )
+        .await;
         assert!(res2.is_ok());
 
         let rules2 = backend.get_all_wisdom_rules().await.unwrap();
@@ -654,8 +694,7 @@ mod tests {
             .filter(|r| r.target_pattern == "Tool sequence: read_file -> replace_file_content")
             .count();
         assert_eq!(
-            target_rule_count2,
-            1,
+            target_rule_count2, 1,
             "Mining transcript of higher count must deduplicate identical wisdom rule target_pattern"
         );
     }

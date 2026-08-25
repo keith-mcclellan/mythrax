@@ -43,7 +43,8 @@ impl TreePropagate for HypothesisNode {
     fn propagate_upward<'a>(
         &'a mut self,
         children: &'a [Self],
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + 'a>>
+    {
         Box::pin(async move {
             if children.is_empty() {
                 return Ok(self.insight.clone());
@@ -809,7 +810,10 @@ pub fn format_node_markdown(node: &HypothesisNode) -> String {
                 .map(|c| format!("- [[wiki/{}/hypothesis_tree/{}|{}]]", scope, c, c))
                 .collect::<Vec<_>>()
                 .join("\n");
-            format!("\n\n## Propagated Insights\n{}\n\n- **Aggregated Insight**: {}", child_links, ins)
+            format!(
+                "\n\n## Propagated Insights\n{}\n\n- **Aggregated Insight**: {}",
+                child_links, ins
+            )
         }
         Some(ins) => format!("\n\n## Propagated Insights\n- **Insight**: {}", ins),
         None => String::new(),

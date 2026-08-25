@@ -96,9 +96,6 @@ pub fn sanitize_body_title_repetitions(body: &str, title_candidates: &[&str]) ->
     clean_lines.join("\n")
 }
 
-
-
-
 /// Strips markdown styling, headers, formatting, raw HTML, links, and code blocks
 /// to produce clean, plain text for indexing/embeddings.
 pub fn extract_plain_text(markdown: &str) -> String {
@@ -142,7 +139,10 @@ fn append_text(plain_text: &mut String, text: &str) {
 }
 
 /// Formats a WikiNode into standard Arbor quadruplet Markdown format with frontmatter and Wikilinks.
-pub fn format_arbor_wiki_node_markdown(node: &crate::contracts::WikiNode, related_links: &[String]) -> String {
+pub fn format_arbor_wiki_node_markdown(
+    node: &crate::contracts::WikiNode,
+    related_links: &[String],
+) -> String {
     let mut yaml_val = serde_json::Map::new();
     yaml_val.insert("name".to_string(), serde_json::json!(node.name));
     yaml_val.insert("scope".to_string(), serde_json::json!(node.scope));
@@ -247,7 +247,7 @@ mod tests {
         let title = "general/cto_review_critique_part1";
         let short_title = "cto_review_critique_part1";
         let body = "cto_review_critique_part1 cto_review_critique_part1 cto_review_critique_part1 cto_review_critique_part1\n\n# cto_review_critique_part1\n\n# general/cto_review_critique_part1\n\nCTO Adversarial Critique: Mythrax v2.6.0 Code Review\nReviewer : Adversarial CTO Reviewer";
-        
+
         let cleaned = sanitize_body_title_repetitions(body, &[title, short_title]);
         assert_eq!(
             cleaned,
@@ -255,4 +255,3 @@ mod tests {
         );
     }
 }
-

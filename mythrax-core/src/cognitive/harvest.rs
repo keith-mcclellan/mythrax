@@ -192,7 +192,9 @@ mod tests {
         let result = harvester.harvest_skills(&db, &store).await;
         assert!(result.is_ok());
 
-        let facts = crate::cognitive::db::get_facts_by_scope(&db, "general").await.unwrap_or_default();
+        let facts = crate::cognitive::db::get_facts_by_scope(&db, "general")
+            .await
+            .unwrap_or_default();
         assert!(!facts.is_empty() || result.is_ok());
 
         // Clear skills dir and prepare for the second check: outliers only

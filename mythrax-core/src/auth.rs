@@ -103,7 +103,13 @@ mod tests {
         // Basic UUID v4 validation: 36 chars, contains hyphens, version 4
         assert_eq!(token.len(), 36);
         assert!(token.contains('-'));
-        assert_eq!(token.chars().nth(14).ok_or_else(|| anyhow::anyhow!("Token too short"))?, '4');
+        assert_eq!(
+            token
+                .chars()
+                .nth(14)
+                .ok_or_else(|| anyhow::anyhow!("Token too short"))?,
+            '4'
+        );
 
         // Cleanup
         let _ = fs::remove_file(&token_path);

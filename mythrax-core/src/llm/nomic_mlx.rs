@@ -248,12 +248,8 @@ impl NomicBertLayer {
         cos_cached: Array,
         sin_cached: Array,
     ) -> Result<Self> {
-        let attn = NomicBertAttention::new(
-            weights,
-            &format!("{}.attn", prefix),
-            cos_cached,
-            sin_cached,
-        )?;
+        let attn =
+            NomicBertAttention::new(weights, &format!("{}.attn", prefix), cos_cached, sin_cached)?;
         let mlp = NomicBertMLP::new(weights, &format!("{}.mlp", prefix))?;
         let norm1 = get_layer_norm(weights, &format!("{}.norm1", prefix), 1e-5)?;
         let norm2 = get_layer_norm(weights, &format!("{}.norm2", prefix), 1e-5)?;

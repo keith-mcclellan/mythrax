@@ -46,8 +46,14 @@ async fn test_e2e_frontmatter_preservation_and_no_duplication() -> Result<()> {
     assert_eq!(yaml["scope"].as_str(), Some("mythrax"));
 
     // Assert no duplicate '---' delimiters exist in body
-    assert!(!body.contains("---"), "Body must not contain duplicated frontmatter delimiters");
-    assert!(body.contains("[[wiki/mythrax/raw/artifact1]]"), "Wikilinks must be preserved in markdown body");
+    assert!(
+        !body.contains("---"),
+        "Body must not contain duplicated frontmatter delimiters"
+    );
+    assert!(
+        body.contains("[[wiki/mythrax/raw/artifact1]]"),
+        "Wikilinks must be preserved in markdown body"
+    );
 
     Ok(())
 }
@@ -70,18 +76,28 @@ async fn test_e2e_artifact_fact_extraction_and_linking() -> Result<()> {
         artifact_content,
         vault_path,
         scope,
-    ).await?;
+    )
+    .await?;
 
-    assert!(!facts.is_empty(), "Artifact must produce at least one extracted Fact");
+    assert!(
+        !facts.is_empty(),
+        "Artifact must produce at least one extracted Fact"
+    );
     let fact = &facts[0];
     assert_eq!(fact.source_type, FactSource::Document);
     assert_eq!(fact.scope, scope);
-    let hypothesis = fact.hypothesis.as_deref().expect("hypothesis string must exist");
+    let hypothesis = fact
+        .hypothesis
+        .as_deref()
+        .expect("hypothesis string must exist");
     assert_eq!(hypothesis.is_empty(), false);
 
     // Assert Fact record is persisted in DB
     let fact_id = fact.id.as_ref().expect("fact id must exist");
-    let fetched = backend.get_fact(fact_id).await?.expect("Fact must be retrievable from database");
+    let fetched = backend
+        .get_fact(fact_id)
+        .await?
+        .expect("Fact must be retrievable from database");
     assert_eq!(fetched.scope, scope);
 
     Ok(())
@@ -104,15 +120,18 @@ async fn test_e2e_ast_symbol_fact_linking() -> Result<()> {
         code_content,
         file_path,
         scope,
-    ).await?;
+    )
+    .await?;
 
     assert!(!facts.is_empty(), "Code file must produce extracted facts");
 
     // Fetch stored AST symbols for file
     let all_nodes = backend.get_all_wiki_nodes().await?;
-    let ast_node = all_nodes.into_iter().find(|n| n.content.contains("flush_buffer")).expect("AST symbol WikiNode must be persisted");
+    let ast_node = all_nodes
+        .into_iter()
+        .find(|n| n.content.contains("flush_buffer"))
+        .expect("AST symbol WikiNode must be persisted");
     assert_eq!(ast_node.scope, scope);
-
 
     Ok(())
 }
@@ -140,14 +159,23 @@ async fn test_e2e_sanitize_corrupted_headers_and_no_recursion() -> Result<()> {
 
     // Step 3: Read file from disk and DB, assert pristine content preservation and DB-Disk Parity
     let disk_content = std::fs::read_to_string(&full_path)?;
-    assert!(disk_content.contains("CTO Adversarial Critique: Mythrax v2.6.0 Code Review"), "Actual content must be preserved");
+    assert!(
+        disk_content.contains("CTO Adversarial Critique: Mythrax v2.6.0 Code Review"),
+        "Actual content must be preserved"
+    );
 
     // Step 4: Verify DB content matches disk content (DB-Disk Parity)
     let all_nodes = backend.get_all_wiki_nodes().await?;
-    let node_in_db = all_nodes.into_iter().find(|n| n.name == "mythrax/cto_review_critique_part1").unwrap();
-    assert!(node_in_db.content.contains("CTO Adversarial Critique: Mythrax v2.6.0 Code Review"), "SurrealDB content must contain preserved body text");
-
-
+    let node_in_db = all_nodes
+        .into_iter()
+        .find(|n| n.name == "mythrax/cto_review_critique_part1")
+        .unwrap();
+    assert!(
+        node_in_db
+            .content
+            .contains("CTO Adversarial Critique: Mythrax v2.6.0 Code Review"),
+        "SurrealDB content must contain preserved body text"
+    );
 
     // Step 5: Verify uppercase extension and node_type metadata guards in extract_from_document
     let fact_path_upper = "wiki/mythrax/TEST_UPPERCASE_FACT.MD";
@@ -157,8 +185,12 @@ async fn test_e2e_sanitize_corrupted_headers_and_no_recursion() -> Result<()> {
         "Fact content",
         fact_path_upper,
         "mythrax",
-    ).await?;
-    assert!(fact_facts_upper.is_empty(), "Uppercase _FACT.MD files must be excluded from recursive fact extraction");
+    )
+    .await?;
+    assert!(
+        fact_facts_upper.is_empty(),
+        "Uppercase _FACT.MD files must be excluded from recursive fact extraction"
+    );
 
     let fact_content_yaml = "---\nnode_type: fact\nscope: mythrax\ntitle: custom_fact\n---\n\n# custom_fact\n\nFact detail";
     let fact_facts_meta = mythrax_core::cognitive::pipeline::extract_from_document(
@@ -167,10 +199,12 @@ async fn test_e2e_sanitize_corrupted_headers_and_no_recursion() -> Result<()> {
         fact_content_yaml,
         "wiki/mythrax/custom_name.md",
         "mythrax",
-    ).await?;
-    assert!(fact_facts_meta.is_empty(), "node_type: fact files must be excluded from recursive fact extraction regardless of filename");
+    )
+    .await?;
+    assert!(
+        fact_facts_meta.is_empty(),
+        "node_type: fact files must be excluded from recursive fact extraction regardless of filename"
+    );
 
     Ok(())
 }
-
-

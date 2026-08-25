@@ -1,5 +1,5 @@
-use std::sync::OnceLock;
 use regex::Regex;
+use std::sync::OnceLock;
 
 static AWS_KEY_REGEX: OnceLock<Regex> = OnceLock::new();
 static GITHUB_TOKEN_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -12,9 +12,19 @@ pub struct SecretFilter;
 impl SecretFilter {
     pub fn clean(content: &str) -> String {
         let aws_re = AWS_KEY_REGEX.get_or_init(|| Regex::new(r"AKIA[0-9A-Z]{16}").unwrap());
-        let gh_re = GITHUB_TOKEN_REGEX.get_or_init(|| Regex::new(r"(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{22,})").unwrap());
-        let jwt_re = JWT_REGEX.get_or_init(|| Regex::new(r"eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+").unwrap());
-        let pem_re = PEM_REGEX.get_or_init(|| Regex::new(r"-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----").unwrap());
+        let gh_re = GITHUB_TOKEN_REGEX.get_or_init(|| {
+            Regex::new(r"(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{22,})")
+                .unwrap()
+        });
+        let jwt_re = JWT_REGEX.get_or_init(|| {
+            Regex::new(r"eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+").unwrap()
+        });
+        let pem_re = PEM_REGEX.get_or_init(|| {
+            Regex::new(
+                r"-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----",
+            )
+            .unwrap()
+        });
         let env_re = ENV_SECRET_REGEX.get_or_init(|| Regex::new(r"(?i)(export\s+)?(AWS_SECRET_ACCESS_KEY|API_KEY|SECRET_KEY|PASSWORD|TOKEN|AUTH_TOKEN)\s*=\s*([^\s'\x22]+)").unwrap());
 
         let res = aws_re.replace_all(content, "[REDACTED_AWS_KEY]");

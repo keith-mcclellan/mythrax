@@ -47,7 +47,12 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("/Users/keith/Documents/mythrax");
             let ws_path = std::path::PathBuf::from(ws_path_str);
-            crate::vault::ingestion::sync_workspace_docs_to_vault(&ws_path, &state.store, &*state.backend).await?;
+            crate::vault::ingestion::sync_workspace_docs_to_vault(
+                &ws_path,
+                &state.store,
+                &*state.backend,
+            )
+            .await?;
             Ok(json!({
                 "content": [
                     {
@@ -117,9 +122,15 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                                         let original_len = val_str.len();
                                         val_str.truncate(STM_VALUE_MAX_CHARS);
                                         let msg = if let Some(path) = abs_handoff_path.to_str() {
-                                            format!("... <Value truncated. Full value at: {}>", path)
+                                            format!(
+                                                "... <Value truncated. Full value at: {}>",
+                                                path
+                                            )
                                         } else {
-                                            format!("... <Value truncated from {} to {} chars>", original_len, STM_VALUE_MAX_CHARS)
+                                            format!(
+                                                "... <Value truncated from {} to {} chars>",
+                                                original_len, STM_VALUE_MAX_CHARS
+                                            )
                                         };
                                         val_str.push_str(&msg);
                                     }
@@ -178,8 +189,9 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
 
             return Ok(json!({ "status": "success" }));
         }
-        "verify" | "organize" | "reprocess" | "reprocess_markdown" | "summarize" | "audit" | "ingest_bulk"
-        | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean" | "reset_unprocessed" => {
+        "verify" | "organize" | "reprocess" | "reprocess_markdown" | "summarize" | "audit"
+        | "ingest_bulk" | "ingest_forge" | "save_forged_assets" | "bootstrap" | "clean"
+        | "reset_unprocessed" => {
             match mapped_action {
                 "ingest_bulk" => {
                     let _source = args
@@ -247,11 +259,19 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             super::htr_handlers::handle_manage_htr(state, modified_args).await
         }
         "extract" => {
-            let doc_path = args.get("doc_path").and_then(|v| v.as_str()).context("Missing doc_path")?.to_string();
+            let doc_path = args
+                .get("doc_path")
+                .and_then(|v| v.as_str())
+                .context("Missing doc_path")?
+                .to_string();
             if doc_path.contains("..") {
                 anyhow::bail!("Path traversal disallowed in doc_path");
             }
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general")
+                .to_string();
             let backend = state.backend.clone();
             let full_doc_path = state.store.vault_root.join(&doc_path);
             let content = std::fs::read_to_string(full_doc_path).unwrap_or_default();
@@ -264,18 +284,27 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     &content,
                     &doc_path_task,
                     &scope,
-                ).await;
+                )
+                .await;
             });
             Ok(json!({
                 "content": [{ "type": "text", "text": format!("Started background fact extraction from document {}", doc_path) }]
             }))
         }
         "extract_code" => {
-            let file_path = args.get("file_path").and_then(|v| v.as_str()).context("Missing file_path")?.to_string();
+            let file_path = args
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .context("Missing file_path")?
+                .to_string();
             if file_path.contains("..") {
                 anyhow::bail!("Path traversal disallowed in file_path");
             }
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general")
+                .to_string();
             let backend = state.backend.clone();
             let content = std::fs::read_to_string(&file_path).unwrap_or_default();
             let file_path_task = file_path.clone();
@@ -287,14 +316,19 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     &content,
                     &file_path_task,
                     &scope,
-                ).await;
+                )
+                .await;
             });
             Ok(json!({
                 "content": [{ "type": "text", "text": format!("Started background fact extraction from code file {}", file_path) }]
             }))
         }
         "hypothesize" => {
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general")
+                .to_string();
             let surreal_backend = state
                 .backend
                 .as_any()
@@ -302,7 +336,8 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 .context("SurrealBackend required for hypothesize")?;
 
             let config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
-            let unassociated = crate::cognitive::db::get_unassociated_facts(&*state.backend, &scope).await?;
+            let unassociated =
+                crate::cognitive::db::get_unassociated_facts(&*state.backend, &scope).await?;
             if unassociated.len() < config.cluster_min_size {
                 return Ok(json!({
                     "content": [{ "type": "text", "text": format!("Not enough unassociated facts for scope {} ({}/{})", scope, unassociated.len(), config.cluster_min_size) }]
@@ -313,20 +348,38 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 .iter()
                 .map(|f| f.embedding.clone().unwrap_or_else(|| vec![0.0; 768]))
                 .collect();
-            let clusters = crate::cognitive::pipeline::cluster_facts(&unassociated, &embeddings, &config);
-            let pruned_nodes = crate::cognitive::db::get_pruned_idea_nodes(&*state.backend, &scope, config.prune_threshold).await?;
-            let pruned_constraints: Vec<String> = pruned_nodes.iter().map(|n| n.claim.clone()).collect();
+            let clusters =
+                crate::cognitive::pipeline::cluster_facts(&unassociated, &embeddings, &config);
+            let pruned_nodes = crate::cognitive::db::get_pruned_idea_nodes(
+                &*state.backend,
+                &scope,
+                config.prune_threshold,
+            )
+            .await?;
+            let pruned_constraints: Vec<String> =
+                pruned_nodes.iter().map(|n| n.claim.clone()).collect();
 
             let mut queued = 0usize;
             for cluster in &clusters {
-                let cluster_facts: Vec<&crate::contracts::Fact> = cluster.iter().map(|&idx| &unassociated[idx]).collect();
+                let cluster_facts: Vec<&crate::contracts::Fact> =
+                    cluster.iter().map(|&idx| &unassociated[idx]).collect();
                 let facts_summary = cluster_facts
                     .iter()
                     .enumerate()
-                    .map(|(i, f)| format!("[{}] H: {} | Insight: {}", i, f.h_n().unwrap_or(""), f.iota_n().unwrap_or("")))
+                    .map(|(i, f)| {
+                        format!(
+                            "[{}] H: {} | Insight: {}",
+                            i,
+                            f.h_n().unwrap_or(""),
+                            f.iota_n().unwrap_or("")
+                        )
+                    })
                     .collect::<Vec<String>>()
                     .join("\n");
-                let (sys, user) = crate::cognitive::prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
+                let (sys, user) = crate::cognitive::prompts::build_hypothesis_formation_prompt(
+                    &facts_summary,
+                    &pruned_constraints,
+                );
                 let task_id = format!("cognitive_task:{}", uuid::Uuid::new_v4());
                 let task = crate::db::CognitiveTask {
                     id: task_id.clone(),
@@ -347,7 +400,8 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     for fact in &cluster_facts {
                         let mut updated_fact = (*fact).clone();
                         updated_fact.idea_node_id = Some(format!("pending_{}", task_id));
-                        let _ = crate::cognitive::db::save_fact(&*state.backend, &updated_fact).await;
+                        let _ =
+                            crate::cognitive::db::save_fact(&*state.backend, &updated_fact).await;
                     }
                 }
             }
@@ -356,14 +410,19 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "refine" => {
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general")
+                .to_string();
             let surreal_backend = state
                 .backend
                 .as_any()
                 .downcast_ref::<crate::db::backend::SurrealBackend>()
                 .context("SurrealBackend required for refine")?;
 
-            let pending_ideas = crate::cognitive::db::get_idea_nodes_by_scope(&*state.backend, &scope).await?;
+            let pending_ideas =
+                crate::cognitive::db::get_idea_nodes_by_scope(&*state.backend, &scope).await?;
             let facts = crate::cognitive::db::get_facts_by_scope(&*state.backend, &scope).await?;
             let _config = crate::cognitive::db::get_pipeline_config(&*state.backend).await?;
 
@@ -378,7 +437,11 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     if fact.idea_node_id.as_deref() != idea.id.as_deref() {
                         continue;
                     }
-                    let fact_summary = format!("H: {} | Insight: {}", fact.h_n().unwrap_or(""), fact.iota_n().unwrap_or(""));
+                    let fact_summary = format!(
+                        "H: {} | Insight: {}",
+                        fact.h_n().unwrap_or(""),
+                        fact.iota_n().unwrap_or("")
+                    );
                     let (sys, user) = crate::cognitive::prompts::build_refinement_prompt(
                         &idea.claim,
                         &idea.insight,
@@ -389,7 +452,12 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                     let task = crate::db::CognitiveTask {
                         id: task_id,
                         task_type: "Refinement".to_string(),
-                        prompt: format!("[scope:{}] [idea:{}] Refine hypothesis:\n{}", scope, idea.id.as_deref().unwrap_or(""), user),
+                        prompt: format!(
+                            "[scope:{}] [idea:{}] Refine hypothesis:\n{}",
+                            scope,
+                            idea.id.as_deref().unwrap_or(""),
+                            user
+                        ),
                         system_instruction: sys,
                         expected_format: "Json".to_string(),
                         priority: "Normal".to_string(),
@@ -410,7 +478,10 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
             }))
         }
         "graduate" => {
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general");
             crate::db::graduation_pipeline::run_graduation_pipeline(&*state.backend, scope).await?;
             Ok(json!({
                 "content": [{ "type": "text", "text": format!("Graduation pipeline complete for scope {}", scope) }]
@@ -422,12 +493,8 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 "content": [{ "type": "text", "text": serde_json::to_string_pretty(&cfg).unwrap_or_default() }]
             }))
         }
-        "pre_invocation" => {
-            handle_pre_invocation_hook(state, args).await
-        }
-        "post_invocation" => {
-            handle_post_invocation_hook(state, args).await
-        }
+        "pre_invocation" => handle_pre_invocation_hook(state, args).await,
+        "post_invocation" => handle_post_invocation_hook(state, args).await,
         "precompact" => {
             let session_id = args
                 .get("session_id")
@@ -459,11 +526,17 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 )
                 .await
                 {
-                    tracing::error!("Background precompaction failed for session '{}': {:?}", session_id_clone, e);
+                    tracing::error!(
+                        "Background precompaction failed for session '{}': {:?}",
+                        session_id_clone,
+                        e
+                    );
                 }
             });
 
-            Ok(json!({ "status": "background_processing_started", "message": format!("Precompaction background process started for session {}", session_id) }))
+            Ok(
+                json!({ "status": "background_processing_started", "message": format!("Precompaction background process started for session {}", session_id) }),
+            )
         }
         "stop" => {
             let session_id = args
@@ -558,7 +631,11 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 let mut db_rules = Vec::new();
                 let mut w_offset = 0;
                 loop {
-                    match state.backend.get_wisdom_rules_paginated(100, w_offset).await {
+                    match state
+                        .backend
+                        .get_wisdom_rules_paginated(100, w_offset)
+                        .await
+                    {
                         Ok(page) if !page.is_empty() => {
                             let count = page.len() as u32;
                             db_rules.extend(page);
@@ -780,7 +857,9 @@ pub async fn handle_agent(state: &ApiState, args: Value) -> Result<Value> {
                     false,
                 )
                 .await
-                .map_err(|e| anyhow::anyhow!("LLM completion failed for complete_code_task: {}", e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("LLM completion failed for complete_code_task: {}", e)
+                })?;
 
             Ok(serde_json::json!({
                 "content": [
@@ -919,10 +998,18 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                                             if val_str.len() > STM_VALUE_MAX_CHARS {
                                                 let original_len = val_str.len();
                                                 val_str.truncate(STM_VALUE_MAX_CHARS);
-                                                let msg = if let Some(path) = abs_handoff_path.to_str() {
-                                                    format!("... <Value truncated. Full value at: {}>", path)
+                                                let msg = if let Some(path) =
+                                                    abs_handoff_path.to_str()
+                                                {
+                                                    format!(
+                                                        "... <Value truncated. Full value at: {}>",
+                                                        path
+                                                    )
                                                 } else {
-                                                    format!("... <Value truncated from {} to {} chars>", original_len, STM_VALUE_MAX_CHARS)
+                                                    format!(
+                                                        "... <Value truncated from {} to {} chars>",
+                                                        original_len, STM_VALUE_MAX_CHARS
+                                                    )
                                                 };
                                                 val_str.push_str(&msg);
                                             }
@@ -1058,7 +1145,11 @@ pub async fn handle_manage_config(state: &ApiState, args: Value) -> Result<Value
             }))
         }
         "set" => {
-            let val_owned = args.get("value").map(|v| v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string()));
+            let val_owned = args.get("value").map(|v| {
+                v.as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| v.to_string())
+            });
             if let (Some(k), Some(v)) = (
                 args.get("key").and_then(|v| v.as_str()),
                 val_owned.as_deref(),
@@ -1419,7 +1510,10 @@ pub async fn handle_post_invocation_hook(state: &ApiState, args: Value) -> Resul
         .context("Missing session_id for post_invocation")?;
 
     let exit_code = args.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
-    let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("success");
+    let status = args
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("success");
     let summary = args.get("summary").and_then(|v| v.as_str()).unwrap_or("");
     let error_msg = args.get("error_message").and_then(|v| v.as_str());
 
@@ -1443,7 +1537,12 @@ pub async fn handle_post_invocation_hook(state: &ApiState, args: Value) -> Resul
     }
 
     if exit_code != 0 || status == "error" || status == "failed" {
-        tracing::warn!("Post-invocation reported failure for session {}: exit_code={}, status={}", session_id, exit_code, status);
+        tracing::warn!(
+            "Post-invocation reported failure for session {}: exit_code={}, status={}",
+            session_id,
+            exit_code,
+            status
+        );
         let ep_content = format!(
             "Post-invocation failure reported.\nStatus: {}\nExit Code: {}\nSummary: {}\nError: {}",
             status,
@@ -1503,7 +1602,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
         let state_clone = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await {
+            if let Err(e) =
+                crate::mcp_routes::write_handlers::sweep_expired_tasks(&state_clone).await
+            {
                 tracing::error!("Operation failed: {:?}", e);
             }
         });
@@ -1515,13 +1616,11 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
             selected_tasks.push(t.clone());
         } else {
             let mut prioritized: Vec<_> = pending_tasks.iter().collect();
-            prioritized.sort_by_key(|t| {
-                match t.task_type.as_str() {
-                    "Synthesis" => 0,
-                    "Refinement" => 1,
-                    "GraduateWisdom" => 2,
-                    _ => 3,
-                }
+            prioritized.sort_by_key(|t| match t.task_type.as_str() {
+                "Synthesis" => 0,
+                "Refinement" => 1,
+                "GraduateWisdom" => 2,
+                _ => 3,
             });
             for t in prioritized.into_iter().take(3) {
                 selected_tasks.push(t.clone());
@@ -1530,8 +1629,14 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
 
         let mut callback_injection = String::new();
         if !selected_tasks.is_empty() {
-            let total_pending = surreal_backend.count_pending_cognitive_tasks().await.unwrap_or(pending_tasks.len());
-            callback_injection.push_str(&format!("### 🧠 Pending Cognitive Callbacks (Total Remaining: {})\n", total_pending));
+            let total_pending = surreal_backend
+                .count_pending_cognitive_tasks()
+                .await
+                .unwrap_or(pending_tasks.len());
+            callback_injection.push_str(&format!(
+                "### 🧠 Pending Cognitive Callbacks (Total Remaining: {})\n",
+                total_pending
+            ));
             for task in &selected_tasks {
                 callback_injection.push_str(&format!(
                     "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
@@ -1859,14 +1964,19 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     .contains(&rule.target_pattern.to_lowercase());
 
                 if !triggered {
-                    if let (Some(t_emb), Some(embedder)) = (&turn_embedding, &surreal_backend.embedder) {
+                    if let (Some(t_emb), Some(embedder)) =
+                        (&turn_embedding, &surreal_backend.embedder)
+                    {
                         if let Ok(r_emb) = embedder.embed(&rule.target_pattern).await {
                             let sim = crate::math::cosine_similarity(t_emb, &r_emb);
-                            if sim > 0.82 { // threshold for semantic similarity
+                            if sim > 0.82 {
+                                // threshold for semantic similarity
                                 triggered = true;
                             }
                         }
-                    } else if surreal_backend.embedder.is_none() && rule.tier == crate::contracts::Tier::Wisdom {
+                    } else if surreal_backend.embedder.is_none()
+                        && rule.tier == crate::contracts::Tier::Wisdom
+                    {
                         // Safety fallback: if embedder is unavailable, inject wisdom-tier rules
                         triggered = true;
                     }
@@ -2110,7 +2220,11 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 if let Ok(file_content) = std::fs::read_to_string(path_str) {
                     for line in file_content.lines().rev() {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
-                            let is_user = val.get("role").and_then(|r| r.as_str()).map(|r| r == "user").unwrap_or(false);
+                            let is_user = val
+                                .get("role")
+                                .and_then(|r| r.as_str())
+                                .map(|r| r == "user")
+                                .unwrap_or(false);
                             if is_user {
                                 if let Some(c) = val.get("content").and_then(|c| c.as_str()) {
                                     extracted = Some(c.to_string());
@@ -2122,7 +2236,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 }
             }
             if extracted.is_none() {
-                if let Some(c) = stm_map.get("objective").or_else(|| stm_map.get("task_description")) {
+                if let Some(c) = stm_map
+                    .get("objective")
+                    .or_else(|| stm_map.get("task_description"))
+                {
                     extracted = Some(c.to_string());
                 }
             }
@@ -2199,10 +2316,20 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     )
     .await;
     let p0_policy = if let Ok(res) = arbor_res {
-        if let Some(text) = res.get("content").and_then(|c| c.get(0)).and_then(|item| item.get("text")).and_then(|t| t.as_str()) {
+        if let Some(text) = res
+            .get("content")
+            .and_then(|c| c.get(0))
+            .and_then(|item| item.get("text"))
+            .and_then(|t| t.as_str())
+        {
             if !text.contains("(No active negative constraints found)") {
-                let rules_body = text.strip_prefix("### Negative Constraints & Guardrails\n").unwrap_or(text);
-                format!("### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n", rules_body.trim())
+                let rules_body = text
+                    .strip_prefix("### Negative Constraints & Guardrails\n")
+                    .unwrap_or(text);
+                format!(
+                    "### 🚫 Policy (Non-Negotiable Rules)\n{}\n\n",
+                    rules_body.trim()
+                )
             } else {
                 String::new()
             }
@@ -2230,8 +2357,8 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         }
     };
 
-    let budget_env =
-        std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET").unwrap_or_else(|_| "32000".to_string());
+    let budget_env = std::env::var("MYTHRAX_PRE_INVOCATION_TOKEN_BUDGET")
+        .unwrap_or_else(|_| "32000".to_string());
     let token_budget: usize = budget_env.parse().unwrap_or(32000);
 
     // Broker/Handoff metadata is in `parts`
@@ -2265,8 +2392,14 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                 if sections.len() > 2 {
                     let mut valid_sections = Vec::new();
                     for (i, s) in sections.iter().enumerate() {
-                        if i == 0 && s.trim().is_empty() { continue; }
-                        let full_sec = if i > 0 { format!("> [!TIP]{}", s) } else { s.to_string() };
+                        if i == 0 && s.trim().is_empty() {
+                            continue;
+                        }
+                        let full_sec = if i > 0 {
+                            format!("> [!TIP]{}", s)
+                        } else {
+                            s.to_string()
+                        };
                         valid_sections.push(full_sec);
                     }
                     if valid_sections.len() > 1 {
@@ -2274,13 +2407,19 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                         valid_sections.pop(); // drop the lowest-priority section
                         let dropped_count = total_count - valid_sections.len();
                         p1_advisory = valid_sections.join("");
-                        tracing::warn!("Pre-invocation truncated {} of {} advisory sections to fit token budget", dropped_count, total_count);
+                        tracing::warn!(
+                            "Pre-invocation truncated {} of {} advisory sections to fit token budget",
+                            dropped_count,
+                            total_count
+                        );
                     } else if !p2_stm.is_empty() {
                         let lines: Vec<&str> = p2_stm.lines().collect();
                         if lines.len() > 1 {
                             let truncated_lines = &lines[..lines.len() - 1];
                             p2_stm = truncated_lines.join("\n");
-                            tracing::warn!("Pre-invocation truncated STM working memory to fit token budget");
+                            tracing::warn!(
+                                "Pre-invocation truncated STM working memory to fit token budget"
+                            );
                         } else {
                             p2_stm.clear();
                         }
@@ -2292,7 +2431,9 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     if lines.len() > 1 {
                         let truncated_lines = &lines[..lines.len() - 1];
                         p2_stm = truncated_lines.join("\n");
-                        tracing::warn!("Pre-invocation truncated STM working memory to fit token budget");
+                        tracing::warn!(
+                            "Pre-invocation truncated STM working memory to fit token budget"
+                        );
                     } else {
                         p2_stm.clear();
                     }
@@ -2443,8 +2584,15 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     if caller != Some("distiller") {
         if let Ok(pending) = surreal_backend.get_pending_cognitive_tasks().await {
             if !pending.is_empty() {
-                let global_hb = if let Ok(global_stm) = state.backend.get_stm("global", Some("_distiller_heartbeat")).await {
-                    global_stm.get("_distiller_heartbeat").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0)
+                let global_hb = if let Ok(global_stm) = state
+                    .backend
+                    .get_stm("global", Some("_distiller_heartbeat"))
+                    .await
+                {
+                    global_stm
+                        .get("_distiller_heartbeat")
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .unwrap_or(0)
                 } else {
                     0
                 };
@@ -2462,7 +2610,6 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                          > You MUST immediately spin up the Mythrax Cloud Brain subagent to execute dreaming and callback resolution using your cloud brain!\n\
                          > Run this tool call to boot it:\n\
                          > `invoke_subagent(TypeName=\"self\", Role=\"Mythrax Cloud Brain\", Prompt=\"You are the Mythrax Cloud Brain. Your job is to continuously orchestrate Mythrax operations using MCP endpoints in an infinite loop. RULES: 1. In call_mcp_tool calls, ServerName MUST be exact unquoted 'mythrax', and ToolName MUST be manage, write, or read. 2. ONLY use call_mcp_tool endpoints. 3. Execute in a CONTINUOUS INFINITE LOOP WITH BACKLOG DRAINING. PHASE 1 (HIGHEST PRIORITY): Backlog Draining Cognitive Callback Loop - LOOP UNTIL BACKLOG IS EMPTY: call_mcp_tool: manage(session_id=\\\"<active_session_id>\\\", action=\\\"pre_invocation\\\", caller=\\\"distiller\\\"); IF pending callbacks exist, resolve each via write(action=\\\"cognitive_callback\\\", callback_id=\\\"<ID>\\\", result=\\\"<OUTPUT>\\\") and REPEAT Phase 1 immediately. ELSE break Phase 1 loop. PHASE 2: Ingestion & Embedding Maintenance - call_mcp_tool: manage(action=\\\"reprocess\\\"). PHASE 3: Dynamic Scope Dreaming, Hypothesis Formation, Refinement & Insight Synthesis - call_mcp_tool: manage(action=\\\"precompact\\\"); for EACH scope in ['general', 'mythrax'] sequentially: manage(action=\\\"summarize\\\", scope=\\\"<scope>\\\", async_mode=false), manage(action=\\\"hypothesize\\\", scope=\\\"<scope>\\\"), manage(action=\\\"refine\\\", scope=\\\"<scope>\\\"), manage(action=\\\"graduate\\\", scope=\\\"<scope>\\\"). PHASE 4: Wisdom Graduation, Cleaning & Vault Repair - call_mcp_tool: manage(action=\\\"audit_compliance\\\"), manage(action=\\\"clean\\\"), manage(action=\\\"verify\\\", fix=true), manage(action=\\\"organize\\\"). INNER SLEEP: If active pending tasks exist or were processed, schedule a 15s timer (DurationSeconds=15). If system is IDLE (0 pending tasks and 0 new facts), schedule a 300s (5-minute) timer (DurationSeconds=300) to conserve token budget.\")`\n"
-
                     );
                 }
             }
@@ -2642,8 +2789,6 @@ async fn format_search_result_hybrid(
         Ok(None)
     }
 }
-
-
 
 /// Collects advisory context from semantic insights, experience episodes, and belief state.
 pub async fn collect_advisory_context(

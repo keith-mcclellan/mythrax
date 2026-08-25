@@ -1,11 +1,11 @@
+use crate::db::GLOBAL_BACKEND;
 use crate::embeddings::TextEmbedder;
 use crate::llm::{LLMClient, MxbaiReranker};
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use surrealdb::engine::local::{Db, Mem, SurrealKv};
 use surrealdb::Surreal;
+use surrealdb::engine::local::{Db, Mem, SurrealKv};
 use uuid::Uuid;
-use crate::db::GLOBAL_BACKEND;
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
@@ -35,7 +35,8 @@ pub struct SurrealBackend {
     pub search_mode: Arc<tokio::sync::Mutex<String>>,
     pub reranker: Arc<tokio::sync::Mutex<Option<MxbaiReranker>>>,
     pub reinforcement_semaphore: Arc<tokio::sync::Semaphore>,
-    pub watch_ignore_list: Arc<tokio::sync::RwLock<Option<Arc<crate::vault::watcher::WatchIgnoreList>>>>,
+    pub watch_ignore_list:
+        Arc<tokio::sync::RwLock<Option<Arc<crate::vault::watcher::WatchIgnoreList>>>>,
     pub(crate) blackboard_tx:
         std::sync::OnceLock<tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>>,
 }
@@ -208,5 +209,4 @@ impl SurrealBackend {
         backend.db.use_ns(&random_ns).use_db(&random_db).await?;
         Ok(backend)
     }
-
 }
