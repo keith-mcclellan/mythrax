@@ -88,7 +88,11 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 )
                 .await;
                 if let Err(e) = coordinator.trigger_ideation(&node_clone).await {
-                    tracing::error!("Background HTR ideation failed for node '{}': {:?}", node_clone, e);
+                    tracing::error!(
+                        "Background HTR ideation failed for node '{}': {:?}",
+                        node_clone,
+                        e
+                    );
                 }
             });
 
@@ -133,7 +137,11 @@ pub async fn handle_manage_htr(state: &ApiState, args: Value) -> Result<Value> {
                 )
                 .await;
                 if let Err(e) = coordinator.execute_node(&node_clone).await {
-                    tracing::error!("Background HTR execution failed for node '{}': {:?}", node_clone, e);
+                    tracing::error!(
+                        "Background HTR execution failed for node '{}': {:?}",
+                        node_clone,
+                        e
+                    );
                 }
             });
 

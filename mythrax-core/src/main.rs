@@ -8,8 +8,8 @@ use clap::Parser;
 use cli::{Cli, Commands, ConfigAction, HtrAction, MemoryAction, StmAction, VaultAction};
 use db::{StorageBackend, SurrealBackend};
 use mythrax_core::contracts::WikiNode;
-use surrealdb_types::SurrealValue;
 use std::path::{Path, PathBuf};
+use surrealdb_types::SurrealValue;
 
 // Embed Mythrax Documentation
 const ARCHITECTURE_DOC: &str = include_str!("../../ARCHITECTURE.md");
@@ -408,7 +408,11 @@ pub fn spawn_swap_monitor_thread() {
 
             let config_sql = "SELECT disable_swap_monitor, swap_threshold_tier1_gb, swap_threshold_tier2_gb, swap_threshold_tier3_gb FROM config:settings LIMIT 1;";
             let cfg: SwapConfig = match backend.db.query(config_sql).await {
-                Ok(mut res) => res.take::<Option<SwapConfig>>(0).ok().flatten().unwrap_or_default(),
+                Ok(mut res) => res
+                    .take::<Option<SwapConfig>>(0)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
                 Err(_) => SwapConfig::default(),
             };
 

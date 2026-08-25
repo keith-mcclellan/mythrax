@@ -97,10 +97,17 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
 }
 
 async fn health_handler(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
-    let is_degraded = state.degraded_mode.load(std::sync::atomic::Ordering::Relaxed);
-    let disk_ok = crate::vault::organization::has_enough_disk_space(std::path::Path::new("."), 1024 * 1024);
+    let is_degraded = state
+        .degraded_mode
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let disk_ok =
+        crate::vault::organization::has_enough_disk_space(std::path::Path::new("."), 1024 * 1024);
 
-    let status = if is_degraded || !disk_ok { "degraded" } else { "ok" };
+    let status = if is_degraded || !disk_ok {
+        "degraded"
+    } else {
+        "ok"
+    };
 
     let body = json!({
         "status": status,
@@ -400,7 +407,8 @@ async fn dream_handler(
         .get("scope")
         .and_then(|v| v.as_str())
         .unwrap_or("general");
-    let res_scope = crate::cognitive::pipeline::refine_hypotheses(state.backend.as_ref(), None, scope).await;
+    let res_scope =
+        crate::cognitive::pipeline::refine_hypotheses(state.backend.as_ref(), None, scope).await;
     match res_scope {
         Ok(_) => Ok(Json(json!({ "status": "success" }))),
         _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
@@ -756,7 +764,9 @@ async fn completions_proxy_handler(
                     prompt.truncate(safe_end);
                 }
                 if let Some(ref mut sys_str) = system_instruction {
-                    if let Some(safe_end) = sys_str.char_indices().nth(max_chars).map(|(idx, _)| idx) {
+                    if let Some(safe_end) =
+                        sys_str.char_indices().nth(max_chars).map(|(idx, _)| idx)
+                    {
                         sys_str.truncate(safe_end);
                     }
                 }
@@ -1079,7 +1089,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-        
+
         // Test POST /v1/mcp/tools/call_batch payload too large (> 5MB)
         let large_batch_bytes = vec![0u8; 6 * 1024 * 1024]; // 6MB
         let response = app

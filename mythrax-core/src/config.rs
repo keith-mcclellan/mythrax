@@ -17,6 +17,10 @@ pub fn daemon_url() -> String {
 }
 
 pub fn llm_proxy_url() -> String {
-    env::var("MYTHRAX_PROXY_URL")
-        .unwrap_or_else(|_| format!("http://127.0.0.1:{}/v1/chat/completions", DEFAULT_LLM_PROXY_PORT))
+    env::var("MYTHRAX_PROXY_URL").unwrap_or_else(|_| {
+        format!(
+            "http://127.0.0.1:{}/v1/chat/completions",
+            DEFAULT_LLM_PROXY_PORT
+        )
+    })
 }

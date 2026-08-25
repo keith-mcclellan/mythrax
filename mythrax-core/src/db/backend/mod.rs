@@ -602,9 +602,6 @@ impl SurrealBackend {
         }
     }
 
-
-
-
     pub fn set_blackboard_sender(
         &self,
         tx: tokio::sync::mpsc::Sender<crate::db::blackboard::EventMessage>,
@@ -623,7 +620,6 @@ impl SurrealBackend {
         let m = self.search_mode.lock().await;
         m.clone()
     }
-
 
     pub async fn record_indexing_write(&self, vault_path: &str) {
         if !vault_path.is_empty() {

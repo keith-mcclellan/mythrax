@@ -294,8 +294,7 @@ impl SurrealBackend {
     }
 
     pub async fn get_pending_cognitive_tasks(&self) -> Result<Vec<CognitiveTask>> {
-        let query_str =
-            "SELECT * FROM cognitive_task WHERE status = 'Pending' ORDER BY created_at ASC LIMIT 50;";
+        let query_str = "SELECT * FROM cognitive_task WHERE status = 'Pending' ORDER BY created_at ASC LIMIT 50;";
         let mut response = self.db.query(query_str).await?;
         let tasks: Vec<CognitiveTaskRaw> = response.take(0)?;
         Ok(tasks.into_iter().map(CognitiveTask::from).collect())
@@ -392,8 +391,7 @@ impl SurrealBackend {
         &self,
         task_type: &str,
     ) -> Result<Vec<CognitiveTask>> {
-        let query_str =
-            "SELECT * FROM cognitive_task WHERE status = 'Completed' AND task_type = $task_type LIMIT 50;";
+        let query_str = "SELECT * FROM cognitive_task WHERE status = 'Completed' AND task_type = $task_type LIMIT 50;";
         let mut response = self
             .db
             .query(query_str)

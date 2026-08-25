@@ -12,7 +12,9 @@ impl MarkdownStore {
     pub fn new<P: AsRef<Path>>(vault_root: P) -> Result<Self> {
         let root = vault_root.as_ref().to_path_buf();
         fs::create_dir_all(&root).context("Failed to create vault root directory")?;
-        unsafe { std::env::set_var("MYTHRAX_VAULT_ROOT", &root); }
+        unsafe {
+            std::env::set_var("MYTHRAX_VAULT_ROOT", &root);
+        }
 
         // Initialize vault folders (canonical 3-directory layout created by ensure_vault_structure)
         fs::create_dir_all(root.join("wisdom/pinned"))?;
@@ -197,7 +199,8 @@ Welcome to the Mythrax Vault.
 
 ## Wisdom & Skills
 - [[wisdom/skills/|Skills]]
-"#.to_string()
+"#
+            .to_string()
         };
 
         let mut ref_section_text = "## Reference\n".to_string();

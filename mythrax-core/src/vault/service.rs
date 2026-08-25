@@ -28,7 +28,10 @@ impl VaultService {
         let limit: usize = 500;
 
         loop {
-            let page = self.backend.get_episodes_paginated(limit as u32, offset).await?;
+            let page = self
+                .backend
+                .get_episodes_paginated(limit as u32, offset)
+                .await?;
             if page.is_empty() {
                 break;
             }
@@ -42,10 +45,13 @@ impl VaultService {
                     if !path.exists() {
                         missing += 1;
                         if fix {
-                            let save = crate::contracts::EpisodeSave::builder(ep.title.clone(), ep.content.clone())
-                                .scope(ep.scope.clone())
-                                .vault_path(Some(vp.clone()))
-                                .build();
+                            let save = crate::contracts::EpisodeSave::builder(
+                                ep.title.clone(),
+                                ep.content.clone(),
+                            )
+                            .scope(ep.scope.clone())
+                            .vault_path(Some(vp.clone()))
+                            .build();
                             let _ = self.backend.save_episode(&save).await;
                         }
                     }

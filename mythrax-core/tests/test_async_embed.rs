@@ -24,10 +24,7 @@ async fn test_async_embed_identical_results() -> Result<()> {
         let local_res = local.embed(text_local).await?;
         assert_eq!(local_res.len(), 768);
 
-        let batch_local = vec![
-            "Alpha document.".to_string(),
-            "Beta document.".to_string(),
-        ];
+        let batch_local = vec!["Alpha document.".to_string(), "Beta document.".to_string()];
         let batch_local_res = local.embed_batch(&batch_local).await?;
         assert_eq!(batch_local_res.len(), 2);
 
@@ -47,9 +44,8 @@ async fn test_async_embed_semaphore_nonblocking() -> Result<()> {
     let permit = sem.acquire().await.unwrap();
 
     // Spawn a task invoking embed which will wait non-blockingly on the semaphore
-    let embed_handle = tokio::spawn(async move {
-        mock.embed("Non-blocking semaphore test string").await
-    });
+    let embed_handle =
+        tokio::spawn(async move { mock.embed("Non-blocking semaphore test string").await });
 
     // Spawn a lightweight task to ensure worker threads are NOT blocked by sleeping
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -59,23 +55,17 @@ async fn test_async_embed_semaphore_nonblocking() -> Result<()> {
     });
 
     // The lightweight task should complete quickly within timeout
-    let lightweight_done = tokio::time::timeout(
-        std::time::Duration::from_millis(500),
-        rx,
-    )
-    .await
-    .expect("Tokio runtime worker thread was blocked while embed waited on semaphore");
+    let lightweight_done = tokio::time::timeout(std::time::Duration::from_millis(500), rx)
+        .await
+        .expect("Tokio runtime worker thread was blocked while embed waited on semaphore");
     assert_eq!(lightweight_done, Ok(true));
 
     // Release permit so embed can finish
     drop(permit);
 
-    let embed_result = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        embed_handle,
-    )
-    .await
-    .expect("embed failed to proceed after semaphore permit was released");
+    let embed_result = tokio::time::timeout(std::time::Duration::from_secs(2), embed_handle)
+        .await
+        .expect("embed failed to proceed after semaphore permit was released");
     let inner_res = embed_result.expect("join handle must succeed");
     let vec = inner_res.expect("embedding must succeed");
     assert_eq!(vec.len(), 768);

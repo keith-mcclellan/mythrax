@@ -33,9 +33,12 @@ pub struct CursorPayload {
     pub hook_active: Option<bool>,
 }
 
-pub fn adapt_standard_payload(val: serde_json::Value, host: &str) -> Result<(String, bool, String)> {
-    let payload: StandardHookPayload =
-        serde_json::from_value(val).with_context(|| format!("Failed to deserialize {} payload", host))?;
+pub fn adapt_standard_payload(
+    val: serde_json::Value,
+    host: &str,
+) -> Result<(String, bool, String)> {
+    let payload: StandardHookPayload = serde_json::from_value(val)
+        .with_context(|| format!("Failed to deserialize {} payload", host))?;
     let session_id = sanitize_session_id(&payload.session_id);
     let stop_hook_active = payload.stop_hook_active.unwrap_or(true);
     let transcript_path = normalize_transcript_path(&payload.transcript_path);
@@ -51,11 +54,15 @@ pub fn adapt_gemini(val: serde_json::Value) -> Result<(String, bool, String)> {
 }
 
 pub fn adapt_codex(_val: serde_json::Value) -> Result<(String, bool, String)> {
-    anyhow::bail!("Codex integration requires the standard session_id and transcript_path schema format. Please ensure your hook adapter passes canonical payload parameters.")
+    anyhow::bail!(
+        "Codex integration requires the standard session_id and transcript_path schema format. Please ensure your hook adapter passes canonical payload parameters."
+    )
 }
 
 pub fn adapt_cursor(_val: serde_json::Value) -> Result<(String, bool, String)> {
-    anyhow::bail!("Cursor integration requires the standard session_id and transcript_path schema format. Please ensure your hook adapter passes canonical payload parameters.")
+    anyhow::bail!(
+        "Cursor integration requires the standard session_id and transcript_path schema format. Please ensure your hook adapter passes canonical payload parameters."
+    )
 }
 
 pub fn adapt_payload(val: serde_json::Value, host: &str) -> Result<(String, bool, String)> {

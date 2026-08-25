@@ -1,5 +1,5 @@
-use crate::contracts::CodeSymbol;
 use crate::cognitive::pipeline::slugify_title;
+use crate::contracts::CodeSymbol;
 use crate::store::MarkdownStore;
 use anyhow::Result;
 use regex::Regex;
@@ -23,7 +23,9 @@ pub fn extract_code_ast(file_path: &str, content: &str, scope: &str) -> Vec<Code
     match ext {
         "rs" => extract_rust_symbols(file_path, &file_slug, &lines, scope, &mut symbols),
         "py" => extract_python_symbols(file_path, &file_slug, &lines, scope, &mut symbols),
-        "ts" | "js" | "tsx" | "jsx" => extract_ts_symbols(file_path, &file_slug, &lines, scope, &mut symbols),
+        "ts" | "js" | "tsx" | "jsx" => {
+            extract_ts_symbols(file_path, &file_slug, &lines, scope, &mut symbols)
+        }
         "go" => extract_go_symbols(file_path, &file_slug, &lines, scope, &mut symbols),
         _ => {}
     }
@@ -49,7 +51,12 @@ fn extract_rust_symbols(
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("///") || trimmed.starts_with("//!") {
-            current_doc.push(trimmed.trim_start_matches("///").trim_start_matches("//!").trim());
+            current_doc.push(
+                trimmed
+                    .trim_start_matches("///")
+                    .trim_start_matches("//!")
+                    .trim(),
+            );
             continue;
         }
 
@@ -97,9 +104,7 @@ fn extract_python_symbols(
     scope: &str,
     symbols: &mut Vec<CodeSymbol>,
 ) {
-    let re = PY_SYMBOL_RE.get_or_init(|| {
-        Regex::new(r"^\s*(def|class)\s+([A-Za-z0-9_]+)").unwrap()
-    });
+    let re = PY_SYMBOL_RE.get_or_init(|| Regex::new(r"^\s*(def|class)\s+([A-Za-z0-9_]+)").unwrap());
 
     for (idx, line) in lines.iter().enumerate() {
         if let Some(caps) = re.captures(line) {
@@ -175,9 +180,8 @@ fn extract_go_symbols(
     scope: &str,
     symbols: &mut Vec<CodeSymbol>,
 ) {
-    let re = GO_SYMBOL_RE.get_or_init(|| {
-        Regex::new(r"^\s*(func|type|const|var)\s+([A-Za-z0-9_]+)").unwrap()
-    });
+    let re = GO_SYMBOL_RE
+        .get_or_init(|| Regex::new(r"^\s*(func|type|const|var)\s+([A-Za-z0-9_]+)").unwrap());
 
     for (idx, line) in lines.iter().enumerate() {
         if let Some(caps) = re.captures(line) {
