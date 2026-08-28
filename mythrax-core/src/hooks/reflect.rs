@@ -243,7 +243,8 @@ pub async fn collect_policy_context(backend: &dyn StorageBackend, scope: &str) -
     if pruned_nodes.is_empty() {
         return Ok(String::new());
     }
-    let mut out = String::from("\n> [!CAUTION]\n> **Actions to Avoid (Negative Policy Constraints):**\n");
+    let mut out =
+        String::from("\n> [!CAUTION]\n> **Actions to Avoid (Negative Policy Constraints):**\n");
     for node in pruned_nodes {
         out.push_str(&format!("> - {}\n", node.claim));
     }

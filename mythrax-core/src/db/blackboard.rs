@@ -190,7 +190,10 @@ mod tests {
         assert_eq!(all_nodes.len(), 10);
         for node in all_nodes {
             let idx: usize = node.name["node_".len()..].parse().unwrap();
-            let expected = format!("---\ntitle: node_{}\nscope: test_scope\n---\n\nupdated_content_{}\n", idx, idx);
+            let expected = format!(
+                "---\ntitle: node_{}\nscope: test_scope\n---\n\nupdated_content_{}\n",
+                idx, idx
+            );
             assert_eq!(node.content, expected);
         }
     }

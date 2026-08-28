@@ -50,7 +50,8 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
                 {
                     tracing::info!(
                         "Graduation blocked: source node flagged as conflict (local='{}', other='{}')",
-                        local.name, other.name
+                        local.name,
+                        other.name
                     );
                     continue;
                 }
@@ -146,12 +147,10 @@ pub async fn run_graduation_pipeline(db: &dyn StorageBackend, current_scope: &st
         let decayed_util = util * (-age_days * ln2 / half_life_days).exp();
         rule.utility = Some(decayed_util as f32);
 
-        let Some(ref full_id) = rule.id else { continue; };
-        let id_raw = full_id
-            .split(':')
-            .nth(1)
-            .unwrap_or(full_id)
-            .to_string();
+        let Some(ref full_id) = rule.id else {
+            continue;
+        };
+        let id_raw = full_id.split(':').nth(1).unwrap_or(full_id).to_string();
         let _ = surreal_backend.db.query("UPDATE metrics SET utility_score = $utility WHERE target_id = type::record('wisdom', $id);")
             .bind(("id", id_raw))
             .bind(("utility", decayed_util as f32))

@@ -156,7 +156,10 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
             let output = match format {
                 "constraints" => {
                     let mut rules = Vec::new();
-                    let target_scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+                    let target_scope = args
+                        .get("scope")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("general");
                     // 1. Permanent Wisdom
                     if let Ok(mut resp) = surreal_backend
                         .db
@@ -220,14 +223,23 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                     if rules.is_empty() {
                         "### Negative Constraints & Guardrails\n(No active negative constraints found)".to_string()
                     } else {
-                        format!("### Negative Constraints & Guardrails\n{}\n\n", rules.join("\n"))
+                        format!(
+                            "### Negative Constraints & Guardrails\n{}\n\n",
+                            rules.join("\n")
+                        )
                     }
                 }
                 "hierarchy" => {
                     let mut out = String::from("### Arbor Tree Hierarchy\n");
-                    let mut children_map: std::collections::HashMap<Option<String>, Vec<&HypothesisNode>> = std::collections::HashMap::new();
+                    let mut children_map: std::collections::HashMap<
+                        Option<String>,
+                        Vec<&HypothesisNode>,
+                    > = std::collections::HashMap::new();
                     for node in &nodes {
-                        children_map.entry(node.parent_id.clone()).or_default().push(node);
+                        children_map
+                            .entry(node.parent_id.clone())
+                            .or_default()
+                            .push(node);
                     }
                     fn render_level(
                         parent_id: Option<String>,
@@ -409,7 +421,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(res["content"][0]["text"].as_str().unwrap().contains("test_root"));
+        assert!(
+            res["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("test_root")
+        );
 
         // 2. TreeUpdateNode
         let res_up = handle_manage_arbor(
@@ -422,7 +439,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(res_up["content"][0]["text"].as_str().unwrap().contains("updated"));
+        assert!(
+            res_up["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("updated")
+        );
 
         // 3. TreeView hierarchy
         let res_h = handle_manage_arbor(
@@ -434,7 +456,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(res_h["content"][0]["text"].as_str().unwrap().contains("test_root"));
+        assert!(
+            res_h["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("test_root")
+        );
 
         // 4. TreeView constraints
         let res_c = handle_manage_arbor(
@@ -446,7 +473,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(res_c["content"][0]["text"].as_str().unwrap().contains("Negative Constraints"));
+        assert!(
+            res_c["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Negative Constraints")
+        );
 
         // 5. TreePrune
         let res_p = handle_manage_arbor(
@@ -458,7 +490,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(res_p["content"][0]["text"].as_str().unwrap().contains("pruned"));
+        assert!(
+            res_p["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("pruned")
+        );
 
         // 6. GitMergeBranch (Etest)
         let res_m = handle_manage_arbor(
@@ -471,6 +508,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(res_m["content"][0]["text"].as_str().unwrap().contains("Git merge branch evaluated"));
+        assert!(
+            res_m["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Git merge branch evaluated")
+        );
     }
 }

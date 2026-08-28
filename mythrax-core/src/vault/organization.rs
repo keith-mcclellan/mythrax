@@ -271,7 +271,10 @@ mod tests {
         assert_eq!(p1, temp.path().join("wiki/mythrax/facts/fact-001.md"));
 
         let p2 = typed_vault_path(temp.path(), "general", NodeType::ReferenceAst, "ast-002.md");
-        assert_eq!(p2, temp.path().join("wiki/general/references/ast/ast-002.md"));
+        assert_eq!(
+            p2,
+            temp.path().join("wiki/general/references/ast/ast-002.md")
+        );
 
         let p3 = typed_vault_path(temp.path(), "mythrax", NodeType::Skill, "skill-003.md");
         assert_eq!(p3, temp.path().join("wisdom/skills/skill-003.md"));

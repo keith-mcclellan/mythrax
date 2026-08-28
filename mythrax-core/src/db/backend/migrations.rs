@@ -1,7 +1,7 @@
-use crate::db::backend::SurrealBackend;
-use crate::db::schema::INIT_SCHEMA;
 use crate::contracts::LlmConfigResponse;
 use crate::db::backend::StorageBackend;
+use crate::db::backend::SurrealBackend;
+use crate::db::schema::INIT_SCHEMA;
 use anyhow::{Context, Result};
 
 impl SurrealBackend {
@@ -11,7 +11,10 @@ impl SurrealBackend {
         }
         if let Ok(mut resp) = self.db.query(INIT_SCHEMA).await {
             if let Err(e) = resp.check() {
-                tracing::warn!("Schema check warning on existing database (continuing startup): {:?}", e);
+                tracing::warn!(
+                    "Schema check warning on existing database (continuing startup): {:?}",
+                    e
+                );
             }
         }
 
@@ -23,7 +26,10 @@ impl SurrealBackend {
             "UPDATE episode SET node_type = 'agent_thought' WHERE node_type = NONE;";
         if let Ok(mut resp) = self.db.query(migration_sql).await {
             if let Err(e) = resp.check() {
-                tracing::warn!("Legacy episode node_type migration warning (continuing startup): {:?}", e);
+                tracing::warn!(
+                    "Legacy episode node_type migration warning (continuing startup): {:?}",
+                    e
+                );
             }
         }
 
@@ -49,7 +55,8 @@ impl SurrealBackend {
             }
         }
 
-        let hash_check = "SELECT count() AS total FROM episode WHERE content_hash IS NONE GROUP ALL;";
+        let hash_check =
+            "SELECT count() AS total FROM episode WHERE content_hash IS NONE GROUP ALL;";
         if let Ok(mut res) = self.db.query(hash_check).await {
             let count_val: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
             let mut missing_count = 0;
@@ -61,7 +68,10 @@ impl SurrealBackend {
                 }
             }
             if missing_count > 0 {
-                tracing::info!("Found {} episodes missing content_hash. Spawning background backfill...", missing_count);
+                tracing::info!(
+                    "Found {} episodes missing content_hash. Spawning background backfill...",
+                    missing_count
+                );
                 let self_clone = self.clone();
                 tokio::spawn(async move {
                     if let Err(e) = self_clone.backfill_content_hashes_db().await {

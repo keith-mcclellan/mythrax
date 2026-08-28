@@ -23,7 +23,6 @@ pub struct ExtractFactsResponse {
     pub no_facts_reason: Option<String>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FormHypothesisDto {
     pub claim: String,
@@ -147,7 +146,10 @@ OUTPUT SCHEMA (Strict JSON):
   ]
 }"#.to_string();
 
-    let user = format!("REFERENCE SOURCE: {}\nSECTION CONTENT:\n{}", source_path, section_content);
+    let user = format!(
+        "REFERENCE SOURCE: {}\nSECTION CONTENT:\n{}",
+        source_path, section_content
+    );
     (system, user)
 }
 
@@ -171,14 +173,18 @@ OUTPUT SCHEMA (Strict JSON):
     (system, user)
 }
 
-pub fn build_hypothesis_formation_prompt(facts_summary: &str, pruned_constraints: &[String]) -> (String, String) {
+pub fn build_hypothesis_formation_prompt(
+    facts_summary: &str,
+    pruned_constraints: &[String],
+) -> (String, String) {
     let constraints_str = if pruned_constraints.is_empty() {
         "None".to_string()
     } else {
         pruned_constraints.join("\n- ")
     };
 
-    let system = format!(r#"You are a cognitive synthesizer. Given a cluster of topically coherent facts, form a generalized, testable hypothesis (claim) and distill a unified insight explaining WHY it holds.
+    let system = format!(
+        r#"You are a cognitive synthesizer. Given a cluster of topically coherent facts, form a generalized, testable hypothesis (claim) and distill a unified insight explaining WHY it holds.
 Classify item_type as 'direction' if the cluster reflects a user directive, preference, or workflow constraint, 'rule' if universal wisdom, or 'insight'.
 
 CRITICAL POLICY MANDATE: You MUST NOT propose hypotheses that violate these known-false negative policy constraints derived from pruned past attempts:
@@ -194,13 +200,20 @@ OUTPUT SCHEMA (Strict JSON):
       "fact_indices": [0, 1, 2]
     }}
   ]
-}}"#, constraints_str);
+}}"#,
+        constraints_str
+    );
 
     let user = format!("FACT CLUSTER:\n{}", facts_summary);
     (system, user)
 }
 
-pub fn build_refinement_prompt(claim: &str, insight: &str, current_confidence: f32, new_fact_summary: &str) -> (String, String) {
+pub fn build_refinement_prompt(
+    claim: &str,
+    insight: &str,
+    current_confidence: f32,
+    new_fact_summary: &str,
+) -> (String, String) {
     let system = r#"You are an HTR cognitive evaluator. Given an existing Hypothesis (with its current claim, insight, and confidence score) and a newly extracted Fact, evaluate their relationship:
 - SUPPORT: The new fact confirms, expands, or strengthens the hypothesis.
 - CONTRADICT: The new fact refutes, invalidates, or exposes a flaw in the hypothesis.
@@ -221,7 +234,10 @@ OUTPUT SCHEMA (Strict JSON):
     (system, user)
 }
 
-pub fn build_ancestor_merge_prompt(validated_insights_summary: &str, scope: &str) -> (String, String) {
+pub fn build_ancestor_merge_prompt(
+    validated_insights_summary: &str,
+    scope: &str,
+) -> (String, String) {
     let system = r#"You are a principal technical writer and memory synthesizer. Given a set of validated hypotheses (confidence >= 0.90) and their supporting child insights (ι_n), synthesize them into an ancestor understanding formatted as a clean Markdown wiki page.
 
 Do NOT perform simple text concatenation. Abstract over the child insights to produce a cohesive, authoritative document. Suggest a vault file path.
@@ -233,7 +249,10 @@ OUTPUT SCHEMA (Strict JSON):
   "markdown_content": "string"
 }"#.to_string();
 
-    let user = format!("SCOPE: {}\nVALIDATED HYPOTHESES & CHILD INSIGHTS:\n{}", scope, validated_insights_summary);
+    let user = format!(
+        "SCOPE: {}\nVALIDATED HYPOTHESES & CHILD INSIGHTS:\n{}",
+        scope, validated_insights_summary
+    );
     (system, user)
 }
 
@@ -295,7 +314,8 @@ mod tests {
             "refined_insight": "Better insight",
             "reasoning": "Direct match"
         }"#;
-        let refine_parsed: RefineHypothesisResponse = serde_json::from_str(mock_refine_json).unwrap();
+        let refine_parsed: RefineHypothesisResponse =
+            serde_json::from_str(mock_refine_json).unwrap();
         assert_eq!(refine_parsed.action, "support");
 
         let mock_merge_json = r##"{
@@ -335,4 +355,3 @@ pub fn clean_json_payload(raw: &str) -> String {
     }
     stripped
 }
-

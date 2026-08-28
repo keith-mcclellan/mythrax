@@ -680,15 +680,24 @@ pub async fn bulk_ingest_vault(
                         if log_exists || has_md {
                             let mut timestamp_ns: u128 = 0;
                             if log_exists {
-                                let transcript_file = path.join(".system_generated/logs/transcript.jsonl");
+                                let transcript_file =
+                                    path.join(".system_generated/logs/transcript.jsonl");
                                 if let Ok(file) = std::fs::File::open(&transcript_file) {
                                     use std::io::BufRead;
                                     let reader = std::io::BufReader::new(file);
                                     if let Some(Ok(line)) = reader.lines().next() {
-                                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
-                                            if let Some(ts_str) = v.get("timestamp").and_then(|t| t.as_str()) {
-                                                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
-                                                    timestamp_ns = dt.timestamp_nanos_opt().unwrap_or(0) as u128;
+                                        if let Ok(v) =
+                                            serde_json::from_str::<serde_json::Value>(&line)
+                                        {
+                                            if let Some(ts_str) =
+                                                v.get("timestamp").and_then(|t| t.as_str())
+                                            {
+                                                if let Ok(dt) =
+                                                    chrono::DateTime::parse_from_rfc3339(ts_str)
+                                                {
+                                                    timestamp_ns =
+                                                        dt.timestamp_nanos_opt().unwrap_or(0)
+                                                            as u128;
                                                 }
                                             }
                                         }
@@ -699,7 +708,10 @@ pub async fn bulk_ingest_vault(
                                 let mtime = std::fs::metadata(&path)
                                     .and_then(|m| m.modified())
                                     .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                                timestamp_ns = mtime.duration_since(std::time::SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+                                timestamp_ns = mtime
+                                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                    .map(|d| d.as_nanos())
+                                    .unwrap_or(0);
                             }
                             dirs_with_time.push((path, timestamp_ns));
                         }
@@ -864,8 +876,14 @@ pub async fn bulk_ingest_vault(
                     let mut generated_parts = Vec::new();
 
                     let slug_title = crate::cognitive::pipeline::slugify_title(&title);
-                    let parent_filename = format!("{}_{}_{}.md", slug_title, &dir_name[..dir_name.len().min(8)], uuid_suffix);
-                    let parent_relative_path = crate::vault::organization::episode_relative_path(&parent_filename);
+                    let parent_filename = format!(
+                        "{}_{}_{}.md",
+                        slug_title,
+                        &dir_name[..dir_name.len().min(8)],
+                        uuid_suffix
+                    );
+                    let parent_relative_path =
+                        crate::vault::organization::episode_relative_path(&parent_filename);
                     let parent_title = title.clone();
                     let mut parent_saved_id = String::new();
 
@@ -881,7 +899,8 @@ pub async fn bulk_ingest_vault(
                                 &dir_name[..dir_name.len().min(8)],
                                 uuid_suffix
                             );
-                            let part_path = crate::vault::organization::episode_relative_path(&part_file);
+                            let part_path =
+                                crate::vault::organization::episode_relative_path(&part_file);
                             parent_parts_list.push_str(&format!("- [[{}]]\n", part_path));
                         }
                         let parent_content = format!(
@@ -955,7 +974,10 @@ pub async fn bulk_ingest_vault(
                             let prev_str = if chunk_idx > 0 {
                                 let prev_path = format!(
                                     "episodes/{}_part{}_{}_{}",
-                                    slug_title, chunk_idx, &dir_name[..dir_name.len().min(8)], uuid_suffix
+                                    slug_title,
+                                    chunk_idx,
+                                    &dir_name[..dir_name.len().min(8)],
+                                    uuid_suffix
                                 );
                                 format!("[[{}]]", prev_path)
                             } else {
@@ -1181,11 +1203,10 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"claude\"\n---\n\n{}",
                             title, scope, content
                         );
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1213,11 +1234,10 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"cursor\"\n---\n\n{}",
                             title, scope, content
                         );
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1251,11 +1271,10 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"codex\"\n---\n\n{}",
                             title, scope, content
                         );
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1287,11 +1306,10 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"opencode\"\n---\n\n{}",
                             title, scope, content
                         );
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1323,11 +1341,10 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"openclaw\"\n---\n\n{}",
                             title, scope, content
                         );
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1355,11 +1372,10 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"hermes\"\n---\n\n{}",
                             title, scope, content
                         );
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1393,11 +1409,10 @@ pub async fn bulk_ingest_vault(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"generic_jsonl\"\n---\n\n{}",
                             title, scope, content
                         );
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1424,11 +1439,10 @@ pub async fn bulk_ingest_vault(
                         let uuid = uuid::Uuid::new_v4().to_string();
                         let relative_path = format!("episodes/{}_{}.md", file_stem, &uuid[..8]);
 
-                        let ep_save =
-                            crate::contracts::EpisodeSave::builder(title, note_content)
-                                .scope(Some(scope.to_string()))
-                                .vault_path(Some(relative_path))
-                                .build();
+                        let ep_save = crate::contracts::EpisodeSave::builder(title, note_content)
+                            .scope(Some(scope.to_string()))
+                            .vault_path(Some(relative_path))
+                            .build();
                         if db.save_episode(&ep_save).await.is_ok() {
                             success_count += 1;
                         }
@@ -1445,7 +1459,10 @@ pub async fn bulk_ingest_vault(
 
     if success_count > 0 {
         if let Err(e) = post_ingestion_compaction_and_cleanup(db, &store, scope).await {
-            tracing::warn!("Post-ingestion compaction and cleanup returned error: {:?}", e);
+            tracing::warn!(
+                "Post-ingestion compaction and cleanup returned error: {:?}",
+                e
+            );
         }
     }
 
@@ -1458,7 +1475,8 @@ async fn post_ingestion_compaction_and_cleanup(
     scope: &str,
 ) -> Result<()> {
     if let Some(surreal) = db.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-        let db_arc = std::sync::Arc::new(crate::db::SurrealBackend::new_with_db(surreal.db.clone()));
+        let db_arc =
+            std::sync::Arc::new(crate::db::SurrealBackend::new_with_db(surreal.db.clone()));
         if let Err(e) = crate::cognitive::pipeline::refine_hypotheses(&*db_arc, None, scope).await {
             tracing::warn!("Auto scope compaction post-ingestion returned: {:?}", e);
         }
@@ -1470,7 +1488,8 @@ async fn post_ingestion_compaction_and_cleanup(
             .await
         {
             if let Ok(raws) = response.take::<Vec<crate::db::EpisodeRaw>>(0) {
-                let archived_episodes: Vec<crate::contracts::Episode> = raws.into_iter().map(|r| r.into()).collect();
+                let archived_episodes: Vec<crate::contracts::Episode> =
+                    raws.into_iter().map(|r| r.into()).collect();
                 for ep in archived_episodes {
                     if let Some(ref path) = ep.vault_path {
                         let file_name = std::path::Path::new(path)
@@ -1482,17 +1501,37 @@ async fn post_ingestion_compaction_and_cleanup(
                         let dst_path = store.vault_root.join(&archive_rel_path);
                         if let Some(parent) = dst_path.parent() {
                             if let Err(e) = std::fs::create_dir_all(parent) {
-                                tracing::warn!("Failed to create archive directory {:?}: {:?}", parent, e);
+                                tracing::warn!(
+                                    "Failed to create archive directory {:?}: {:?}",
+                                    parent,
+                                    e
+                                );
                             }
                         }
                         if src_path.exists() {
                             if let Err(e) = std::fs::rename(&src_path, &dst_path) {
-                                tracing::warn!("Failed to move archived episode from {:?} to {:?}: {:?}", src_path, dst_path, e);
+                                tracing::warn!(
+                                    "Failed to move archived episode from {:?} to {:?}: {:?}",
+                                    src_path,
+                                    dst_path,
+                                    e
+                                );
                             } else if let Some(ref ep_id) = ep.id {
                                 let id_part = ep_id.split(':').nth(1).unwrap_or(ep_id);
-                                let update_sql = "UPDATE type::record('episode', $id) SET vault_path = $vp;";
-                                if let Err(e) = surreal.db.query(update_sql).bind(("id", id_part)).bind(("vp", archive_rel_path.clone())).await {
-                                    tracing::warn!("Failed to update database vault_path for archived episode '{}': {:?}", ep_id, e);
+                                let update_sql =
+                                    "UPDATE type::record('episode', $id) SET vault_path = $vp;";
+                                if let Err(e) = surreal
+                                    .db
+                                    .query(update_sql)
+                                    .bind(("id", id_part))
+                                    .bind(("vp", archive_rel_path.clone()))
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        "Failed to update database vault_path for archived episode '{}': {:?}",
+                                        ep_id,
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -1506,7 +1545,10 @@ async fn post_ingestion_compaction_and_cleanup(
     let mut moc_content = format!("# Map of Content: {}\n\n## Wiki Nodes\n", scope);
     for node in wiki_nodes {
         if node.scope == scope {
-            moc_content.push_str(&format!("- [[wiki/{}/{}|{}]]\n", scope, node.name, node.name));
+            moc_content.push_str(&format!(
+                "- [[wiki/{}/{}|{}]]\n",
+                scope, node.name, node.name
+            ));
         }
     }
     let moc_path = format!("wiki/{}/MOC.md", scope);
@@ -1841,7 +1883,11 @@ mod tests {
         std::fs::create_dir_all(&git_dir).unwrap();
         std::fs::write(target_dir.join("ignored.md"), "ignored build content").unwrap();
         std::fs::write(git_dir.join("git.md"), "ignored git content").unwrap();
-        std::fs::write(vault_dir.join("vault_note.md"), "ignored inner vault content").unwrap();
+        std::fs::write(
+            vault_dir.join("vault_note.md"),
+            "ignored inner vault content",
+        )
+        .unwrap();
 
         // Create valid workspace docs
         let specs_dir = ws_path.join("specs").join("foo");
@@ -1854,19 +1900,40 @@ mod tests {
         backend.init().await.unwrap();
 
         // Sync workspace docs
-        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+        sync_workspace_docs_to_vault(ws_path, &store, &backend)
+            .await
+            .unwrap();
 
-        let ref_doc = vault_dir.join("reference").join("specs").join("foo").join("bar.md");
-        assert!(ref_doc.exists(), "Mirrored reference file should exist in vault/reference");
+        let ref_doc = vault_dir
+            .join("reference")
+            .join("specs")
+            .join("foo")
+            .join("bar.md");
+        assert!(
+            ref_doc.exists(),
+            "Mirrored reference file should exist in vault/reference"
+        );
 
-        let ignored_ref = vault_dir.join("reference").join("target").join("ignored.md");
-        assert!(!ignored_ref.exists(), "Target directory files should be ignored");
+        let ignored_ref = vault_dir
+            .join("reference")
+            .join("target")
+            .join("ignored.md");
+        assert!(
+            !ignored_ref.exists(),
+            "Target directory files should be ignored"
+        );
 
         let vault_inner_ref = vault_dir.join("reference").join("mythrax-vault");
-        assert!(!vault_inner_ref.exists(), "Inner vault directory should be ignored");
+        assert!(
+            !vault_inner_ref.exists(),
+            "Inner vault directory should be ignored"
+        );
 
         // Verify WikiNode in DB
-        let node = backend.find_wiki_node_by_hash_db("dummy", "workspace_ref").await.unwrap();
+        let node = backend
+            .find_wiki_node_by_hash_db("dummy", "workspace_ref")
+            .await
+            .unwrap();
         assert!(node.is_none());
 
         use sha2::Digest;
@@ -1874,14 +1941,19 @@ mod tests {
         hasher.update(b"# Specs Foo Bar\nContent for bar.");
         let expected_hash = format!("{:x}", hasher.finalize());
 
-        let node_found = backend.find_wiki_node_by_hash_db(&expected_hash, "workspace_ref").await.unwrap();
+        let node_found = backend
+            .find_wiki_node_by_hash_db(&expected_hash, "workspace_ref")
+            .await
+            .unwrap();
         assert!(node_found.is_some());
         let found = node_found.unwrap();
         assert_eq!(found.name, "specs/foo/bar.md");
         assert_eq!(found.scope, "workspace_ref");
 
         // Re-sync without changes: SHA-256 diffing skips re-write
-        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+        sync_workspace_docs_to_vault(ws_path, &store, &backend)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1898,7 +1970,9 @@ mod tests {
         let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
         backend.init().await.unwrap();
 
-        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+        sync_workspace_docs_to_vault(ws_path, &store, &backend)
+            .await
+            .unwrap();
 
         let ref_doc = vault_dir.join("reference").join("temp_doc.md");
         assert!(ref_doc.exists());
@@ -1907,9 +1981,14 @@ mod tests {
         std::fs::remove_file(&doc_path).unwrap();
 
         // Re-sync to trigger deletion pruning
-        sync_workspace_docs_to_vault(ws_path, &store, &backend).await.unwrap();
+        sync_workspace_docs_to_vault(ws_path, &store, &backend)
+            .await
+            .unwrap();
 
-        assert!(!ref_doc.exists(), "Mirrored file should be pruned when deleted from workspace");
+        assert!(
+            !ref_doc.exists(),
+            "Mirrored file should be pruned when deleted from workspace"
+        );
     }
 
     #[tokio::test]
@@ -1920,7 +1999,11 @@ mod tests {
         let ref_specs = vault_dir.path().join("reference").join("specs").join("foo");
         std::fs::create_dir_all(&ref_specs).unwrap();
         std::fs::write(ref_specs.join("bar.md"), "# Bar Spec").unwrap();
-        std::fs::write(vault_dir.path().join("reference").join("architecture.md"), "# Architecture").unwrap();
+        std::fs::write(
+            vault_dir.path().join("reference").join("architecture.md"),
+            "# Architecture",
+        )
+        .unwrap();
 
         let backend = crate::db::SurrealBackend::new_in_memory().await.unwrap();
         store.rebuild_reference_moc(&backend).unwrap();
@@ -1939,14 +2022,20 @@ mod tests {
         let sql = "CREATE wiki_node CONTENT { name: 'test_node', content: 'hello world content', scope: 'general' };";
         backend.db.query(sql).await.unwrap();
 
-        backend.backfill_wiki_node_content_hashes_db().await.unwrap();
+        backend
+            .backfill_wiki_node_content_hashes_db()
+            .await
+            .unwrap();
 
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
         hasher.update(b"hello world content");
         let hash = format!("{:x}", hasher.finalize());
 
-        let found = backend.find_wiki_node_by_hash_db(&hash, "general").await.unwrap();
+        let found = backend
+            .find_wiki_node_by_hash_db(&hash, "general")
+            .await
+            .unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "test_node");
     }
@@ -2108,7 +2197,10 @@ pub async fn sync_workspace_docs_to_vault(
                     hasher.update(disk_content.as_bytes());
                     let disk_hash = format!("{:x}", hasher.finalize());
                     if disk_hash == file.hash {
-                        if let Ok(Some(_)) = backend.find_wiki_node_by_hash(&file.hash, "workspace_ref").await {
+                        if let Ok(Some(_)) = backend
+                            .find_wiki_node_by_hash(&file.hash, "workspace_ref")
+                            .await
+                        {
                             needs_write = false;
                         }
                     }
@@ -2117,7 +2209,14 @@ pub async fn sync_workspace_docs_to_vault(
 
             if needs_write {
                 store.write_file(&vault_rel_path, &file.content)?;
-                index_reference_doc(&file.rel_path, &vault_rel_path, &file.content, &file.hash, backend).await?;
+                index_reference_doc(
+                    &file.rel_path,
+                    &vault_rel_path,
+                    &file.content,
+                    &file.hash,
+                    backend,
+                )
+                .await?;
                 let llm_client = crate::llm::LLMClient::default();
                 let _ = crate::cognitive::pipeline::extract_from_document(
                     backend,
@@ -2125,7 +2224,8 @@ pub async fn sync_workspace_docs_to_vault(
                     &file.content,
                     &file.rel_path,
                     ws_scope,
-                ).await;
+                )
+                .await;
             }
         } else {
             // Process code file for AST extraction & project-scoped AST reference markdown file generation
@@ -2136,10 +2236,10 @@ pub async fn sync_workspace_docs_to_vault(
                 &file.content,
                 &file.rel_path,
                 ws_scope,
-            ).await;
+            )
+            .await;
         }
     }
-
 
     if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
         #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
@@ -2208,20 +2308,34 @@ async fn index_reference_doc(
     backend: &dyn StorageBackend,
 ) -> Result<()> {
     if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>() {
-        let sql = "SELECT * FROM wiki_node WHERE vault_path = $vault_path AND scope = 'workspace_ref';";
+        let sql =
+            "SELECT * FROM wiki_node WHERE vault_path = $vault_path AND scope = 'workspace_ref';";
         let mut response = surreal
             .db
             .query(sql)
             .bind(("vault_path", vault_rel_path.to_string()))
             .await?;
         let raws: Vec<crate::db::WikiNodeRaw> = response.take(0).unwrap_or_default();
-        let nodes: Vec<crate::contracts::WikiNode> = raws.into_iter().map(|r| r.into_wiki_node()).collect();
+        let nodes: Vec<crate::contracts::WikiNode> =
+            raws.into_iter().map(|r| r.into_wiki_node()).collect();
         for node in nodes {
             if let Some(ref id_str) = node.id {
                 if let Ok(thing) = crate::db::parse_record_id(id_str) {
-                    let _ = surreal.db.query("DELETE relates_to WHERE in = $id OR out = $id;").bind(("id", thing.clone())).await;
-                    let _ = surreal.db.query("DELETE followed_by WHERE in = $id OR out = $id;").bind(("id", thing.clone())).await;
-                    let _ = surreal.db.query("DELETE $id;").bind(("id", thing.clone())).await;
+                    let _ = surreal
+                        .db
+                        .query("DELETE relates_to WHERE in = $id OR out = $id;")
+                        .bind(("id", thing.clone()))
+                        .await;
+                    let _ = surreal
+                        .db
+                        .query("DELETE followed_by WHERE in = $id OR out = $id;")
+                        .bind(("id", thing.clone()))
+                        .await;
+                    let _ = surreal
+                        .db
+                        .query("DELETE $id;")
+                        .bind(("id", thing.clone()))
+                        .await;
                 }
             }
         }
@@ -2276,7 +2390,9 @@ mod phase8_tests {
 
         // 2. Archived Episode for file move and DB vault_path update
         let ep_rel_path = "episodes/test_scope/archived_ep.md";
-        store.write_file(ep_rel_path, "# Archived Episode Content").unwrap();
+        store
+            .write_file(ep_rel_path, "# Archived Episode Content")
+            .unwrap();
 
         let ep = crate::contracts::Episode {
             id: None,
@@ -2306,7 +2422,10 @@ mod phase8_tests {
 
         // Verify archived file move on disk
         let archived_disk_path = temp_dir.path().join("archive/test_scope/archived_ep.md");
-        assert!(archived_disk_path.exists(), "Archived file should be moved to archive/test_scope/");
+        assert!(
+            archived_disk_path.exists(),
+            "Archived file should be moved to archive/test_scope/"
+        );
 
         // Verify SurrealDB vault_path update
         let mut resp = db
@@ -2315,7 +2434,8 @@ mod phase8_tests {
             .await
             .unwrap();
         let raws: Vec<crate::db::EpisodeRaw> = resp.take(0).unwrap();
-        let updated_eps: Vec<crate::contracts::Episode> = raws.into_iter().map(|r| r.into()).collect();
+        let updated_eps: Vec<crate::contracts::Episode> =
+            raws.into_iter().map(|r| r.into()).collect();
         assert_eq!(
             updated_eps[0].vault_path,
             Some("archive/test_scope/archived_ep.md".to_string()),
