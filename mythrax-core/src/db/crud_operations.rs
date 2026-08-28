@@ -12,7 +12,6 @@ use surrealdb_types::SurrealValue;
 use uuid::Uuid;
 
 impl SurrealBackend {
-
     pub async fn save_episode_db(&self, episode: &EpisodeSave) -> Result<String> {
         crate::daemon::update_last_activity();
         if self.is_client_mode() {
@@ -76,8 +75,13 @@ impl SurrealBackend {
         }
 
         if !is_update {
-            let check_query = "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
-            let mut response = self.db.query(check_query).bind(("content_hash", content_hash.as_str())).await?;
+            let check_query =
+                "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
+            let mut response = self
+                .db
+                .query(check_query)
+                .bind(("content_hash", content_hash.as_str()))
+                .await?;
             let ids: Option<surrealdb::types::RecordId> = response.take(0)?;
             if let Some(thing) = ids {
                 let id = match &thing.key {
@@ -176,7 +180,11 @@ impl SurrealBackend {
             .unwrap_or_else(|| "agent_thought".to_string());
 
         let embedding_val = if self.embedder.is_some() {
-            let insight_str = episode.causal_insight.as_ref().map(|v| v.to_string()).or_else(|| episode.causal_explanation.clone());
+            let insight_str = episode
+                .causal_insight
+                .as_ref()
+                .map(|v| v.to_string())
+                .or_else(|| episode.causal_explanation.clone());
             let text_to_embed = if let Some(ref insight) = insight_str {
                 format!("{}: {}", episode.title, insight)
             } else if let Some(ref summary) = episode.summary {
@@ -344,7 +352,10 @@ impl SurrealBackend {
             }
         }
 
-        if !missing_texts.is_empty() && self.embedder.is_some() && std::env::var("MYTHRAX_ASYNC_EMBEDDINGS").is_err() {
+        if !missing_texts.is_empty()
+            && self.embedder.is_some()
+            && std::env::var("MYTHRAX_ASYNC_EMBEDDINGS").is_err()
+        {
             if let Ok(generated) = self.embed_batch(&missing_texts).await {
                 for (midx, generated_emb) in missing_indices.into_iter().zip(generated.into_iter())
                 {
@@ -496,21 +507,37 @@ impl SurrealBackend {
             let chunk_start_idx = chunk_idx * SUB_BATCH_SIZE;
             let chunk_end_idx = (chunk_start_idx + json_chunk.len()).min(inserted_ids.len());
 
-            match self.db.query(query).bind(("episodes", json_chunk.to_vec())).await {
+            match self
+                .db
+                .query(query)
+                .bind(("episodes", json_chunk.to_vec()))
+                .await
+            {
                 Ok(res) => {
                     if let Err(e) = res.check() {
-                        tracing::error!("SurrealDB save_episodes_batch sub-batch {} failed: {:?}", chunk_idx, e);
+                        tracing::error!(
+                            "SurrealDB save_episodes_batch sub-batch {} failed: {:?}",
+                            chunk_idx,
+                            e
+                        );
                     } else {
-                        successful_inserted_ids.extend_from_slice(&inserted_ids[chunk_start_idx..chunk_end_idx]);
+                        successful_inserted_ids
+                            .extend_from_slice(&inserted_ids[chunk_start_idx..chunk_end_idx]);
                     }
                 }
                 Err(e) => {
-                    tracing::error!("SurrealDB save_episodes_batch query sub-batch {} failed: {:?}", chunk_idx, e);
+                    tracing::error!(
+                        "SurrealDB save_episodes_batch query sub-batch {} failed: {:?}",
+                        chunk_idx,
+                        e
+                    );
                 }
             }
         }
 
-        let _ = self.update_idf_index_batch_db(&successful_inserted_ids).await;
+        let _ = self
+            .update_idf_index_batch_db(&successful_inserted_ids)
+            .await;
 
         // 6. Relate temporal followed_by connections
         for rel in relations {
@@ -694,7 +721,13 @@ impl SurrealBackend {
         let metrics_uuid = Uuid::new_v4().to_string();
         let vp_val = rule.vault_path.clone().unwrap_or_default();
         let content_hash = rule.content_hash.clone().unwrap_or_else(|| {
-            let full = format!("{}:{}:{}:{}", rule.target_pattern, rule.action_to_avoid, rule.causal_explanation, rule.prescribed_remedy);
+            let full = format!(
+                "{}:{}:{}:{}",
+                rule.target_pattern,
+                rule.action_to_avoid,
+                rule.causal_explanation,
+                rule.prescribed_remedy
+            );
             use sha2::Digest;
             let mut hasher = sha2::Sha256::new();
             hasher.update(full.as_bytes());
@@ -1089,7 +1122,12 @@ impl SurrealBackend {
         Ok(episodes)
     }
 
-    pub async fn get_episodes_by_node_type_paginated_db(&self, node_type: &str, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+    pub async fn get_episodes_by_node_type_paginated_db(
+        &self,
+        node_type: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>> {
         let sql = "SELECT * FROM episode WHERE node_type = $node_type LIMIT $limit START $offset;";
         let mut response = self
             .db
@@ -1305,7 +1343,9 @@ impl SurrealBackend {
 
     pub async fn save_wiki_node_db(&self, node: &WikiNode) -> Result<String> {
         let raw_display_title = node.name.rsplit('/').next().unwrap_or(&node.name);
-        let display_title = raw_display_title.strip_suffix(".md").unwrap_or(raw_display_title);
+        let display_title = raw_display_title
+            .strip_suffix(".md")
+            .unwrap_or(raw_display_title);
 
         let (fm_opt, raw_body) = crate::vault::markdown::parse_frontmatter(&node.content);
         let mut yaml_val = match fm_opt {
@@ -1313,16 +1353,31 @@ impl SurrealBackend {
             _ => serde_yaml::Mapping::new(),
         };
 
-        yaml_val.insert(serde_yaml::Value::String("title".to_string()), serde_yaml::Value::String(display_title.to_string()));
-        yaml_val.insert(serde_yaml::Value::String("scope".to_string()), serde_yaml::Value::String(node.scope.clone()));
+        yaml_val.insert(
+            serde_yaml::Value::String("title".to_string()),
+            serde_yaml::Value::String(display_title.to_string()),
+        );
+        yaml_val.insert(
+            serde_yaml::Value::String("scope".to_string()),
+            serde_yaml::Value::String(node.scope.clone()),
+        );
         if let Some(ref nt) = node.node_type {
-            yaml_val.insert(serde_yaml::Value::String("node_type".to_string()), serde_yaml::Value::String(nt.clone()));
+            yaml_val.insert(
+                serde_yaml::Value::String("node_type".to_string()),
+                serde_yaml::Value::String(nt.clone()),
+            );
         }
         if let Some(ref it) = node.item_type {
-            yaml_val.insert(serde_yaml::Value::String("item_type".to_string()), serde_yaml::Value::String(it.clone()));
+            yaml_val.insert(
+                serde_yaml::Value::String("item_type".to_string()),
+                serde_yaml::Value::String(it.clone()),
+            );
         }
         if let Some(mc) = node.metacognitive_confidence {
-            yaml_val.insert(serde_yaml::Value::String("metacognitive_confidence".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(mc)));
+            yaml_val.insert(
+                serde_yaml::Value::String("metacognitive_confidence".to_string()),
+                serde_yaml::Value::Number(serde_yaml::Number::from(mc)),
+            );
         }
 
         let mut relates_to_links: Vec<String> = Vec::new();
@@ -1350,7 +1405,12 @@ impl SurrealBackend {
 
         if is_update {
             let edge_query = "SELECT out.name AS name, out.vault_path AS vault_path FROM relates_to WHERE in = type::record('wiki_node', $node_uuid) LIMIT 50;";
-            if let Ok(mut edge_res) = self.db.query(edge_query).bind(("node_uuid", node_uuid.as_str())).await {
+            if let Ok(mut edge_res) = self
+                .db
+                .query(edge_query)
+                .bind(("node_uuid", node_uuid.as_str()))
+                .await
+            {
                 #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
                 struct EdgeTarget {
                     name: Option<String>,
@@ -1414,7 +1474,6 @@ impl SurrealBackend {
                 let _ = std::fs::write(&full_path, &final_content);
             }
         }
-
 
         let content_hash = node.content_hash.clone().unwrap_or_else(|| {
             use sha2::Digest;
@@ -1609,7 +1668,11 @@ impl SurrealBackend {
     pub async fn get_related_node_ids_db(&self, from_id: &str) -> Result<Vec<String>> {
         let from_thing = parse_record_id(from_id)?;
         let sql1 = "SELECT VALUE out FROM relates_to WHERE in = $from LIMIT 50;";
-        let mut res1 = self.db.query(sql1).bind(("from", from_thing.clone())).await?;
+        let mut res1 = self
+            .db
+            .query(sql1)
+            .bind(("from", from_thing.clone()))
+            .await?;
         let mut outs: Vec<surrealdb::types::RecordId> = res1.take(0).unwrap_or_default();
 
         let sql2 = "SELECT VALUE in FROM relates_to WHERE out = $from LIMIT 50;";
@@ -1669,7 +1732,11 @@ impl SurrealBackend {
                 DELETE $id;
                 COMMIT TRANSACTION;
             ";
-            self.db.query(cascade_sql).bind(("id", rec_id)).await?.check()?;
+            self.db
+                .query(cascade_sql)
+                .bind(("id", rec_id))
+                .await?
+                .check()?;
         }
         if let Some(ep) = ep_opt {
             let _ = self.update_idf_index_for_episode(&ep, true).await;
@@ -1696,14 +1763,29 @@ impl SurrealBackend {
         for term in unique_terms {
             if is_delete {
                 let sql = "UPDATE idf_index SET document_frequency -= 1 WHERE term = $term AND scope = $scope;";
-                self.db.query(sql).bind(("term", term)).bind(("scope", scope.clone())).await?.check()?;
+                self.db
+                    .query(sql)
+                    .bind(("term", term))
+                    .bind(("scope", scope.clone()))
+                    .await?
+                    .check()?;
             } else {
                 let update_sql = "UPDATE idf_index SET document_frequency += 1 WHERE term = $term AND scope = $scope;";
-                let mut res = self.db.query(update_sql).bind(("term", term.clone())).bind(("scope", scope.clone())).await?;
+                let mut res = self
+                    .db
+                    .query(update_sql)
+                    .bind(("term", term.clone()))
+                    .bind(("scope", scope.clone()))
+                    .await?;
                 let updated: Vec<serde_json::Value> = res.take(0).unwrap_or_default();
                 if updated.is_empty() {
                     let insert_sql = "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: 1 };";
-                    self.db.query(insert_sql).bind(("term", term)).bind(("scope", scope.clone())).await?.check()?;
+                    self.db
+                        .query(insert_sql)
+                        .bind(("term", term))
+                        .bind(("scope", scope.clone()))
+                        .await?
+                        .check()?;
                 }
             }
         }
@@ -1717,7 +1799,10 @@ impl SurrealBackend {
         let ep = match self.get_episode_db(episode_id).await {
             Ok(Some(ep)) => ep,
             res => {
-                println!("EARLY RETURN in update_idf_index_db for id {}: {:?}", episode_id, res);
+                println!(
+                    "EARLY RETURN in update_idf_index_db for id {}: {:?}",
+                    episode_id, res
+                );
                 return Ok(());
             }
         };
@@ -1728,7 +1813,8 @@ impl SurrealBackend {
         if episode_ids.is_empty() {
             return Ok(());
         }
-        let mut term_counts: std::collections::HashMap<(String, String), i64> = std::collections::HashMap::new();
+        let mut term_counts: std::collections::HashMap<(String, String), i64> =
+            std::collections::HashMap::new();
         for id_str in episode_ids {
             if let Ok(Some(ep)) = self.get_episode_db(id_str).await {
                 let tokens = crate::retrieval::bm25::tokenize(&ep.content);
@@ -1741,7 +1827,13 @@ impl SurrealBackend {
         }
         for ((term, scope), delta) in term_counts {
             let sql = "UPDATE idf_index SET document_frequency = document_frequency + $delta WHERE term = $term AND scope = $scope; IF count() == 0 THEN INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $delta }; END;";
-            let _ = self.db.query(sql).bind(("term", term)).bind(("scope", scope)).bind(("delta", delta)).await;
+            let _ = self
+                .db
+                .query(sql)
+                .bind(("term", term))
+                .bind(("scope", scope))
+                .bind(("delta", delta))
+                .await;
         }
         Ok(())
     }
@@ -1753,7 +1845,8 @@ impl SurrealBackend {
         self.db.query("DELETE FROM idf_index;").await?.check()?;
         let mut offset = 0;
         let limit = 1000;
-        let mut idf_map: std::collections::HashMap<(String, String), i64> = std::collections::HashMap::new();
+        let mut idf_map: std::collections::HashMap<(String, String), i64> =
+            std::collections::HashMap::new();
 
         loop {
             let episodes = self.get_episodes_paginated_db(limit, offset).await?;
@@ -1775,8 +1868,15 @@ impl SurrealBackend {
         }
 
         for ((term, scope), df) in idf_map {
-            let sql = "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $df };";
-            self.db.query(sql).bind(("term", term)).bind(("scope", scope)).bind(("df", df)).await?.check()?;
+            let sql =
+                "INSERT INTO idf_index { term: $term, scope: $scope, document_frequency: $df };";
+            self.db
+                .query(sql)
+                .bind(("term", term))
+                .bind(("scope", scope))
+                .bind(("df", df))
+                .await?
+                .check()?;
         }
         Ok(())
     }
@@ -1789,13 +1889,23 @@ impl SurrealBackend {
                 if let Some(id_str) = id.as_str() {
                     format!("{}:{}", tb, id_str.trim_matches('`'))
                 } else {
-                    format!("{}:{}", tb, id.to_string().trim_matches('"').trim_matches('`'))
+                    format!(
+                        "{}:{}",
+                        tb,
+                        id.to_string().trim_matches('"').trim_matches('`')
+                    )
                 }
             } else {
-                v.to_string().trim_matches('"').trim_matches('`').to_string()
+                v.to_string()
+                    .trim_matches('"')
+                    .trim_matches('`')
+                    .to_string()
             }
         } else {
-            v.to_string().trim_matches('"').trim_matches('`').to_string()
+            v.to_string()
+                .trim_matches('"')
+                .trim_matches('`')
+                .to_string()
         }
     }
 
@@ -1813,7 +1923,9 @@ impl SurrealBackend {
             }
             let mut updated_any = false;
             for row in &batch {
-                if let (Some(id_val), Some(content)) = (row.get("id"), row.get("content").and_then(|v| v.as_str())) {
+                if let (Some(id_val), Some(content)) =
+                    (row.get("id"), row.get("content").and_then(|v| v.as_str()))
+                {
                     let id_str = self.parse_val_id(id_val);
                     if !id_str.is_empty() {
                         use sha2::Digest;
@@ -1821,16 +1933,19 @@ impl SurrealBackend {
                         hasher.update(content.as_bytes());
                         let hash = format!("{:x}", hasher.finalize());
                         if let Ok(rec_id) = parse_record_id(&id_str) {
-                            if let Ok(mut u_res) = self.db.query("UPDATE $id SET content_hash = $hash;")
+                            if let Ok(mut u_res) = self
+                                .db
+                                .query("UPDATE $id SET content_hash = $hash;")
                                 .bind(("id", rec_id))
                                 .bind(("hash", hash))
-                                .await {
-                                    if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
-                                        if !updated_rows.is_empty() {
-                                            updated_any = true;
-                                        }
+                                .await
+                            {
+                                if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                    if !updated_rows.is_empty() {
+                                        updated_any = true;
                                     }
                                 }
+                            }
                         }
                     }
                 }
@@ -1852,26 +1967,41 @@ impl SurrealBackend {
                 if let Some(id_val) = row.get("id") {
                     let id_str = self.parse_val_id(id_val);
                     if !id_str.is_empty() {
-                        let t1 = row.get("target_pattern").and_then(|v| v.as_str()).unwrap_or("");
-                        let t2 = row.get("action_to_avoid").and_then(|v| v.as_str()).unwrap_or("");
-                        let t3 = row.get("causal_explanation").and_then(|v| v.as_str()).unwrap_or("");
-                        let t4 = row.get("prescribed_remedy").and_then(|v| v.as_str()).unwrap_or("");
+                        let t1 = row
+                            .get("target_pattern")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let t2 = row
+                            .get("action_to_avoid")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let t3 = row
+                            .get("causal_explanation")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let t4 = row
+                            .get("prescribed_remedy")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let full = format!("{}:{}:{}:{}", t1, t2, t3, t4);
                         use sha2::Digest;
                         let mut hasher = sha2::Sha256::new();
                         hasher.update(full.as_bytes());
                         let hash = format!("{:x}", hasher.finalize());
                         if let Ok(rec_id) = parse_record_id(&id_str) {
-                            if let Ok(mut u_res) = self.db.query("UPDATE $id SET content_hash = $hash;")
+                            if let Ok(mut u_res) = self
+                                .db
+                                .query("UPDATE $id SET content_hash = $hash;")
                                 .bind(("id", rec_id))
                                 .bind(("hash", hash))
-                                .await {
-                                    if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
-                                        if !updated_rows.is_empty() {
-                                            updated_any = true;
-                                        }
+                                .await
+                            {
+                                if let Ok(updated_rows) = u_res.take::<Vec<serde_json::Value>>(0) {
+                                    if !updated_rows.is_empty() {
+                                        updated_any = true;
                                     }
                                 }
+                            }
                         }
                     }
                 }
@@ -1899,7 +2029,9 @@ impl SurrealBackend {
             }
             let mut updated_any = false;
             for row in &batch {
-                if let (Some(id_val), Some(content)) = (row.get("id"), row.get("content").and_then(|v| v.as_str())) {
+                if let (Some(id_val), Some(content)) =
+                    (row.get("id"), row.get("content").and_then(|v| v.as_str()))
+                {
                     let id_str = self.parse_val_id(id_val);
                     if !id_str.is_empty() {
                         use sha2::Digest;
@@ -1934,7 +2066,11 @@ impl SurrealBackend {
     /// Searches for a `WikiNode` matching a specific SHA-256 content hash and scope.
     ///
     /// Memory Safety Invariant: Uses the indexed `idx_wiki_node_hash` field for O(1) duplicate checks.
-    pub async fn find_wiki_node_by_hash_db(&self, content_hash: &str, scope: &str) -> Result<Option<WikiNode>> {
+    pub async fn find_wiki_node_by_hash_db(
+        &self,
+        content_hash: &str,
+        scope: &str,
+    ) -> Result<Option<WikiNode>> {
         let check_query = "SELECT * FROM wiki_node WHERE content_hash = $content_hash AND scope = $scope LIMIT 1;";
         let mut response = self
             .db
@@ -1949,7 +2085,12 @@ impl SurrealBackend {
     pub async fn get_wisdom_tier_db(&self, id: &str) -> Result<Option<crate::contracts::Tier>> {
         if let Ok(parse_id) = parse_record_id(id) {
             let check_query = "SELECT VALUE tier FROM $id;";
-            let mut res = self.db.query(check_query).bind(("id", parse_id)).await?.check()?;
+            let mut res = self
+                .db
+                .query(check_query)
+                .bind(("id", parse_id))
+                .await?
+                .check()?;
             let raw_tiers: Vec<String> = res.take(0).unwrap_or_default();
             if let Some(s) = raw_tiers.into_iter().next() {
                 if let Ok(t) = s.parse::<crate::contracts::Tier>() {
@@ -1960,9 +2101,17 @@ impl SurrealBackend {
         Ok(None)
     }
 
-    pub async fn find_duplicate_by_content_hash_db(&self, content_hash: &str) -> Result<Option<String>> {
-        let check_query = "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
-        let mut response = self.db.query(check_query).bind(("content_hash", content_hash)).await?;
+    pub async fn find_duplicate_by_content_hash_db(
+        &self,
+        content_hash: &str,
+    ) -> Result<Option<String>> {
+        let check_query =
+            "SELECT VALUE id FROM episode WHERE content_hash = $content_hash LIMIT 1;";
+        let mut response = self
+            .db
+            .query(check_query)
+            .bind(("content_hash", content_hash))
+            .await?;
         let ep_id: Option<surrealdb::types::RecordId> = response.take(0)?;
         if let Some(thing) = ep_id {
             let id = match &thing.key {
@@ -1972,8 +2121,13 @@ impl SurrealBackend {
             return Ok(Some(format!("episode:{}", id)));
         }
 
-        let wisdom_query = "SELECT VALUE id FROM wisdom WHERE content_hash = $content_hash LIMIT 1;";
-        let mut response_w = self.db.query(wisdom_query).bind(("content_hash", content_hash)).await?;
+        let wisdom_query =
+            "SELECT VALUE id FROM wisdom WHERE content_hash = $content_hash LIMIT 1;";
+        let mut response_w = self
+            .db
+            .query(wisdom_query)
+            .bind(("content_hash", content_hash))
+            .await?;
         let w_id: Option<surrealdb::types::RecordId> = response_w.take(0)?;
         if let Some(thing) = w_id {
             let id = match &thing.key {
@@ -1989,42 +2143,67 @@ impl SurrealBackend {
     /// Persists an ephemeral DBSCAN cluster assignment to the SurrealDB `pipeline_cluster` temporary table.
     ///
     /// Memory Safety Invariant: Replaces in-memory cluster arrays with database table records.
-    pub async fn save_cluster_assignment_db(&self, run_id: &str, cluster_id: i32, entity_id: &str, scope: Option<&str>) -> Result<()> {
+    pub async fn save_cluster_assignment_db(
+        &self,
+        run_id: &str,
+        cluster_id: i32,
+        entity_id: &str,
+        scope: Option<&str>,
+    ) -> Result<()> {
         let ep_thing = if let Ok(rec_id) = parse_record_id(entity_id) {
             rec_id
-        } else if entity_id.starts_with("wiki") || entity_id.contains(".md") || entity_id.contains("/") {
+        } else if entity_id.starts_with("wiki")
+            || entity_id.contains(".md")
+            || entity_id.contains("/")
+        {
             surrealdb::types::RecordId::new("wiki_node", entity_id)
         } else {
             surrealdb::types::RecordId::new("episode", entity_id)
         };
         let sc = scope.unwrap_or("general");
         let sql = "CREATE pipeline_cluster CONTENT { run_id: $run_id, cluster_id: $cluster_id, episode_id: $ep, scope: $scope };";
-        self.db.query(sql)
+        self.db
+            .query(sql)
             .bind(("run_id", run_id))
             .bind(("cluster_id", cluster_id))
             .bind(("ep", ep_thing))
             .bind(("scope", sc))
-            .await?.check()?;
+            .await?
+            .check()?;
         Ok(())
     }
 
     /// Retrieves a paginated subset of cluster member episodes from the `pipeline_cluster` temporary table.
     ///
     /// Memory Safety Invariant: Bounds memory consumption during cognitive synthesis by returning at most `limit` members.
-    pub async fn get_cluster_members_paginated_db(&self, run_id: &str, cluster_id: i32, limit: u32, offset: u32) -> Result<Vec<Episode>> {
+    pub async fn get_cluster_members_paginated_db(
+        &self,
+        run_id: &str,
+        cluster_id: i32,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Episode>> {
         let sql = "SELECT VALUE episode_id FROM pipeline_cluster WHERE run_id = $run_id AND cluster_id = $cluster_id LIMIT $limit START $offset;";
-        let mut res = self.db.query(sql)
+        let mut res = self
+            .db
+            .query(sql)
             .bind(("run_id", run_id))
             .bind(("cluster_id", cluster_id))
             .bind(("limit", limit))
             .bind(("offset", offset))
-            .await?.check()?;
+            .await?
+            .check()?;
         let ep_ids: Vec<surrealdb::types::RecordId> = res.take(0)?;
         if ep_ids.is_empty() {
             return Ok(Vec::new());
         }
         let get_ep_sql = "SELECT * FROM episode WHERE id IN $ep_ids;";
-        let mut ep_res = self.db.query(get_ep_sql).bind(("ep_ids", ep_ids)).await?.check()?;
+        let mut ep_res = self
+            .db
+            .query(get_ep_sql)
+            .bind(("ep_ids", ep_ids))
+            .await?
+            .check()?;
         let raw_episodes: Vec<EpisodeRaw> = ep_res.take(0)?;
         let episodes = raw_episodes.into_iter().map(Episode::from).collect();
         Ok(episodes)
@@ -2047,16 +2226,32 @@ impl SurrealBackend {
         let q_wis = "SELECT VALUE id FROM wisdom WHERE vault_path = $vault_path;";
         let q_wiki = "SELECT VALUE id FROM wiki_node WHERE vault_path = $vault_path;";
 
-        let mut res_ep = self.db.query(q_ep).bind(("vault_path", vault_path)).await?.check()?;
+        let mut res_ep = self
+            .db
+            .query(q_ep)
+            .bind(("vault_path", vault_path))
+            .await?
+            .check()?;
         let ep_ids: Vec<surrealdb::types::RecordId> = res_ep.take(0)?;
 
-        let mut res_wis = self.db.query(q_wis).bind(("vault_path", vault_path)).await?.check()?;
+        let mut res_wis = self
+            .db
+            .query(q_wis)
+            .bind(("vault_path", vault_path))
+            .await?
+            .check()?;
         let wis_ids: Vec<surrealdb::types::RecordId> = res_wis.take(0)?;
 
-        let mut res_wiki = self.db.query(q_wiki).bind(("vault_path", vault_path)).await?.check()?;
+        let mut res_wiki = self
+            .db
+            .query(q_wiki)
+            .bind(("vault_path", vault_path))
+            .await?
+            .check()?;
         let wiki_ids: Vec<surrealdb::types::RecordId> = res_wiki.take(0)?;
 
-        let all_ids: Vec<surrealdb::types::RecordId> = ep_ids.into_iter().chain(wis_ids).chain(wiki_ids).collect();
+        let all_ids: Vec<surrealdb::types::RecordId> =
+            ep_ids.into_iter().chain(wis_ids).chain(wiki_ids).collect();
 
         for id in all_ids {
             let cascade_sql = "
@@ -2506,7 +2701,11 @@ impl SurrealBackend {
     /// Retrieves a paginated subset of wisdom rules from SurrealDB (`LIMIT $limit START $offset`).
     ///
     /// Memory Safety Invariant: Prevents OOM by bounding query result size to `limit` entries.
-    pub async fn get_wisdom_rules_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WisdomRule>> {
+    pub async fn get_wisdom_rules_paginated_db(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<WisdomRule>> {
         let sql = "
             SELECT *,
                    (utility ?? 50.0) AS utility
@@ -2550,7 +2749,11 @@ impl SurrealBackend {
     /// Retrieves a paginated subset of wiki nodes from SurrealDB (`LIMIT $limit START $offset`).
     ///
     /// Memory Safety Invariant: Prevents OOM by bounding query result size to `limit` entries.
-    pub async fn get_wiki_nodes_paginated_db(&self, limit: u32, offset: u32) -> Result<Vec<WikiNode>> {
+    pub async fn get_wiki_nodes_paginated_db(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<WikiNode>> {
         let sql = "SELECT * FROM wiki_node LIMIT $limit START $offset;";
         let mut response = self
             .db
@@ -2749,7 +2952,10 @@ impl SurrealBackend {
         };
 
         // Query HTR tree state (all hypothesis nodes)
-        let mut response = self.db.query("SELECT * FROM hypothesis_node LIMIT 100;").await?;
+        let mut response = self
+            .db
+            .query("SELECT * FROM hypothesis_node LIMIT 100;")
+            .await?;
         let htr_tree_state: Vec<serde_json::Value> = response.take(0).unwrap_or_default();
 
         // Query active STM keys

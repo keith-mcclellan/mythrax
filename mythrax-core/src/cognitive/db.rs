@@ -30,7 +30,10 @@ pub async fn get_facts_by_scope(backend: &dyn StorageBackend, scope: &str) -> Re
     backend.get_facts_by_scope(scope).await
 }
 
-pub async fn get_unassociated_facts(backend: &dyn StorageBackend, scope: &str) -> Result<Vec<Fact>> {
+pub async fn get_unassociated_facts(
+    backend: &dyn StorageBackend,
+    scope: &str,
+) -> Result<Vec<Fact>> {
     backend.get_unassociated_facts(scope).await
 }
 
@@ -42,7 +45,10 @@ pub async fn get_idea_node(backend: &dyn StorageBackend, id: &str) -> Result<Opt
     backend.get_idea_node(id).await
 }
 
-pub async fn get_idea_nodes_by_scope(backend: &dyn StorageBackend, scope: &str) -> Result<Vec<IdeaNode>> {
+pub async fn get_idea_nodes_by_scope(
+    backend: &dyn StorageBackend,
+    scope: &str,
+) -> Result<Vec<IdeaNode>> {
     backend.get_idea_nodes_by_scope(scope).await
 }
 
@@ -103,7 +109,8 @@ pub async fn save_code_symbol(
     backend: &dyn StorageBackend,
     symbol: &crate::contracts::CodeSymbol,
 ) -> Result<String> {
-    save_code_symbols_for_file(backend, &[symbol.clone()], &symbol.file_path, &symbol.scope).await?;
+    save_code_symbols_for_file(backend, &[symbol.clone()], &symbol.file_path, &symbol.scope)
+        .await?;
     Ok(format!("{}_{}", symbol.file_slug, symbol.name))
 }
 
@@ -159,7 +166,11 @@ pub async fn save_code_symbols_for_file(
         }
     }
 
-    let clean_scope = if scope.trim().is_empty() { "general" } else { scope.trim() };
+    let clean_scope = if scope.trim().is_empty() {
+        "general"
+    } else {
+        scope.trim()
+    };
 
     // 2. Build ONE consolidated AST markdown file for the ENTIRE code file on disk under reference/<scope>/ast/
     let rel_ast_path = format!("reference/{}/ast/{}_ast.md", clean_scope, file_slug);
@@ -205,10 +216,8 @@ pub async fn save_code_symbols_for_file(
     };
     let _ = backend.save_wiki_node(&ast_node).await;
 
-
     Ok(())
 }
-
 
 pub async fn save_subagent_worktree(
     backend: &dyn StorageBackend,
@@ -235,7 +244,9 @@ pub async fn save_subagent_worktree(
             .bind(("status", worktree.status.as_str()))
             .await?;
         let raw: Option<crate::contracts::SubagentWorktree> = resp.take(0)?;
-        Ok(raw.and_then(|r| r.id).unwrap_or_else(|| worktree.subagent_id.clone()))
+        Ok(raw
+            .and_then(|r| r.id)
+            .unwrap_or_else(|| worktree.subagent_id.clone()))
     } else {
         Ok(worktree.subagent_id.clone())
     }
@@ -267,7 +278,8 @@ pub async fn queue_cognitive_task(
         let record_id = crate::db::parse_record_id(&format!("cognitive_task:{}", task_id))?;
         let mut save = task.clone();
         save.id = None;
-        let _res: Option<crate::contracts::CognitiveTask> = surreal.db.upsert(record_id).content(save).await?;
+        let _res: Option<crate::contracts::CognitiveTask> =
+            surreal.db.upsert(record_id).content(save).await?;
         Ok(task_id)
     } else {
         Ok(uuid::Uuid::new_v4().to_string())

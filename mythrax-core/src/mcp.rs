@@ -110,7 +110,9 @@ impl McpServer {
 
     fn get_current_token(&self) -> String {
         if let Ok(home) = std::env::var("HOME") {
-            let token_path = std::path::PathBuf::from(home).join(".mythrax").join("token");
+            let token_path = std::path::PathBuf::from(home)
+                .join(".mythrax")
+                .join("token");
             if let Ok(token) = std::fs::read_to_string(&token_path) {
                 let trimmed = token.trim().to_string();
                 if !trimmed.is_empty() {
@@ -262,7 +264,9 @@ Respond ONLY with a JSON array of nodes, each containing exactly:
                 ignore_list: std::sync::Arc::new(crate::vault::watcher::WatchIgnoreList::new()),
                 dream_tx: None,
                 shutdown_tx: None,
-                checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::new())),
+                checked_sessions: std::sync::Arc::new(tokio::sync::RwLock::new(
+                    std::collections::HashSet::new(),
+                )),
                 degraded_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             };
             crate::mcp_routes::call_mcp_tool(&api_state, name, args).await

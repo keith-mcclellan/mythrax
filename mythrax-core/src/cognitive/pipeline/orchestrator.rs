@@ -17,19 +17,39 @@ pub async fn extract_facts(
     llm: Option<&LLMClient>,
     episode: &Episode,
 ) -> Result<Vec<Fact>> {
-    let scope = episode.scope.clone().unwrap_or_else(|| "general".to_string());
-    let source_id = episode.id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let scope = episode
+        .scope
+        .clone()
+        .unwrap_or_else(|| "general".to_string());
+    let source_id = episode
+        .id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let (sys, user) = prompts::build_episode_extraction_prompt(&episode.content);
-    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, &episode.title, 10).await?;
+    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(
+        backend,
+        llm,
+        &sys,
+        &user,
+        &episode.title,
+        10,
+    )
+    .await?;
     let facts_dtos = facts_resp.facts;
 
     if facts_dtos.is_empty() {
         return Ok(Vec::new());
     }
 
-    let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
-    let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
+    let texts: Vec<String> = facts_dtos
+        .iter()
+        .map(|f| f.causal_insight.clone())
+        .collect();
+    let embeddings = backend
+        .embed_batch(&texts)
+        .await
+        .unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
 
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
@@ -81,7 +101,9 @@ pub async fn extract_facts(
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
-        let _ = backend.relate_nodes(&saved_id, &source_id, None, None, None).await;
+        let _ = backend
+            .relate_nodes(&saved_id, &source_id, None, None, None)
+            .await;
 
         if let Some(ref it) = dto.item_type {
             if it == "direction" {
@@ -147,17 +169,34 @@ pub async fn retry_llm_json<T: serde::de::DeserializeOwned>(
                 match serde_json::from_str::<T>(&cleaned) {
                     Ok(val) => return Ok(val),
                     Err(e) => {
-                        tracing::warn!("Failed to parse LLM JSON synthesis for {} (attempt {}/{}): {:?}. Raw: {}", target_name, attempt, max_retries, e, cleaned);
+                        tracing::warn!(
+                            "Failed to parse LLM JSON synthesis for {} (attempt {}/{}): {:?}. Raw: {}",
+                            target_name,
+                            attempt,
+                            max_retries,
+                            e,
+                            cleaned
+                        );
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("LLM complete_json error for {} (attempt {}/{}): {:?}", target_name, attempt, max_retries, e);
+                tracing::warn!(
+                    "LLM complete_json error for {} (attempt {}/{}): {:?}",
+                    target_name,
+                    attempt,
+                    max_retries,
+                    e
+                );
             }
         }
 
         if attempt >= max_retries {
-            anyhow::bail!("LLM synthesis failed to return valid JSON for {} after {} attempts", target_name, max_retries);
+            anyhow::bail!(
+                "LLM synthesis failed to return valid JSON for {} after {} attempts",
+                target_name,
+                max_retries
+            );
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
@@ -193,20 +232,35 @@ pub async fn extract_from_document(
         || lower_path.contains("/facts/")
         || lower_path.contains("/rules/")
     {
-        tracing::debug!("Skipping recursive fact extraction on generated vault file: {}", vault_path);
+        tracing::debug!(
+            "Skipping recursive fact extraction on generated vault file: {}",
+            vault_path
+        );
         return Ok(Vec::new());
     }
 
     let (sys, user) = prompts::build_document_extraction_prompt(content, vault_path);
-    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, vault_path, 10).await?;
+    let facts_resp =
+        retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, vault_path, 10)
+            .await?;
     let facts_dtos = facts_resp.facts;
     if facts_dtos.is_empty() {
-        tracing::info!("LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}", vault_path, facts_resp.no_facts_reason);
+        tracing::info!(
+            "LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}",
+            vault_path,
+            facts_resp.no_facts_reason
+        );
         return Ok(Vec::new());
     }
 
-    let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
-    let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
+    let texts: Vec<String> = facts_dtos
+        .iter()
+        .map(|f| f.causal_insight.clone())
+        .collect();
+    let embeddings = backend
+        .embed_batch(&texts)
+        .await
+        .unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
 
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
@@ -258,7 +312,9 @@ pub async fn extract_from_document(
             ..Default::default()
         };
         let _ = backend.save_wiki_node(&fact_node).await;
-        let _ = backend.relate_nodes(&saved_id, vault_path, None, None, None).await;
+        let _ = backend
+            .relate_nodes(&saved_id, vault_path, None, None, None)
+            .await;
     }
     Ok(created_facts)
 }
@@ -275,15 +331,27 @@ pub async fn extract_from_code(
     let _ = db::save_code_symbols_for_file(backend, &symbols, file_path, scope).await;
 
     let (sys, user) = prompts::build_code_extraction_prompt(code_content, file_path);
-    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, file_path, 10).await?;
+    let facts_resp =
+        retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, file_path, 10)
+            .await?;
     let facts_dtos = facts_resp.facts;
     if facts_dtos.is_empty() {
-        tracing::info!("LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}", file_path, facts_resp.no_facts_reason);
+        tracing::info!(
+            "LLM analyzed {} and determined no facts were worth extracting. Reason: {:?}",
+            file_path,
+            facts_resp.no_facts_reason
+        );
         return Ok(Vec::new());
     }
 
-    let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
-    let embeddings = backend.embed_batch(&texts).await.unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
+    let texts: Vec<String> = facts_dtos
+        .iter()
+        .map(|f| f.causal_insight.clone())
+        .collect();
+    let embeddings = backend
+        .embed_batch(&texts)
+        .await
+        .unwrap_or_else(|_| vec![vec![0.0; 768]; texts.len()]);
 
     let mut created_facts = Vec::new();
     for (idx, dto) in facts_dtos.into_iter().enumerate() {
@@ -337,9 +405,19 @@ pub async fn extract_from_code(
         let _ = backend.save_wiki_node(&fact_node).await;
         for sym in &symbols {
             let sym_name = format!("{}_{}", sym.file_slug, sym.name);
-            let _ = backend.relate_nodes(&saved_id, &format!("code_symbol:{}", sym_name), None, None, None).await;
+            let _ = backend
+                .relate_nodes(
+                    &saved_id,
+                    &format!("code_symbol:{}", sym_name),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
         }
-        let _ = backend.relate_nodes(&saved_id, file_path, None, None, None).await;
+        let _ = backend
+            .relate_nodes(&saved_id, file_path, None, None, None)
+            .await;
     }
     Ok(created_facts)
 }
@@ -394,10 +472,21 @@ pub async fn forge_document(
         let _ = backend.save_wiki_node(&chunk_node).await;
 
         let (sys, user) = prompts::build_forge_extraction_prompt(&section.content, source_path);
-        let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, &format!("{}_section_{}", source_path, idx), 10).await?;
+        let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(
+            backend,
+            llm,
+            &sys,
+            &user,
+            &format!("{}_section_{}", source_path, idx),
+            10,
+        )
+        .await?;
         let facts_dtos = facts_resp.facts;
 
-        let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
+        let texts: Vec<String> = facts_dtos
+            .iter()
+            .map(|f| f.causal_insight.clone())
+            .collect();
         let fact_embeds = backend
             .embed_batch(&texts)
             .await
@@ -457,10 +546,15 @@ pub async fn forge_skill(
     let _ = backend.save_wiki_node(&chunk_node).await;
 
     let (sys, user) = prompts::build_skill_extraction_prompt(skill_content, skill_path);
-    let facts_resp = retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, skill_name, 10).await?;
+    let facts_resp =
+        retry_llm_json::<prompts::ExtractFactsResponse>(backend, llm, &sys, &user, skill_name, 10)
+            .await?;
     let facts_dtos = facts_resp.facts;
 
-    let texts: Vec<String> = facts_dtos.iter().map(|f| f.causal_insight.clone()).collect();
+    let texts: Vec<String> = facts_dtos
+        .iter()
+        .map(|f| f.causal_insight.clone())
+        .collect();
     let embeddings = backend
         .embed_batch(&texts)
         .await
@@ -524,12 +618,28 @@ pub async fn form_hypotheses(
         let facts_summary = cluster_facts
             .iter()
             .enumerate()
-            .map(|(i, f)| format!("[{}] H: {} | Insight: {}", i, f.h_n().unwrap_or(""), f.iota_n().unwrap_or("")))
+            .map(|(i, f)| {
+                format!(
+                    "[{}] H: {} | Insight: {}",
+                    i,
+                    f.h_n().unwrap_or(""),
+                    f.iota_n().unwrap_or("")
+                )
+            })
             .collect::<Vec<String>>()
             .join("\n");
 
-        let (sys, user) = prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
-        let form_resp = retry_llm_json::<prompts::FormHypothesesResponse>(backend, llm, &sys, &user, "form_hypotheses", 10).await?;
+        let (sys, user) =
+            prompts::build_hypothesis_formation_prompt(&facts_summary, &pruned_constraints);
+        let form_resp = retry_llm_json::<prompts::FormHypothesesResponse>(
+            backend,
+            llm,
+            &sys,
+            &user,
+            "form_hypotheses",
+            10,
+        )
+        .await?;
         let hypotheses_dto = form_resp.hypotheses;
 
         for hdto in hypotheses_dto {
@@ -600,17 +710,30 @@ pub async fn refine_hypotheses(
                 continue;
             }
 
-            let fact_summary = format!("H: {} | Insight: {}", fact.h_n().unwrap_or(""), fact.iota_n().unwrap_or(""));
+            let fact_summary = format!(
+                "H: {} | Insight: {}",
+                fact.h_n().unwrap_or(""),
+                fact.iota_n().unwrap_or("")
+            );
             let (sys, user) = prompts::build_refinement_prompt(
                 &idea.claim,
                 &idea.insight,
                 idea.confidence,
                 &fact_summary,
             );
-            let r = retry_llm_json::<prompts::RefineHypothesisResponse>(backend, llm, &sys, &user, "refine_hypotheses", 10).await?;
+            let r = retry_llm_json::<prompts::RefineHypothesisResponse>(
+                backend,
+                llm,
+                &sys,
+                &user,
+                "refine_hypotheses",
+                10,
+            )
+            .await?;
 
             let prev_conf = idea.confidence;
-            let (action, new_conf, refined_insight, reasoning) = (r.action, r.new_confidence, r.refined_insight, r.reasoning);
+            let (action, new_conf, refined_insight, reasoning) =
+                (r.action, r.new_confidence, r.refined_insight, r.reasoning);
 
             idea.confidence = new_conf;
             idea.insight = refined_insight;
@@ -680,7 +803,9 @@ pub async fn merge_validated_nodes(
         let r_n_vec: Vec<String> = flattened_r_n.into_iter().collect();
         let mu_n_vec: Vec<String> = flattened_mu_n.into_iter().collect();
 
-        let is_code_impacting = mu_n_vec.iter().any(|m| m.ends_with(".rs") || m.ends_with(".py") || m.ends_with(".ts") || m.ends_with(".go"));
+        let is_code_impacting = mu_n_vec.iter().any(|m| {
+            m.ends_with(".rs") || m.ends_with(".py") || m.ends_with(".ts") || m.ends_with(".go")
+        });
         if is_code_impacting && std::env::var("MYTHRAX_TEST_MOCK").is_err() {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let has_manifest = cwd.join("Cargo.toml").exists()
@@ -729,9 +854,18 @@ pub async fn merge_validated_nodes(
         let (path, title, markdown) = if let Some(r) = merge_resp {
             (r.suggested_path, r.title, r.markdown_content)
         } else {
-            let default_path = format!("wiki/{}/insights/{}.md", scope, idea.claim.replace(' ', "_").to_lowercase());
+            let default_path = format!(
+                "wiki/{}/insights/{}.md",
+                scope,
+                idea.claim.replace(' ', "_").to_lowercase()
+            );
             let default_title = idea.claim.clone();
-            let default_md = format!("# {}\n\n## Insight\n{}\n\n## Evidence\n- {}", default_title, idea.insight, r_n_vec.join("\n- "));
+            let default_md = format!(
+                "# {}\n\n## Insight\n{}\n\n## Evidence\n- {}",
+                default_title,
+                idea.insight,
+                r_n_vec.join("\n- ")
+            );
             (default_path, default_title, default_md)
         };
 
@@ -797,19 +931,26 @@ pub async fn graduate(
         } else {
             false
         } || node.item_type.as_deref() == Some("rule")
-          || node.node_type.as_deref() == Some("rule")
-          || node.content.to_lowercase().contains("universal")
-          || node.content.contains("ALWAYS")
-          || node.content.contains("NEVER");
+            || node.node_type.as_deref() == Some("rule")
+            || node.content.to_lowercase().contains("universal")
+            || node.content.contains("ALWAYS")
+            || node.content.contains("NEVER");
 
         if is_universal {
-            let rule_slug = node.name.to_lowercase().replace(' ', "_").replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+            let rule_slug = node
+                .name
+                .to_lowercase()
+                .replace(' ', "_")
+                .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
             let rule_vault_path = format!("wisdom/general/{}_rule.md", rule_slug);
             let rule = WisdomRule {
                 id: None,
                 target_pattern: node.name.clone(),
                 action_to_avoid: "Violating universal design invariant".to_string(),
-                causal_explanation: node.causal_insight.clone().unwrap_or_else(|| node.content.clone()),
+                causal_explanation: node
+                    .causal_insight
+                    .clone()
+                    .unwrap_or_else(|| node.content.clone()),
                 prescribed_remedy: format!("Follow pattern defined in {}", node.name),
                 tier: crate::contracts::Tier::Wisdom,
                 scope: "general".to_string(),
@@ -881,18 +1022,29 @@ pub async fn graduate_wisdom(
 }
 
 pub async fn prune_chat_history(backend: &dyn StorageBackend, max_turns: usize) -> Result<usize> {
-    if let Some(surreal) = backend.as_any().downcast_ref::<crate::db::backend::SurrealBackend>() {
-        let mut resp = surreal.db.query("SELECT id, session_id, created_at FROM chat_history ORDER BY created_at DESC;").await?;
+    if let Some(surreal) = backend
+        .as_any()
+        .downcast_ref::<crate::db::backend::SurrealBackend>()
+    {
+        let mut resp = surreal
+            .db
+            .query("SELECT id, session_id, created_at FROM chat_history ORDER BY created_at DESC;")
+            .await?;
         let rows: Vec<serde_json::Value> = resp.take(0)?;
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut deleted = 0;
         for row in rows {
-            if let (Some(id_str), Some(sess_id)) = (row["id"].as_str(), row["session_id"].as_str()) {
+            if let (Some(id_str), Some(sess_id)) = (row["id"].as_str(), row["session_id"].as_str())
+            {
                 let count = counts.entry(sess_id.to_string()).or_insert(0);
                 *count += 1;
                 if *count > max_turns {
                     if let Ok(rec_id) = crate::db::backend::parse_record_id(id_str) {
-                        let _ = surreal.db.query("DELETE type::record('chat_history', $id);").bind(("id", rec_id)).await;
+                        let _ = surreal
+                            .db
+                            .query("DELETE type::record('chat_history', $id);")
+                            .bind(("id", rec_id))
+                            .await;
                         deleted += 1;
                     }
                 }

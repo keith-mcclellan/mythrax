@@ -81,7 +81,13 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
             handle_query_memory(state, args).await
         }
         "get_full" => {
-            if args.get("path").or_else(|| args.get("AbsolutePath")).or_else(|| args.get("TargetFile")).and_then(|v| v.as_str()).is_some() {
+            if args
+                .get("path")
+                .or_else(|| args.get("AbsolutePath"))
+                .or_else(|| args.get("TargetFile"))
+                .and_then(|v| v.as_str())
+                .is_some()
+            {
                 super::manage_handlers::handle_manage_file(state, args).await
             } else if args.get("ids").and_then(|v| v.as_array()).is_some()
                 || args.get("node_ids").and_then(|v| v.as_array()).is_some()
@@ -94,8 +100,7 @@ pub async fn handle_read(state: &ApiState, mut args: Value) -> Result<Value> {
         "root" => handle_query_memory(state, args).await,
         "get" => {
             if action == "get_short_term"
-                || (action == "get"
-                    && args.get("session_id").and_then(|v| v.as_str()).is_some())
+                || (action == "get" && args.get("session_id").and_then(|v| v.as_str()).is_some())
             {
                 let _session_id = args
                     .get("session_id")
@@ -202,7 +207,10 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
             let temporal_anchor = args.get("temporal_anchor").and_then(|v| v.as_str());
-            let full_content = args.get("full_content").and_then(|v| v.as_bool()).unwrap_or(false);
+            let full_content = args
+                .get("full_content")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
             let search_res = state
                 .backend
@@ -263,7 +271,7 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                 let id = &r.id;
                 let scope = "N/A";
                 let vault_path = r.vault_path.as_deref().unwrap_or("none");
-                
+
                 let mut content_slice = r.content.clone();
                 if !full_content && content_slice.len() > 500 {
                     let mut truncate_idx = 500;
@@ -638,13 +646,23 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
         "nodes" => {
             let node_ids = if let Some(node_ids_val) = args.get("node_ids") {
                 if let Some(arr) = node_ids_val.as_array() {
-                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
                 } else {
                     Vec::new()
                 }
             } else if let Some(scope_val) = args.get("scope").and_then(|v| v.as_str()) {
-                let nodes = state.backend.get_wiki_nodes_paginated(200, 0).await.unwrap_or_default();
-                nodes.into_iter().filter(|n| n.scope == scope_val).filter_map(|n| n.id).collect()
+                let nodes = state
+                    .backend
+                    .get_wiki_nodes_paginated(200, 0)
+                    .await
+                    .unwrap_or_default();
+                nodes
+                    .into_iter()
+                    .filter(|n| n.scope == scope_val)
+                    .filter_map(|n| n.id)
+                    .collect()
             } else {
                 Vec::new()
             };

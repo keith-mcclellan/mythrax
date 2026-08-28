@@ -20,7 +20,11 @@ async fn run_git_command_with_retry(args: &[&str], dir: &Path) -> Result<std::pr
 
     loop {
         attempts += 1;
-        let status = Command::new("git").args(args).current_dir(dir).status().await;
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .await;
 
         match status {
             Ok(s) if s.success() => return Ok(s),

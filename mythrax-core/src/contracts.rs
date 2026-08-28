@@ -601,7 +601,9 @@ pub struct HypothesisNode {
     pub visits: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue, Serialize, Deserialize,
+)]
 pub enum FactSource {
     #[default]
     Episode,
@@ -640,7 +642,9 @@ pub struct Fact {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SurrealValue, Serialize, Deserialize,
+)]
 pub enum IdeaStatus {
     #[default]
     Pending,
@@ -1175,14 +1179,20 @@ mod tests {
         };
 
         assert_eq!(fact.h_n(), Some("Async-first DB architecture"));
-        assert_eq!(fact.iota_n(), Some("All storage calls use StorageBackend trait"));
+        assert_eq!(
+            fact.iota_n(),
+            Some("All storage calls use StorageBackend trait")
+        );
         assert_eq!(fact.r_n(), &["pub trait StorageBackend"]);
         assert_eq!(fact.mu_n(), &["src/db/backend.rs"]);
 
         let json = serde_json::to_string(&fact).unwrap();
         let deserialized: Fact = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.source_type, FactSource::Code);
-        assert_eq!(deserialized.hypothesis.as_deref(), Some("Async-first DB architecture"));
+        assert_eq!(
+            deserialized.hypothesis.as_deref(),
+            Some("Async-first DB architecture")
+        );
     }
 
     #[test]
@@ -1214,9 +1224,13 @@ mod tests {
         let json = serde_json::to_string(&ep).unwrap();
         let deserialized: Episode = serde_json::from_str(&json).unwrap();
         assert!(deserialized.causal_insight.is_some());
-        let parsed_facts: Vec<Fact> = serde_json::from_value(deserialized.causal_insight.unwrap()).unwrap();
+        let parsed_facts: Vec<Fact> =
+            serde_json::from_value(deserialized.causal_insight.unwrap()).unwrap();
         assert_eq!(parsed_facts.len(), 1);
-        assert_eq!(parsed_facts[0].hypothesis.as_deref(), Some("User prefers Rust"));
+        assert_eq!(
+            parsed_facts[0].hypothesis.as_deref(),
+            Some("User prefers Rust")
+        );
     }
 
     #[test]
@@ -1229,4 +1243,3 @@ mod tests {
         assert_eq!(config.version_decay_weight, 0.80);
     }
 }
-

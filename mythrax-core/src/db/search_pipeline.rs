@@ -1813,14 +1813,21 @@ impl SurrealBackend {
             }
 
             for cs in code_symbols {
-                let similarity = if let (Some(q_vec), Some(e_vec)) = (query_emb.as_ref(), cs.embedding.as_ref()) {
+                let similarity = if let (Some(q_vec), Some(e_vec)) =
+                    (query_emb.as_ref(), cs.embedding.as_ref())
+                {
                     crate::math::cosine_similarity(q_vec, e_vec)
                 } else {
                     1.0f32
                 };
-                let factor_multiplier = get_tier_boost(crate::contracts::Tier::Project, query_category);
+                let factor_multiplier =
+                    get_tier_boost(crate::contracts::Tier::Project, query_category);
                 let blended_score = similarity * factor_multiplier;
-                let pass_threshold = if is_vector { threshold * 0.5f32 } else { threshold * 0.7f32 };
+                let pass_threshold = if is_vector {
+                    threshold * 0.5f32
+                } else {
+                    threshold * 0.7f32
+                };
                 if blended_score >= pass_threshold {
                     list.push(SearchResult {
                         id: format_record_id(&cs.id),
@@ -1918,7 +1925,12 @@ impl SurrealBackend {
             if !cache_hit {
                 let count_sql = "SELECT count() AS total FROM episode WHERE scope = $scope OR scope = 'general' GROUP ALL;";
                 let mut tn = 0;
-                if let Ok(mut res) = self.db.query(count_sql).bind(("scope", resolved_scope.as_str())).await {
+                if let Ok(mut res) = self
+                    .db
+                    .query(count_sql)
+                    .bind(("scope", resolved_scope.as_str()))
+                    .await
+                {
                     let count_val: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
                     if let Some(arr) = count_val {
                         if let Some(first) = arr.first() {
@@ -1931,16 +1943,29 @@ impl SurrealBackend {
                 total_n = tn.max(1);
 
                 let idf_sql = "SELECT term, math::sum(document_frequency) as df FROM idf_index WHERE term IN $terms AND (scope = $scope OR scope = 'general') GROUP BY term;";
-                if let Ok(mut res) = self.db.query(idf_sql).bind(("terms", query_tokens.clone())).bind(("scope", resolved_scope.as_str())).await {
+                if let Ok(mut res) = self
+                    .db
+                    .query(idf_sql)
+                    .bind(("terms", query_tokens.clone()))
+                    .bind(("scope", resolved_scope.as_str()))
+                    .await
+                {
                     let idf_vals: Option<Vec<serde_json::Value>> = res.take(0).unwrap_or_default();
                     if let Some(arr) = idf_vals {
                         for row in arr {
                             if let Some(term) = row.get("term").and_then(|v| v.as_str()) {
-                                let df = row.get("df").and_then(|v| {
-                                    if let Some(i) = v.as_u64() { Some(i as usize) }
-                                    else if let Some(f) = v.as_f64() { Some(f as usize) }
-                                    else { None }
-                                }).unwrap_or(0);
+                                let df = row
+                                    .get("df")
+                                    .and_then(|v| {
+                                        if let Some(i) = v.as_u64() {
+                                            Some(i as usize)
+                                        } else if let Some(f) = v.as_f64() {
+                                            Some(f as usize)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(0);
                                 global_df.insert(term.to_string(), df);
                             }
                         }
@@ -2421,7 +2446,12 @@ impl SurrealBackend {
                                (SELECT VALUE in FROM followed_by WHERE out = $parent.id LIMIT 10) AS preds_1,
                                (SELECT VALUE out FROM followed_by WHERE in = $parent.id LIMIT 10) AS succs_1,
                                session_id, scope FROM episode, wiki_node WHERE id IN $hop1_ids;";
-                    if let Ok(mut res) = self.db.query(sql).bind(("hop1_ids", hop1_ids.clone())).await {
+                    if let Ok(mut res) = self
+                        .db
+                        .query(sql)
+                        .bind(("hop1_ids", hop1_ids.clone()))
+                        .await
+                    {
                         let hop2_batch: Vec<EpisodeRelations> = res.take(0).unwrap_or_default();
                         for rel in &hop2_batch {
                             let h1_str = format_record_id(&rel.id);
@@ -2433,13 +2463,17 @@ impl SurrealBackend {
                                         if let Some(ref preds) = rel.preds_1 {
                                             for pred_val in preds {
                                                 let pred_str = parse_val_id(pred_val);
-                                                if let Ok(pred_rec_id) = parse_record_id(&pred_str) {
+                                                if let Ok(pred_rec_id) = parse_record_id(&pred_str)
+                                                {
                                                     neighbor_ids_to_fetch.push(pred_rec_id.clone());
                                                     hop2_ids.push(pred_rec_id);
                                                     neighbor_to_primary
                                                         .entry(pred_str)
                                                         .or_default()
-                                                        .push((prim_id.clone(), prim_sim * 0.25f32));
+                                                        .push((
+                                                            prim_id.clone(),
+                                                            prim_sim * 0.25f32,
+                                                        ));
                                                 }
                                             }
                                         }
@@ -2450,13 +2484,17 @@ impl SurrealBackend {
                                         if let Some(ref succs) = rel.succs_1 {
                                             for succ_val in succs {
                                                 let succ_str = parse_val_id(succ_val);
-                                                if let Ok(succ_rec_id) = parse_record_id(&succ_str) {
+                                                if let Ok(succ_rec_id) = parse_record_id(&succ_str)
+                                                {
                                                     neighbor_ids_to_fetch.push(succ_rec_id.clone());
                                                     hop2_ids.push(succ_rec_id);
                                                     neighbor_to_primary
                                                         .entry(succ_str)
                                                         .or_default()
-                                                        .push((prim_id.clone(), prim_sim * 0.25f32));
+                                                        .push((
+                                                            prim_id.clone(),
+                                                            prim_sim * 0.25f32,
+                                                        ));
                                                 }
                                             }
                                         }
@@ -2483,12 +2521,17 @@ impl SurrealBackend {
                                             if let Some(ref preds) = rel.preds_1 {
                                                 for pred_val in preds {
                                                     let pred_str = parse_val_id(pred_val);
-                                                    if let Ok(pred_rec_id) = parse_record_id(&pred_str) {
+                                                    if let Ok(pred_rec_id) =
+                                                        parse_record_id(&pred_str)
+                                                    {
                                                         neighbor_ids_to_fetch.push(pred_rec_id);
                                                         neighbor_to_primary
                                                             .entry(pred_str)
                                                             .or_default()
-                                                            .push((prim_id.clone(), prim_sim * 0.125f32));
+                                                            .push((
+                                                                prim_id.clone(),
+                                                                prim_sim * 0.125f32,
+                                                            ));
                                                     }
                                                 }
                                             }
@@ -2499,12 +2542,17 @@ impl SurrealBackend {
                                             if let Some(ref succs) = rel.succs_1 {
                                                 for succ_val in succs {
                                                     let succ_str = parse_val_id(succ_val);
-                                                    if let Ok(succ_rec_id) = parse_record_id(&succ_str) {
+                                                    if let Ok(succ_rec_id) =
+                                                        parse_record_id(&succ_str)
+                                                    {
                                                         neighbor_ids_to_fetch.push(succ_rec_id);
                                                         neighbor_to_primary
                                                             .entry(succ_str)
                                                             .or_default()
-                                                            .push((prim_id.clone(), prim_sim * 0.125f32));
+                                                            .push((
+                                                                prim_id.clone(),
+                                                                prim_sim * 0.125f32,
+                                                            ));
                                                     }
                                                 }
                                             }
@@ -2959,8 +3007,13 @@ impl SurrealBackend {
         });
         candidates.truncate(limit * 5);
 
-        self.hydrate_top_candidate_relations(&mut candidates, deep_insight, allow_downward, include_episodes)
-            .await?;
+        self.hydrate_top_candidate_relations(
+            &mut candidates,
+            deep_insight,
+            allow_downward,
+            include_episodes,
+        )
+        .await?;
 
         let mut final_results = Vec::new();
         let mut seen_related_ids = std::collections::HashSet::new();
@@ -2990,7 +3043,11 @@ impl SurrealBackend {
         // Stage 9: Bounded Verbatim Hydration and Limit/Offset clipping
         for c in &mut candidates {
             if c.content.chars().count() > crate::config::MAX_HYDRATION_CHARS {
-                c.content = c.content.chars().take(crate::config::MAX_HYDRATION_CHARS).collect();
+                c.content = c
+                    .content
+                    .chars()
+                    .take(crate::config::MAX_HYDRATION_CHARS)
+                    .collect();
             }
         }
 

@@ -15,8 +15,8 @@ pub mod write_handlers;
 pub use arbor_handlers::handle_manage_arbor;
 pub use htr_handlers::handle_manage_htr;
 pub use manage_handlers::{
-    handle_agent, handle_manage, handle_manage_config,
-    handle_manage_file, handle_manage_stm, handle_post_invocation_hook, handle_pre_invocation_hook,
+    handle_agent, handle_manage, handle_manage_config, handle_manage_file, handle_manage_stm,
+    handle_post_invocation_hook, handle_pre_invocation_hook,
 };
 pub use read_handlers::{handle_query_memory, handle_read};
 pub use vault_handlers::{handle_ingest_knowledge, handle_manage_vault};

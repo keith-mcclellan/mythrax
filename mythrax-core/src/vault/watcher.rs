@@ -84,7 +84,14 @@ fn count_files_recursive(path: &Path, depth: usize) -> usize {
         return 0;
     }
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name == ".trash" || name == "target" || name == ".git" || name == ".mythrax" || name == "reference" || name == "MOC.md" || name.ends_with(".tmp") {
+        if name == ".trash"
+            || name == "target"
+            || name == ".git"
+            || name == ".mythrax"
+            || name == "reference"
+            || name == "MOC.md"
+            || name.ends_with(".tmp")
+        {
             return 0;
         }
     }
@@ -174,7 +181,8 @@ pub fn start_watching(
     let ignore_list_clone = ignore_list.clone();
     tokio::spawn(async move {
         let mut pending: HashMap<PathBuf, (String, Arc<MarkdownStore>, Instant)> = HashMap::new();
-        let mut timeouts: std::collections::BTreeSet<(Instant, PathBuf)> = std::collections::BTreeSet::new();
+        let mut timeouts: std::collections::BTreeSet<(Instant, PathBuf)> =
+            std::collections::BTreeSet::new();
         loop {
             let sleep_dur = if let Some((earliest, _)) = timeouts.first() {
                 let now = Instant::now();
@@ -205,7 +213,7 @@ pub fn start_watching(
 
             let now = Instant::now();
             let mut expired = Vec::new();
-            
+
             while let Some((time, path)) = timeouts.first().cloned() {
                 if time <= now {
                     timeouts.remove(&(time, path.clone()));
@@ -416,7 +424,8 @@ pub fn start_watching(
     // 6. Debounce Handler: Collects events, waits for timeout, then sends to Worker Pool
     tokio::spawn(async move {
         let mut pending: HashMap<PathBuf, (bool, Instant)> = HashMap::new();
-        let mut timeouts: std::collections::BTreeSet<(Instant, PathBuf)> = std::collections::BTreeSet::new();
+        let mut timeouts: std::collections::BTreeSet<(Instant, PathBuf)> =
+            std::collections::BTreeSet::new();
         loop {
             let sleep_dur = if let Some((earliest, _)) = timeouts.first() {
                 let now = Instant::now();
@@ -446,7 +455,7 @@ pub fn start_watching(
 
             let now = Instant::now();
             let mut expired = Vec::new();
-            
+
             while let Some((time, path)) = timeouts.first().cloned() {
                 if time <= now {
                     timeouts.remove(&(time, path.clone()));
@@ -796,12 +805,12 @@ pub async fn sync_file_to_db_with_cache(
 
         let db_id = backend.save_wiki_node(&wiki_node).await?;
 
-        if let Some(surreal_backend) =
-            backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
+        if let Some(surreal_backend) = backend.as_any().downcast_ref::<crate::db::SurrealBackend>()
         {
             if let Ok(from_id) = crate::db::parse_record_id(&db_id) {
                 let body_links = crate::parser::extract_wiki_links(&body);
-                let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> = Vec::new();
+                let mut desired: Vec<(surrealdb::types::RecordId, String, Option<f32>)> =
+                    Vec::new();
 
                 #[derive(serde::Deserialize)]
                 struct RawEdge {
@@ -869,8 +878,7 @@ pub async fn sync_file_to_db_with_cache(
                                 .iter()
                                 .any(|ext| &ext.out == des_id && &ext.relation == rel)
                             {
-                                let relate_query =
-                                    "RELATE ($from)->relates_to->($to) CONTENT { relation: $relation, strength: $strength, created_at: time::now() };";
+                                let relate_query = "RELATE ($from)->relates_to->($to) CONTENT { relation: $relation, strength: $strength, created_at: time::now() };";
                                 let _ = surreal_backend
                                     .db
                                     .query(relate_query)
@@ -1074,10 +1082,7 @@ pub async fn sync_file_to_db_with_cache(
                 .to_string()
         });
 
-        let file_stem = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let file_stem = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let deduced_item_type = if file_stem == "spec.md" || file_stem.contains("spec") {
             Some("constraint".to_string())
         } else if file_stem.ends_with("_review.md") || file_stem.ends_with("_audit.md") {
@@ -1094,7 +1099,10 @@ pub async fn sync_file_to_db_with_cache(
             id: None,
             name: name.clone(),
             content: plain_body.clone(),
-            scope: frontmatter.scope.clone().unwrap_or_else(|| "general".to_string()),
+            scope: frontmatter
+                .scope
+                .clone()
+                .unwrap_or_else(|| "general".to_string()),
             vault_path: Some(rel_path.clone()),
             embedding: None,
             metacognitive_confidence: frontmatter.metacognitive_confidence,
@@ -1295,7 +1303,10 @@ pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
     }
 
     let scope_str = episode.scope.as_deref().unwrap_or("general");
-    body.push_str(&format!("\n\n## Synthesized Into\n- [[wiki/{}/MOC|Scope Map of Content]]\n", scope_str));
+    body.push_str(&format!(
+        "\n\n## Synthesized Into\n- [[wiki/{}/MOC|Scope Map of Content]]\n",
+        scope_str
+    ));
     body.push_str("\n## Temporal Navigation\n- **Sequence**: Episode captured in timeline\n");
 
     body
@@ -1349,7 +1360,11 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     }
 
     let yaml_str = serde_yaml::to_string(&yaml_val).unwrap_or_default();
-    let title = rule.target_pattern.rsplit('/').next().unwrap_or(&rule.target_pattern);
+    let title = rule
+        .target_pattern
+        .rsplit('/')
+        .next()
+        .unwrap_or(&rule.target_pattern);
     let mut body = format!(
         "---\n{}\n---\n\n# Rule: {}\n\n**Action to Avoid:** {}\n\n**Causal Explanation:** {}\n\n**Prescribed Remedy:** {}\n",
         yaml_str.trim(),

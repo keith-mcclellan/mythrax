@@ -77,7 +77,10 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
                 .get("content")
                 .and_then(|v| v.as_str())
                 .context("Missing content")?;
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general");
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general");
             let node_type = args
                 .get("node_type")
                 .or_else(|| args.get("type"))
@@ -90,7 +93,11 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
                     .to_lowercase()
                     .replace(' ', "_")
                     .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
-                let subfolder = if node_type == "direction" { "directions" } else { "insights" };
+                let subfolder = if node_type == "direction" {
+                    "directions"
+                } else {
+                    "insights"
+                };
                 let vault_path = format!("wiki/{}/{}/{}_{}.md", scope, subfolder, slug, node_type);
                 let wiki_node = crate::contracts::WikiNode {
                     id: None,
@@ -182,17 +189,42 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
         }
         "cognitive_callback" => handle_cognitive_callback(state, args).await,
         "save_wisdom" => {
-            let target_pattern = args.get("target_pattern").and_then(|v| v.as_str()).context("Missing target_pattern")?.to_string();
-            let action_to_avoid = args.get("action_to_avoid").and_then(|v| v.as_str()).context("Missing action_to_avoid")?.to_string();
-            let causal_explanation = args.get("causal_explanation").and_then(|v| v.as_str()).context("Missing causal_explanation")?.to_string();
-            let prescribed_remedy = args.get("prescribed_remedy").and_then(|v| v.as_str()).context("Missing prescribed_remedy")?.to_string();
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("general").to_string();
-            
-            let tier_str = args.get("tier").and_then(|v| v.as_str()).unwrap_or("wisdom");
-            let tier = tier_str.parse::<crate::contracts::Tier>().unwrap_or(crate::contracts::Tier::Wisdom);
-            
+            let target_pattern = args
+                .get("target_pattern")
+                .and_then(|v| v.as_str())
+                .context("Missing target_pattern")?
+                .to_string();
+            let action_to_avoid = args
+                .get("action_to_avoid")
+                .and_then(|v| v.as_str())
+                .context("Missing action_to_avoid")?
+                .to_string();
+            let causal_explanation = args
+                .get("causal_explanation")
+                .and_then(|v| v.as_str())
+                .context("Missing causal_explanation")?
+                .to_string();
+            let prescribed_remedy = args
+                .get("prescribed_remedy")
+                .and_then(|v| v.as_str())
+                .context("Missing prescribed_remedy")?
+                .to_string();
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("general")
+                .to_string();
+
+            let tier_str = args
+                .get("tier")
+                .and_then(|v| v.as_str())
+                .unwrap_or("wisdom");
+            let tier = tier_str
+                .parse::<crate::contracts::Tier>()
+                .unwrap_or(crate::contracts::Tier::Wisdom);
+
             let rule_path = crate::cognitive::pipeline::resolve_rule_path(&scope, &action_to_avoid);
-            
+
             let rule = crate::contracts::WisdomRule {
                 id: None,
                 target_pattern,
@@ -205,18 +237,18 @@ pub async fn handle_write(state: &ApiState, mut args: Value) -> Result<Value> {
                 generator_name: "Manual".to_string(),
                 ..Default::default()
             };
-            
+
             let surreal_backend = state
                 .backend
                 .as_any()
                 .downcast_ref::<SurrealBackend>()
                 .context("SurrealBackend required to save wisdom_rule")?;
-            
+
             let markdown = crate::vault::watcher::format_wisdom_markdown(&rule);
             state.store.write_file(&rule_path, &markdown)?;
-            
+
             let id = surreal_backend.save_wisdom_rule(&rule).await?;
-            
+
             Ok(json!({
                 "content": [
                     {
@@ -619,10 +651,17 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
         )
         .await?;
 
-    crate::vault::distillation::broadcast_task_event(callback_id, "Completed", Some(result.to_string()));
+    crate::vault::distillation::broadcast_task_event(
+        callback_id,
+        "Completed",
+        Some(result.to_string()),
+    );
 
     // Dynamic Episode Title Resolution & Renaming Pass
-    if task.task_type == "Extraction" || task.system_instruction.contains("title generator") || task.prompt.contains("Generate a concise title") {
+    if task.task_type == "Extraction"
+        || task.system_instruction.contains("title generator")
+        || task.prompt.contains("Generate a concise title")
+    {
         let clean_title = result
             .lines()
             .next()
@@ -636,7 +675,12 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
         if !clean_title.is_empty() {
             if let Some(ref session_id) = task.session_id {
                 let query = "SELECT id, vault_path, name FROM episode WHERE session_id = $session_id OR id = $session_id OR vault_path CONTAINS $session_id;";
-                if let Ok(mut resp) = surreal_backend.db.query(query).bind(("session_id", session_id.clone())).await {
+                if let Ok(mut resp) = surreal_backend
+                    .db
+                    .query(query)
+                    .bind(("session_id", session_id.clone()))
+                    .await
+                {
                     #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
                     struct EpRow {
                         id: surrealdb::types::RecordId,
@@ -661,27 +705,53 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
 
     // Downstream WikiNode Synthesis Persistence
     // Extract scope from [scope:...] prompt prefix if present, fall back to session_id.
-    let scope_from_prompt: Option<String> = task.prompt.strip_prefix("[scope:").and_then(|rest| {
-        rest.split_once(']').map(|(s, _)| s.trim().to_string())
-    });
-    let scope_name = scope_from_prompt.as_deref()
+    let scope_from_prompt: Option<String> = task
+        .prompt
+        .strip_prefix("[scope:")
+        .and_then(|rest| rest.split_once(']').map(|(s, _)| s.trim().to_string()));
+    let scope_name = scope_from_prompt
+        .as_deref()
         .or(task.session_id.as_deref())
         .unwrap_or("general");
-    if task.prompt.contains("Form hypotheses") || task.task_type == "Synthesis" || task.task_type == "Refinement"
-        || task.prompt.contains("insight") || task.prompt.contains("direction") || task.prompt.contains("wisdom") {
+    if task.prompt.contains("Form hypotheses")
+        || task.task_type == "Synthesis"
+        || task.task_type == "Refinement"
+        || task.prompt.contains("insight")
+        || task.prompt.contains("direction")
+        || task.prompt.contains("wisdom")
+    {
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(result).or_else(|_| {
             let cleaned = crate::llm::strip_code_fences(result);
             serde_json::from_str::<serde_json::Value>(&cleaned)
         }) {
-            if let Some(arr) = json_val.as_array().or_else(|| json_val.get("hypotheses").and_then(|h| h.as_array())).or_else(|| json_val.get("insights").and_then(|h| h.as_array())) {
+            if let Some(arr) = json_val
+                .as_array()
+                .or_else(|| json_val.get("hypotheses").and_then(|h| h.as_array()))
+                .or_else(|| json_val.get("insights").and_then(|h| h.as_array()))
+            {
                 for item in arr {
-                    let title = item.get("title").or_else(|| item.get("claim")).and_then(|v| v.as_str()).unwrap_or("Untitled");
-                    let content = item.get("insight").or_else(|| item.get("content")).or_else(|| item.get("reasoning")).and_then(|v| v.as_str()).unwrap_or("");
+                    let title = item
+                        .get("title")
+                        .or_else(|| item.get("claim"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Untitled");
+                    let content = item
+                        .get("insight")
+                        .or_else(|| item.get("content"))
+                        .or_else(|| item.get("reasoning"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     let title_lower = title.to_lowercase();
                     let content_lower = content.to_lowercase();
                     let item_type_from_llm = item.get("item_type").and_then(|v| v.as_str());
                     let node_type = if let Some(it) = item_type_from_llm {
-                        if it == "direction" { "direction" } else if it == "rule" { "rule" } else { "insight" }
+                        if it == "direction" {
+                            "direction"
+                        } else if it == "rule" {
+                            "rule"
+                        } else {
+                            "insight"
+                        }
                     } else if task.prompt.contains("direction")
                         || title_lower.contains("always")
                         || title_lower.contains("never")
@@ -705,7 +775,10 @@ pub async fn handle_cognitive_callback(state: &ApiState, args: Value) -> Result<
                     } else {
                         "insight"
                     };
-                    let slug = title.to_lowercase().replace(' ', "_").replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+                    let slug = title
+                        .to_lowercase()
+                        .replace(' ', "_")
+                        .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
                     let vault_path = if node_type == "rule" {
                         format!("wisdom/general/{}_rule.md", slug)
                     } else if node_type == "direction" {

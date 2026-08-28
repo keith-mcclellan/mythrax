@@ -28,7 +28,11 @@ pub struct CognitiveTaskEvent {
     pub result: Option<String>,
 }
 
-pub fn broadcast_task_event(task_id: impl Into<String>, status: impl Into<String>, result: Option<String>) {
+pub fn broadcast_task_event(
+    task_id: impl Into<String>,
+    status: impl Into<String>,
+    result: Option<String>,
+) {
     let _ = get_cognitive_task_bus().send(CognitiveTaskEvent {
         task_id: task_id.into(),
         status: status.into(),
@@ -216,7 +220,9 @@ pub async fn run_summarization_task(
                 while start.elapsed() < timeout {
                     let remaining = timeout.saturating_sub(start.elapsed());
                     match tokio::time::timeout(remaining, rx.recv()).await {
-                        Ok(Ok(event)) if event.task_id == task_id && event.status == "Completed" => {
+                        Ok(Ok(event))
+                            if event.task_id == task_id && event.status == "Completed" =>
+                        {
                             if let Some(ref res) = event.result {
                                 return Ok(enforce_symbol_integrity(content, res));
                             }
@@ -299,11 +305,21 @@ pub async fn distill_transcript_file(
             if let Some(ref calls) = step.tool_calls {
                 for call in calls {
                     if call.name == "run_command" {
-                        if let Some(cmd) = call.args.as_ref().and_then(|a| a.get("CommandLine")).and_then(|v| v.as_str()) {
+                        if let Some(cmd) = call
+                            .args
+                            .as_ref()
+                            .and_then(|a| a.get("CommandLine"))
+                            .and_then(|v| v.as_str())
+                        {
                             commands_run.push(cmd.to_string());
                         }
                     } else if is_edit_tool(&call.name) {
-                        if let Some(file) = call.args.as_ref().and_then(|a| a.get("TargetFile")).and_then(|v| v.as_str()) {
+                        if let Some(file) = call
+                            .args
+                            .as_ref()
+                            .and_then(|a| a.get("TargetFile"))
+                            .and_then(|v| v.as_str())
+                        {
                             code_changes.push(file.to_string());
                         }
                     }
@@ -448,35 +464,39 @@ pub async fn distill_transcript_file(
             key_takeaways: parsed.key_takeaways.unwrap_or_default(),
             hypothesis: parsed.hypothesis,
             raw_evidence: parsed.raw_evidence.unwrap_or_default(),
-            causal_insight: parsed.causal_insight.as_ref().map(|v| {
-                if let Some(s) = v.as_str() {
-                    s.to_string()
-                } else {
-                    serde_json::to_string(v).unwrap_or_default()
-                }
-            }).or_else(|| {
-                let mut parts = Vec::new();
-                if let Some(ref m) = parsed.mistakes_failures {
-                    if !m.is_empty() {
-                        parts.push(format!("Mistakes: {}", m.join("; ")));
+            causal_insight: parsed
+                .causal_insight
+                .as_ref()
+                .map(|v| {
+                    if let Some(s) = v.as_str() {
+                        s.to_string()
+                    } else {
+                        serde_json::to_string(v).unwrap_or_default()
                     }
-                }
-                if let Some(ref r) = parsed.root_causes {
-                    if !r.is_empty() {
-                        parts.push(format!("Root Causes: {}", r.join("; ")));
+                })
+                .or_else(|| {
+                    let mut parts = Vec::new();
+                    if let Some(ref m) = parsed.mistakes_failures {
+                        if !m.is_empty() {
+                            parts.push(format!("Mistakes: {}", m.join("; ")));
+                        }
                     }
-                }
-                if let Some(ref a) = parsed.actions_to_avoid {
-                    if !a.is_empty() {
-                        parts.push(format!("Actions to Avoid: {}", a.join("; ")));
+                    if let Some(ref r) = parsed.root_causes {
+                        if !r.is_empty() {
+                            parts.push(format!("Root Causes: {}", r.join("; ")));
+                        }
                     }
-                }
-                if parts.is_empty() {
-                    None
-                } else {
-                    Some(parts.join(" | "))
-                }
-            }),
+                    if let Some(ref a) = parsed.actions_to_avoid {
+                        if !a.is_empty() {
+                            parts.push(format!("Actions to Avoid: {}", a.join("; ")));
+                        }
+                    }
+                    if parts.is_empty() {
+                        None
+                    } else {
+                        Some(parts.join(" | "))
+                    }
+                }),
             artifact_refs: parsed.artifact_refs.unwrap_or_default(),
         };
 
@@ -485,8 +505,6 @@ pub async fn distill_transcript_file(
 
     Ok(distilled_chunks)
 }
-
-
 
 pub fn extract_completed_tasks(content: &str) -> String {
     let mut completed = Vec::new();
@@ -553,7 +571,8 @@ pub async fn ingest_artifacts_in_dir(
                     let content = std::fs::read_to_string(&path)?;
                     let item_type = if file_name == "spec.md" || file_name.contains("spec") {
                         "constraint"
-                    } else if file_name.ends_with("_review.md") || file_name.ends_with("_audit.md") {
+                    } else if file_name.ends_with("_review.md") || file_name.ends_with("_audit.md")
+                    {
                         "failure_mode"
                     } else if file_name.starts_with("analysis_") {
                         "analysis"
@@ -581,7 +600,14 @@ pub async fn ingest_artifacts_in_dir(
                         || file_name.ends_with("_review.md")
                         || file_name.ends_with("_audit.md")
                     {
-                        let _ = crate::cognitive::pipeline::extract_from_document(db, None, &content, &path.to_string_lossy(), scope).await;
+                        let _ = crate::cognitive::pipeline::extract_from_document(
+                            db,
+                            None,
+                            &content,
+                            &path.to_string_lossy(),
+                            scope,
+                        )
+                        .await;
                     }
                 }
             }
@@ -735,7 +761,9 @@ pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) 
                         let start = std::time::Instant::now();
                         let timeout = std::time::Duration::from_secs(60);
 
-                        if let Ok(Some(updated)) = surreal_backend.get_cognitive_task(&task_id).await {
+                        if let Ok(Some(updated)) =
+                            surreal_backend.get_cognitive_task(&task_id).await
+                        {
                             if updated.status == "Completed" {
                                 if let Some(res) = updated.result {
                                     wisdom_rule_res = Some(res);
@@ -747,7 +775,10 @@ pub async fn seed_wisdom_from_rules(db: &dyn StorageBackend, vault_root: &Path) 
                             while start.elapsed() < timeout {
                                 let remaining = timeout.saturating_sub(start.elapsed());
                                 match tokio::time::timeout(remaining, rx.recv()).await {
-                                    Ok(Ok(event)) if event.task_id == task_id && event.status == "Completed" => {
+                                    Ok(Ok(event))
+                                        if event.task_id == task_id
+                                            && event.status == "Completed" =>
+                                    {
                                         if let Some(res) = event.result {
                                             wisdom_rule_res = Some(res);
                                             break;
