@@ -98,43 +98,61 @@ impl<S: FsmState> ContextGovernor<S> {
         damping_factor: f32,
         max_iterations: usize,
     ) -> HashMap<String, f32> {
-        let mut nodes = HashSet::new();
+        // Collect unique nodes and assign them integer IDs to avoid HashMap lookups and cloning in tight loops
+        let mut node_to_id: HashMap<&String, usize> = HashMap::new();
+        let mut id_to_node: Vec<String> = Vec::new();
+
         for (u, v) in edges {
-            nodes.insert(u.clone());
-            nodes.insert(v.clone());
+            if !node_to_id.contains_key(u) {
+                node_to_id.insert(u, id_to_node.len());
+                id_to_node.push(u.clone());
+            }
+            if !node_to_id.contains_key(v) {
+                node_to_id.insert(v, id_to_node.len());
+                id_to_node.push(v.clone());
+            }
         }
 
-        let n = nodes.len();
+        let n = id_to_node.len();
         if n == 0 {
             return HashMap::new();
         }
 
-        let mut out_degree = HashMap::new();
-        for (u, _) in edges {
-            *out_degree.entry(u.clone()).or_insert(0) += 1;
+        // Compute out degrees
+        let mut out_degree: Vec<usize> = vec![0; n];
+        let mut edge_indices: Vec<(usize, usize)> = Vec::with_capacity(edges.len());
+
+        for (u, v) in edges {
+            let u_id = *node_to_id.get(u).unwrap();
+            let v_id = *node_to_id.get(v).unwrap();
+            out_degree[u_id] += 1;
+            edge_indices.push((u_id, v_id));
         }
 
-        let mut ranks: HashMap<String, f32> = nodes
-            .iter()
-            .map(|node_id| (node_id.clone(), 1.0 / n as f32))
-            .collect();
+        // Initialize ranks using contiguous vectors
+        let initial_rank = 1.0 / n as f32;
+        let base_rank = (1.0 - damping_factor) / n as f32;
+
+        let mut ranks: Vec<f32> = vec![initial_rank; n];
+        let mut new_ranks: Vec<f32> = vec![base_rank; n];
 
         for _ in 0..max_iterations {
-            let mut new_ranks: HashMap<String, f32> = nodes
-                .iter()
-                .map(|node_id| (node_id.clone(), (1.0 - damping_factor) / n as f32))
-                .collect();
+            new_ranks.fill(base_rank);
 
-            for (u, v) in edges {
-                let deg = *out_degree.get(u).unwrap_or(&1) as f32;
-                if let Some(r) = new_ranks.get_mut(v) {
-                    *r += damping_factor * (ranks.get(u).unwrap_or(&0.0) / deg);
-                }
+            for &(u, v) in &edge_indices {
+                let deg = if out_degree[u] == 0 { 1.0 } else { out_degree[u] as f32 };
+                new_ranks[v] += damping_factor * (ranks[u] / deg);
             }
-            ranks = new_ranks;
+            ranks.copy_from_slice(&new_ranks);
         }
 
-        ranks
+        // Map back to HashMap
+        let mut final_ranks = HashMap::with_capacity(n);
+        for (i, node) in id_to_node.into_iter().enumerate() {
+            final_ranks.insert(node, ranks[i]);
+        }
+
+        final_ranks
     }
 }
 
