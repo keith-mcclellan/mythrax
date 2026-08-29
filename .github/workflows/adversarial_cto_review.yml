@@ -1,0 +1,38 @@
+name: Adversarial CTO Review
+on:
+  schedule:
+    - cron: '0 0 */14 * *' # Bi-weekly cadence
+  push:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+  pull_request:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  adversarial_review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run Adversarial Review Script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/run_adversarial_review.py
