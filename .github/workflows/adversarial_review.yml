@@ -1,0 +1,33 @@
+name: Adversarial Architecture Review
+
+on:
+  schedule:
+    - cron: '0 0 1,15 * *'
+  push:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  adversarial_review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Run Adversarial Review Script
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/adversarial_review.py
