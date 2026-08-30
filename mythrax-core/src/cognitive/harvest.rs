@@ -138,7 +138,7 @@ mod tests {
     #[tokio::test]
     async fn test_targeted_cross_skill_harvesting() {
         // Lock mutex to prevent race conditions with env vars
-        let _guard = TEST_MUTEX.lock().unwrap();
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
         // Save original env vars
         let original_home = env::var("HOME").ok();
