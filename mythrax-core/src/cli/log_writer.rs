@@ -31,7 +31,7 @@ impl SizeRollingFileWriter {
     }
 
     fn write_all_and_roll(&self, buf: &[u8]) -> io::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         // 1. Check current file size
         let mut needs_roll = false;
@@ -97,7 +97,7 @@ impl Write for SizeRollingFileWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut file) = inner.file {
             file.flush()?;
         }
@@ -112,7 +112,7 @@ impl Write for &SizeRollingFileWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut file) = inner.file {
             file.flush()?;
         }
