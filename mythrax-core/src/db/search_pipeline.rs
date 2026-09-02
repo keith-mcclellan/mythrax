@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::contracts::{SearchParams, SearchResponse, SearchResult};
 use crate::db::SurrealBackend;
 use crate::db::backend::{
@@ -382,40 +383,40 @@ fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]
         let table = node.id.table.as_str();
         if table == "episode" {
             if let (Some(t), Some(c)) = (&node.title, &node.content) {
-                content.push_str(&format!("[Related Episode: {}]\n{}\n\n", t, c));
+                write!(content, "[Related Episode: {}]\n{}\n\n", t, c).unwrap();
             }
         } else if table == "wiki_node" {
             if let (Some(n), Some(c)) = (&node.name, &node.content) {
-                content.push_str(&format!("[Related Wiki Node: {}]\n{}\n\n", n, c));
+                write!(content, "[Related Wiki Node: {}]\n{}\n\n", n, c).unwrap();
             }
         } else if table == "entity" {
             if let (Some(n), Some(s)) = (&node.name, &node.summary) {
-                content.push_str(&format!("[Related Entity: {}]\n{}\n\n", n, s));
+                write!(content, "[Related Entity: {}]\n{}\n\n", n, s).unwrap();
             }
         } else if table == "wisdom" {
             let pattern = node.target_pattern.as_deref().unwrap_or("");
             let avoid = node.action_to_avoid.as_deref().unwrap_or("");
             let explanation = node.causal_explanation.as_deref().unwrap_or("");
             let remedy = node.prescribed_remedy.as_deref().unwrap_or("");
-            content.push_str(&format!(
+            write!(content,
                 "[Related Wisdom: {}]\nAction to avoid: {}\nCausal explanation: {}\nPrescribed remedy: {}\n\n",
                 pattern, avoid, explanation, remedy
-            ));
+            ).unwrap();
         } else if table == "hypothesis_node" {
             if node.status.as_deref() == Some("done") {
                 if let Some(c) = &node.content {
-                    content.push_str(&format!("[Related Hypothesis]\n{}\n\n", c));
+                    write!(content, "[Related Hypothesis]\n{}\n\n", c).unwrap();
                 }
             }
         } else if table == "handoff" {
             if let Some(s) = &node.summary {
-                content.push_str(&format!("[Related Handoff]\n{}\n\n", s));
+                write!(content, "[Related Handoff]\n{}\n\n", s).unwrap();
             }
         } else {
             if let Some(c) = &node.content {
-                content.push_str(&format!("[Related {}]\n{}\n\n", table, c));
+                write!(content, "[Related {}]\n{}\n\n", table, c).unwrap();
             } else if let Some(s) = &node.summary {
-                content.push_str(&format!("[Related {}]\n{}\n\n", table, s));
+                write!(content, "[Related {}]\n{}\n\n", table, s).unwrap();
             }
         }
     }
