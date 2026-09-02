@@ -1,0 +1,40 @@
+name: CTO Architecture Review
+
+on:
+  schedule:
+    - cron: '0 0 */14 * *' # Bi-weekly cadence
+  push:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+  pull_request:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  adversarial_review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run CTO Review Agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/cto_review.py
