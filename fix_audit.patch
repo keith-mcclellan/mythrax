@@ -1,0 +1,32 @@
+--- scripts/security_audit.py
++++ scripts/security_audit.py
+@@ -9,6 +9,7 @@
+ import re
+ from datetime import datetime, timedelta, timezone
++import time
+
+ def load_ciso_prompt():
+@@ -62,7 +63,7 @@
+     findings = []
+     try:
+         os.chdir("mythrax-core")
+-        output = subprocess.check_output(["cargo", "audit", "--json"], stderr=subprocess.STDOUT)
++        output = subprocess.check_output(["cargo", "audit", "--json"])
+         os.chdir("..")
+         audit_res = json.loads(output)
+@@ -118,6 +119,7 @@
+         deps = re.findall(r'^([a-zA-Z0-9_-]+)\s*=\s*(?:\{.*version\s*=\s*|)"([^"]+)"', content, re.MULTILINE)
+         for pkg, ver in deps:
+             yanked, stale = check_crates_io(pkg, ver)
++            time.sleep(1) # Respect crates.io rate limits
+             if yanked:
+                 findings.append({
+@@ -149,7 +151,7 @@
+
+     try:
+         # A basic check for potential secrets in history
+-        output = subprocess.check_output(["git", "log", "-p", "-G", "AKIA[0-9A-Z]{16}"], text=True)
++        output = subprocess.check_output(["git", "log", "-p", "-G", "(?i)(AKIA[0-9A-Z]{16}|secret|token|password|api_key)"], text=True)
+         if output:
+             findings.append({
+                 "severity": "Critical",
