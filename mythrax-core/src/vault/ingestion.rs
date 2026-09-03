@@ -25,18 +25,20 @@ fn ingest_cursor(path: &Path) -> Result<String> {
         "SELECT key, value FROM ItemTable WHERE key LIKE 'composer:%' OR key LIKE 'chat:%';",
     )?;
     let mut rows = stmt.query([])?;
+    use std::fmt::Write;
     let mut result = String::new();
     while let Some(row) = rows.next()? {
         let key: String = row.get(0)?;
         let value: String = row.get(1)?;
-        result.push_str(&format!("### Key: {}\n", key));
+        let _ = write!(result, "### Key: {}\n", key);
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&value) {
-            result.push_str(&format!(
+            let _ = write!(
+                result,
                 "```json\n{}\n```\n\n",
                 serde_json::to_string_pretty(&json_val)?
-            ));
+            );
         } else {
-            result.push_str(&format!("{}\n\n", value));
+            let _ = write!(result, "{}\n\n", value);
         }
     }
     if result.is_empty() {
