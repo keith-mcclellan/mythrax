@@ -1,0 +1,46 @@
+name: Adversarial CTO Architecture Review
+
+on:
+  schedule:
+    - cron: '0 0 */14 * *' # Bi-weekly cadence
+  push:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+  pull_request:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  adversarial_cto_review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Adversarial CTO Script
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # If it's a pull request, only run analysis on modified files conditionally
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+             echo "Running on PR. Analyzing modified files."
+             git diff --name-only origin/${GITHUB_BASE_REF} HEAD > changed_files.txt
+             cat changed_files.txt
+          fi
+          python3 scripts/adversarial_cto_review.py
