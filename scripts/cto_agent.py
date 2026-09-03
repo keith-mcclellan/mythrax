@@ -19,13 +19,22 @@ def get_git_diff_files():
         print(f"Error fetching git diff: {e}")
         return None
 
-def find_untested_functions():
+def find_untested_functions(files_to_analyze):
     print("Finding untested public functions...", flush=True)
     untested_findings = []
     try:
-        # Search for 'pub fn' in mythrax-core/src/
-        result = subprocess.run(["grep", "-rn", "pub fn", "mythrax-core/src/"], capture_output=True, text=True, check=True)
-        pub_fns = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+        # Search for 'pub fn' in relevant files
+        pub_fns = []
+        for file_path in files_to_analyze:
+            if not file_path.endswith('.rs'):
+                continue
+            try:
+                result = subprocess.run(["grep", "-n", "pub fn", file_path], capture_output=True, text=True, check=True)
+                for line in result.stdout.split('\n'):
+                    if line.strip():
+                        pub_fns.append(f"{file_path}:{line.strip()}")
+            except subprocess.CalledProcessError:
+                pass
 
         # Simple heuristic: cross reference with files containing tests
         # A more complex analysis would parse AST, but for this script we look for missing corresponding test files
@@ -124,55 +133,56 @@ def main():
         print("OPENAI_API_KEY environment variable is missing.", file=sys.stderr)
         # Proceed with just grep analysis if no API key in CI?
         # Let's exit 1 if this is a real CI run expecting LLM
-        sys.exit(1)
+        api_key = None
 
     all_findings = []
 
     # Chunking files
-    chunk_size = 5
-    for i in range(0, len(files_to_analyze), chunk_size):
-        chunk_files = files_to_analyze[i:i+chunk_size]
-        code_context = ""
-        for file in chunk_files:
-            content = read_file_content(file)
-            code_context += f"\\n--- FILE: {file} ---\\n{content}\\n"
+    if api_key:
+        chunk_size = 5
+        for i in range(0, len(files_to_analyze), chunk_size):
+            chunk_files = files_to_analyze[i:i+chunk_size]
+            code_context = ""
+            for file in chunk_files:
+                content = read_file_content(file)
+                code_context += f"\\n--- FILE: {file} ---\\n{content}\\n"
 
-        user_prompt = f"Analyze the following code for bugs based on your rules:\\n\\n{code_context}"
+            user_prompt = f"Analyze the following code for bugs based on your rules:\\n\\n{code_context}"
 
-        # Prepare request
-        req_data = {
-            "model": "gpt-4o",
-            "response_format": { "type": "json_object" },
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.2
-        }
-
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=json.dumps(req_data).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
+            # Prepare request
+            req_data = {
+                "model": "gpt-4o",
+                "response_format": { "type": "json_object" },
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.2
             }
-        )
 
-        try:
-            with urllib.request.urlopen(req) as response:
-                resp_data = json.loads(response.read().decode("utf-8"))
-                content = resp_data["choices"][0]["message"]["content"]
-                result = json.loads(content)
-                if "findings" in result:
-                    all_findings.extend(result["findings"])
-        except urllib.error.HTTPError as e:
-            print(f"LLM API HTTP Error: {e.code} {e.read().decode('utf-8')}")
-        except Exception as e:
-            print(f"LLM API Error: {e}")
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=json.dumps(req_data).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}"
+                }
+            )
+
+            try:
+                with urllib.request.urlopen(req) as response:
+                    resp_data = json.loads(response.read().decode("utf-8"))
+                    content = resp_data["choices"][0]["message"]["content"]
+                    result = json.loads(content)
+                    if "findings" in result:
+                        all_findings.extend(result["findings"])
+            except urllib.error.HTTPError as e:
+                print(f"LLM API HTTP Error: {e.code} {e.read().decode('utf-8')}")
+            except Exception as e:
+                print(f"LLM API Error: {e}")
 
     # 4. Add explicitly found untested functions
-    untested_functions = find_untested_functions()
+    untested_functions = find_untested_functions(files_to_analyze)
     all_findings.extend(untested_functions)
 
     # 5. Output findings and file issues
@@ -184,9 +194,31 @@ def main():
     github_repository = os.environ.get("GITHUB_REPOSITORY")
 
     if all_findings and gh_token and github_repository:
+        print("Fetching existing issues...", flush=True)
+        existing_issues = set()
+        try:
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{github_repository}/issues?state=all&per_page=100",
+                headers={
+                    "Authorization": f"Bearer {gh_token}",
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "CTO-Agent-Script"
+                }
+            )
+            with urllib.request.urlopen(req) as response:
+                issues_data = json.loads(response.read().decode("utf-8"))
+                for issue in issues_data:
+                    existing_issues.add(issue.get("title"))
+        except Exception as e:
+            print(f"Error fetching existing issues: {e}")
+
         print("Filing GitHub issues for findings...", flush=True)
         for finding in all_findings:
             title = f"[Adversarial CTO] Issue in {finding.get('file', 'Unknown')}:{finding.get('line_number', '?')}"
+
+            if title in existing_issues:
+                print(f"Skipping duplicate issue: {title}")
+                continue
             body = f"**File:** `{finding.get('file', 'Unknown')}`\n"
             body += f"**Line:** `{finding.get('line_number', '?')}`\n"
             body += f"**Severity:** {finding.get('severity', 'Unknown')}\n\n"
