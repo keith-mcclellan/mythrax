@@ -347,7 +347,7 @@ impl RealLlmProvider {
                 static LAST_CALL: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
                 let mutex = LAST_CALL.get_or_init(|| Mutex::new(None));
                 let sleep_dur = {
-                    let mut guard = mutex.lock().unwrap();
+                    let mut guard = mutex.lock().unwrap_or_else(|e| e.into_inner());
                     let now = std::time::Instant::now();
                     let sleep_dur = if let Some(last_time) = *guard {
                         if last_time > now {
@@ -1498,7 +1498,7 @@ impl DynamicModelBroker {
             let model_name = match tier {
                 ModelTier::Tier1 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
                 ModelTier::Tier2 => {
-                    let config_model = self.config_model.lock().unwrap();
+                    let config_model = self.config_model.lock().unwrap_or_else(|e| e.into_inner());
                     config_model
                         .as_ref()
                         .cloned()
@@ -1510,11 +1510,11 @@ impl DynamicModelBroker {
             // 1. Identify and evict all other LLM models to free VRAM
             let mut evict_list = Vec::new();
             {
-                let mut models = self.models.lock().unwrap();
+                let mut models = self.models.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(model) = models.get(&tier) {
-                    let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                    let mut last_weak_ref = self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner());
                     *last_weak_ref = Some(Arc::downgrade(model));
-                    let mut active_tier = self.active_tier.lock().unwrap();
+                    let mut active_tier = self.active_tier.lock().unwrap_or_else(|e| e.into_inner());
                     *active_tier = Some(tier);
                     return Ok(model.clone());
                 }
@@ -1545,7 +1545,7 @@ impl DynamicModelBroker {
             }
 
             // 2. Load the mock model safely under lock
-            let mut models = self.models.lock().unwrap();
+            let mut models = self.models.lock().unwrap_or_else(|e| e.into_inner());
             let model = if let Some(model) = models.get(&tier) {
                 model.clone()
             } else {
@@ -1570,9 +1570,9 @@ impl DynamicModelBroker {
                 arc
             };
 
-            let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+            let mut last_weak_ref = self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner());
             *last_weak_ref = Some(Arc::downgrade(&model));
-            let mut active_tier = self.active_tier.lock().unwrap();
+            let mut active_tier = self.active_tier.lock().unwrap_or_else(|e| e.into_inner());
             *active_tier = Some(tier);
 
             return Ok(model);
@@ -1581,12 +1581,12 @@ impl DynamicModelBroker {
         // 1. Identify and evict all other LLM models to free VRAM
         let mut evict_list = Vec::new();
         {
-            let mut models = self.models.lock().unwrap();
+            let mut models = self.models.lock().unwrap_or_else(|e| e.into_inner());
             // If the requested tier is already loaded, we can just return it immediately
             if let Some(model) = models.get(&tier) {
-                let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                let mut last_weak_ref = self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner());
                 *last_weak_ref = Some(Arc::downgrade(model));
-                let mut active_tier = self.active_tier.lock().unwrap();
+                let mut active_tier = self.active_tier.lock().unwrap_or_else(|e| e.into_inner());
                 *active_tier = Some(tier);
                 return Ok(model.clone());
             }
@@ -1627,7 +1627,7 @@ impl DynamicModelBroker {
         let model_name = match tier {
             ModelTier::Tier1 => "mlx-community/Qwen2.5-0.5B-Instruct-4bit".to_string(),
             ModelTier::Tier2 => {
-                let config_model = self.config_model.lock().unwrap();
+                let config_model = self.config_model.lock().unwrap_or_else(|e| e.into_inner());
                 config_model
                     .as_ref()
                     .cloned()
@@ -1712,7 +1712,7 @@ impl DynamicModelBroker {
         }
 
         // 4. Now load the new model safely under lock
-        let mut models = self.models.lock().unwrap();
+        let mut models = self.models.lock().unwrap_or_else(|e| e.into_inner());
         // Check again in case another thread loaded it while we were waiting
         let model = if let Some(model) = models.get(&tier) {
             model.clone()
@@ -1832,11 +1832,11 @@ impl DynamicModelBroker {
         };
 
         // Update the last weak reference
-        let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+        let mut last_weak_ref = self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner());
         *last_weak_ref = Some(Arc::downgrade(&model));
 
         // Update the active tier
-        let mut active_tier = self.active_tier.lock().unwrap();
+        let mut active_tier = self.active_tier.lock().unwrap_or_else(|e| e.into_inner());
         *active_tier = Some(tier);
 
         Ok(model)
@@ -1844,19 +1844,19 @@ impl DynamicModelBroker {
 
     /// Gets the active model tier.
     pub fn active_tier(&self) -> Option<ModelTier> {
-        *self.active_tier.lock().unwrap()
+        *self.active_tier.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Gets a weak reference to the last acquired LLM.
     pub fn get_weak_llm_reference(&self) -> Option<Weak<dyn InferenceEngine>> {
-        let last_weak_ref = self.last_weak_ref.lock().unwrap();
+        let last_weak_ref = self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner());
         last_weak_ref.clone()
     }
 
     /// Evicts unused models from the cache.
     pub async fn evict_unused_models(&self) {
         let first_tier_and_model = {
-            let mut models = self.models.lock().unwrap();
+            let mut models = self.models.lock().unwrap_or_else(|e| e.into_inner());
             models.retain(|_, model| Arc::strong_count(model) > 1);
             models
                 .iter()
@@ -1864,11 +1864,11 @@ impl DynamicModelBroker {
                 .next()
         };
         if let Some((tier, weak_ref)) = first_tier_and_model {
-            *self.active_tier.lock().unwrap() = Some(tier);
-            *self.last_weak_ref.lock().unwrap() = Some(weak_ref);
+            *self.active_tier.lock().unwrap_or_else(|e| e.into_inner()) = Some(tier);
+            *self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner()) = Some(weak_ref);
         } else {
-            *self.active_tier.lock().unwrap() = None;
-            *self.last_weak_ref.lock().unwrap() = None;
+            *self.active_tier.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner()) = None;
         }
         crate::embeddings::evict_global_embedder();
         evict_global_reranker().await;
@@ -1876,7 +1876,7 @@ impl DynamicModelBroker {
 
     /// Updates the configuration model name.
     pub async fn update_config_model(&self, model_name: &str) -> Result<()> {
-        let mut config_model = self.config_model.lock().unwrap();
+        let mut config_model = self.config_model.lock().unwrap_or_else(|e| e.into_inner());
         *config_model = Some(model_name.to_string());
         Ok(())
     }
@@ -1904,7 +1904,7 @@ impl DynamicModelBroker {
             Ok(model) => Ok(model),
             #[cfg(any(test, debug_assertions))]
             Err(_e) => {
-                let mut models = self.models.lock().unwrap();
+                let mut models = self.models.lock().unwrap_or_else(|e| e.into_inner());
                 models.clear();
 
                 let fallback_model: Arc<dyn InferenceEngine> = Arc::new(InProcessMlxEngine::new(
@@ -1920,7 +1920,7 @@ impl DynamicModelBroker {
 
                 models.insert(tier, fallback_model.clone());
 
-                let mut last_weak_ref = self.last_weak_ref.lock().unwrap();
+                let mut last_weak_ref = self.last_weak_ref.lock().unwrap_or_else(|e| e.into_inner());
                 *last_weak_ref = Some(Arc::downgrade(&fallback_model));
 
                 Ok(fallback_model)

@@ -35,29 +35,29 @@ impl WatchIgnoreList {
     }
 
     pub fn ignore(&self, path: PathBuf) {
-        let mut map = self.ignored.lock().unwrap();
+        let mut map = self.ignored.lock().unwrap_or_else(|e| e.into_inner());
         map.insert(path, Instant::now());
     }
 
     pub fn is_ignored(&self, path: &Path) -> bool {
-        let mut map = self.ignored.lock().unwrap();
+        let mut map = self.ignored.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         map.retain(|_, &mut time| now.duration_since(time) < Duration::from_secs(2));
         map.contains_key(path)
     }
 
     pub fn ignore_hash(&self, hash: u64) {
-        let mut hashes = self.ignored_hashes.lock().unwrap();
+        let mut hashes = self.ignored_hashes.lock().unwrap_or_else(|e| e.into_inner());
         hashes.insert(hash);
     }
 
     pub fn is_hash_ignored(&self, hash: &u64) -> bool {
-        let mut hashes = self.ignored_hashes.lock().unwrap();
+        let mut hashes = self.ignored_hashes.lock().unwrap_or_else(|e| e.into_inner());
         hashes.remove(hash)
     }
 
     pub fn queue_write(&self, path: PathBuf, content: &str, store: Arc<MarkdownStore>) {
-        let tx = self.write_tx.lock().unwrap();
+        let tx = self.write_tx.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sender) = tx.as_ref() {
             let _ = sender.send((path, content.to_string(), store));
         } else {
@@ -164,7 +164,7 @@ pub fn start_watching(
     let (write_tx, mut write_rx) =
         mpsc::unbounded_channel::<(PathBuf, String, Arc<MarkdownStore>)>();
     {
-        let mut guard = ignore_list.write_tx.lock().unwrap();
+        let mut guard = ignore_list.write_tx.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(write_tx);
     }
 
