@@ -372,54 +372,61 @@ fn get_tier_boost(tier: crate::contracts::Tier, category: QueryCategory) -> f32 
     }
 }
 
+use std::fmt::Write;
+
 // Stage 9 hydration private helper
 fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]) {
     if related_nodes.is_empty() {
         return;
     }
-    content.push_str("\n\n---\n### Related Context\n");
+    let _ = write!(content, "\n\n---\n### Related Context\n");
     for node in related_nodes {
         let table = node.id.table.as_str();
         if table == "episode" {
             if let (Some(t), Some(c)) = (&node.title, &node.content) {
-                content.push_str(&format!("[Related Episode: {}]\n{}\n\n", t, c));
+                let _ = write!(content, "[Related Episode: {}]\n{}\n\n", t, c);
             }
         } else if table == "wiki_node" {
             if let (Some(n), Some(c)) = (&node.name, &node.content) {
-                content.push_str(&format!("[Related Wiki Node: {}]\n{}\n\n", n, c));
+                let _ = write!(content, "[Related Wiki Node: {}]\n{}\n\n", n, c);
             }
         } else if table == "entity" {
             if let (Some(n), Some(s)) = (&node.name, &node.summary) {
-                content.push_str(&format!("[Related Entity: {}]\n{}\n\n", n, s));
+                let _ = write!(content, "[Related Entity: {}]\n{}\n\n", n, s);
             }
         } else if table == "wisdom" {
             let pattern = node.target_pattern.as_deref().unwrap_or("");
             let avoid = node.action_to_avoid.as_deref().unwrap_or("");
             let explanation = node.causal_explanation.as_deref().unwrap_or("");
             let remedy = node.prescribed_remedy.as_deref().unwrap_or("");
-            content.push_str(&format!(
+            let _ = write!(
+                content,
                 "[Related Wisdom: {}]\nAction to avoid: {}\nCausal explanation: {}\nPrescribed remedy: {}\n\n",
                 pattern, avoid, explanation, remedy
-            ));
+            );
         } else if table == "hypothesis_node" {
             if node.status.as_deref() == Some("done") {
                 if let Some(c) = &node.content {
-                    content.push_str(&format!("[Related Hypothesis]\n{}\n\n", c));
+                    let _ = write!(content, "[Related Hypothesis]\n{}\n\n", c);
                 }
             }
         } else if table == "handoff" {
             if let Some(s) = &node.summary {
-                content.push_str(&format!("[Related Handoff]\n{}\n\n", s));
+                let _ = write!(content, "[Related Handoff]\n{}\n\n", s);
             }
         } else {
             if let Some(c) = &node.content {
-                content.push_str(&format!("[Related {}]\n{}\n\n", table, c));
+                let _ = write!(content, "[Related {}]\n{}\n\n", table, c);
             } else if let Some(s) = &node.summary {
-                content.push_str(&format!("[Related {}]\n{}\n\n", table, s));
+                let _ = write!(content, "[Related {}]\n{}\n\n", table, s);
             }
         }
     }
-    *content = content.trim_end().to_string();
+
+    // Trim trailing whitespace manually to avoid cloning the string if possible
+    while content.ends_with(char::is_whitespace) {
+        content.pop();
+    }
 }
 
 impl SurrealBackend {
