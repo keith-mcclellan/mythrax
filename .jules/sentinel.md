@@ -1,0 +1,4 @@
+## 2025-05-18 - Prevent DoS via Mutex Poisoning
+**Vulnerability:** The codebase had widespread usage of `.lock().unwrap()` on `Mutex` guards. If a thread panics while holding the lock, the mutex becomes poisoned. Subsequent calls to `.lock().unwrap()` on that poisoned mutex will cause a cascading panic, leading to a Denial of Service (DoS) vulnerability.
+**Learning:** In a multithreaded application (like a web server or asynchronous agent framework), panics should be contained and not crash the entire system. `unwrap()` circumvents this by turning an error (mutex poisoning) into a fatal panic.
+**Prevention:** Always use `.lock().unwrap_or_else(|e| e.into_inner())` or a `match` statement to handle lock acquisitions gracefully. This ensures that even if a previous thread panicked, the data can still be accessed and the application can recover.
