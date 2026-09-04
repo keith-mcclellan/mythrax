@@ -1,0 +1,38 @@
+name: Adversarial CTO Architecture Review
+
+on:
+  schedule:
+    - cron: '0 0 */14 * *' # Bi-weekly cadence
+  push:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+  pull_request:
+    paths:
+      - 'ARCHITECTURE.md'
+      - 'mythrax-core/src/**'
+      - '.agents/**'
+
+jobs:
+  adversarial-review:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Need full history for git diff in PRs
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Run Adversarial CTO Script
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/adversarial_cto.py
