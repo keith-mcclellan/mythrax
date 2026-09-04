@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use crate::secret_filter::SecretFilter;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
@@ -150,7 +151,7 @@ Welcome to the Mythrax Vault.
             if !content.ends_with('\n') && !content.is_empty() {
                 content.push('\n');
             }
-            content.push_str(&format!("\n{}\n", section_header));
+            let _ = write!(content, "\n{}\n", section_header);
         }
 
         if !content.ends_with('\n') {

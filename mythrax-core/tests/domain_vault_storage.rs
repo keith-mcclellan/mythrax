@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod vault_lifecycle {
+use std::fmt::Write as _;
 use anyhow::Result;
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::{StorageBackend, SurrealBackend};
@@ -467,7 +468,7 @@ async fn test_artifact_chunking_during_ingestion() -> Result<()> {
     let mut large_artifact = String::new();
     large_artifact.push_str("Title: Large Artifact\n\n");
     for i in 1..=800 {
-        large_artifact.push_str(&format!("Line {}: Some content text.\n", i));
+        let _ = write!(large_artifact, "Line {}: Some content text.\n", i);
     }
     assert!(large_artifact.len() > 20_000);
 

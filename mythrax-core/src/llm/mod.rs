@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::db::StorageBackend;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -913,7 +914,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
     ) -> Result<String> {
         let mut files_context = String::new();
         for (path, content) in target_files {
-            files_context.push_str(&format!("--- FILE: {} ---\n{}\n\n", path, content));
+            write!(files_context, "--- FILE: {} ---\n{}\n\n", path, content).unwrap();
         }
 
         // Query Wisdom Rules semantically for all tiers
@@ -945,14 +946,14 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                 "\n\nHere are some relevant Wisdom Rules to follow during code generation:\n",
             );
             for (idx, r) in rules.iter().enumerate() {
-                wisdom_injection.push_str(&format!(
+                write!(wisdom_injection,
                     "{}. [Rule: {}]\n   - Action to Avoid: {}\n   - Why: {}\n   - Remedy: {}\n",
                     idx + 1,
                     r.target_pattern,
                     r.action_to_avoid,
                     r.causal_explanation,
                     r.prescribed_remedy
-                ));
+                ).unwrap();
             }
         }
 
@@ -962,7 +963,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                 "\n\nYou MUST respect the following constraints during code generation:\n",
             );
             for c in constraints {
-                constraints_injection.push_str(&format!("- {}\n", c));
+                write!(constraints_injection, "- {}\n", c).unwrap();
             }
         }
 
@@ -971,7 +972,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             stm_injection
                 .push_str("\n\nActive Short Term Memory (STM) anchors to guide your ideation:\n");
             for anchor in stm_anchors {
-                stm_injection.push_str(&format!("- {}\n", anchor));
+                write!(stm_injection, "- {}\n", anchor).unwrap();
             }
         }
 

@@ -1,6 +1,7 @@
 #![allow(async_fn_in_trait)]
 #![recursion_limit = "512"]
 
+use std::fmt::Write as _;
 use mythrax_core::{cli, daemon, db, mcp};
 
 use anyhow::{Context, Result};
@@ -1396,10 +1397,9 @@ fn merge_toml_mcp(path: &std::path::Path, exe_path: &str) -> Result<()> {
             content.push('\n');
         }
         content.push_str("[mcp.mythrax]\n");
-        content.push_str(&format!(
+        let _ = write!(content,
             "command = \"{}\"\n",
-            exe_path.replace("\\", "\\\\")
-        ));
+            exe_path.replace("\\", "\\\\"));
         content.push_str("args = [\"mcp\"]\n");
     }
 

@@ -1,4 +1,5 @@
 #![allow(dead_code, unused_imports)]
+use std::fmt::Write as _;
 use std::sync::Mutex;
 use tempfile::tempdir;
 static GLOBAL_TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -1970,6 +1971,7 @@ async fn test_task10_injection_and_truncation() -> anyhow::Result<()> {
 }
 
 mod task14 {
+use std::fmt::Write;
 use mythrax_core::db::{StorageBackend, SurrealBackend};
 use mythrax_core::hooks::reflect::handle_reflect;
 use std::fs;
@@ -1992,10 +1994,10 @@ async fn test_reflect_queues_cognitive_task() {
         } else {
             ""
         };
-        transcript_content.push_str(&format!(
+        let _ = write!(transcript_content,
             r#"{{"step_index": {}, "source": "MODEL", "type": "PLANNER_RESPONSE", "content": "hello turn {}"{}}}"#,
             i, i, tool_call
-        ));
+        );
         transcript_content.push_str("\n");
     }
     fs::write(&transcript_path, transcript_content).unwrap();

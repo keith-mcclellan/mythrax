@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::contracts::{Fact, IdeaNode, IdeaStatus, PipelineConfig, WikiNode};
 use crate::db::StorageBackend;
 use anyhow::Result;
@@ -180,12 +181,12 @@ pub async fn save_code_symbols_for_file(
     );
 
     for sym in symbols {
-        doc.push_str(&format!(
+        write!(doc,
             "### `{}` ({})\n- **Lines:** L{}-L{}\n- **Signature:** `{}`\n\n",
             sym.name, sym.symbol_type, sym.start_line, sym.end_line, sym.signature
-        ));
+        ).unwrap();
         if let Some(ref doc_comment) = sym.doc_comment {
-            doc.push_str(&format!("**Doc Comment:**\n{}\n\n", doc_comment.trim()));
+            write!(doc, "**Doc Comment:**\n{}\n\n", doc_comment.trim()).unwrap();
         }
         doc.push_str("---\n\n");
     }

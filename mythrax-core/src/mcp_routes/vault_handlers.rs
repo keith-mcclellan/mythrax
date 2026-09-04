@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::api::ApiState;
 use crate::cognitive::forge::Forge;
 use crate::contracts::*;
@@ -324,18 +325,18 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 let mut text = "Dry-Run Summary:\n".to_string();
                 text.push_str("Stale Sessions:\n");
                 for (sess, dt) in &stale_sessions {
-                    text.push_str(&format!("- {} (last active: {})\n", sess, dt.to_rfc3339()));
+                    write!(text, "- {} (last active: {})\n", sess, dt.to_rfc3339()).unwrap();
                 }
                 if stale_sessions.is_empty() {
                     text.push_str("  None\n");
                 }
                 text.push_str("Stale Git Branches:\n");
                 for (branch, dt) in &stale_branches {
-                    text.push_str(&format!(
+                    write!(text,
                         "- {} (last commit: {})\n",
                         branch,
                         dt.to_rfc3339()
-                    ));
+                    ).unwrap();
                 }
                 if stale_branches.is_empty() {
                     text.push_str("  None\n");

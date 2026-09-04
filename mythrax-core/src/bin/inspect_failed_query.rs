@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use anyhow::{Context, Result};
 use mythrax_core::contracts::EpisodeSave;
 use mythrax_core::db::{StorageBackend, SurrealBackend};
@@ -253,10 +254,10 @@ async fn main() -> Result<()> {
     let mut transaction_sql = "BEGIN TRANSACTION;".to_string();
     for ent in all_entities_set {
         let escaped = ent.replace("'", "\\'");
-        transaction_sql.push_str(&format!(
+        let _ = write!(transaction_sql,
             "UPSERT entity:⟨{}⟩ CONTENT {{ name: '{}', entity_type: 'concept', summary: '', labels: ['concept'], scope: 'general' }}; ",
             escaped, escaped
-        ));
+        );
     }
 
     for (corpus_id, entities) in &turn_entities {
@@ -264,10 +265,10 @@ async fn main() -> Result<()> {
             let ep_uuid = ep_id.strip_prefix("episode:").unwrap_or(ep_id);
             for ent in entities {
                 let escaped = ent.replace("'", "\\'");
-                transaction_sql.push_str(&format!(
+                let _ = write!(transaction_sql,
                     "RELATE episode:⟨{}⟩ -> mentions -> entity:⟨{}⟩ CONTENT {{ created_at: time::now() }}; ",
                     ep_uuid, escaped
-                ));
+                );
             }
         }
     }
@@ -295,10 +296,10 @@ async fn main() -> Result<()> {
                         ) {
                             let ep_a_uuid = ep_a.strip_prefix("episode:").unwrap_or(ep_a);
                             let ep_b_uuid = ep_b.strip_prefix("episode:").unwrap_or(ep_b);
-                            transaction_sql.push_str(&format!(
+                            let _ = write!(transaction_sql,
                                 "RELATE episode:⟨{}⟩ -> relates_to -> episode:⟨{}⟩ CONTENT {{ confidence: 0.85 }}; ",
                                 ep_a_uuid, ep_b_uuid
-                            ));
+                            );
                         }
                     }
                 }
