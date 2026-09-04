@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::contracts::{
     Episode, EpisodeSave, GetMemoryNodesResponse, HandoffSave, LlmConfigRequest, LlmConfigResponse,
     WikiNode, WisdomRule,
@@ -1386,7 +1387,7 @@ impl SurrealBackend {
         if !relates_to_links.is_empty() && !body_content.contains("## Related Nodes") {
             body_content.push_str("\n\n## Related Nodes\n");
             for link in &relates_to_links {
-                body_content.push_str(&format!("- {}\n", link));
+                write!(body_content, "- {}\n", link).unwrap();
             }
         }
 

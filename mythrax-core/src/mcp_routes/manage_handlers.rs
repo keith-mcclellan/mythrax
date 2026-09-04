@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::api::ApiState;
 use crate::contracts::*;
 use crate::db::{SurrealBackend, parse_record_id};
@@ -571,10 +572,10 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 if !filtered.is_empty() {
                     rules_content.push_str("\n\n### Learned Wisdom Rules:\n");
                     for r in filtered {
-                        rules_content.push_str(&format!(
+                        write!(rules_content,
                             "- Target: {}\n  Avoid: {}\n  Remedy: {}\n",
                             r.target_pattern, r.action_to_avoid, r.prescribed_remedy
-                        ));
+                        ).unwrap();
                     }
                 }
             }
@@ -992,11 +993,11 @@ pub async fn handle_manage_stm(state: &ApiState, args: Value) -> Result<Value> {
                                 for ep in nodes_resp.episodes {
                                     if let Some(ref vp) = ep.vault_path {
                                         let abs_path = vault_root.join(vp);
-                                        footnote.push_str(&format!(
+                                        write!(footnote,
                                             "- [{}]((file://{}))\n",
                                             ep.title,
                                             abs_path.display()
-                                        ));
+                                        ).unwrap();
                                     }
                                 }
 
@@ -1531,12 +1532,12 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
         let mut callback_injection = String::new();
         if !selected_tasks.is_empty() {
             let total_pending = surreal_backend.count_pending_cognitive_tasks().await.unwrap_or(pending_tasks.len());
-            callback_injection.push_str(&format!("### 🧠 Pending Cognitive Callbacks (Total Remaining: {})\n", total_pending));
+            write!(callback_injection, "### 🧠 Pending Cognitive Callbacks (Total Remaining: {})\n", total_pending).unwrap();
             for task in &selected_tasks {
-                callback_injection.push_str(&format!(
+                write!(callback_injection,
                     "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
                     task.id, task.task_type, task.prompt, task.system_instruction, task.expected_format, task.priority
-                ));
+                ).unwrap();
                 surreal_backend
                     .update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None)
                     .await?;
@@ -2320,7 +2321,7 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
                     let mut text = String::from("### 🎯 Active User Directions\n");
                     for row in rows {
                         let snippet = row.content.lines().next().unwrap_or(&row.content);
-                        text.push_str(&format!("- **{}**: {}\n", row.name, snippet));
+                        write!(text, "- **{}**: {}\n", row.name, snippet).unwrap();
                     }
                     text.push_str("\n");
                     text
@@ -2424,10 +2425,10 @@ pub async fn handle_pre_invocation_hook(state: &ApiState, args: Value) -> Result
     if !selected_tasks.is_empty() {
         callback_injection.push_str("### 🧠 Pending Cognitive Callbacks\n");
         for task in &selected_tasks {
-            callback_injection.push_str(&format!(
+            write!(callback_injection,
                 "- **Callback ID**: `{}`\n  - **Type**: {}\n  - **Prompt**: {}\n  - **System Instruction**: {}\n  - **Expected Format**: {}\n  - **Priority**: {}\n",
                 task.id, task.task_type, task.prompt, task.system_instruction, task.expected_format, task.priority
-            ));
+            ).unwrap();
             surreal_backend
                 .update_cognitive_task_status(&task.id, crate::db::TaskStatus::Injected, None)
                 .await?;

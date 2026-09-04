@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::db::StorageBackend;
 use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
@@ -229,10 +230,10 @@ impl ArborExecutor {
             if let Ok(Some((explanation, remedy))) =
                 backend.diagnose_error_internal(&stderr, &stdout).await
             {
-                combined_logs.push_str(&format!(
+                write!(combined_logs,
                     "\n---\n[MYTHRAX AUTO-DIAGNOSTIC]: A matching failure was resolved in the database.\n- Causal Explanation: {}\n- Prescribed Remedy: {}\n---\n",
                     explanation, remedy
-                ));
+                ).unwrap();
             }
         }
 

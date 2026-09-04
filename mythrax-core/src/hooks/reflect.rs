@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use anyhow::Result;
 use chrono::Utc;
 use std::fs;
@@ -57,11 +58,11 @@ pub async fn handle_reflect(
             } else {
                 content.clone()
             };
-            transcript_summary.push_str(&format!("{}: {}\n", type_str, clipped));
+            write!(transcript_summary, "{}: {}\n", type_str, clipped).unwrap();
         }
         if let Some(ref calls) = step.tool_calls {
             for call in calls {
-                transcript_summary.push_str(&format!("Tool call: {}\n", call.name));
+                write!(transcript_summary, "Tool call: {}\n", call.name).unwrap();
             }
         }
     }
@@ -245,7 +246,7 @@ pub async fn collect_policy_context(backend: &dyn StorageBackend, scope: &str) -
     }
     let mut out = String::from("\n> [!CAUTION]\n> **Actions to Avoid (Negative Policy Constraints):**\n");
     for node in pruned_nodes {
-        out.push_str(&format!("> - {}\n", node.claim));
+        write!(out, "> - {}\n", node.claim).unwrap();
     }
     Ok(out)
 }

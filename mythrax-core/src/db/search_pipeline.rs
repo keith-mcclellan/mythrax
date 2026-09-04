@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::contracts::{SearchParams, SearchResponse, SearchResult};
 use crate::db::SurrealBackend;
 use crate::db::backend::{
@@ -382,40 +383,40 @@ fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]
         let table = node.id.table.as_str();
         if table == "episode" {
             if let (Some(t), Some(c)) = (&node.title, &node.content) {
-                content.push_str(&format!("[Related Episode: {}]\n{}\n\n", t, c));
+                write!(content, "[Related Episode: {}]\n{}\n\n", t, c).unwrap();
             }
         } else if table == "wiki_node" {
             if let (Some(n), Some(c)) = (&node.name, &node.content) {
-                content.push_str(&format!("[Related Wiki Node: {}]\n{}\n\n", n, c));
+                write!(content, "[Related Wiki Node: {}]\n{}\n\n", n, c).unwrap();
             }
         } else if table == "entity" {
             if let (Some(n), Some(s)) = (&node.name, &node.summary) {
-                content.push_str(&format!("[Related Entity: {}]\n{}\n\n", n, s));
+                write!(content, "[Related Entity: {}]\n{}\n\n", n, s).unwrap();
             }
         } else if table == "wisdom" {
             let pattern = node.target_pattern.as_deref().unwrap_or("");
             let avoid = node.action_to_avoid.as_deref().unwrap_or("");
             let explanation = node.causal_explanation.as_deref().unwrap_or("");
             let remedy = node.prescribed_remedy.as_deref().unwrap_or("");
-            content.push_str(&format!(
+            write!(content,
                 "[Related Wisdom: {}]\nAction to avoid: {}\nCausal explanation: {}\nPrescribed remedy: {}\n\n",
                 pattern, avoid, explanation, remedy
-            ));
+            ).unwrap();
         } else if table == "hypothesis_node" {
             if node.status.as_deref() == Some("done") {
                 if let Some(c) = &node.content {
-                    content.push_str(&format!("[Related Hypothesis]\n{}\n\n", c));
+                    write!(content, "[Related Hypothesis]\n{}\n\n", c).unwrap();
                 }
             }
         } else if table == "handoff" {
             if let Some(s) = &node.summary {
-                content.push_str(&format!("[Related Handoff]\n{}\n\n", s));
+                write!(content, "[Related Handoff]\n{}\n\n", s).unwrap();
             }
         } else {
             if let Some(c) = &node.content {
-                content.push_str(&format!("[Related {}]\n{}\n\n", table, c));
+                write!(content, "[Related {}]\n{}\n\n", table, c).unwrap();
             } else if let Some(s) = &node.summary {
-                content.push_str(&format!("[Related {}]\n{}\n\n", table, s));
+                write!(content, "[Related {}]\n{}\n\n", table, s).unwrap();
             }
         }
     }
@@ -1239,7 +1240,7 @@ impl SurrealBackend {
                 ");
             }
 
-            vector_sql.push_str(&format!(
+            write!(vector_sql,
                 "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                        (utility ?? 50.0) AS utility
                 FROM wiki_node
@@ -1260,13 +1261,13 @@ impl SurrealBackend {
                   AND (embedding <|50, 50|> $query_embedding);
                 ",
                 wiki_node_filter = wiki_node_filter
-            ));
+            ).unwrap();
         }
 
         let mut keyword_sql = String::new();
         if is_hybrid || mode == "keyword" {
             if include_episodes {
-                keyword_sql.push_str(&format!(
+                write!(keyword_sql,
                     "SELECT id, title, content, embedding, vault_path, last_retrieved_at, importance, created_at, temporal_range_start, temporal_range_end, archived, archived_at, discovery_tokens, session_id, word_count, node_type, confidence,
                            (utility ?? 50.0) AS utility,
                            {fts_score_expr} AS bm25_score
@@ -1281,10 +1282,10 @@ impl SurrealBackend {
                     ",
                     fts_where_clause = fts_where_clause,
                     fts_score_expr = fts_score_expr
-                ));
+                ).unwrap();
             }
 
-            keyword_sql.push_str(&format!(
+            write!(keyword_sql,
                 "SELECT id, name AS title, content, embedding, vault_path, importance, created_at, temporal_range_start, temporal_range_end,
                        (utility ?? 50.0) AS utility
                 FROM wiki_node
@@ -1305,7 +1306,7 @@ impl SurrealBackend {
                   AND (scope IN [$target_scope, 'general'] OR $search_all = true);
                 ",
                 wiki_node_filter = wiki_node_filter
-            ));
+            ).unwrap();
         }
 
         let target_pattern = "AND ($session_prefix = NONE OR $session_prefix = NULL OR (session_id != NONE AND session_id != NULL AND string::starts_with(session_id, $session_prefix)) OR session_id = NONE OR session_id = NULL)";

@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::api::ApiState;
 use crate::contracts::HypothesisNode;
 use crate::db::SurrealBackend;
@@ -238,12 +239,12 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                         if let Some(children) = map.get(&parent_id) {
                             for child in children {
                                 let indent = "  ".repeat(depth);
-                                out.push_str(&format!(
+                                write!(out,
                                     "{}- [{}] `{}`: {}\n",
                                     indent, child.status, child.node_id, child.hypothesis
-                                ));
+                                ).unwrap();
                                 if let Some(ref i) = child.insight {
-                                    out.push_str(&format!("{}  - Insight: {}\n", indent, i));
+                                    write!(out, "{}  - Insight: {}\n", indent, i).unwrap();
                                 }
                                 render_level(Some(child.node_id.clone()), map, depth + 1, out);
                             }
@@ -256,7 +257,7 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                     let mut out = String::from("### Abstract Insights\n");
                     for node in &nodes {
                         if let Some(ref i) = node.insight {
-                            out.push_str(&format!("- `{}`: {}\n", node.node_id, i));
+                            write!(out, "- `{}`: {}\n", node.node_id, i).unwrap();
                         }
                     }
                     out
@@ -264,10 +265,10 @@ pub async fn handle_manage_arbor(state: &ApiState, args: Value) -> Result<Value>
                 "scores" => {
                     let mut out = String::from("### Node Evaluation Scores\n");
                     for node in &nodes {
-                        out.push_str(&format!(
+                        write!(out,
                             "- `{}` (Status: {}): Score: {:?}\n",
                             node.node_id, node.status, node.score
-                        ));
+                        ).unwrap();
                     }
                     out
                 }

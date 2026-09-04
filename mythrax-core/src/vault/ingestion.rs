@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
 use anyhow::Result;
@@ -29,14 +30,14 @@ fn ingest_cursor(path: &Path) -> Result<String> {
     while let Some(row) = rows.next()? {
         let key: String = row.get(0)?;
         let value: String = row.get(1)?;
-        result.push_str(&format!("### Key: {}\n", key));
+        write!(result, "### Key: {}\n", key).unwrap();
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&value) {
-            result.push_str(&format!(
+            write!(result,
                 "```json\n{}\n```\n\n",
                 serde_json::to_string_pretty(&json_val)?
-            ));
+            ).unwrap();
         } else {
-            result.push_str(&format!("{}\n\n", value));
+            write!(result, "{}\n\n", value).unwrap();
         }
     }
     if result.is_empty() {
@@ -71,7 +72,7 @@ fn ingest_hermes(path: &Path) -> Result<String> {
     while let Some(row) = rows.next()? {
         let role: String = row.get(0)?;
         let content: String = row.get(1)?;
-        result.push_str(&format!("**{}**: {}\n\n", role, content));
+        write!(result, "**{}**: {}\n\n", role, content).unwrap();
     }
     if result.is_empty() {
         anyhow::bail!("No messages found in table {}", table_name);
@@ -95,7 +96,7 @@ async fn parse_antigravity_log(
             let step_type = obj["type"].as_str().unwrap_or("");
             if step_type == "USER_INPUT" {
                 if let Some(content) = obj["content"].as_str() {
-                    markdown.push_str(&format!("## User Request\n{}\n\n", content));
+                    write!(markdown, "## User Request\n{}\n\n", content).unwrap();
 
                     user_turn_count += 1;
                     if user_turn_count > 1 {
@@ -141,7 +142,7 @@ async fn parse_antigravity_log(
             } else if step_type == "PLANNER_RESPONSE"
                 && let Some(content) = obj["content"].as_str()
             {
-                markdown.push_str(&format!("## Planner Response\n{}\n\n", content));
+                write!(markdown, "## Planner Response\n{}\n\n", content).unwrap();
             }
         }
     }
@@ -188,12 +189,12 @@ fn parse_claude_log(path: &Path) -> Result<String> {
                 for msg in messages {
                     let role = msg["role"].as_str().unwrap_or("unknown");
                     let content = msg["content"].as_str().unwrap_or("");
-                    markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+                    write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
                 }
             } else {
                 let role = obj["role"].as_str().unwrap_or("unknown");
                 let content = obj["content"].as_str().unwrap_or("");
-                markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+                write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
             }
         }
     }
@@ -211,13 +212,13 @@ fn parse_opencode_log(path: &Path) -> Result<String> {
         for msg in arr {
             let role = msg["role"].as_str().unwrap_or("unknown");
             let content = msg["content"].as_str().unwrap_or("");
-            markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+            write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
         }
     } else if let Some(arr) = json_val["messages"].as_array() {
         for msg in arr {
             let role = msg["role"].as_str().unwrap_or("unknown");
             let content = msg["content"].as_str().unwrap_or("");
-            markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+            write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
         }
     }
     if markdown.is_empty() {
@@ -234,13 +235,13 @@ fn parse_openclaw_log(path: &Path) -> Result<String> {
             for msg in arr {
                 let role = msg["role"].as_str().unwrap_or("unknown");
                 let content = msg["content"].as_str().unwrap_or("");
-                markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+                write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
             }
         } else if let Some(arr) = json_val["messages"].as_array() {
             for msg in arr {
                 let role = msg["role"].as_str().unwrap_or("unknown");
                 let content = msg["content"].as_str().unwrap_or("");
-                markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+                write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
             }
         }
         if !markdown.is_empty() {
@@ -257,7 +258,7 @@ fn parse_openclaw_log(path: &Path) -> Result<String> {
         if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
             let role = obj["role"].as_str().unwrap_or("unknown");
             let content = obj["content"].as_str().unwrap_or("");
-            markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+            write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
         }
     }
     if markdown.is_empty() {
@@ -283,7 +284,7 @@ fn parse_generic_jsonl(path: &Path) -> Result<String> {
                 .or_else(|| obj["text"].as_str())
                 .or_else(|| obj["message"].as_str())
                 .unwrap_or("");
-            markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+            write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
         }
     }
     if markdown.is_empty() {
@@ -313,13 +314,13 @@ fn parse_codex_log(path: &Path) -> Result<String> {
             for msg in arr {
                 let role = msg["role"].as_str().unwrap_or("unknown");
                 let content = msg["content"].as_str().unwrap_or("");
-                markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+                write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
             }
         } else if let Some(arr) = json_val["messages"].as_array() {
             for msg in arr {
                 let role = msg["role"].as_str().unwrap_or("unknown");
                 let content = msg["content"].as_str().unwrap_or("");
-                markdown.push_str(&format!("**{}**: {}\n\n", role, content));
+                write!(markdown, "**{}**: {}\n\n", role, content).unwrap();
             }
         }
         if !markdown.is_empty() {
@@ -345,7 +346,7 @@ fn parse_codex_log(path: &Path) -> Result<String> {
             current_content = trimmed[idx + 1..idx + 1 + end_idx].to_string();
         }
         if !current_role.is_empty() && !current_content.is_empty() {
-            markdown.push_str(&format!("**{}**: {}\n\n", current_role, current_content));
+            write!(markdown, "**{}**: {}\n\n", current_role, current_content).unwrap();
             current_role.clear();
             current_content.clear();
         }
@@ -882,7 +883,7 @@ pub async fn bulk_ingest_vault(
                                 uuid_suffix
                             );
                             let part_path = crate::vault::organization::episode_relative_path(&part_file);
-                            parent_parts_list.push_str(&format!("- [[{}]]\n", part_path));
+                            write!(parent_parts_list, "- [[{}]]\n", part_path).unwrap();
                         }
                         let parent_content = format!(
                             "---\ntitle: \"{}\"\nscope: \"{}\"\nsource: \"antigravity\"\n---\n\n# {}\n{}",
@@ -939,7 +940,7 @@ pub async fn bulk_ingest_vault(
                         if !resolved_artifacts.is_empty() {
                             linked_artifacts_section.push_str("\n\n## Linked Artifacts\n");
                             for (_, _, wikilink, _) in &resolved_artifacts {
-                                linked_artifacts_section.push_str(&format!("- [[{}]]\n", wikilink));
+                                write!(linked_artifacts_section, "- [[{}]]\n", wikilink).unwrap();
                             }
                         }
 
@@ -950,7 +951,7 @@ pub async fn bulk_ingest_vault(
                             let parent_target = parent_relative_path
                                 .strip_suffix(".md")
                                 .unwrap_or(&parent_relative_path);
-                            nav_callout.push_str(&format!("> Parent: [[{}]]\n", parent_target));
+                            write!(nav_callout, "> Parent: [[{}]]\n", parent_target).unwrap();
 
                             let prev_str = if chunk_idx > 0 {
                                 let prev_path = format!(
@@ -975,8 +976,7 @@ pub async fn bulk_ingest_vault(
                                 "None".to_string()
                             };
 
-                            nav_callout
-                                .push_str(&format!("> Prev: {} | Next: {}\n", prev_str, next_str));
+                            write!(nav_callout, "> Prev: {} | Next: {}\n", prev_str, next_str).unwrap();
                         }
 
                         let note_content = format!(
@@ -1506,7 +1506,7 @@ async fn post_ingestion_compaction_and_cleanup(
     let mut moc_content = format!("# Map of Content: {}\n\n## Wiki Nodes\n", scope);
     for node in wiki_nodes {
         if node.scope == scope {
-            moc_content.push_str(&format!("- [[wiki/{}/{}|{}]]\n", scope, node.name, node.name));
+            write!(moc_content, "- [[wiki/{}/{}|{}]]\n", scope, node.name, node.name).unwrap();
         }
     }
     let moc_path = format!("wiki/{}/MOC.md", scope);

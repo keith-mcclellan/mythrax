@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::contracts::{Entity, EpisodeSave, WikiNode, WisdomRule};
 use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
@@ -1295,7 +1296,7 @@ pub fn format_episode_markdown(episode: &EpisodeSave) -> String {
     }
 
     let scope_str = episode.scope.as_deref().unwrap_or("general");
-    body.push_str(&format!("\n\n## Synthesized Into\n- [[wiki/{}/MOC|Scope Map of Content]]\n", scope_str));
+    write!(body, "\n\n## Synthesized Into\n- [[wiki/{}/MOC|Scope Map of Content]]\n", scope_str).unwrap();
     body.push_str("\n## Temporal Navigation\n- **Sequence**: Episode captured in timeline\n");
 
     body
@@ -1363,7 +1364,7 @@ pub fn format_wisdom_markdown(rule: &WisdomRule) -> String {
     if !rule.source_episodes.is_empty() {
         body.push_str("\n## Source Episodes\n");
         for ep_id in &rule.source_episodes {
-            body.push_str(&format!("- [[{}]]\n", ep_id));
+            write!(body, "- [[{}]]\n", ep_id).unwrap();
         }
     }
 

@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use crate::contracts::ForgedSectionBatch;
 use crate::db::backend::{StorageBackend, SurrealBackend, record_key_to_string, unescape_id_part};
 use anyhow::Result;
@@ -263,7 +264,7 @@ impl SurrealBackend {
         );
         bindings.insert("ep_embedding".to_string(), serde_json::json!(ep_embedding));
 
-        query.push_str(&format!(
+        write!(query,
             "LET $ep = type::record('episode', '{}');\n\
              CREATE $ep CONTENT {{\n\
                  title: $ep_title,\n\
@@ -281,7 +282,7 @@ impl SurrealBackend {
                  access_count: 0\n\
              }};\n",
             episode_uuid, ep_metrics_uuid
-        ));
+        ).unwrap();
 
         for (idx, concept) in batch.concepts.iter().enumerate() {
             let concept_uuid = &concept_uuids[idx];
@@ -300,13 +301,13 @@ impl SurrealBackend {
             bindings.insert(path_var.clone(), serde_json::json!(concept_paths[idx]));
             bindings.insert(emb_var.clone(), serde_json::json!(concept_embeddings[idx]));
 
-            query.push_str(&format!(
+            write!(query,
                 "LET $concept_{} = type::record('wiki_node', '{}');\n",
                 idx, concept_uuid
-            ));
+            ).unwrap();
 
             if is_update {
-                query.push_str(&format!(
+                write!(query,
                     "UPDATE $concept_{} MERGE {{\n\
                           name: ${},\n\
                           content: ${},\n\
@@ -315,9 +316,9 @@ impl SurrealBackend {
                           embedding: ${} ?? none\n\
                       }};\n",
                     idx, name_var, content_var, path_var, emb_var
-                ));
+                ).unwrap();
             } else {
-                query.push_str(&format!(
+                write!(query,
                     "CREATE $concept_{} CONTENT {{\n\
                           name: ${},\n\
                           content: ${},\n\
@@ -326,13 +327,13 @@ impl SurrealBackend {
                           embedding: ${} ?? none\n\
                       }};\n",
                     idx, name_var, content_var, path_var, emb_var
-                ));
+                ).unwrap();
             }
 
-            query.push_str(&format!(
+            write!(query,
                 "RELATE $concept_{} -> relates_to -> $ep UNIQUE CONTENT {{ relation: 'extracted_from', created_at: time::now() }};\n",
                 idx
-            ));
+            ).unwrap();
         }
 
         for (idx, rule) in batch.rules.iter().enumerate() {
@@ -378,7 +379,7 @@ impl SurrealBackend {
                 serde_json::json!(vec![format!("episode:{}", episode_uuid)]),
             );
 
-            query.push_str(&format!(
+            write!(query,
                 "LET $rule_{} = type::record('wisdom', '{}');\n\
                  CREATE $rule_{} CONTENT {{\n\
                      target_pattern: ${},\n\
@@ -412,18 +413,18 @@ impl SurrealBackend {
                 rule_metrics_uuid,
                 idx,
                 idx
-            ));
+            ).unwrap();
 
             for (c_idx, _) in batch.concepts.iter().enumerate() {
-                query.push_str(&format!(
+                write!(query,
                     "RELATE $rule_{} -> relates_to -> $concept_{} UNIQUE CONTENT {{ created_at: time::now() }};\n",
                     idx, c_idx
-                ));
+                ).unwrap();
             }
-            query.push_str(&format!(
+            write!(query,
                 "RELATE $rule_{} -> relates_to -> $ep UNIQUE CONTENT {{ relation: 'extracted_from', created_at: time::now() }};\n",
                 idx
-            ));
+            ).unwrap();
         }
 
         query.push_str("COMMIT TRANSACTION;");

@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use super::*;
 use crate::api::ApiState;
 use crate::cognitive::paging::intercept_and_restore_symbols;
@@ -275,10 +276,10 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
                     content_slice = format!("{}... [truncated]", &content_slice[..truncate_idx]);
                 }
 
-                text.push_str(&format!(
+                write!(text,
                     "### [{:.4}] {}: {} (`{}`)\n**Scope:** {} | **Tier:** {} | **Path:** `{}`\n{}\n\n",
                     score, node_type, title, id, scope, node_type, vault_path, content_slice
-                ));
+                ).unwrap();
             }
 
             if search_res.has_more {
@@ -291,10 +292,10 @@ pub async fn handle_query_memory(state: &ApiState, args: Value) -> Result<Value>
 
             if let Some(ref omitted) = search_res.omitted_ids {
                 if !omitted.is_empty() {
-                    text.push_str(&format!(
+                    write!(text,
                         "\n\n=== BUDGET NOTICE: The following record IDs were omitted due to token budget limits ({} tokens):\n{:?} ===",
                         token_budget.unwrap_or(0), omitted
-                    ));
+                    ).unwrap();
                 }
             }
 
