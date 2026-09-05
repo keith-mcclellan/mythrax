@@ -8,6 +8,7 @@ use crate::contracts::{EpisodeSave, Tier, TranscriptStep, WisdomRule};
 use crate::db::CognitiveTask;
 use crate::db::StorageBackend;
 use crate::db::SurrealBackend;
+use std::fmt::Write as _;
 
 pub async fn handle_reflect(
     session_id: &str,
@@ -57,11 +58,11 @@ pub async fn handle_reflect(
             } else {
                 content.clone()
             };
-            transcript_summary.push_str(&format!("{}: {}\n", type_str, clipped));
+            write!(transcript_summary, "{}: {}\n", type_str, clipped).unwrap();
         }
         if let Some(ref calls) = step.tool_calls {
             for call in calls {
-                transcript_summary.push_str(&format!("Tool call: {}\n", call.name));
+                write!(transcript_summary, "Tool call: {}\n", call.name).unwrap();
             }
         }
     }
@@ -243,9 +244,10 @@ pub async fn collect_policy_context(backend: &dyn StorageBackend, scope: &str) -
     if pruned_nodes.is_empty() {
         return Ok(String::new());
     }
-    let mut out = String::from("\n> [!CAUTION]\n> **Actions to Avoid (Negative Policy Constraints):**\n");
+    let mut out =
+        String::from("\n> [!CAUTION]\n> **Actions to Avoid (Negative Policy Constraints):**\n");
     for node in pruned_nodes {
-        out.push_str(&format!("> - {}\n", node.claim));
+        write!(out, "> - {}\n", node.claim).unwrap();
     }
     Ok(out)
 }

@@ -10,6 +10,7 @@ use tokio::sync::Semaphore;
 
 #[cfg(feature = "mlx")]
 use mlx_rs::{Array, StreamOrDevice};
+use std::fmt::Write as _;
 #[cfg(feature = "mlx")]
 use tokenizers::Tokenizer;
 
@@ -179,11 +180,11 @@ impl LLMClient {
         system_instruction: &str,
         prompt: &str,
     ) -> Result<String> {
-        let profile = crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction);
-        self.routed_completion(db, &profile, Some(system_instruction), prompt).await
+        let profile =
+            crate::contracts::TaskProfile::new(crate::contracts::TaskArchetype::Extraction);
+        self.routed_completion(db, &profile, Some(system_instruction), prompt)
+            .await
     }
-
-
 
     pub async fn routed_completion(
         &self,
@@ -249,16 +250,16 @@ impl RealLlmProvider {
         system_instruction: Option<&str>,
         prompt: &str,
     ) -> Result<String> {
-        let mock_llm = crate::is_test_mock() || match db.get_profile_key("llm.mock").await {
-            Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
-            _ => false,
-        };
+        let mock_llm = crate::is_test_mock()
+            || match db.get_profile_key("llm.mock").await {
+                Ok(Some(val_str)) => val_str.parse::<bool>().unwrap_or(false),
+                _ => false,
+            };
         if mock_llm {
             return self
                 .completion_explicit(db, "mock", "", "", system_instruction, prompt, false, true)
                 .await;
         }
-
 
         // --- 1. PRIORITY 1: COGNITIVE CALLBACK ---
         if std::env::var("MYTHRAX_BOOTSTRAPPING").is_err() {
@@ -311,7 +312,11 @@ impl RealLlmProvider {
                     }
 
                     let _ = surreal_backend
-                        .update_cognitive_task_status(&task_id, crate::db::TaskStatus::Pending, None)
+                        .update_cognitive_task_status(
+                            &task_id,
+                            crate::db::TaskStatus::Pending,
+                            None,
+                        )
                         .await;
                     tracing::warn!(
                         "Cognitive callback timed out for task {}, re-queued in Pending status for Cloud Brain resolution",
@@ -322,7 +327,6 @@ impl RealLlmProvider {
                         "Failed to create cognitive task, falling back to direct cloud / local models"
                     );
                 }
-
             }
         }
 
@@ -444,7 +448,9 @@ impl RealLlmProvider {
 
         // --- 3. PRIORITY 3: LOCAL MODEL (FALLBACK) ---
         if std::env::var("MYTHRAX_DISABLE_FALLBACK").is_ok() {
-            anyhow::bail!("Local model fallback is disabled (MYTHRAX_DISABLE_FALLBACK is set). Waiting for Cloud Brain cognitive callback.");
+            anyhow::bail!(
+                "Local model fallback is disabled (MYTHRAX_DISABLE_FALLBACK is set). Waiting for Cloud Brain cognitive callback."
+            );
         }
 
         let tier = crate::llm::router::route_task(db, profile).await;
@@ -588,7 +594,9 @@ impl RealLlmProvider {
         is_mock: bool,
     ) -> Result<String> {
         if active_provider == "mock" || is_mock {
-            if system_instruction.map(|s| s.contains("facts") || s.contains("OUTPUT SCHEMA")).unwrap_or(false)
+            if system_instruction
+                .map(|s| s.contains("facts") || s.contains("OUTPUT SCHEMA"))
+                .unwrap_or(false)
                 || prompt.contains("VAULT PATH:")
                 || prompt.contains("SOURCE CODE:")
                 || prompt.contains("REFERENCE SOURCE:")
@@ -659,23 +667,38 @@ impl RealLlmProvider {
                 } else {
                     return Ok(r#"{"title": "Split Analysis Other", "summary": "Summary of other cluster containing key decisions and outcomes for this episode.", "metacognitive_confidence": 3, "node_type": "insight"}"#.to_string());
                 }
-            } else if system_instruction.map(|s| s.contains("FormHypothesesResponse") || s.contains("hypotheses")).unwrap_or(false) || prompt.contains("Hypotheses") {
+            } else if system_instruction
+                .map(|s| s.contains("FormHypothesesResponse") || s.contains("hypotheses"))
+                .unwrap_or(false)
+                || prompt.contains("Hypotheses")
+            {
                 return Ok(r#"{"hypotheses": [{"claim": "Test Formed Claim", "insight": "Test Formed Insight", "fact_indices": [0], "slug": "test_claim"}]}"#.to_string());
-            } else if system_instruction.map(|s| s.contains("RefineHypothesisResponse") || s.contains("refine")).unwrap_or(false) || prompt.contains("Refining") {
+            } else if system_instruction
+                .map(|s| s.contains("RefineHypothesisResponse") || s.contains("refine"))
+                .unwrap_or(false)
+                || prompt.contains("Refining")
+            {
                 return Ok(r#"{"action": "support", "new_confidence": 0.85, "refined_insight": "Refined test insight", "reasoning": "Mock test support"}"#.to_string());
-            } else if system_instruction.map(|s| s.contains("AncestorMergeResponse") || s.contains("merge")).unwrap_or(false) || prompt.contains("Merge") {
+            } else if system_instruction
+                .map(|s| s.contains("AncestorMergeResponse") || s.contains("merge"))
+                .unwrap_or(false)
+                || prompt.contains("Merge")
+            {
                 return Ok("{\"suggested_path\": \"wiki/test/test_topic.md\", \"title\": \"Test Topic Title\", \"markdown_content\": \"# Test Topic\\n\\nTest content\"}".to_string());
-            } else if system_instruction.map(|s| s.contains("GraduationResponse") || s.contains("graduation")).unwrap_or(false) || prompt.contains("Graduation") {
-                return Ok(r#"{"scope": "universal", "reasoning": "Applies across projects"}"#.to_string());
+            } else if system_instruction
+                .map(|s| s.contains("GraduationResponse") || s.contains("graduation"))
+                .unwrap_or(false)
+                || prompt.contains("Graduation")
+            {
+                return Ok(
+                    r#"{"scope": "universal", "reasoning": "Applies across projects"}"#.to_string(),
+                );
             } else {
                 return Ok(
                     r#"[{"name": "test_concept", "content": "test_explanation"}]"#.to_string(),
                 );
             }
         }
-
-
-
 
         let config = db.get_llm_config().await?;
 
@@ -913,7 +936,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
     ) -> Result<String> {
         let mut files_context = String::new();
         for (path, content) in target_files {
-            files_context.push_str(&format!("--- FILE: {} ---\n{}\n\n", path, content));
+            write!(files_context, "--- FILE: {} ---\n{}\n\n", path, content).unwrap();
         }
 
         // Query Wisdom Rules semantically for all tiers
@@ -945,14 +968,16 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                 "\n\nHere are some relevant Wisdom Rules to follow during code generation:\n",
             );
             for (idx, r) in rules.iter().enumerate() {
-                wisdom_injection.push_str(&format!(
+                write!(
+                    wisdom_injection,
                     "{}. [Rule: {}]\n   - Action to Avoid: {}\n   - Why: {}\n   - Remedy: {}\n",
                     idx + 1,
                     r.target_pattern,
                     r.action_to_avoid,
                     r.causal_explanation,
                     r.prescribed_remedy
-                ));
+                )
+                .unwrap();
             }
         }
 
@@ -962,7 +987,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
                 "\n\nYou MUST respect the following constraints during code generation:\n",
             );
             for c in constraints {
-                constraints_injection.push_str(&format!("- {}\n", c));
+                write!(constraints_injection, "- {}\n", c).unwrap();
             }
         }
 
@@ -971,7 +996,7 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             stm_injection
                 .push_str("\n\nActive Short Term Memory (STM) anchors to guide your ideation:\n");
             for anchor in stm_anchors {
-                stm_injection.push_str(&format!("- {}\n", anchor));
+                write!(stm_injection, "- {}\n", anchor).unwrap();
             }
         }
 
@@ -1949,7 +1974,9 @@ mod tests {
     #[tokio::test]
     async fn test_acquire_llm_cache_hit_updates_state() {
         let temp = tempfile::tempdir().unwrap();
-        let broker = DynamicModelBroker::new(temp.path().to_path_buf()).await.unwrap();
+        let broker = DynamicModelBroker::new(temp.path().to_path_buf())
+            .await
+            .unwrap();
 
         let model1 = broker.acquire_llm(ModelTier::Tier1).await.unwrap();
         assert_eq!(broker.active_tier(), Some(ModelTier::Tier1));
@@ -1958,7 +1985,9 @@ mod tests {
         // Cache hit call
         let model2 = broker.acquire_llm(ModelTier::Tier1).await.unwrap();
         assert_eq!(broker.active_tier(), Some(ModelTier::Tier1));
-        let weak_ref = broker.get_weak_llm_reference().expect("Weak ref should exist");
+        let weak_ref = broker
+            .get_weak_llm_reference()
+            .expect("Weak ref should exist");
         assert!(Arc::ptr_eq(&model1, &model2));
         assert!(weak_ref.upgrade().is_some());
     }

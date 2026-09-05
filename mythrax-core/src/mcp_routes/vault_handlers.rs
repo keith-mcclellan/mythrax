@@ -6,6 +6,7 @@ use crate::vault::ingestion::bulk_ingest_vault;
 use crate::verify::run_workspace_audit;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 use std::sync::Arc;
 use surrealdb_types::SurrealValue;
 
@@ -38,7 +39,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
 
             let mut total_episodes = 0;
             let mut missing_count = 0;
-            
+
             let mut offset = 0;
             let limit = 500;
             loop {
@@ -47,7 +48,7 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                     break;
                 }
                 total_episodes += page.len();
-                
+
                 for ep in &page {
                     if let Some(ref vp) = ep.vault_path {
                         if vp.starts_with("episodes/") {
@@ -57,13 +58,15 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                         if !path.exists() {
                             missing_count += 1;
                             if fix {
-                                let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
-                                    .scope(ep.scope.clone())
-                                    .vault_path(Some(vp.clone()))
-                                    .source_episode(ep.source_episode.clone())
-                                    .node_type(ep.node_type.clone())
-                                    .build();
-                                let markdown = crate::vault::watcher::format_episode_markdown(&save);
+                                let save =
+                                    EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                                        .scope(ep.scope.clone())
+                                        .vault_path(Some(vp.clone()))
+                                        .source_episode(ep.source_episode.clone())
+                                        .node_type(ep.node_type.clone())
+                                        .build();
+                                let markdown =
+                                    crate::vault::watcher::format_episode_markdown(&save);
                                 state.store.write_file(vp, &markdown)?;
                             }
                         }
@@ -91,10 +94,8 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 .unwrap_or(false);
 
             if reset_processed {
-                if let Some(surreal_backend) = state
-                    .backend
-                    .as_any()
-                    .downcast_ref::<SurrealBackend>()
+                if let Some(surreal_backend) =
+                    state.backend.as_any().downcast_ref::<SurrealBackend>()
                 {
                     let _ = surreal_backend
                         .db
@@ -116,12 +117,13 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                         }
                         for ep in page {
                             if ep.embedding.is_none() || reset_processed {
-                                let save = EpisodeSave::builder(ep.title.clone(), ep.content.clone())
-                                    .scope(ep.scope.clone())
-                                    .vault_path(ep.vault_path.clone())
-                                    .source_episode(ep.source_episode.clone())
-                                    .node_type(ep.node_type.clone())
-                                    .build();
+                                let save =
+                                    EpisodeSave::builder(ep.title.clone(), ep.content.clone())
+                                        .scope(ep.scope.clone())
+                                        .vault_path(ep.vault_path.clone())
+                                        .source_episode(ep.source_episode.clone())
+                                        .node_type(ep.node_type.clone())
+                                        .build();
                                 let _ = backend.save_episode(&save).await;
 
                                 // ONLY trigger LLM fact re-extraction when reset_processed is explicitly true!
@@ -141,7 +143,10 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                         break;
                     }
                 }
-                tracing::info!("Background episode reprocessing completed (processed {} episodes).", count);
+                tracing::info!(
+                    "Background episode reprocessing completed (processed {} episodes).",
+                    count
+                );
             });
 
             Ok(json!({
@@ -195,8 +200,18 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             let state_clone = state.clone();
             tokio::spawn(async move {
                 let scope_name = scope_clone.as_deref().unwrap_or("general");
-                if let Err(e) = crate::cognitive::pipeline::refine_hypotheses(state_clone.backend.as_ref(), None, scope_name).await {
-                    tracing::error!("Background refinement failed for scope '{}': {:?}", scope_name, e);
+                if let Err(e) = crate::cognitive::pipeline::refine_hypotheses(
+                    state_clone.backend.as_ref(),
+                    None,
+                    scope_name,
+                )
+                .await
+                {
+                    tracing::error!(
+                        "Background refinement failed for scope '{}': {:?}",
+                        scope_name,
+                        e
+                    );
                 }
 
                 crate::embeddings::evict_global_embedder();
@@ -324,18 +339,14 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
                 let mut text = "Dry-Run Summary:\n".to_string();
                 text.push_str("Stale Sessions:\n");
                 for (sess, dt) in &stale_sessions {
-                    text.push_str(&format!("- {} (last active: {})\n", sess, dt.to_rfc3339()));
+                    write!(text, "- {} (last active: {})\n", sess, dt.to_rfc3339()).unwrap();
                 }
                 if stale_sessions.is_empty() {
                     text.push_str("  None\n");
                 }
                 text.push_str("Stale Git Branches:\n");
                 for (branch, dt) in &stale_branches {
-                    text.push_str(&format!(
-                        "- {} (last commit: {})\n",
-                        branch,
-                        dt.to_rfc3339()
-                    ));
+                    write!(text, "- {} (last commit: {})\n", branch, dt.to_rfc3339()).unwrap();
                 }
                 if stale_branches.is_empty() {
                     text.push_str("  None\n");
@@ -513,12 +524,13 @@ pub async fn handle_ingest_knowledge(state: &ApiState, args: Value) -> Result<Va
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            let source_path_buf = if source == "antigravity" || !std::path::Path::new(source).exists() {
-                let home = std::env::var("HOME").unwrap_or_default();
-                std::path::PathBuf::from(home).join(".gemini/antigravity/brain")
-            } else {
-                std::path::PathBuf::from(source)
-            };
+            let source_path_buf =
+                if source == "antigravity" || !std::path::Path::new(source).exists() {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    std::path::PathBuf::from(home).join(".gemini/antigravity/brain")
+                } else {
+                    std::path::PathBuf::from(source)
+                };
 
             if async_mode {
                 let state_clone = state.clone();
@@ -818,7 +830,9 @@ pub async fn run_bootstrap_internal(
     let mut wisdom_count = 0;
     if !dry_run {
         let harvester = crate::cognitive::harvest::Harvester::new();
-        let _ = harvester.harvest_skills(&*state.backend, &state.store).await;
+        let _ = harvester
+            .harvest_skills(&*state.backend, &state.store)
+            .await;
         if let Ok(w_count) = crate::vault::distillation::seed_wisdom_from_rules(
             state.backend.as_ref(),
             &state.store.vault_root,

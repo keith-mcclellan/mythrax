@@ -1,5 +1,6 @@
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde_yaml::Value;
+use std::fmt::Write as _;
 
 /// Parses YAML frontmatter (between `---` lines) and extracts metadata.
 /// Returns `(Some(Value), remainder)` if valid frontmatter is found,
@@ -96,9 +97,6 @@ pub fn sanitize_body_title_repetitions(body: &str, title_candidates: &[&str]) ->
     clean_lines.join("\n")
 }
 
-
-
-
 /// Strips markdown styling, headers, formatting, raw HTML, links, and code blocks
 /// to produce clean, plain text for indexing/embeddings.
 pub fn extract_plain_text(markdown: &str) -> String {
@@ -142,7 +140,10 @@ fn append_text(plain_text: &mut String, text: &str) {
 }
 
 /// Formats a WikiNode into standard Arbor quadruplet Markdown format with frontmatter and Wikilinks.
-pub fn format_arbor_wiki_node_markdown(node: &crate::contracts::WikiNode, related_links: &[String]) -> String {
+pub fn format_arbor_wiki_node_markdown(
+    node: &crate::contracts::WikiNode,
+    related_links: &[String],
+) -> String {
     let mut yaml_val = serde_json::Map::new();
     yaml_val.insert("name".to_string(), serde_json::json!(node.name));
     yaml_val.insert("scope".to_string(), serde_json::json!(node.scope));
@@ -163,22 +164,22 @@ pub fn format_arbor_wiki_node_markdown(node: &crate::contracts::WikiNode, relate
     let mut body = format!("---\n{}\n---\n# {}\n\n", yaml_str.trim(), node.name);
 
     if let Some(ref h) = node.hypothesis {
-        body.push_str(&format!("## Claim ($h_n$)\n{}\n\n", h));
+        write!(body, "## Claim ($h_n$)\n{}\n\n", h).unwrap();
     }
 
     if let Some(ref ci) = node.causal_insight {
-        body.push_str(&format!("## Causal Insight ($\\iota_n$)\n{}\n\n", ci));
+        write!(body, "## Causal Insight ($\\iota_n$)\n{}\n\n", ci).unwrap();
     }
 
     if !node.content.is_empty() {
-        body.push_str(&format!("## Synthesis\n{}\n\n", node.content));
+        write!(body, "## Synthesis\n{}\n\n", node.content).unwrap();
     }
 
     if let Some(ref ev) = node.raw_evidence {
         if !ev.is_empty() {
             body.push_str("## Evidence ($r_n$)\n");
             for e in ev {
-                body.push_str(&format!("- {}\n", e));
+                write!(body, "- {}\n", e).unwrap();
             }
             body.push('\n');
         }
@@ -189,7 +190,7 @@ pub fn format_arbor_wiki_node_markdown(node: &crate::contracts::WikiNode, relate
             body.push_str("## Artifact References ($\\mu_n$)\n");
             for r in refs {
                 let target = r.strip_suffix(".md").unwrap_or(r);
-                body.push_str(&format!("- [[{}|{}]]\n", target, r));
+                write!(body, "- [[{}|{}]]\n", target, r).unwrap();
             }
             body.push('\n');
         }
@@ -198,7 +199,7 @@ pub fn format_arbor_wiki_node_markdown(node: &crate::contracts::WikiNode, relate
     if !related_links.is_empty() {
         body.push_str("## Graph Relations\n");
         for link in related_links {
-            body.push_str(&format!("- {}\n", link));
+            write!(body, "- {}\n", link).unwrap();
         }
         body.push('\n');
     }
@@ -247,7 +248,7 @@ mod tests {
         let title = "general/cto_review_critique_part1";
         let short_title = "cto_review_critique_part1";
         let body = "cto_review_critique_part1 cto_review_critique_part1 cto_review_critique_part1 cto_review_critique_part1\n\n# cto_review_critique_part1\n\n# general/cto_review_critique_part1\n\nCTO Adversarial Critique: Mythrax v2.6.0 Code Review\nReviewer : Adversarial CTO Reviewer";
-        
+
         let cleaned = sanitize_body_title_repetitions(body, &[title, short_title]);
         assert_eq!(
             cleaned,
@@ -255,4 +256,3 @@ mod tests {
         );
     }
 }
-
