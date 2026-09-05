@@ -358,12 +358,12 @@ pub async fn handle_manage_vault(state: &ApiState, args: Value) -> Result<Value>
             // 4. Perform actual cleanup
             for (sess, _) in &stale_sessions {
                 let _ = state.backend.clear_stm(sess).await;
-                let delete_queries = format!("
-                    DELETE FROM chat_history WHERE session_id = '{}';
-                    DELETE FROM belief_state WHERE session_id = '{}';
-                    DELETE FROM handoff WHERE parent_conversation_id = '{}' OR subagent_conversation_id = '{}';
-                ", sess, sess, sess, sess);
-                let _ = surreal_backend.db.query(&delete_queries).await;
+                let delete_queries = "
+                    DELETE FROM chat_history WHERE session_id = $session_id;
+                    DELETE FROM belief_state WHERE session_id = $session_id;
+                    DELETE FROM handoff WHERE parent_conversation_id = $session_id OR subagent_conversation_id = $session_id;
+                ";
+                let _ = surreal_backend.db.query(delete_queries).bind(("session_id", sess.clone())).await;
             }
 
             for (branch, _) in &stale_branches {
