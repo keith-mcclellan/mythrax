@@ -11829,3 +11829,47 @@ query: "Bulk Content 19", profile: 1us, embed: 3774us, terms: 2244us, db: 4200us
 query: "Write 4", profile: 2us, embed: 57247us, terms: 155983us, db: 53368us, rerank_start: 87094us, total: 353842us
 query: "Bulk Content 19", profile: 1us, embed: 89183us, terms: 56801us, db: 40015us, rerank_start: 33396us, total: 219459us
 query: "mythrax refactor architecture spec test harness isolation memory gate", profile: 11us, embed: 817us, terms: 22us, db: 49364us, rerank_start: 215us, total: 50437us
+query: "Database index compression", profile: 12us, embed: 42842us, terms: 9561us, db: 42392us, rerank_start: 10246us, total: 105165us
+query: "Database index compression", profile: 201065us, embed: 14900us, terms: 286us, db: 35189us, rerank_start: 11824us, total: 263333us
+query: "Hello, how do I optimize the pipeline?", profile: 6265us, embed: 12689us, terms: 7728us, db: 14602us, rerank_start: 7064us, total: 48445us
+query: "current status", profile: 6333us, embed: 10955us, terms: 7771us, db: 14081us, rerank_start: 7479us, total: 46751us
+query: "Sure, OK", profile: 7us, embed: 12533us, terms: 161us, db: 21458us, rerank_start: 3124us, total: 37464us
+query: "Sure thing", profile: 2us, embed: 37285us, terms: 116us, db: 19900us, rerank_start: 3553us, total: 61055us
+query: "troubleshooting process", profile: 7us, embed: 10947us, terms: 133us, db: 19083us, rerank_start: 2860us, total: 33248us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 7us, embed: 11717us, terms: 124us, db: 23734us, rerank_start: 2983us, total: 38799us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 3us, embed: 57481us, terms: 126us, db: 23827us, rerank_start: 3007us, total: 84685us
+query: "This episode is pruned", profile: 6us, embed: 11996us, terms: 104us, db: 17378us, rerank_start: 2800us, total: 32374us
+query: "What compile actions did I run?", profile: 13us, embed: 16085us, terms: 153us, db: 25772us, rerank_start: 60426us, total: 123278us
+query: "Hydration", profile: 6us, embed: 10665us, terms: 162us, db: 17782us, rerank_start: 3148us, total: 31943us
+query: "Big Episode", profile: 6us, embed: 11006us, terms: 150us, db: 36362us, rerank_start: 4044us, total: 57640us
+query: "Big Episode", profile: 10us, embed: 11797us, terms: 109us, db: 36667us, rerank_start: 4589us, total: 59234us
+query: "Episode", profile: 6us, embed: 22534us, terms: 258us, db: 39737us, rerank_start: 5599us, total: 68856us
+query: "Timeline Episode 3", profile: 9us, embed: 25476us, terms: 2118us, db: 25688us, rerank_start: 3375us, total: 56937us
+query: "test query", profile: 7130us, embed: 10894us, terms: 8124us, db: 16866us, rerank_start: 8169us, total: 51271us
+query: "workspace project context", profile: 6812us, embed: 11130us, terms: 155us, db: 19111us, rerank_start: 10152us, total: 47892us
+query: "workspace project context", profile: 6350us, embed: 11923us, terms: 7803us, db: 16315us, rerank_start: 7317us, total: 49795us
+query: "workspace project context", profile: 6069us, embed: 13942us, terms: 8384us, db: 19443us, rerank_start: 6870us, total: 54794us
+query: "workspace project context", profile: 6157us, embed: 10357us, terms: 8151us, db: 17757us, rerank_start: 7410us, total: 49921us
+query: "workspace project context", profile: 6700us, embed: 10711us, terms: 7802us, db: 15379us, rerank_start: 11107us, total: 51793us
+query: "Database index compression", profile: 13us, embed: 37667us, terms: 7689us, db: 33220us, rerank_start: 9097us, total: 87802us
+query: "Database index compression", profile: 162374us, embed: 10669us, terms: 115us, db: 25651us, rerank_start: 8733us, total: 207615us
+query: "Hello, how do I optimize the pipeline?", profile: 6773us, embed: 11268us, terms: 7581us, db: 14272us, rerank_start: 7297us, total: 47286us
+query: "current status", profile: 6386us, embed: 10791us, terms: 7565us, db: 14040us, rerank_start: 7103us, total: 45981us
+query: "Sure, OK", profile: 6us, embed: 10983us, terms: 100us, db: 17943us, rerank_start: 2710us, total: 31897us
+query: "Sure thing", profile: 1us, embed: 31812us, terms: 105us, db: 17973us, rerank_start: 2740us, total: 52791us
+query: "troubleshooting process", profile: 6us, embed: 10570us, terms: 149us, db: 19123us, rerank_start: 2760us, total: 32865us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 6us, embed: 11219us, terms: 121us, db: 23725us, rerank_start: 3028us, total: 38325us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 2us, embed: 54602us, terms: 123us, db: 22779us, rerank_start: 2655us, total: 80441us
+query: "This episode is pruned", profile: 5us, embed: 10543us, terms: 107us, db: 14593us, rerank_start: 2373us, total: 27694us
+query: "What compile actions did I run?", profile: 8us, embed: 15583us, terms: 140us, db: 23215us, rerank_start: 59760us, total: 118636us
+query: "Hydration", profile: 5us, embed: 10462us, terms: 139us, db: 16140us, rerank_start: 2744us, total: 29653us
+query: "Big Episode", profile: 4us, embed: 10609us, terms: 136us, db: 34537us, rerank_start: 3923us, total: 55191us
+query: "Big Episode", profile: 6us, embed: 11166us, terms: 151us, db: 35896us, rerank_start: 3959us, total: 57313us
+query: "Episode", profile: 4us, embed: 10813us, terms: 100us, db: 19834us, rerank_start: 3060us, total: 34137us
+query: "Timeline Episode 3", profile: 6us, embed: 24036us, terms: 1942us, db: 24402us, rerank_start: 3063us, total: 53768us
+query: "test query", profile: 10890us, embed: 18968us, terms: 14821us, db: 27834us, rerank_start: 11864us, total: 84509us
+query: "workspace project context", profile: 6625us, embed: 10538us, terms: 138us, db: 18911us, rerank_start: 8356us, total: 44841us
+query: "workspace project context", profile: 6154us, embed: 10348us, terms: 7726us, db: 16194us, rerank_start: 7124us, total: 47630us
+query: "workspace project context", profile: 7137us, embed: 11734us, terms: 9490us, db: 20782us, rerank_start: 8473us, total: 57707us
+query: "workspace project context", profile: 6289us, embed: 10858us, terms: 8394us, db: 22726us, rerank_start: 6872us, total: 55222us
+query: "workspace project context", profile: 6152us, embed: 10685us, terms: 7370us, db: 15813us, rerank_start: 7240us, total: 47379us
