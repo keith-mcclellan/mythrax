@@ -10,6 +10,7 @@ use crate::db::query_classification::{
 use anyhow::{Context, Result};
 use surrealdb::IndexedResults;
 use surrealdb_types::SurrealValue;
+use std::fmt::Write as _;
 
 #[cfg(feature = "mlx")]
 use crate::db::backend::GLOBAL_RERANKER;
@@ -382,15 +383,18 @@ fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]
         let table = node.id.table.as_str();
         if table == "episode" {
             if let (Some(t), Some(c)) = (&node.title, &node.content) {
-                content.push_str(&format!("[Related Episode: {}]\n{}\n\n", t, c));
+                // ⚡ Bolt: Use write! to append directly, avoiding temporary heap allocations from format!
+                write!(content, "[Related Episode: {}]\n{}\n\n", t, c).expect("write failed");
             }
         } else if table == "wiki_node" {
             if let (Some(n), Some(c)) = (&node.name, &node.content) {
-                content.push_str(&format!("[Related Wiki Node: {}]\n{}\n\n", n, c));
+                // ⚡ Bolt: Use write! to append directly, avoiding temporary heap allocations from format!
+                write!(content, "[Related Wiki Node: {}]\n{}\n\n", n, c).expect("write failed");
             }
         } else if table == "entity" {
             if let (Some(n), Some(s)) = (&node.name, &node.summary) {
-                content.push_str(&format!("[Related Entity: {}]\n{}\n\n", n, s));
+                // ⚡ Bolt: Use write! to append directly, avoiding temporary heap allocations from format!
+                write!(content, "[Related Entity: {}]\n{}\n\n", n, s).expect("write failed");
             }
         } else if table == "wisdom" {
             let pattern = node.target_pattern.as_deref().unwrap_or("");
