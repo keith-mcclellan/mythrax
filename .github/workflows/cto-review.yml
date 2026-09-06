@@ -1,0 +1,25 @@
+name: Adversarial CTO Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '0 0 * * 0' # Weekly on main
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  cto-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run CTO Script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .agents/cto_agent/cto_review.py
