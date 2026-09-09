@@ -1,0 +1,38 @@
+name: CISO Security Audit
+
+on:
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 0 * * *' # Nightly
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for git secret scanning
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run CISO Audit Script
+        run: python3 scripts/ciso_audit.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Upload Security Advisory Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-advisory-report
+          path: security_advisory_report.md
