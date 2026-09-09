@@ -11829,3 +11829,25 @@ query: "Bulk Content 19", profile: 1us, embed: 3774us, terms: 2244us, db: 4200us
 query: "Write 4", profile: 2us, embed: 57247us, terms: 155983us, db: 53368us, rerank_start: 87094us, total: 353842us
 query: "Bulk Content 19", profile: 1us, embed: 89183us, terms: 56801us, db: 40015us, rerank_start: 33396us, total: 219459us
 query: "mythrax refactor architecture spec test harness isolation memory gate", profile: 11us, embed: 817us, terms: 22us, db: 49364us, rerank_start: 215us, total: 50437us
+query: "Database index compression", profile: 13us, embed: 32782us, terms: 6881us, db: 28923us, rerank_start: 7843us, total: 76588us
+query: "Database index compression", profile: 152739us, embed: 10631us, terms: 105us, db: 24321us, rerank_start: 8054us, total: 195914us
+query: "Hello, how do I optimize the pipeline?", profile: 5642us, embed: 10404us, terms: 6796us, db: 12401us, rerank_start: 6361us, total: 41689us
+query: "current status", profile: 5914us, embed: 9917us, terms: 6638us, db: 12492us, rerank_start: 6921us, total: 41958us
+query: "Sure, OK", profile: 7us, embed: 10666us, terms: 103us, db: 20282us, rerank_start: 2650us, total: 33864us
+query: "Sure thing", profile: 1us, embed: 34714us, terms: 105us, db: 18186us, rerank_start: 2706us, total: 55863us
+query: "troubleshooting process", profile: 5us, embed: 10212us, terms: 93us, db: 19094us, rerank_start: 2631us, total: 32242us
+query: "BLOCK_TOOL_PAYLOAD_ABC", profile: 6us, embed: 10678us, terms: 115us, db: 21809us, rerank_start: 2768us, total: 35599us
+query: "NESTED_TOOL_PAYLOAD_DEF", profile: 1us, embed: 51169us, terms: 112us, db: 22275us, rerank_start: 2834us, total: 76607us
+query: "This episode is pruned", profile: 5us, embed: 10555us, terms: 91us, db: 14537us, rerank_start: 2271us, total: 27531us
+query: "What compile actions did I run?", profile: 8us, embed: 15118us, terms: 146us, db: 24166us, rerank_start: 57081us, total: 115523us
+query: "Hydration", profile: 4us, embed: 10364us, terms: 180us, db: 16211us, rerank_start: 2682us, total: 29643us
+query: "Big Episode", profile: 5us, embed: 10140us, terms: 133us, db: 33417us, rerank_start: 3537us, total: 53136us
+query: "Big Episode", profile: 6us, embed: 10976us, terms: 167us, db: 35476us, rerank_start: 3767us, total: 56407us
+query: "Episode", profile: 5us, embed: 10443us, terms: 97us, db: 19250us, rerank_start: 2899us, total: 33098us
+query: "Timeline Episode 3", profile: 6us, embed: 22003us, terms: 1639us, db: 23040us, rerank_start: 2993us, total: 49932us
+query: "test query", profile: 6186us, embed: 10178us, terms: 6802us, db: 14039us, rerank_start: 7226us, total: 44517us
+query: "workspace project context", profile: 6526us, embed: 10532us, terms: 133us, db: 17937us, rerank_start: 7680us, total: 43080us
+query: "workspace project context", profile: 6017us, embed: 10445us, terms: 7618us, db: 15541us, rerank_start: 6949us, total: 46650us
+query: "workspace project context", profile: 5875us, embed: 10254us, terms: 7745us, db: 18616us, rerank_start: 6652us, total: 49213us
+query: "workspace project context", profile: 5867us, embed: 9970us, terms: 7124us, db: 16322us, rerank_start: 6711us, total: 46069us
+query: "workspace project context", profile: 5724us, embed: 10148us, terms: 7787us, db: 13960us, rerank_start: 7606us, total: 45311us

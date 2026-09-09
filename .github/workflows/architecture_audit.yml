@@ -1,0 +1,25 @@
+name: Architecture Debt Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  issues: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+      - name: Run Chief Architect Scorecard
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/generate_scorecard.py > scorecard.md
+          cat scorecard.md
