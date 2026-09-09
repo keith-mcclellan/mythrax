@@ -2582,8 +2582,8 @@ async fn resolve_placeholders(backend: &SurrealBackend, text: &str) -> String {
 
 async fn get_node_scope(backend: &SurrealBackend, id: &str) -> String {
     if let Ok(rec_id) = parse_record_id(id) {
-        let sql = format!("SELECT scope FROM {};", rec_id.table);
-        if let Ok(mut response) = backend.db.query(&sql).bind(("id", rec_id)).await {
+        let sql = "SELECT scope FROM type::table($table);";
+        if let Ok(mut response) = backend.db.query(sql).bind(("table", rec_id.table.to_string())).await {
             if let Ok(Some(scope)) = response.take::<Option<String>>(0) {
                 return scope;
             }
