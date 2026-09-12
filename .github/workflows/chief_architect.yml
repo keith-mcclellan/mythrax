@@ -1,0 +1,41 @@
+name: Chief Architect Audit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mythrax-core/**/*.rs'
+      - 'scripts/**/*.py'
+  pull_request:
+    paths:
+      - 'mythrax-core/**/*.rs'
+      - 'scripts/**/*.py'
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Chief Architect Script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/chief_architect.py
