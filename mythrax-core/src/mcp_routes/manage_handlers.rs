@@ -570,11 +570,14 @@ pub async fn handle_manage(state: &ApiState, args: Value) -> Result<Value> {
                 let filtered: Vec<_> = db_rules.iter().filter(|r| r.scope == scope).collect();
                 if !filtered.is_empty() {
                     rules_content.push_str("\n\n### Learned Wisdom Rules:\n");
+                    // ⚡ Bolt: Use write! macro instead of push_str(&format!) to avoid allocating intermediate Strings on the heap.
+                    use std::fmt::Write;
                     for r in filtered {
-                        rules_content.push_str(&format!(
+                        write!(
+                            rules_content,
                             "- Target: {}\n  Avoid: {}\n  Remedy: {}\n",
                             r.target_pattern, r.action_to_avoid, r.prescribed_remedy
-                        ));
+                        ).expect("Failed to write to string");
                     }
                 }
             }

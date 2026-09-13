@@ -912,8 +912,10 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
         stm_anchors: &[String],
     ) -> Result<String> {
         let mut files_context = String::new();
+        // ⚡ Bolt: Use write! macro instead of push_str(&format!) to avoid allocating intermediate Strings on the heap.
+        use std::fmt::Write;
         for (path, content) in target_files {
-            files_context.push_str(&format!("--- FILE: {} ---\n{}\n\n", path, content));
+            write!(files_context, "--- FILE: {} ---\n{}\n\n", path, content).expect("Failed to write to string");
         }
 
         // Query Wisdom Rules semantically for all tiers
@@ -944,15 +946,17 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             wisdom_injection.push_str(
                 "\n\nHere are some relevant Wisdom Rules to follow during code generation:\n",
             );
+            use std::fmt::Write;
             for (idx, r) in rules.iter().enumerate() {
-                wisdom_injection.push_str(&format!(
+                write!(
+                    wisdom_injection,
                     "{}. [Rule: {}]\n   - Action to Avoid: {}\n   - Why: {}\n   - Remedy: {}\n",
                     idx + 1,
                     r.target_pattern,
                     r.action_to_avoid,
                     r.causal_explanation,
                     r.prescribed_remedy
-                ));
+                ).expect("Failed to write to string");
             }
         }
 
@@ -961,8 +965,9 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
             constraints_injection.push_str(
                 "\n\nYou MUST respect the following constraints during code generation:\n",
             );
+            use std::fmt::Write;
             for c in constraints {
-                constraints_injection.push_str(&format!("- {}\n", c));
+                write!(constraints_injection, "- {}\n", c).expect("Failed to write to string");
             }
         }
 
@@ -970,8 +975,9 @@ impl crate::cognitive::arbor::ArborLlmClient for LLMClient {
         if !stm_anchors.is_empty() {
             stm_injection
                 .push_str("\n\nActive Short Term Memory (STM) anchors to guide your ideation:\n");
+            use std::fmt::Write;
             for anchor in stm_anchors {
-                stm_injection.push_str(&format!("- {}\n", anchor));
+                write!(stm_injection, "- {}\n", anchor).expect("Failed to write to string");
             }
         }
 
