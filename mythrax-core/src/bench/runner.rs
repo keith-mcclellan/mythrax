@@ -1310,12 +1310,15 @@ async fn run_evaluation(
             }
 
             let mut transaction_sql = "BEGIN TRANSACTION;".to_string();
+            // ⚡ Bolt: Use write! macro instead of push_str(&format!) to avoid allocating intermediate Strings on the heap.
+            use std::fmt::Write;
             for ent in all_entities_set {
                 let escaped = ent.replace("'", "\\'");
-                transaction_sql.push_str(&format!(
+                write!(
+                    transaction_sql,
                     "UPSERT entity:⟨{}⟩ CONTENT {{ name: '{}', entity_type: 'concept', summary: '', labels: ['concept'], scope: 'general' }}; ",
                     escaped, escaped
-                ));
+                ).expect("Failed to write to string");
             }
 
             for (corpus_id, entities) in &turn_entities {
@@ -1323,10 +1326,11 @@ async fn run_evaluation(
                     let ep_uuid = ep_id.strip_prefix("episode:").unwrap_or(ep_id);
                     for ent in entities {
                         let escaped = ent.replace("'", "\\'");
-                        transaction_sql.push_str(&format!(
+                        write!(
+                            transaction_sql,
                             "RELATE episode:⟨{}⟩ -> mentions -> entity:⟨{}⟩ CONTENT {{ created_at: time::now() }}; ",
                             ep_uuid, escaped
-                        ));
+                        ).expect("Failed to write to string");
                     }
                 }
             }
@@ -1351,10 +1355,11 @@ async fn run_evaluation(
                                 if let (Some(ep_a), Some(ep_b)) = (corpus_to_ep_id.get(&corpus_id_a), corpus_to_ep_id.get(&corpus_id_b)) {
                                     let ep_a_uuid = ep_a.strip_prefix("episode:").unwrap_or(ep_a);
                                     let ep_b_uuid = ep_b.strip_prefix("episode:").unwrap_or(ep_b);
-                                    transaction_sql.push_str(&format!(
+                                    write!(
+                                        transaction_sql,
                                         "RELATE episode:⟨{}⟩ -> relates_to -> episode:⟨{}⟩ CONTENT {{ confidence: 0.85 }}; ",
                                         ep_a_uuid, ep_b_uuid
-                                    ));
+                                    ).expect("Failed to write to string");
                                 }
                             }
                         }
