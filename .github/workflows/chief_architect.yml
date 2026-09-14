@@ -1,0 +1,24 @@
+name: Chief Architect Scan
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Need full history for commits
+      - name: Run Chief Architect Scanner
+        run: python3 scripts/chief_architect_scanner.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
