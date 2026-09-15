@@ -1,0 +1,29 @@
+name: Chief Architect Scan
+
+on:
+  push:
+    branches: [ "main", "**" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  analyze_debt:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Run Chief Architect Scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/chief_architect.py
