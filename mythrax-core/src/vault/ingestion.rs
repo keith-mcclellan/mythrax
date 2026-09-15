@@ -1,6 +1,7 @@
 use crate::db::StorageBackend;
 use crate::store::MarkdownStore;
 use anyhow::Result;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use surrealdb_types::SurrealValue;
 use uuid::Uuid;
@@ -29,14 +30,15 @@ fn ingest_cursor(path: &Path) -> Result<String> {
     while let Some(row) = rows.next()? {
         let key: String = row.get(0)?;
         let value: String = row.get(1)?;
-        result.push_str(&format!("### Key: {}\n", key));
+        write!(result, "### Key: {}\n", key).expect("write failed");
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&value) {
-            result.push_str(&format!(
+            write!(
+                result,
                 "```json\n{}\n```\n\n",
                 serde_json::to_string_pretty(&json_val)?
-            ));
+            ).expect("write failed");
         } else {
-            result.push_str(&format!("{}\n\n", value));
+            write!(result, "{}\n\n", value).expect("write failed");
         }
     }
     if result.is_empty() {
@@ -71,7 +73,7 @@ fn ingest_hermes(path: &Path) -> Result<String> {
     while let Some(row) = rows.next()? {
         let role: String = row.get(0)?;
         let content: String = row.get(1)?;
-        result.push_str(&format!("**{}**: {}\n\n", role, content));
+        write!(result, "**{}**: {}\n\n", role, content).expect("write failed");
     }
     if result.is_empty() {
         anyhow::bail!("No messages found in table {}", table_name);
