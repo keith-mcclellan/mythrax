@@ -419,7 +419,9 @@ fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]
             }
         }
     }
-    *content = content.trim_end().to_string();
+    // ⚡ Bolt: Zero-allocation in-place trim to prevent unnecessary heap allocation in hot path
+    let len = content.trim_end().len();
+    content.truncate(len);
 }
 
 impl SurrealBackend {
