@@ -1529,7 +1529,9 @@ fn split_by_sections(text: &str) -> Vec<String> {
     for line in text.lines() {
         if line.starts_with('#') {
             if !current_section.is_empty() {
-                sections.push(current_section.trim_end().to_string());
+                current_section.truncate(current_section.trim_end().len());
+                // ⚡ Bolt: Use std::mem::take to move the buffer into the vector without an extra allocation.
+                sections.push(std::mem::take(&mut current_section));
             }
             current_section = line.to_string();
         } else {
@@ -1541,7 +1543,9 @@ fn split_by_sections(text: &str) -> Vec<String> {
     }
 
     if !current_section.is_empty() {
-        sections.push(current_section.trim_end().to_string());
+        current_section.truncate(current_section.trim_end().len());
+        // ⚡ Bolt: Use std::mem::take to move the buffer into the vector without an extra allocation.
+        sections.push(std::mem::take(&mut current_section));
     }
 
     sections

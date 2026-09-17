@@ -419,7 +419,8 @@ fn append_related_context(content: &mut String, related_nodes: &[RelatedNodeRaw]
             }
         }
     }
-    *content = content.trim_end().to_string();
+    // ⚡ Bolt: Using in-place truncate() instead of trim_end().to_string() avoids a heap allocation and byte copy.
+    content.truncate(content.trim_end().len());
 }
 
 impl SurrealBackend {
