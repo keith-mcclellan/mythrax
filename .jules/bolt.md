@@ -1,0 +1,3 @@
+## 2024-09-17 - In-place String Truncation
+**Learning:** In Rust, `string.trim_end().to_string()` creates an unnecessary heap allocation and a full copy of the string contents just to remove trailing whitespace. This is particularly inefficient in loops, such as when parsing sections or preparing search contexts, where large strings are frequently processed.
+**Action:** Replace `string = string.trim_end().to_string();` or `*string = string.trim_end().to_string();` with `string.truncate(string.trim_end().len());`. This performs a highly efficient, zero-allocation in-place truncation, saving significant heap allocation overhead on hot paths.
